@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::Frontier as _;
+use takt::forge::gitlab::Glab;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness, Kind, SessionHarness};
@@ -634,6 +635,8 @@ struct LoopArgs {
     /// The harness's model, when it takes one.
     #[arg(long)]
     model: Option<String>,
+    #[command(flatten)]
+    endpoint: EndpointArgs,
     /// The approval gate the harness may request to end the run. Not given, the case's
     /// protocol's first action that requires a capability and that the case's inputs do not
     /// block for good: `repository.merge` for a delivery or a software change,
@@ -650,11 +653,18 @@ struct LoopArgs {
     #[arg(long)]
     project: Option<PathBuf>,
     /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch,
-    /// opens its pull request and merges it, `gh` reads the pull request's state and checks) or
-    /// `none` (no pull request is opened; when `pr.open`, `ci.read` or `repository.merge` is the
-    /// only action that decides what is left, nothing performs it: the run stops
-    /// `Unperformable`, exit 7, and the case stays open). Not given, `bot` when the repository's `origin` is a repository on
-    /// github.com, the host the bot route serves, else `none`.
+    /// opens its pull request and merges it, `gh` reads the pull request's state and checks),
+    /// `gitlab` (a repository on a GitLab host: git pushes the case's branch over HTTPS under
+    /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
+    /// pipeline and merges it; refused before any case opens unless `glab auth status
+    /// --hostname <host>` exits 0) or `none` (no pull request is opened; when `pr.open`,
+    /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
+    /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
+    /// `bot` when the repository's `origin` is a repository on github.com, the host the bot
+    /// route serves; `gitlab` when it is on another host and `glab` is logged in to it; else
+    /// `none`, said in one line naming what `glab` said. A scenario run creates its trial base
+    /// only through the bot route: it refuses `gitlab` before anything is opened, and on another
+    /// host its default is `none`, said in one line, `glab` never asked.
     #[arg(long)]
     forge: Option<String>,
     /// The least free space, in GiB, a step needs on the file system of the repository's tree
@@ -1379,36 +1389,124 @@ impl LoopArgs {
 /// The harness `--harness` names, each through the metaharness session executor, proposing from
 /// a scratch copy what takt's edit effect applies, with `--model`: `claude`, Claude Code on the
 /// user's claude.ai login; `codex`, Codex on the user's ChatGPT login (`~/.codex/auth.json`);
-/// `harness`, b10x-harness pointed at the Anthropic Messages API on the user's claude.ai
-/// subscription token (`~/.claude/.credentials.json`), the endpoint b10x-harness's own `claude`
-/// provider names; or `none`.
+/// `harness`, b10x-harness pointed at the endpoint the `--endpoint-*` flags and
+/// `--endpoint-file` give ([`EndpointArgs`]), by default the Anthropic Messages API on the
+/// user's claude.ai subscription token (`~/.claude/.credentials.json`), the endpoint
+/// b10x-harness's own `claude` provider names; or `none`. An `--endpoint-*` flag given with
+/// another harness is refused.
 fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
     let session = |kind| {
         let mut session = SessionHarness::of(kind);
         session.model.clone_from(&looping.model);
         session
     };
+    if looping.harness != "harness"
+        && let Some(flag) = looping.endpoint.given()
+    {
+        return Err(anyhow!(
+            "{flag} points --harness harness at its endpoint; --harness {} takes none",
+            looping.harness
+        ));
+    }
     match looping.harness.as_str() {
         "claude" => Ok(Box::new(session(Kind::Claude))),
         "codex" => Ok(Box::new(session(Kind::Codex))),
         "harness" => {
-            let home = std::env::var_os("HOME")
-                .map(PathBuf::from)
-                .ok_or_else(|| anyhow!("--harness harness reads its token under HOME; none set"))?;
+            let home = std::env::var_os("HOME").map(PathBuf::from);
             let mut session = session(Kind::B10x);
-            session.endpoint = Some(takt::harness::Endpoint {
-                base_url: "https://api.anthropic.com/v1".to_owned(),
-                wire: "anthropic-messages".to_owned(),
-                model: "claude-opus-5".to_owned(),
-                token_file: home.join(".claude/.credentials.json"),
-                token_pointer: Some("/claudeAiOauth/accessToken".to_owned()),
-            });
+            session.point_at(&looping.endpoint.config(home.as_deref())?);
+            session.home = home;
             Ok(Box::new(session))
         }
         "none" => Ok(Box::new(NoHarness)),
         other => Err(anyhow!(
             "no harness `{other}`: claude, codex, harness or none"
         )),
+    }
+}
+
+/// Where `--harness harness` points b10x-harness, read only under it: each field a flag's,
+/// else `--endpoint-file`'s, else the default. A credential is named, never given: a token
+/// file's path or a secret's name.
+#[derive(clap::Args)]
+struct EndpointArgs {
+    /// `--harness harness`: the endpoint's base URL, its origin and API prefix. Not given,
+    /// `--endpoint-file`'s `base_url`, else `https://api.anthropic.com/v1`. `https://`, or
+    /// `http://` to a loopback host; no userinfo, query or fragment. Another base URL takes a
+    /// credential by flag or file: the default token is sent to the default one alone.
+    #[arg(long, value_name = "URL")]
+    endpoint_base_url: Option<String>,
+    /// `--harness harness`: the model API the endpoint speaks, `anthropic-messages` or
+    /// `openai-responses`. Not given, `--endpoint-file`'s `wire`, else `anthropic-messages`.
+    #[arg(long, value_name = "WIRE")]
+    endpoint_wire: Option<String>,
+    /// `--harness harness`: the model the endpoint serves; `--model` wins over it. Not given,
+    /// `--endpoint-file`'s `model`, else `claude-opus-5`.
+    #[arg(long, value_name = "MODEL")]
+    endpoint_model: Option<String>,
+    /// `--harness harness`: the file holding a subscription token, which b10x-harness reads;
+    /// not with --endpoint-secret. Not given, `--endpoint-file`'s credential, else
+    /// `~/.claude/.credentials.json` at `/claudeAiOauth/accessToken`. A relative path is read
+    /// against the current directory. A file that is missing, or whose pointer resolves to no
+    /// token, is refused before the case opens, exit 1.
+    #[arg(long, value_name = "PATH")]
+    endpoint_token_file: Option<PathBuf>,
+    /// `--harness harness`: the JSON pointer to the token inside --endpoint-token-file, given
+    /// only with it; not given, the whole file is the token.
+    #[arg(long, value_name = "JSON POINTER")]
+    endpoint_token_pointer: Option<String>,
+    /// `--harness harness`: the API key as a secret's name in the owner's secrets store,
+    /// `<namespace>/<name>`, handed to b10x-harness by name, which the harness resolves; takt
+    /// reads no secret and opens no store. Not with --endpoint-token-file.
+    #[arg(long, value_name = "NAMESPACE/NAME")]
+    endpoint_secret: Option<String>,
+    /// `--harness harness`: a TOML file of the same fields, each under a flag: `base_url`,
+    /// `wire`, `model`, and a `[credential]` table of `token_file` with an optional
+    /// `token_pointer` (a relative path read beside the file), or of `secret`.
+    #[arg(long, value_name = "PATH")]
+    endpoint_file: Option<PathBuf>,
+}
+
+impl EndpointArgs {
+    /// The first `--endpoint-*` flag given, by its name.
+    fn given(&self) -> Option<&'static str> {
+        [
+            ("--endpoint-base-url", self.endpoint_base_url.is_some()),
+            ("--endpoint-wire", self.endpoint_wire.is_some()),
+            ("--endpoint-model", self.endpoint_model.is_some()),
+            ("--endpoint-token-file", self.endpoint_token_file.is_some()),
+            (
+                "--endpoint-token-pointer",
+                self.endpoint_token_pointer.is_some(),
+            ),
+            ("--endpoint-secret", self.endpoint_secret.is_some()),
+            ("--endpoint-file", self.endpoint_file.is_some()),
+        ]
+        .into_iter()
+        .find_map(|(flag, given)| given.then_some(flag))
+    }
+
+    /// The endpoint the session is pointed at: the flags over the file over the default under
+    /// `home`, a token file made absolute and checked to hold a token where its pointer points,
+    /// a secret's name checked by no read, before any case opens.
+    fn config(&self, home: Option<&Path>) -> Result<takt::harness::EndpointConfig> {
+        use takt::harness::{EndpointConfig, EndpointFields};
+        let flags = EndpointFields {
+            base_url: self.endpoint_base_url.clone(),
+            wire: self.endpoint_wire.clone(),
+            model: self.endpoint_model.clone(),
+            token_file: self.endpoint_token_file.clone(),
+            token_pointer: self.endpoint_token_pointer.clone(),
+            secret: self.endpoint_secret.clone(),
+        };
+        let file = self
+            .endpoint_file
+            .as_deref()
+            .map(EndpointFields::read)
+            .transpose()?;
+        let config = EndpointConfig::of(&flags, file.as_ref(), home)?;
+        config.check_token()?;
+        Ok(config)
     }
 }
 
@@ -1623,10 +1721,20 @@ impl Forged {
 }
 
 /// The forge: the bot route when asked for, or by default when `origin` is a repository on
-/// github.com, the host the bot route serves. `--forge bot` elsewhere is refused in one line
-/// before any case is opened; by default another host gets no forge, said in one line once the
-/// case is open.
+/// github.com, the host the bot route serves; `glab` when asked for, or by default when `origin`
+/// is on another host and `glab` is logged in to it. `--forge bot` elsewhere, `--forge gitlab` on
+/// github.com or without a login are refused in one line before any case is opened; by default
+/// another host without a login gets no forge, said in one line once the case is open.
 fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
+    forge_through(repo, forge, &Glab::for_tree)
+}
+
+/// [`forge_of`], the `glab` adapter of a tree, and its login check, made by `glab_of`.
+fn forge_through(
+    repo: &Path,
+    forge: Option<&str>,
+    glab_of: &dyn Fn(&Path) -> Result<Glab>,
+) -> Result<Forged> {
     let bot = |repo: &Path| -> Result<Forged> {
         let bot = BotRoute::for_tree(repo)?;
         let line = format!(
@@ -1640,6 +1748,17 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
             trials: Some(trials),
         })
     };
+    let gitlab = |glab: Glab| -> Forged {
+        let line = format!(
+            "forge: gitlab ({} {}); pr.open, ci.read and repository.merge go through glab",
+            glab.host, glab.project
+        );
+        Forged {
+            forge: Some(Rc::new(glab)),
+            line: Some(line),
+            trials: None,
+        }
+    };
     let none = |line: Option<String>| Forged {
         forge: None,
         line,
@@ -1648,6 +1767,7 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
     Ok(match forge {
         Some("none") => none(None),
         Some("bot") => bot(repo)?,
+        Some("gitlab") => gitlab(glab_of(repo)?),
         None => match takt::git::remote_url(repo, "origin")
             .ok()
             .as_deref()
@@ -1655,17 +1775,50 @@ fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
         {
             None => none(None),
             Some(Some(origin)) if BotRoute::serves(&origin.host) => bot(repo)?,
-            Some(Some(origin)) => none(Some(format!(
-                "forge: none (origin {} is not {})",
-                origin.host,
-                BotRoute::HOST
-            ))),
+            Some(Some(origin)) => match glab_of(repo) {
+                Ok(glab) => gitlab(glab),
+                Err(error) => none(Some(format!(
+                    "forge: none (origin {} is not {}, and glab is not logged in to it: {})",
+                    origin.host,
+                    BotRoute::HOST,
+                    one_line(&format!("{error:#}"))
+                ))),
+            },
             Some(None) => none(Some(
                 "forge: none (origin names no <owner>/<repo> on a host)".to_owned(),
             )),
         },
-        Some(other) => return Err(anyhow!("no forge `{other}`: bot or none")),
+        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab or none")),
     })
+}
+
+/// The forge of a scenario run: [`forge_of`], but never `glab`. A scenario's trial base
+/// `trial/<n>` is created on the remote only through the bot route ([`TrialRoute`]), so
+/// `--forge gitlab` is refused before anything is fetched, cut or opened, and by default an
+/// `origin` on a host other than github.com gets no forge, said in one line, `glab` never asked.
+fn scenario_forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
+    match forge {
+        Some("gitlab") => Err(anyhow!(
+            "--forge gitlab is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, and glab opens a merge request against a base it cannot create; give --forge bot or --forge none; nothing was changed"
+        )),
+        None => match takt::git::remote_url(repo, "origin")
+            .ok()
+            .as_deref()
+            .map(repository_of)
+        {
+            Some(Some(origin)) if !BotRoute::serves(&origin.host) => Ok(Forged {
+                forge: None,
+                line: Some(format!(
+                    "forge: none (origin {} is not {}, and a scenario run creates its trial base only through the bot route)",
+                    origin.host,
+                    BotRoute::HOST
+                )),
+                trials: None,
+            }),
+            _ => forge_of(repo, None),
+        },
+        Some(_) => forge_of(repo, forge),
+    }
 }
 
 /// Runs the open case `run` to its stop, `forge_line` said first, the run given this binary's
@@ -1999,7 +2152,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             repo.display()
         )
     })?;
-    let forge = forge_of(&repo, looping.forge.as_deref())?;
+    let forge = scenario_forge_of(&repo, looping.forge.as_deref())?;
     // The identity the trial's commits carry: the one given, else the one `--declared-on`
     // configures (the pinned seed predates any such file); none through the bot route, which
     // pushes them, is refused before anything is fetched, cut or pushed.
@@ -3032,7 +3185,34 @@ mod tests {
         assert!(!repo.join(".engineering/cases").exists());
     }
 
-    /// Without `--forge`, an origin on another host gets no forge, and the run says so.
+    /// Answers glab's login check as a glab with no login does, exit 1, and keeps each line
+    /// it was asked: the host's own glab is never run.
+    struct NotLoggedIn(std::rc::Rc<std::cell::RefCell<Vec<Vec<String>>>>);
+
+    impl takt::forge::Runner for NotLoggedIn {
+        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<takt::forge::Exit> {
+            self.run_env(tree, argv, &[])
+        }
+
+        fn run_env(
+            &self,
+            _tree: &Path,
+            argv: &[String],
+            _env: &[(&str, &str)],
+        ) -> anyhow::Result<takt::forge::Exit> {
+            self.0.borrow_mut().push(argv.to_vec());
+            Ok(takt::forge::Exit {
+                code: Some(1),
+                stdout: String::new(),
+                stderr: "gitlab.example.com has not been authenticated with glab".to_owned(),
+            })
+        }
+    }
+
+    /// Without `--forge`, an origin on another host that glab is not logged in to gets no
+    /// forge, said in one line naming what glab said. glab's login check runs through a double
+    /// (`forge_through`); the run that prints the line is `forge_cli`'s, under a glab double on
+    /// its `PATH`.
     #[test]
     fn with_a_non_github_origin_the_default_forge_is_none_and_the_run_says_so() {
         let repo = gated_repository("forge-default-elsewhere", None);
@@ -3045,17 +3225,23 @@ mod tests {
                 "https://gitlab.example.com/owner/repo.git",
             ],
         );
-        let (code, out) = takt(&delivery_args(
-            repo.to_str().expect("utf-8"),
-            "default-elsewhere",
-            &["--iterations", "1"],
-        ));
-        assert_eq!(code, 7, "{out}");
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let glab_of = |tree: &Path| {
+            takt::forge::gitlab::Glab::for_tree_through(tree, Box::new(NotLoggedIn(asked.clone())))
+        };
+        let forged = super::forge_through(&repo, None, &glab_of).expect("no forge is no error");
+        assert!(forged.forge.is_none() && forged.trials.is_none());
+        let line = forged.line.expect("the line that says so");
         assert!(
-            out.contains("forge: none (origin gitlab.example.com is not github.com)"),
-            "{out}"
+            line.starts_with(
+                "forge: none (origin gitlab.example.com is not github.com, and glab is not logged in to it: "
+            ) && line.contains("has not been authenticated with glab"),
+            "{line}"
         );
-        assert!(!out.contains("forge: bot"), "{out}");
+        assert_eq!(
+            *asked.borrow(),
+            [["glab", "auth", "status", "--hostname", "gitlab.example.com"].map(str::to_owned)]
+        );
     }
 
     #[test]
@@ -3066,7 +3252,7 @@ mod tests {
             "unknown",
             &["--forge", "hub"],
         ));
-        assert_eq!(error, "no forge `hub`: bot or none");
+        assert_eq!(error, "no forge `hub`: bot, gitlab or none");
         assert!(!repo.join(".engineering/cases").exists());
     }
 

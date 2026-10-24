@@ -1728,8 +1728,18 @@ const PYTHON_FILES: &[&str] = &[
     "usercustomize.py",
 ];
 
+/// The CI definition of a repository on a GitLab host, at the tree's root: on the judge surface
+/// as `.github/**` is, so a step that edits what the checks run leaves `ci.read` nothing to read.
+pub const GITLAB_CI: &str = ".gitlab-ci.yml";
+
+/// The directory at the tree's root where a GitLab repository keeps what its CI definition
+/// includes (`include: local: .gitlab/ci/*.yml`) and its review rules (`.gitlab/CODEOWNERS`): on
+/// the judge surface with [`GITLAB_CI`], everything under it. A file `include: local:` names
+/// outside both is not.
+pub const GITLAB_DIR: &str = ".gitlab";
+
 /// The judge surface every run guards, as a refusal names it.
-pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root and directly in a `site-packages` or `dist-packages` directory, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), a module, compiled module or package named like one the test command's Python imports from outside the tree (asked when the case opens; the standard library's and the test runners' `unittest`, `pytest`, `_pytest`, `pluggy`, `nose2` when no Python answers) in every directory Python imports from under any program (where it runs, each `PYTHONPATH` entry, a `unittest discover` or `nose2` start and top-level directory, a test file's directory when pytest runs, a Python script's own directory), every executable entry (at the base, before or after the step) directly in a tree directory on `PATH`, the script's or the one takt runs with, the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file, shell file and program of the tree while a line of such a script cannot be read or a build tool's recipe runs, and the repository's own `.engineering/judge-surface.yaml` list";
+pub const JUDGE_SURFACE: &str = "`.cargo/**` and `rust-toolchain*` and `build.rs` at any depth, `.github/**`, `.gitlab-ci.yml` at the root, `.gitlab/**`, `.engineering/**` but `.engineering/cases/**`, `conftest.py`, `pytest.ini`, `.pytest.ini`, `pytest.toml`, `.pytest.toml`, `tox.ini`, `setup.cfg`, `sitecustomize.py` and `usercustomize.py` at any depth, `*.pth` at the root and directly in a `site-packages` or `dist-packages` directory, `[tool.pytest*]` in `pyproject.toml`, the module and package `python -m` runs and the `*.pth` files in every directory it imports from (where it runs and what `PYTHONPATH` names), a module, compiled module or package named like one the test command's Python imports from outside the tree (asked when the case opens; the standard library's and the test runners' `unittest`, `pytest`, `_pytest`, `pluggy`, `nose2` when no Python answers) in every directory Python imports from under any program (where it runs, each `PYTHONPATH` entry, a `unittest discover` or `nose2` start and top-level directory, a test file's directory when pytest runs, a Python script's own directory), every executable entry (at the base, before or after the step) directly in a tree directory on `PATH`, the script's or the one takt runs with, the test command's own script, the scripts it runs, read one level deep (every file beside a script deeper than that), and its build tool's file, every Python file, shell file and program of the tree while a line of such a script cannot be read or a build tool's recipe runs, and the repository's own `.engineering/judge-surface.yaml` list";
 
 /// How many scripts deep the guard reads: the test command's own script, and the scripts it
 /// runs. A script deeper than that is not read; everything in its directory, and every Python
@@ -6243,6 +6253,9 @@ impl JudgeSurface {
         let name = parts.last().copied().unwrap_or_default();
         (self.store && Self::is_store(path))
             || folded == fold(JUDGE_LIST)
+            || folded == GITLAB_CI
+            || folded == GITLAB_DIR
+            || folded.starts_with(".gitlab/")
             || folded == ".github"
             || folded.starts_with(".github/")
             || parts.contains(&".cargo")
@@ -6267,7 +6280,7 @@ impl JudgeSurface {
 
     /// Whether a validator or the guarded command would read through a link at `link`: the link
     /// is, or is on the way to, the cargo configuration (`.cargo/` at any depth), the CI
-    /// workflows (`.github/workflows/`), the store's directories and project file (while the
+    /// workflows (`.github/workflows/`, `.gitlab-ci.yml` and `.gitlab/` at the root), the store's directories and project file (while the
     /// store is on the surface), a manifest, a build script, a toolchain file, a Python start-up
     /// file (`sitecustomize.py`, `usercustomize.py`, a `*.pth` at the root or in a
     /// `site-packages` or `dist-packages` directory), or the test
@@ -6289,6 +6302,8 @@ impl JudgeSurface {
         };
         parts.contains(&".cargo")
             || is_or_holds(".github/workflows")
+            || is_or_holds(GITLAB_CI)
+            || is_or_holds(GITLAB_DIR)
             || (self.store
                 && [
                     ".engineering/planning",
@@ -6330,7 +6345,15 @@ impl JudgeSurface {
                 continue;
             };
             let folded = fold(name);
-            if [ENGINEERING, ".cargo", ".github", "build.rs"].contains(&folded.as_str())
+            if [
+                ENGINEERING,
+                ".cargo",
+                ".github",
+                GITLAB_CI,
+                GITLAB_DIR,
+                "build.rs",
+            ]
+            .contains(&folded.as_str())
                 || folded.starts_with("rust-toolchain")
                 || PYTHON_FILES.contains(&folded.as_str())
                 || folded.ends_with(".pth")
@@ -8007,17 +8030,45 @@ pub const UNPROPOSED_SUMMARY: &str =
 /// the user's home: a private key block (`~/.ssh`); a JWT (Codex's `auth.json` tokens); an
 /// Anthropic token (`sk-ant-`, Claude Code's `.credentials.json` OAuth tokens and API keys); a
 /// GitHub token (`gho_`, `ghp_`, `ghu_`, `ghs_`, `ghr_`, `github_pat_`; gh's `hosts.yml`); an
-/// OpenAI key (`sk-`); and a token field (`access_token`, `refresh_token`, `id_token`,
-/// `oauth_token`, `accessToken`, `refreshToken`, `idToken`) set to a value of 20 token
+/// OpenAI key (`sk-`); a GitLab token (each of [`GITLAB_TOKEN_PREFIXES`] before 20 token
+/// characters or more; glab's `config.yml`); and a token field (`access_token`,
+/// `refresh_token`, `id_token`, `oauth_token`, `accessToken`, `refreshToken`, `idToken`, and
+/// the key `token:` that starts a line of glab's `config.yml`) set to a value of 20 token
 /// characters or more holding a letter and a digit. Checked beside the gates policy's scan,
 /// which holds no rule for them.
-pub const CREDENTIAL_SHAPES: [&str; 6] = [
+pub const CREDENTIAL_SHAPES: [&str; 7] = [
     "private-key",
     "jwt",
     "anthropic-token",
     "github-token",
+    "gitlab-token",
     "openai-key",
     "token-field",
+];
+
+/// The prefixes GitLab gives its tokens, as GitLab's documentation lists them under "Token
+/// prefixes" (<https://docs.gitlab.com/security/tokens/#token-prefixes>): personal,
+/// impersonation, project and group access tokens (`glpat-`), an OAuth application secret
+/// (`gloas-`), deploy tokens (`gldt-`), runner authentication tokens (`glrt-`, `glrtr-`), CI/CD
+/// job tokens (`glcbt-`), trigger tokens (`glptt-`), feed tokens (`glft-`), incoming mail tokens
+/// (`glimt-`), GitLab agent for Kubernetes tokens (`glagent-`), workspace tokens (`glwt-`),
+/// SCIM tokens (`glsoat-`), feature flags client tokens (`glffct-`) and the session cookie
+/// (`_gitlab_session=`).
+pub const GITLAB_TOKEN_PREFIXES: [&str; 14] = [
+    "glpat-",
+    "gloas-",
+    "gldt-",
+    "glrt-",
+    "glrtr-",
+    "glcbt-",
+    "glptt-",
+    "glft-",
+    "glimt-",
+    "glagent-",
+    "glwt-",
+    "glsoat-",
+    "glffct-",
+    "_gitlab_session=",
 ];
 
 /// The first of [`CREDENTIAL_SHAPES`] `text` holds, by its name; none when it holds none. Read
@@ -8071,6 +8122,10 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
             || (here.starts_with(b"github_pat_") && run(at + 11, &word) >= 22)
         {
             Some("github-token")
+        } else if GITLAB_TOKEN_PREFIXES.iter().any(|prefix| {
+            here.starts_with(prefix.as_bytes()) && run(at + prefix.len(), &word) >= 20
+        }) {
+            Some("gitlab-token")
         } else if here.starts_with(b"eyJ") && jwt(at) {
             Some("jwt")
         } else {
@@ -8107,6 +8162,22 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
             {
                 return Some("token-field");
             }
+        }
+    }
+    // glab's `config.yml` keeps a host's token under the key `token:`, one to a line and the
+    // value the rest of it; a line of code that only names a token (`token: read_token(),`)
+    // holds more than token characters after the key.
+    for line in text.lines() {
+        let Some(value) = line.trim_start().strip_prefix("token:") else {
+            continue;
+        };
+        let value = value.trim().trim_matches(['"', '\'']);
+        if value.len() >= 20
+            && value.bytes().all(token)
+            && value.bytes().any(|c| c.is_ascii_digit())
+            && value.bytes().any(|c| c.is_ascii_alphabetic())
+        {
+            return Some("token-field");
         }
     }
     None
@@ -10193,6 +10264,8 @@ impl<'a> Run<'a> {
                 binary: self.binary.clone(),
                 layers: Some(layers),
                 confinement: Some(confinement.clone()),
+                // The endpoint the harness is pointed at, by reference: never a token.
+                endpoint: self.harness.endpoint_reference(),
             },
         )?;
         writeln!(

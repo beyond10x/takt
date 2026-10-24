@@ -6,6 +6,36 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- `--harness harness` takes its endpoint from `--endpoint-base-url`, `--endpoint-wire`, `--endpoint-model`, `--endpoint-token-file` and `--endpoint-token-pointer`.
+- `--endpoint-file` gives the same as a TOML file (`base_url`, `wire`, `model`, a `[credential]` table); a flag wins over it, and with neither the endpoint is the one before.
+- An `--endpoint-*` flag given with a harness other than `harness` is refused before the case opens.
+- An endpoint's credential is a subscription token file with an optional JSON pointer, or a secret's name (`--endpoint-secret <namespace>/<name>`); takt reads no secret.
+- A missing token file, or a pointer that resolves to no token, exits 1 before the case opens, naming the path and the pointer.
+- A secret's name is handed to b10x-harness by name, as the session executor's `api_key_secret`, and the harness resolves it; takt reads no secret and opens no store.
+- A `--harness harness` run records its endpoint on the `opened` line by reference: base URL, wire, model, the token file's path (`~/…` under HOME) and pointer or the secret's name; never a token.
+- `--endpoint-base-url` takes `https://`, or `http://` to a loopback host only (`localhost`, `127.0.0.0/8`, `::1`).
+- A base URL with a userinfo, a query or a fragment is refused before the case opens, naming the part and repeating none of it.
+- A base URL other than the default needs a credential by flag or file: the default claude.ai token goes to `https://api.anthropic.com/v1` only.
+- A relative `--endpoint-token-file` is read against the current directory; the harness gets it, and the case records it, as an absolute path.
+- `--forge gitlab` delivers through `glab` on a GitLab host: it pushes over HTTPS under `glab auth git-credential`, and opens, reads and merges the merge request through `glab api`.
+- `--forge gitlab` without `glab` on the program path, or without `glab auth status --hostname <host>` exiting 0, is refused before the case opens, naming `glab` and the host.
+- `.gitlab-ci.yml` and everything under `.gitlab/` at the repository's root are on the judge surface, as `.github/**` is; a file an `include: local:` names outside both is not.
+- Through `--forge gitlab`, `ci.read` waits on the merge request's head pipeline as on GitHub's checks, under the same poll and `--hours`.
+- A head pipeline that is not the pushed head's, or that names no commit, is pending; one that ends writes `ci_result` `pass` (`success`, `skipped`) or `fail` (`failed`, `canceled`).
+- Through `--forge gitlab`, a `glab api` call that exits non-zero is an error naming the call, GitLab's message and the HTTP status; only a 404 on the merge target's branch means no such branch.
+- An HTTPS `origin` on a port of its own (`https://gitlab.example:8443/group/repo.git`) keeps the port for the push and for every `glab --hostname`.
+- `takt scenario run --forge gitlab` is refused before anything is cut or opened: a scenario's trial base is created only through the bot route.
+- A proposal holding a GitLab token (each prefix GitLab's documentation lists, from `glpat-` to `glffct-`) or glab's `token:` line is refused before the edit effect, as a GitHub token is.
+
+### Changed
+
+- `b10x-loom-sdk` moves from loom 0.39.0 to 0.39.1, whose session executor carries an endpoint's `api_key_secret` to b10x-harness; metaharness stays at 0.15.0.
+- Without `--forge`, an `origin` on a host other than github.com gets the forge `gitlab` when `glab` is logged in to it, and otherwise `forge: none` with what `glab` said in one line.
+- Without `--forge`, `takt scenario run` on an `origin` that is not on github.com runs with no forge and says so in one line; `glab` is not asked.
+- The test command run under `--confinement none` no longer inherits `GLAB_CONFIG_DIR`, as it no longer inherits `GH_CONFIG_DIR`; a harness child never did, its environment being built from nothing.
+
 ## [0.10.1] - 2026-10-23
 
 `--harness claude` proposes on Claude Code 2.1.309 and `--harness codex` runs on Codex 0.160.0, through loom 0.39.0

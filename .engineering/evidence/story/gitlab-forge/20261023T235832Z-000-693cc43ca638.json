@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-23T23:58:32Z",
+  "actor": "human:timo",
+  "artifact": "story:gitlab-forge",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --no-fail-fast on the tree committed as db65aad: 160 results, 1728 passed, 0 failed, 5 ignored, exit 0",
+    "reference": "docs/waves/wave-36.md"
+  }
+}

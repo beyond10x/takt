@@ -235,6 +235,8 @@ struct Session {
     summary: String,
     tokens: bool,
     version: String,
+    /// The `credential_source` its opening record names in place of [`record`]'s, if any.
+    source: Option<&'static str>,
     seen: Rc<RefCell<Seen>>,
 }
 
@@ -256,7 +258,7 @@ impl ProcessRunner for Session {
             fs::create_dir_all(at.parent().expect("a parent"))?;
             fs::write(at, text)?;
         }
-        let lines = record(
+        let mut lines = record(
             self.kind,
             plan.cwd,
             &self.action,
@@ -264,6 +266,15 @@ impl ProcessRunner for Session {
             self.tokens,
             &self.version,
         );
+        if let Some(source) = self.source {
+            for line in &mut lines {
+                let mut value: serde_json::Value = serde_json::from_str(line)?;
+                if value["kind"] == "started" {
+                    value["credential_source"] = source.into();
+                    *line = value.to_string();
+                }
+            }
+        }
         ScriptedRunner::of_lines(lines, ScriptedLog::new()).start(plan)
     }
 }
@@ -291,6 +302,16 @@ impl Script<'_> {
 
 /// `--harness <kind>` over a scripted session.
 fn harness(kind: Kind, script: &Script<'_>) -> (SessionHarness, Rc<RefCell<Seen>>) {
+    harness_saying(kind, script, None)
+}
+
+/// [`harness`], a b10x-harness session's opening record naming `source` as its
+/// `credential_source` when given, as the loop names the road its key came by.
+fn harness_saying(
+    kind: Kind,
+    script: &Script<'_>,
+    source: Option<&'static str>,
+) -> (SessionHarness, Rc<RefCell<Seen>>) {
     let seen = Rc::new(RefCell::new(Seen::default()));
     let shared = Rc::clone(&seen);
     let writes: Vec<(String, String)> = script
@@ -323,6 +344,7 @@ fn harness(kind: Kind, script: &Script<'_>) -> (SessionHarness, Rc<RefCell<Seen>
             summary: summary.clone(),
             tokens,
             version: version.clone(),
+            source,
             seen: Rc::clone(&shared),
         })
     });
@@ -643,6 +665,141 @@ fn no_kind_is_handed_a_withheld_variable() {
     assert!(said.contains("1 passed"), "the child ran the case: {said}");
 }
 
+/// The secret the trial arm's endpoints name their key by, `<namespace>/<name>`.
+const SECRET_NAME: &str = "llm/opencode-go-api-key";
+
+const SECRET_CHILD: &str = "TAKT_HARNESS_PARITY_SECRET_CHILD";
+
+/// Acceptance 4 and 5 for the secret kind, over a run: b10x-harness pointed at an endpoint whose
+/// key is the secret `llm/opencode-go-api-key` is handed that name and nothing more. In a child
+/// of this test binary with the withheld variables set and no session bus, so no secrets store
+/// or keychain is reachable, the case opens and the step runs; the `opened` line records the
+/// secret by its namespace and name; the arguments name it once, as `--api-key-secret`'s value,
+/// beside no token file, pointer or key variable; and neither the environment nor the prompt
+/// holds it, a withheld value, or a variable that carries a credential.
+#[test]
+fn the_secret_kind_hands_the_harness_its_name_alone() {
+    if std::env::var_os(SECRET_CHILD).is_some() {
+        use takt::harness::{EndpointConfig, EndpointFields};
+        let scratch = repository("secret-name");
+        let tree = scratch.tree();
+        let id = "parity-secret";
+        let flags = EndpointFields {
+            base_url: Some("https://opencode.ai/inference/go/openai/v1".to_owned()),
+            wire: Some("openai-responses".to_owned()),
+            model: Some("gpt-6-luna".to_owned()),
+            secret: Some(SECRET_NAME.to_owned()),
+            ..EndpointFields::default()
+        };
+        let config = EndpointConfig::of(&flags, None, None).expect("no HOME needed");
+        config
+            .check_token()
+            .expect("a secret's name is checked by no read");
+        let (mut harness, seen) =
+            harness_saying(Kind::B10x, &Script::fixing(), Some("api-key:secrets"));
+        harness.point_at(&config);
+        let (stop, text) = run(&tree, id, 2, &harness);
+        assert!(
+            matches!(
+                stop,
+                Ok(Stop::Iterations(_)) | Ok(Stop::ApprovalRequired(_))
+            ),
+            "{stop:?}\n{text}"
+        );
+        let opened: Vec<serde_json::Value> = events(&tree, id)
+            .into_iter()
+            .filter(|line| line["event"] == "opened")
+            .collect();
+        assert_eq!(opened.len(), 1, "{opened:?}");
+        assert_eq!(
+            opened[0]["endpoint"],
+            serde_json::json!({
+                "base_url": "https://opencode.ai/inference/go/openai/v1",
+                "wire": "openai-responses",
+                "model": "gpt-6-luna",
+                "credential": {
+                    "kind": "secret",
+                    "namespace": "llm",
+                    "name": "opencode-go-api-key",
+                },
+            })
+        );
+        let seen = seen.borrow();
+        assert_eq!(seen.args.len(), 1, "one session\n{text}");
+        let argv = &seen.args[0];
+        let at = argv
+            .iter()
+            .position(|word| word == "--api-key-secret")
+            .unwrap_or_else(|| panic!("no secret named: {argv:?}"));
+        assert_eq!(argv[at + 1], SECRET_NAME, "{argv:?}");
+        assert_eq!(
+            argv.iter()
+                .filter(|word| word.contains("opencode-go-api-key"))
+                .count(),
+            1,
+            "the name once: {argv:?}"
+        );
+        for word in argv {
+            for flag in ["--oauth-token", "--api-key-env", "--api-key-file"] {
+                assert!(
+                    !word.starts_with(flag),
+                    "{word} beside the secret: {argv:?}"
+                );
+            }
+        }
+        let prompt =
+            String::from_utf8(harness.last_transcript().expect("a transcript")).expect("utf-8");
+        assert!(
+            !prompt.contains("opencode-go-api-key"),
+            "the prompt names it"
+        );
+        for (key, value) in &seen.env[0] {
+            assert!(
+                !value.contains("opencode-go-api-key"),
+                "{key} holds the name"
+            );
+            assert!(
+                !takt::forge::is_credential(key),
+                "{key} carries a credential to the session"
+            );
+        }
+        for (name, value) in WITHHELD {
+            assert!(
+                !seen.env[0].contains_key(name),
+                "{name} reached the session"
+            );
+            for held in seen.env[0].values().chain(argv.iter()) {
+                assert!(!held.contains(value), "{name}'s value reached the session");
+            }
+        }
+        for bus in ["DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"] {
+            assert!(!seen.env[0].contains_key(bus), "{bus}: no store reachable");
+        }
+        return;
+    }
+    let mut child = Command::new(std::env::current_exe().expect("this test binary"));
+    child
+        .args([
+            "--exact",
+            "the_secret_kind_hands_the_harness_its_name_alone",
+            "--nocapture",
+        ])
+        .env(SECRET_CHILD, "1")
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
+        .env_remove("XDG_RUNTIME_DIR");
+    for (name, value) in WITHHELD {
+        child.env(name, value);
+    }
+    let output = child.output().expect("the child runs");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("1 passed"), "the child ran the case: {said}");
+}
+
 /// Acceptance 4: a Codex step whose session reports no tokens charges none: its step line
 /// carries no tokens and no usage, which the report prints as not reported, and the run's count
 /// stays 0. One that reports them is charged its tokens once: Codex's input figure holds its
@@ -815,6 +972,7 @@ fn every_credential_shape_takt_lists_matches_its_fake() {
             "github-token",
             format!("github_pat_{}", filler(76, 40, ALNUM)),
         ),
+        ("gitlab-token", format!("glpat-{}", filler(79, 20, URLSAFE))),
         ("openai-key", format!("sk-proj-{}", filler(77, 40, ALNUM))),
         (
             "token-field",

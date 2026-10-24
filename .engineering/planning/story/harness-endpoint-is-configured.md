@@ -2,12 +2,30 @@
 format: aep.planning-md/3
 id: story:harness-endpoint-is-configured
 kind: story
-status: draft
+status: implemented
 title: takt --harness harness takes its endpoint and credential reference from flags or a file
 relations:
 - depends_on: epic:takt-on-loom-sdk
 - informed_by: approval-record:trial-harness-arm-endpoint
-revision: 2
+- serves: vision:safe-agentic-coding
+scope:
+- confidence: inferred
+  path: CHANGELOG.md
+- confidence: inferred
+  path: README.md
+- confidence: inferred
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/harness_endpoint_cli.rs
+- confidence: inferred
+  path: crates/takt/src/harness.rs
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-23T21:57:01Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-23T21:57:01Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-24T00:15:39Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 ## Outcome
 
@@ -67,3 +85,22 @@ resolves; takt never reads the secret.
      `claude-haiku-5-5`;
    - wire `openai-responses`, base `https://opencode.ai/inference/go/openai/v1`, model
      `gpt-6-luna`.
+
+## Delivered
+
+Wave 36 (docs/waves/wave-36.md): U3 at 8c171e0, U3b at 1782919, the review's fixes at db65aad,
+U3c at 731d111 on loom 0.39.1. `--harness harness` takes its endpoint from the `--endpoint-*`
+flags or `--endpoint-file` (TOML), a flag winning over the file, and with neither builds the
+endpoint as before (acceptance 1, 2); the credential is a subscription token file with an
+optional JSON pointer, mapped as today, or a secret's name, handed to b10x-harness as
+`SessionExecutor::api_key_secret` with the endpoint naming no token (3); takt opens no store
+and reads no secret (4); the case's `opened` event records base URL, wire, model and the
+credential's reference, the token file from `~` under HOME, never a token, and a marker test
+finds none in the case files (5); a missing token file or an empty pointer exits 1 before the
+first step naming both (6); the two trial endpoints (`anthropic-messages` on
+`https://opencode.ai/inference/go/anthropic/v1` with `claude-haiku-5-5`, `openai-responses` on
+`https://opencode.ai/inference/go/openai/v1` with `gpt-6-luna`, both `llm/opencode-go-api-key`)
+each build what takt hands the harness (7). The review's F2, F3, F7 and F10 narrowed it: the
+default credential goes to the default base URL alone, `http://` to loopback only, no userinfo,
+query or fragment, a relative token file made absolute. Not done in takt: a real run against
+either trial endpoint, which the trial agent starts from the release that carries this.

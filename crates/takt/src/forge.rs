@@ -33,6 +33,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::confinement::Command;
 
+pub mod gitlab;
+
 /// The environment variable that names the `b10x-gates` policy file.
 pub const POLICY_VAR: &str = "B10X_GATES_POLICY";
 
@@ -530,7 +532,7 @@ pub fn without_credentials(command: &mut Command, keep: fn(&str) -> bool) {
 /// session bus and the runtime directory it is found in (the keyring is reached through it), the
 /// XDG base directories, and the configuration a forge client, git, GnuPG, a cloud or container
 /// client reads its login from. [`without_login`] removes every one.
-pub const LOGIN_LOCATIONS: [&str; 16] = [
+pub const LOGIN_LOCATIONS: [&str; 17] = [
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
     "GNOME_KEYRING_CONTROL",
@@ -539,6 +541,7 @@ pub const LOGIN_LOCATIONS: [&str; 16] = [
     "XDG_STATE_HOME",
     "XDG_CACHE_HOME",
     "GH_CONFIG_DIR",
+    "GLAB_CONFIG_DIR",
     "GIT_CONFIG_GLOBAL",
     "GNUPGHOME",
     "NETRC",
@@ -1627,17 +1630,7 @@ impl BotRoute {
     /// push, naming both; a repository with no `base` holds nothing of it; no tracking ref says
     /// nothing. `None` has every commit of the head scanned.
     fn held(&self, tree: &Path, base: &str) -> Result<Option<String>> {
-        let tracking = format!("refs/remotes/{}/{base}", self.remote);
-        let Some(tracked) = exact_ref(tree, &tracking) else {
-            return Ok(None);
-        };
-        match self.remote_base(tree, base)? {
-            None => Ok(None),
-            Some(remote) if remote == tracked => Ok(Some(tracked)),
-            Some(remote) => bail!(
-                "{tracking} is at {tracked}, but the repository's {base} is at {remote}: what the repository holds is not what the tracking ref says; refused, nothing was pushed"
-            ),
-        }
+        held_by(tree, &self.remote, base, || self.remote_base(tree, base))
     }
 
     /// The line that fetches the commit `object` and what it reaches through the bot route into
@@ -1662,15 +1655,19 @@ impl BotRoute {
         .to_vec()
     }
 
+    /// The scan before a push and a pull request, under this route's repository and policy.
+    fn scanner(&self) -> Scanner<'_> {
+        Scanner {
+            runner: &*self.runner,
+            repository: &self.repository,
+            policy: self.policy.as_deref(),
+        }
+    }
+
     /// The options every `b10x-gates` line that reads the policy carries, the scan and the API
     /// writes alike: `--repository`, and `--policy` when the policy file is known.
     fn scope(&self) -> Vec<String> {
-        let mut options = vec!["--repository".to_owned(), self.repository.clone()];
-        if let Some(policy) = &self.policy {
-            options.push("--policy".to_owned());
-            options.push(policy.display().to_string());
-        }
-        options
+        self.scanner().scope()
     }
 
     /// The line that scans `path` before it leaves the machine, under the same repository and
@@ -1689,10 +1686,7 @@ impl BotRoute {
     }
 
     fn scan_paths_argv(&self, paths: &[&Path]) -> Vec<String> {
-        let mut argv = vec!["b10x-gates".to_owned(), "scan-text".to_owned()];
-        argv.extend(self.scope());
-        argv.extend(paths.iter().map(|path| path.display().to_string()));
-        argv
+        self.scanner().argv(paths)
     }
 
     /// The line of an API write: `method` on `path`, the document read from `input`, the
@@ -1773,16 +1767,7 @@ impl BotRoute {
     /// Runs `argv` in `tree`; a program that did not exit 0 is an error naming the line and
     /// what it said.
     fn succeed(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
-        let exit = self.runner.run(tree, argv)?;
-        if !exit.success() {
-            return Err(Failed {
-                line: argv.join(" "),
-                code: exit.code,
-                stderr: exit.stderr.trim().to_owned(),
-            }
-            .into());
-        }
-        Ok(exit)
+        succeed(&*self.runner, tree, argv)
     }
 
     /// Runs `argv` in `tree` and reads what it printed as JSON; anything else is an error
@@ -1797,22 +1782,217 @@ impl BotRoute {
     /// `pushInsteadOf`) would send it over another transport is refused naming the URL pushed to
     /// and that transport.
     fn push_line(&self, tree: &Path, argv: &[String]) -> Result<()> {
-        let exit = self.runner.run_env(tree, argv, &Self::PUSH_ENV)?;
-        if exit.success() {
-            return Ok(());
-        }
-        if let Some(transport) = refused_transport(&exit.stderr) {
-            bail!(
-                "the push to {} would go over {transport}, not https, as a URL rewrite in the repository's configuration names it: the bot route pushes over HTTPS only, so nothing was pushed",
-                self.push_url()
-            );
-        }
-        Err(Failed {
+        push_over_https(&*self.runner, tree, argv, &self.push_url(), "the bot route")
+    }
+}
+
+/// Runs `argv` in `tree` through `runner`; a program that did not exit 0 is an error naming the
+/// line and what it said.
+fn succeed(runner: &dyn Runner, tree: &Path, argv: &[String]) -> Result<Exit> {
+    let exit = runner.run(tree, argv)?;
+    if !exit.success() {
+        return Err(Failed {
             line: argv.join(" "),
             code: exit.code,
             stderr: exit.stderr.trim().to_owned(),
         }
-        .into())
+        .into());
+    }
+    Ok(exit)
+}
+
+/// Runs the push line `argv` in `tree` through `runner` over HTTPS alone
+/// ([`BotRoute::PUSH_ENV`]), the line of every adapter that pushes to `url`. A push git refuses
+/// because a URL rewrite in the repository's configuration (`insteadOf`, `pushInsteadOf`) would
+/// send it over another transport is refused naming `url` and that transport; `route` names
+/// the adapter in the refusal.
+fn push_over_https(
+    runner: &dyn Runner,
+    tree: &Path,
+    argv: &[String],
+    url: &str,
+    route: &str,
+) -> Result<()> {
+    let exit = runner.run_env(tree, argv, &BotRoute::PUSH_ENV)?;
+    if exit.success() {
+        return Ok(());
+    }
+    if let Some(transport) = refused_transport(&exit.stderr) {
+        bail!(
+            "the push to {url} would go over {transport}, not https, as a URL rewrite in the repository's configuration names it: {route} pushes over HTTPS only, so nothing was pushed"
+        );
+    }
+    Err(Failed {
+        line: argv.join(" "),
+        code: exit.code,
+        stderr: exit.stderr.trim().to_owned(),
+    }
+    .into())
+}
+
+/// The commit the repository holds as the case's `base`, what the scan before a push need not
+/// read again: the tracking ref `refs/remotes/<remote>/<base>`, read by its full name, but only
+/// while the repository's own `base`, as `remote_base` reads it through the adapter, is at the
+/// same commit. A tracking ref at another commit (stale, or written by hand) refuses the push,
+/// naming both; a repository with no `base` holds nothing of it; no tracking ref says nothing,
+/// and the repository is then not asked. `None` has every commit of the head scanned.
+fn held_by(
+    tree: &Path,
+    remote: &str,
+    base: &str,
+    remote_base: impl FnOnce() -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    let tracking = format!("refs/remotes/{remote}/{base}");
+    let Some(tracked) = exact_ref(tree, &tracking) else {
+        return Ok(None);
+    };
+    match remote_base()? {
+        None => Ok(None),
+        Some(remote) if remote == tracked => Ok(Some(tracked)),
+        Some(remote) => bail!(
+            "{tracking} is at {tracked}, but the repository's {base} is at {remote}: what the repository holds is not what the tracking ref says; refused, nothing was pushed"
+        ),
+    }
+}
+
+/// The scan before anything leaves the machine, shared by every adapter that publishes: one
+/// `b10x-gates scan-text` line under `--repository` and, when the policy file is known,
+/// `--policy`, run through `runner`.
+struct Scanner<'a> {
+    runner: &'a dyn Runner,
+    repository: &'a str,
+    policy: Option<&'a Path>,
+}
+
+impl Scanner<'_> {
+    /// `--repository`, and `--policy` when the policy file is known.
+    fn scope(&self) -> Vec<String> {
+        let mut options = vec!["--repository".to_owned(), self.repository.to_owned()];
+        if let Some(policy) = self.policy {
+            options.push("--policy".to_owned());
+            options.push(policy.display().to_string());
+        }
+        options
+    }
+
+    /// The line that scans `paths`, the paths last.
+    fn argv(&self, paths: &[&Path]) -> Vec<String> {
+        let mut argv = vec!["b10x-gates".to_owned(), "scan-text".to_owned()];
+        argv.extend(self.scope());
+        argv.extend(paths.iter().map(|path| path.display().to_string()));
+        argv
+    }
+
+    /// One `scan-text` line over everything pushing `outgoing.head` would publish: the request
+    /// `write` puts under `dir` (the JSON sent and the title and body as published, as the
+    /// `request` noun names it), when one is opened, and the objects the push sends that the
+    /// repository does not hold (`held`, [`published_commits`], [`outgoing_text`]): every commit
+    /// object raw ([`BotRoute::MESSAGES`]), every tree's entry names, every path in full and
+    /// every blob ([`BotRoute::FILES`]), all written under `dir`. Once git prints more than
+    /// `limit` bytes for them, it is read no further and the push is refused, nothing written or
+    /// scanned.
+    #[allow(clippy::too_many_arguments)]
+    fn outgoing(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        outgoing: &Outgoing<'_>,
+        held: Option<&str>,
+        limit: usize,
+        write: fn(&Path, &PullRequest) -> Result<(PathBuf, PathBuf)>,
+        noun: &str,
+    ) -> Result<()> {
+        let Outgoing {
+            branch,
+            head,
+            request,
+            ..
+        } = *outgoing;
+        let (text, commits) = outgoing_text(tree, held, head, limit)?;
+        let Some((messages, files)) = text else {
+            bail!(
+                "{commits}, which pushing {branch} would publish, come to more than the {limit} bytes of messages and files one scan is given: refused, not cut; nothing was pushed"
+            );
+        };
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let mut paths = Vec::new();
+        if let Some(request) = request {
+            let (input, published) = write(dir, request)?;
+            paths.extend([input, published]);
+        }
+        for (name, text) in [(BotRoute::MESSAGES, messages), (BotRoute::FILES, files)] {
+            let path = dir.join(name);
+            std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+            paths.push(path);
+        }
+        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
+        succeed(self.runner, tree, &self.argv(&paths)).with_context(|| {
+            format!(
+                "what pushing {branch} would publish did not pass scan-text: {commits}, with their identities, messages and files{}; nothing was pushed{}",
+                if request.is_some() {
+                    format!(", and the {noun}'s title and body")
+                } else {
+                    String::new()
+                },
+                if request.is_some() {
+                    format!(" and no {noun} opened")
+                } else {
+                    String::new()
+                }
+            )
+        })?;
+        Ok(())
+    }
+
+    /// One `scan-text` line over [`BotRoute::IDENTITY`] written under `dir`: the identity as the
+    /// `author` and `committer` headers of a commit object ([`identity_headers`]). A
+    /// `b10x-gates` that is not on the program path, or that finds no policy file
+    /// ([`BotRoute::NO_POLICY`]), scanned nothing: [`IdentityScan::NotScanned`], naming what it
+    /// said. A refusal names `route`, whose scan before a push it is.
+    fn identity(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        identity: &crate::git::CommitIdentity,
+        route: &str,
+    ) -> Result<IdentityScan> {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let path = dir.join(BotRoute::IDENTITY);
+        std::fs::write(&path, identity_headers(identity))
+            .with_context(|| format!("write {}", path.display()))?;
+        let argv = self.argv(&[&path]);
+        let exit = match self.runner.run(tree, &argv) {
+            Ok(exit) => exit,
+            Err(error)
+                if error.chain().any(|cause| {
+                    cause
+                        .downcast_ref::<std::io::Error>()
+                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
+                }) =>
+            {
+                return Ok(IdentityScan::NotScanned(format!("{error:#}")));
+            }
+            Err(error) => return Err(error),
+        };
+        if exit.success() {
+            return Ok(IdentityScan::Passed);
+        }
+        let said = exit.stderr.trim();
+        if said.contains(BotRoute::NO_POLICY) {
+            return Ok(IdentityScan::NotScanned(
+                said.lines().collect::<Vec<_>>().join(" | "),
+            ));
+        }
+        Err(anyhow::Error::new(Failed {
+            line: argv.join(" "),
+            code: exit.code,
+            stderr: said.to_owned(),
+        }))
+        .with_context(|| {
+            format!(
+                "the commit identity {identity} did not pass scan-text, the scan {route} runs over every commit before a push"
+            )
+        })
     }
 }
 
@@ -2230,50 +2410,17 @@ impl Forge for BotRoute {
     /// [`Self::scan_limit`] bytes for them, it is read no further and the push is refused,
     /// nothing written or scanned.
     fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
-        let Outgoing {
-            branch,
-            base,
-            head,
-            request,
-        } = *outgoing;
-        head_is_a_commit(tree, branch, head)?;
-        let held = self.held(tree, base)?;
-        let (text, commits) = outgoing_text(tree, held.as_deref(), head, self.scan_limit)?;
-        let Some((messages, files)) = text else {
-            bail!(
-                "{commits}, which pushing {branch} would publish, come to more than the {} bytes of messages and files one scan is given: refused, not cut; nothing was pushed",
-                self.scan_limit
-            );
-        };
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let mut paths = Vec::new();
-        if let Some(request) = request {
-            let (input, published) = write_request(dir, request)?;
-            paths.extend([input, published]);
-        }
-        for (name, text) in [(Self::MESSAGES, messages), (Self::FILES, files)] {
-            let path = dir.join(name);
-            std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
-            paths.push(path);
-        }
-        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        self.succeed(tree, &self.scan_paths_argv(&paths))
-            .with_context(|| {
-                format!(
-                    "what pushing {branch} would publish did not pass scan-text: {commits}, with their identities, messages and files{}; nothing was pushed{}",
-                    if request.is_some() {
-                        ", and the pull request's title and body"
-                    } else {
-                        ""
-                    },
-                    if request.is_some() {
-                        " and no pull request opened"
-                    } else {
-                        ""
-                    }
-                )
-            })?;
-        Ok(())
+        head_is_a_commit(tree, outgoing.branch, outgoing.head)?;
+        let held = self.held(tree, outgoing.base)?;
+        self.scanner().outgoing(
+            tree,
+            dir,
+            outgoing,
+            held.as_deref(),
+            self.scan_limit,
+            write_request,
+            "pull request",
+        )
     }
 
     /// One `scan-text` line, under the repository and policy of the scan before a push
@@ -2287,43 +2434,8 @@ impl Forge for BotRoute {
         dir: &Path,
         identity: &crate::git::CommitIdentity,
     ) -> Result<IdentityScan> {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let path = dir.join(Self::IDENTITY);
-        std::fs::write(&path, identity_headers(identity))
-            .with_context(|| format!("write {}", path.display()))?;
-        let argv = self.scan_argv(&path);
-        let exit = match self.runner.run(tree, &argv) {
-            Ok(exit) => exit,
-            Err(error)
-                if error.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-                }) =>
-            {
-                return Ok(IdentityScan::NotScanned(format!("{error:#}")));
-            }
-            Err(error) => return Err(error),
-        };
-        if exit.success() {
-            return Ok(IdentityScan::Passed);
-        }
-        let said = exit.stderr.trim();
-        if said.contains(Self::NO_POLICY) {
-            return Ok(IdentityScan::NotScanned(
-                said.lines().collect::<Vec<_>>().join(" | "),
-            ));
-        }
-        Err(anyhow::Error::new(Failed {
-            line: argv.join(" "),
-            code: exit.code,
-            stderr: said.to_owned(),
-        }))
-        .with_context(|| {
-            format!(
-                "the commit identity {identity} did not pass scan-text, the scan the bot route runs over every commit before a push"
-            )
-        })
+        self.scanner()
+            .identity(tree, dir, identity, "the bot route")
     }
 
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {

@@ -381,16 +381,16 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-commission"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "commission",
 ]
 
 [[package]]
 name = "b10x-loom-connectors"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-loom-commission",
  "connectors-client",
@@ -402,8 +402,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-executor"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-llm-core",
  "b10x-loom-commission",
@@ -418,8 +418,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-governor"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-canon",
  "b10x-canon-engineering",
@@ -433,16 +433,16 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-intake-references"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "b10x-loom-intake-router"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-canon-engineering",
  "b10x-llm-core",
@@ -453,8 +453,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-intake-slice"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-canon-engineering",
  "b10x-llm-core",
@@ -483,8 +483,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-protocols"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-canon",
  "b10x-canon-engineering",
@@ -497,8 +497,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-sdk"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-llm-core",
  "b10x-llm-credentials",
@@ -522,8 +522,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-session-executor"
-version = "0.39.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+version = "0.39.1"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 dependencies = [
  "b10x-loom-commission",
  "loom",
@@ -595,6 +595,7 @@ dependencies = [
  "sha1-checked",
  "sha2 0.10.9",
  "time",
+ "toml",
  "unsafe-libyaml",
 ]
 
@@ -908,7 +909,7 @@ dependencies = [
 [[package]]
 name = "commission"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 
 [[package]]
 name = "connectors-client"
@@ -2597,7 +2598,7 @@ dependencies = [
 [[package]]
 name = "intake"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 
 [[package]]
 name = "ipnet"
@@ -2918,7 +2919,7 @@ dependencies = [
 [[package]]
 name = "loom"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.39.0#380e631525c14dd15ad9802f577e6e802b40e47b"
+source = "git+https://github.com/beyond10x/loom?tag=0.39.1#3d0d86d29f2da8d993b3db34b699cac4bd34fd30"
 
 [[package]]
 name = "lru-slab"
@@ -4193,10 +4194,12 @@ version = "1.1.8+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "20489e00e4d8741d6be680764cc12e270655e375a20d1011e844a9c3379e678d"
 dependencies = [
+ "indexmap",
  "serde_core",
  "serde_spanned",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 
@@ -4217,6 +4220,12 @@ checksum = "baa693a8032d7e1cada7d0041e96126df243179ff061456783ac7f12bda4744c"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.3+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "06bdbd8cfc056b8d2e2e85f29b56a3bdbecb527cef81eb39e3e7b98af4652770"
 
 [[package]]
 name = "tower"

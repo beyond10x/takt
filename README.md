@@ -118,13 +118,32 @@ takt --version
 
 ## Requirements
 
-A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests, bubblewrap for
-`takt promote`: [What it needs](https://beyond10x.github.io/takt/docs/getting-started#what-it-needs).
+A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests (`glab` instead of
+`gh` on a GitLab host), bubblewrap for `takt promote`: [What it needs](https://beyond10x.github.io/takt/docs/getting-started#what-it-needs).
+
+`--harness harness` points b10x-harness at the Anthropic Messages API on your claude.ai login
+(`~/.claude/.credentials.json`) unless `--endpoint-base-url`, `--endpoint-wire`,
+`--endpoint-model` and `--endpoint-token-file` with `--endpoint-token-pointer` say otherwise,
+or `--endpoint-file`, a TOML file of `base_url`, `wire`, `model` and a `[credential]` table; a
+flag wins over the file. A credential is named, never given: a token file's path, or a secret's
+name in your secrets store (`--endpoint-secret <namespace>/<name>`), handed to b10x-harness
+by name, which the harness resolves; takt reads no secret. Your
+claude.ai token goes to the default base URL only, so another base URL needs a credential of
+its own; a base URL is `https://`, or `http://` to a loopback host, with no userinfo, query or
+fragment.
 
 takt commits as the identity the repository names in `.engineering/commit-identity.conf`
 (`[identity]` with `name` and `email`), or as `--commit-identity '<name> <email>'`, never as
 your git configuration. With neither it commits as `takt <takt@localhost>`, and a run through
 the bot route, which pushes those commits, is refused before its case opens.
+
+The forge follows `origin`: `--forge bot` on github.com, `--forge gitlab` on any other host
+while `glab auth status --hostname <host>` exits 0, else `--forge none`, with the reason in
+one line. Through `gitlab`, git pushes over HTTPS with `glab auth git-credential` as its one
+credential helper, and the merge request is opened, read and merged through `glab api`;
+`--forge gitlab` without `glab` or its login is refused before the case opens. A scenario run
+creates its trial base only through the bot route: it refuses `--forge gitlab`, and on another
+host it runs with `--forge none`.
 
 A `--forge none` delivery whose change reads ahead stops `Unperformable` at `pr.opened`, exit 7,
 and prints `candidate: <full commit id>`: its code commits, without takt's take, record and
@@ -141,14 +160,14 @@ nothing sandboxes the harness session yet (`story:harness-child-confined`).
 ## Built on
 
 takt is an application on [Loom](https://github.com/beyond10x/loom)'s `b10x-loom-sdk`, pinned
-in `Cargo.toml` at the Loom tag 0.39.0 (ADR 0099, `epic:takt-on-loom-sdk`):
+in `Cargo.toml` at the Loom tag 0.39.1 (ADR 0099, `epic:takt-on-loom-sdk`):
 
 - Commission's runtime drives each step of a case (`run_until_blocked`).
 - Loom's governor decides the case with [Canon](https://github.com/beyond10x/canon) over the
   case's files, and takt's `CaseAuthority` answers it from `authority.yaml` when a step needs a
   grant.
 - Each harness step runs in a metaharness 0.15.0 session started by Loom's session executor, the
-  crate `b10x-loom-session-executor` 0.39.0 (`loom_sdk::session`). The harness proposes a change
+  crate `b10x-loom-session-executor` 0.39.1 (`loom_sdk::session`). The harness proposes a change
   from a scratch copy, and takt's edit effect applies it under the step guard.
 
 takt keeps its validators and their evidence, git and the forge, the planning-store seam,

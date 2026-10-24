@@ -203,6 +203,7 @@ fn the_scorecard_reads_a_record_cut_inside_a_character() {
         binary: None,
         layers: None,
         confinement: None,
+        endpoint: None,
     };
     events.emit(0, &opened).expect("the run opens");
     append(events.path(), CUT);

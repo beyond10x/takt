@@ -130,6 +130,12 @@ pub trait Harness {
     fn take_session(&self) -> Option<AgentSession> {
         None
     }
+    /// The model endpoint the harness's sessions are pointed at, by reference only (its base
+    /// URL, wire and model, and where its credential is, never a token), which the run records
+    /// on its `opened` line; none by default, for a harness pointed at none.
+    fn endpoint_reference(&self) -> Option<EndpointConfig> {
+        None
+    }
 }
 
 pub use loom_sdk::session::{Endpoint, Proposal, ProposedFile};
@@ -189,8 +195,16 @@ pub struct SessionHarness {
     /// metaharness finds itself, on that same `PATH`.
     pub program: String,
     /// For `Kind::B10x`, the endpoint its loop is pointed at and the subscription token it
-    /// reads.
+    /// reads, or none (`token_file` empty) when [`Self::api_key_secret`] names its key.
     pub endpoint: Option<loom_sdk::session::Endpoint>,
+    /// For `Kind::B10x`, the name of the endpoint's API key in the owner's secrets store,
+    /// `<namespace>/<name>`, handed to the session executor as its `api_key_secret`: the loop
+    /// opens the store by it, and the key never reaches takt, metaharness or the child's
+    /// environment. None for a token file and for Claude Code and Codex.
+    pub api_key_secret: Option<String>,
+    /// The user's HOME, under which the endpoint's token file is recorded as `~/…`
+    /// ([`EndpointConfig::recorded`]); the session is given the path whole. None records it whole.
+    pub home: Option<std::path::PathBuf>,
     /// What starts each step's session in place of the real `claude`; none for the real one.
     pub runner: Option<Box<RunnerFactory>>,
     /// The tokens by component the last step reported, set by each step.
@@ -254,6 +268,8 @@ impl SessionHarness {
             }
             .to_owned(),
             endpoint: None,
+            api_key_secret: None,
+            home: None,
             runner: None,
             reported: std::cell::Cell::new(None),
             call: std::cell::RefCell::new(None),
@@ -271,6 +287,14 @@ impl SessionHarness {
     ) -> Self {
         self.runner = Some(Box::new(runner));
         self
+    }
+
+    /// Points the harness at `config`: the session's endpoint
+    /// ([`EndpointConfig::session_endpoint`]) and, for a secret, its name
+    /// ([`EndpointConfig::api_key_secret`]), each from the one configuration so the two agree.
+    pub fn point_at(&mut self, config: &EndpointConfig) {
+        self.endpoint = Some(config.session_endpoint());
+        self.api_key_secret = config.api_key_secret();
     }
 
     /// `program` by path: as given when it names a directory, else the first executable file
@@ -442,6 +466,18 @@ impl Harness for SessionHarness {
         self.session.borrow_mut().take()
     }
 
+    /// b10x-harness's endpoint as its sessions are pointed at it, `--model` over the
+    /// endpoint's model as the session executor takes it, its token file under HOME as `~/…`
+    /// or its secret's name; Claude Code and Codex are pointed at none.
+    fn endpoint_reference(&self) -> Option<EndpointConfig> {
+        let endpoint = self.endpoint.as_ref().filter(|_| self.kind == Kind::B10x)?;
+        let mut reference = EndpointConfig::of_session(endpoint, self.api_key_secret.as_deref());
+        if let Some(model) = &self.model {
+            reference.model.clone_from(model);
+        }
+        Some(reference.recorded(self.home.as_deref()))
+    }
+
     /// Codex's shell reads where its sandbox grants reading, the whole file system;
     /// b10x-harness's calls are observed and decided by none: both may have read outside the
     /// copy. Claude Code's every call is decided inside it.
@@ -514,6 +550,8 @@ impl Harness for SessionHarness {
         executor.model.clone_from(&self.model);
         executor.max_turns = (self.kind != Kind::Codex).then_some(self.max_turns);
         executor.endpoint.clone_from(&self.endpoint);
+        // The secret's name alone: the loop opens the store by it, so takt reads no key.
+        executor.api_key_secret.clone_from(&self.api_key_secret);
         // The user's login where there is one to copy (`~/.claude/.credentials.json`,
         // `~/.codex/auth.json`, the file metaharness copies); on a home with none, no
         // credential, as the program run there would have none.
@@ -1972,6 +2010,492 @@ pub fn is_test_path(path: &str) -> bool {
         || stem.ends_with(".spec")
 }
 
+/// The wires a `--harness harness` endpoint may speak, as b10x-harness names them.
+pub const ENDPOINT_WIRES: [&str; 2] = ["anthropic-messages", "openai-responses"];
+
+/// Where the credential of a `--harness harness` endpoint is, by reference only: takt reads a
+/// subscription token file only to check, before the first step, that a token is where its
+/// pointer points, and never reads a secret. Recorded as `kind` `subscription_file` with the
+/// `path` and, when given, the `pointer`, or `kind` `secret` with the `namespace` and `name`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Credential {
+    /// A subscription token in a file, at a JSON pointer inside it, or the whole file without
+    /// one; b10x-harness's loop reads the file itself.
+    SubscriptionFile {
+        #[serde(serialize_with = "path_as_written")]
+        path: std::path::PathBuf,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pointer: Option<String>,
+    },
+    /// An API key held in the owner's secrets store under a namespace and a name, written
+    /// `<namespace>/<name>`; the harness resolves it, and takt opens no store.
+    Secret { namespace: String, name: String },
+}
+
+/// A token file's path as the record writes it: as it displays, so a path that is not UTF-8
+/// is still recorded, its undecodable bytes replaced, instead of failing the line.
+fn path_as_written<S: serde::Serializer>(
+    path: &std::path::Path,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.serialize_str(&path.display().to_string())
+}
+
+impl Credential {
+    /// The secret `<namespace>/<name>`: each part non-empty, with no `/`, no white space and no
+    /// control character. A refusal does not repeat what was given, which may be a key typed in
+    /// the wrong place.
+    pub fn secret(given: &str) -> Result<Self> {
+        let plain = |part: &str| {
+            !part.is_empty()
+                && !part
+                    .chars()
+                    .any(|c| c == '/' || c.is_whitespace() || c.is_control())
+        };
+        match given.split_once('/') {
+            Some((namespace, name)) if plain(namespace) && plain(name) => Ok(Self::Secret {
+                namespace: namespace.to_owned(),
+                name: name.to_owned(),
+            }),
+            _ => bail!(
+                "the endpoint's secret is no secret's name: one is `<namespace>/<name>`, each part non-empty, with no `/`, no white space and no control character"
+            ),
+        }
+    }
+
+    /// The credential by reference: the token file and its pointer, or the secret's name; never
+    /// a token.
+    #[must_use]
+    pub fn reference(&self) -> String {
+        match self {
+            Self::SubscriptionFile {
+                path,
+                pointer: Some(pointer),
+            } => format!("subscription token file {} at {pointer}", path.display()),
+            Self::SubscriptionFile {
+                path,
+                pointer: None,
+            } => format!("subscription token file {}", path.display()),
+            Self::Secret { namespace, name } => format!("secret {namespace}/{name}"),
+        }
+    }
+}
+
+/// What the `--endpoint-*` flags or an endpoint file give a `--harness harness` endpoint, each
+/// field absent when not given.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EndpointFields {
+    pub base_url: Option<String>,
+    pub wire: Option<String>,
+    pub model: Option<String>,
+    pub token_file: Option<std::path::PathBuf>,
+    pub token_pointer: Option<String>,
+    pub secret: Option<String>,
+}
+
+impl EndpointFields {
+    /// The endpoint file at `path`: TOML holding `base_url`, `wire` and `model`, each a string,
+    /// and a `[credential]` table of `token_file` with an optional `token_pointer`, or of
+    /// `secret` (`<namespace>/<name>`); a relative `token_file` is read beside the file. Any
+    /// other key, or a table naming both kinds or neither, is refused naming the path and, for
+    /// a parse, the line, never a value written there.
+    pub fn read(path: &Path) -> Result<Self> {
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct File {
+            base_url: Option<String>,
+            wire: Option<String>,
+            model: Option<String>,
+            credential: Option<Table>,
+        }
+        #[derive(serde::Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Table {
+            token_file: Option<std::path::PathBuf>,
+            token_pointer: Option<String>,
+            secret: Option<String>,
+        }
+        const SHAPE: &str = "an endpoint file holds `base_url`, `wire` and `model`, each a string, and a `[credential]` table of `token_file` with an optional `token_pointer`, or of `secret`";
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("the endpoint file {}", path.display()))?;
+        let file: File = toml::from_str(&text).map_err(|error| {
+            match error
+                .span()
+                .and_then(|span| text.get(..span.start))
+                .map(|before| before.matches('\n').count() + 1)
+            {
+                Some(line) => anyhow!(
+                    "the endpoint file {} is refused at line {line}: {SHAPE}",
+                    path.display()
+                ),
+                None => anyhow!("the endpoint file {} is refused: {SHAPE}", path.display()),
+            }
+        })?;
+        let given = file.credential.is_some();
+        let table = file.credential.unwrap_or(Table {
+            token_file: None,
+            token_pointer: None,
+            secret: None,
+        });
+        match (&table.token_file, &table.token_pointer, &table.secret) {
+            (Some(_), _, None) | (None, None, Some(_)) => {}
+            (None, None, None) if !given => {}
+            _ => bail!(
+                "the endpoint file {} is refused: its `[credential]` names `token_file` with an optional `token_pointer`, or `secret`: one of them, not both and not a `token_pointer` alone",
+                path.display()
+            ),
+        }
+        let beside = |token: std::path::PathBuf| match path.parent() {
+            Some(dir) if token.is_relative() => dir.join(token),
+            _ => token,
+        };
+        Ok(Self {
+            base_url: file.base_url,
+            wire: file.wire,
+            model: file.model,
+            token_file: table.token_file.map(beside),
+            token_pointer: table.token_pointer,
+            secret: table.secret,
+        })
+    }
+
+    /// The credential these fields name, when they name one.
+    fn credential(&self) -> Option<Result<Credential>> {
+        match (&self.token_file, &self.secret) {
+            (Some(path), _) => Some(Ok(Credential::SubscriptionFile {
+                path: path.clone(),
+                pointer: self.token_pointer.clone(),
+            })),
+            (None, Some(secret)) => Some(Credential::secret(secret)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// The model endpoint `--harness harness` points b10x-harness at: its base URL, its wire, its
+/// model and its credential by reference ([`Credential`]); the run records it so on its
+/// `opened` line ([`crate::events::Event::Opened`]), holding no token to record.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct EndpointConfig {
+    pub base_url: String,
+    pub wire: String,
+    pub model: String,
+    pub credential: Credential,
+}
+
+impl EndpointConfig {
+    /// The default base URL: the Anthropic Messages API.
+    pub const BASE_URL: &str = "https://api.anthropic.com/v1";
+    /// The default wire.
+    pub const WIRE: &str = "anthropic-messages";
+    /// The default model.
+    pub const MODEL: &str = "claude-opus-5";
+    /// The default token file, under HOME: the user's claude.ai login.
+    pub const TOKEN_FILE: &str = ".claude/.credentials.json";
+    /// The default token file's pointer.
+    pub const TOKEN_POINTER: &str = "/claudeAiOauth/accessToken";
+
+    /// The endpoint a session is built with, read back by reference: the secret
+    /// `api_key_secret` names when the session is given one, else the endpoint's token file and
+    /// pointer. A name not of the shape `<namespace>/<name>`, which the session executor refuses,
+    /// is read back whole as the `name`, its `namespace` empty.
+    #[must_use]
+    pub fn of_session(endpoint: &Endpoint, api_key_secret: Option<&str>) -> Self {
+        let credential = match api_key_secret {
+            Some(given) => {
+                let (namespace, name) = given.split_once('/').unwrap_or(("", given));
+                Credential::Secret {
+                    namespace: namespace.to_owned(),
+                    name: name.to_owned(),
+                }
+            }
+            None => Credential::SubscriptionFile {
+                path: endpoint.token_file.clone(),
+                pointer: endpoint.token_pointer.clone(),
+            },
+        };
+        Self {
+            base_url: endpoint.base_url.clone(),
+            wire: endpoint.wire.clone(),
+            model: endpoint.model.clone(),
+            credential,
+        }
+    }
+
+    /// The endpoint as a record writes it: a token file under `home` as `~/<the rest>`, so the
+    /// record names no user's directory; the session is given the path whole. A `home` that is
+    /// relative or the root changes nothing.
+    #[must_use]
+    pub fn recorded(mut self, home: Option<&Path>) -> Self {
+        if let Credential::SubscriptionFile { path, .. } = &mut self.credential
+            && let Some(home) = home.filter(|home| home.is_absolute() && home.parent().is_some())
+            && let Ok(rest) = path.strip_prefix(home)
+        {
+            *path = Path::new("~").join(rest);
+        }
+        self
+    }
+
+    /// The endpoint `flags` and `file` give, each field the flag's, else the file's, else the
+    /// default: b10x-harness's own `claude` provider on the user's claude.ai subscription token
+    /// under `home`. The credential is taken whole from one source: a token file with its
+    /// pointer, or a secret's name; a relative token file is made absolute against the current
+    /// directory, since the harness runs in a scratch copy of the tree. Refused: a token file
+    /// and a secret both given by flag, a pointer flag without a token file flag, a wire
+    /// b10x-harness does not speak, a base URL [`check_base_url`] refuses, an empty model, the
+    /// default credential with no HOME or with a base URL other than the default, which would
+    /// send the user's claude.ai token to another host.
+    pub fn of(
+        flags: &EndpointFields,
+        file: Option<&EndpointFields>,
+        home: Option<&Path>,
+    ) -> Result<Self> {
+        if flags.token_file.is_some() && flags.secret.is_some() {
+            bail!(
+                "--endpoint-token-file and --endpoint-secret each name the endpoint's credential; give one"
+            );
+        }
+        if flags.token_pointer.is_some() && flags.token_file.is_none() {
+            bail!(
+                "--endpoint-token-pointer points into the token file --endpoint-token-file names, and none is given; give both"
+            );
+        }
+        let none = EndpointFields::default();
+        let file = file.unwrap_or(&none);
+        let pick = |flag: &Option<String>, given: &Option<String>, default: &str| {
+            flag.clone()
+                .or_else(|| given.clone())
+                .unwrap_or_else(|| default.to_owned())
+        };
+        let base_url = pick(&flags.base_url, &file.base_url, Self::BASE_URL);
+        let wire = pick(&flags.wire, &file.wire, Self::WIRE);
+        let model = pick(&flags.model, &file.model, Self::MODEL);
+        if !ENDPOINT_WIRES.contains(&wire.as_str()) {
+            bail!(
+                "the endpoint's wire `{wire}` is none b10x-harness speaks: {}",
+                ENDPOINT_WIRES.join(" or ")
+            );
+        }
+        check_base_url(&base_url)?;
+        if model.is_empty() || model.chars().any(char::is_whitespace) {
+            bail!("the endpoint's model `{model}` is no model id");
+        }
+        let credential = match flags.credential().or_else(|| file.credential()) {
+            Some(credential) => credential?,
+            None => {
+                if base_url != Self::BASE_URL {
+                    bail!(
+                        "the endpoint's base URL {base_url} is not the default {}, and no credential is given: the default credential, the claude.ai subscription token in ~/{}, is not sent to another host; give --endpoint-token-file or --endpoint-secret, or the endpoint file's `[credential]`",
+                        Self::BASE_URL,
+                        Self::TOKEN_FILE
+                    );
+                }
+                let home = home.ok_or_else(|| {
+                    anyhow!(
+                        "the endpoint's credential is by default the subscription token file $HOME/{}, and HOME is not set; give --endpoint-token-file or --endpoint-secret",
+                        Self::TOKEN_FILE
+                    )
+                })?;
+                Credential::SubscriptionFile {
+                    path: home.join(Self::TOKEN_FILE),
+                    pointer: Some(Self::TOKEN_POINTER.to_owned()),
+                }
+            }
+        };
+        // The token file as the harness, in its scratch copy of the tree, reads it.
+        let credential = match credential {
+            Credential::SubscriptionFile { path, pointer } if path.is_relative() => {
+                Credential::SubscriptionFile {
+                    path: std::path::absolute(&path).with_context(|| {
+                        format!(
+                            "the endpoint's subscription token file {} is relative, and the current directory it is read against cannot be read",
+                            path.display()
+                        )
+                    })?,
+                    pointer,
+                }
+            }
+            credential => credential,
+        };
+        Ok(Self {
+            base_url,
+            wire,
+            model,
+            credential,
+        })
+    }
+
+    /// Checks, before the first step, that a subscription token file holds a token where its
+    /// pointer points: the file is read, as JSON when a pointer is given, and the pointer
+    /// resolves to a non-empty string; without a pointer the file is not empty. A refusal
+    /// names the path and the pointer and nothing of the file's content. A secret's name is
+    /// checked by no read: takt opens no secrets store.
+    pub fn check_token(&self) -> Result<()> {
+        let Credential::SubscriptionFile { path, pointer } = &self.credential else {
+            return Ok(());
+        };
+        let at = pointer.as_deref().map_or_else(
+            || "no pointer: the whole file is the token".to_owned(),
+            |pointer| format!("pointer {pointer}"),
+        );
+        let bytes = std::fs::read(path).map_err(|error| {
+            anyhow!(
+                "the endpoint's subscription token file {} ({at}) cannot be read: {error}; nothing was started",
+                path.display()
+            )
+        })?;
+        let found = match pointer {
+            Some(pointer) => serde_json::from_slice::<serde_json::Value>(&bytes)
+                .ok()
+                .and_then(|json| {
+                    json.pointer(pointer)
+                        .and_then(serde_json::Value::as_str)
+                        .map(|token| !token.trim().is_empty())
+                })
+                .unwrap_or(false),
+            None => !String::from_utf8_lossy(&bytes).trim().is_empty(),
+        };
+        if !found {
+            bail!(
+                "the endpoint's subscription token file {} ({at}) holds no token there: no non-empty string at the pointer, the file not JSON, or the file empty; nothing was started",
+                path.display()
+            );
+        }
+        Ok(())
+    }
+
+    /// The endpoint the session is built with ([`SessionHarness::endpoint`]): a subscription
+    /// token file maps onto the session executor's token file and pointer; a secret's name
+    /// leaves both empty (`token_file` empty, no pointer), the key named by
+    /// [`Self::api_key_secret`] alone.
+    #[must_use]
+    pub fn session_endpoint(&self) -> Endpoint {
+        let (token_file, token_pointer) = match &self.credential {
+            Credential::SubscriptionFile { path, pointer } => (path.clone(), pointer.clone()),
+            Credential::Secret { .. } => (std::path::PathBuf::new(), None),
+        };
+        Endpoint {
+            base_url: self.base_url.clone(),
+            wire: self.wire.clone(),
+            model: self.model.clone(),
+            token_file,
+            token_pointer,
+        }
+    }
+
+    /// The secret's name the session executor hands b10x-harness (`api_key_secret`),
+    /// `<namespace>/<name>`, which the harness resolves; takt reads no secret and opens no
+    /// store. None for a subscription token file.
+    #[must_use]
+    pub fn api_key_secret(&self) -> Option<String> {
+        match &self.credential {
+            Credential::Secret { namespace, name } => Some(format!("{namespace}/{name}")),
+            Credential::SubscriptionFile { .. } => None,
+        }
+    }
+}
+
+/// Checks a `--harness harness` base URL before any case opens. It is `https://`, or
+/// `http://` to a loopback host alone (`localhost`, `127.0.0.0/8`, `::1`), since the credential
+/// goes with every request; its host is a name, an IPv4 address or a bracketed IPv6 address,
+/// with an optional port; and it holds no userinfo, query or fragment, each of which can carry
+/// a key that the case's `opened` line and every error would repeat. A refusal names the part
+/// found and shows the URL without its userinfo, query and fragment, or, for a URL that is no
+/// http(s) URL or has no such host, nothing of it.
+fn check_base_url(url: &str) -> Result<()> {
+    let Some((scheme, rest)) = url
+        .split_once("://")
+        .filter(|(scheme, _)| matches!(*scheme, "https" | "http"))
+        .filter(|_| !url.chars().any(|c| c.is_whitespace() || c.is_control()))
+    else {
+        bail!(
+            "the endpoint's base URL is no http(s) URL: one is `https://<host>/<prefix>`, or `http://` to a loopback host, with no white space"
+        );
+    };
+    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    let (userinfo, host_port) = authority
+        .rsplit_once('@')
+        .map_or((false, authority), |(_, host_port)| (true, host_port));
+    let (before_fragment, fragment) = tail
+        .split_once('#')
+        .map_or((tail, false), |(before, _)| (before, true));
+    let (path, query) = before_fragment
+        .split_once('?')
+        .map_or((before_fragment, false), |(path, _)| (path, true));
+    let Some(host) = host_of(host_port) else {
+        bail!(
+            "the endpoint's base URL has no host takt reads: one is a name, an IPv4 address or a bracketed IPv6 address, with an optional `:<port>`"
+        );
+    };
+    let shown = format!("{scheme}://{host_port}{path}");
+    let found: Vec<&str> = [
+        (
+            userinfo,
+            "a userinfo (`<user>:<password>@` before the host)",
+        ),
+        (query, "a query (`?…`)"),
+        (fragment, "a fragment (`#…`)"),
+    ]
+    .into_iter()
+    .filter_map(|(found, part)| found.then_some(part))
+    .collect();
+    if !found.is_empty() {
+        bail!(
+            "the endpoint's base URL {shown} carries {}, refused before the case opens: each can carry a key, which the case's `opened` line and every error would repeat; give the credential by --endpoint-token-file or --endpoint-secret, or the endpoint file's `[credential]`",
+            found.join(" and ")
+        );
+    }
+    if scheme == "http" && !loopback(host) {
+        bail!(
+            "the endpoint's base URL {shown} is `http://` to {host}, no loopback host (`localhost`, `127.0.0.0/8`, `::1`): the credential would cross the network in the clear; give `https://`"
+        );
+    }
+    Ok(())
+}
+
+/// The host of a URL's `host[:port]`: a name of letters, digits, `-`, `.` and `_`, an IPv4
+/// address, or an IPv6 address in brackets, its brackets kept; the port, when given, digits.
+fn host_of(host_port: &str) -> Option<&str> {
+    let (host, port) = if host_port.starts_with('[') {
+        let (host, after) = host_port.split_at(host_port.find(']')? + 1);
+        host.strip_prefix('[')?
+            .strip_suffix(']')?
+            .parse::<std::net::Ipv6Addr>()
+            .ok()?;
+        (host, after)
+    } else {
+        let end = host_port.find(':').unwrap_or(host_port.len());
+        let (host, after) = host_port.split_at(end);
+        let name = |c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_');
+        if host.is_empty() || !host.chars().all(name) {
+            return None;
+        }
+        (host, after)
+    };
+    match port.strip_prefix(':') {
+        None if port.is_empty() => Some(host),
+        Some(digits) if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) => {
+            Some(host)
+        }
+        _ => None,
+    }
+}
+
+/// Whether `host` ([`host_of`]) is a loopback host: `localhost`, an address in `127.0.0.0/8`,
+/// or `[::1]`.
+fn loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<std::net::Ipv4Addr>()
+            .is_ok_and(|ip| ip.is_loopback())
+        || host
+            .strip_prefix('[')
+            .and_then(|host| host.strip_suffix(']'))
+            .and_then(|host| host.parse::<std::net::Ipv6Addr>().ok())
+            .is_some_and(|ip| ip.is_loopback())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2557,6 +3081,138 @@ mod tests {
         (line, log.launched())
     }
 
+    /// The argv of each child a scripted b10x-harness step in `tree` starts, the harness
+    /// pointed at `config` as `--harness harness` points it ([`SessionHarness::point_at`]).
+    fn b10x_launched(config: &EndpointConfig, tree: &Path) -> Vec<Vec<String>> {
+        use loom_sdk::session::metaharness::{ScriptedLog, ScriptedRunner};
+        let log = ScriptedLog::new();
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.point_at(config);
+        let kept = log.clone();
+        let harness = harness.with_runner(move || {
+            Box::new(ScriptedRunner::of_lines(Vec::<String>::new(), kept.clone()))
+        });
+        in_context(tree, &scoped(&["todo.py"]), |context| {
+            let _ = harness.step(context);
+        });
+        log.launched()
+    }
+
+    /// The word after `flag` in `argv`, when `flag` is there.
+    fn after<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+        let at = argv.iter().position(|word| word == flag)?;
+        argv.get(at + 1).map(String::as_str)
+    }
+
+    /// Whether `argv` names a credential of the loop's other than a secret's name: a token
+    /// file or variable, or a key file or variable.
+    fn names_a_token(argv: &[String]) -> bool {
+        argv.iter().any(|word| {
+            ["--oauth-token", "--api-key-env", "--api-key-file"]
+                .iter()
+                .any(|flag| word.starts_with(flag))
+        })
+    }
+
+    /// Acceptance 3, over what the session hands b10x-harness, a test per kind: the token kind
+    /// as it was, its file and pointer as `--oauth-token-file` and `--oauth-token-pointer` and
+    /// no secret named.
+    #[test]
+    fn a_token_file_reaches_the_loop_as_its_path_and_pointer() {
+        let dir = scratch("kind-token");
+        committed(&dir.0, &[TODO]);
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: std::path::PathBuf::from("/t/token.json"),
+                pointer: Some("/x/y".to_owned()),
+            },
+        };
+        let launched = b10x_launched(&config, &dir.0);
+        assert_eq!(launched.len(), 1, "one child: {launched:?}");
+        let argv = &launched[0];
+        assert_eq!(
+            after(argv, "--oauth-token-file"),
+            Some("/t/token.json"),
+            "{argv:?}"
+        );
+        assert_eq!(
+            after(argv, "--oauth-token-pointer"),
+            Some("/x/y"),
+            "{argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|word| word.starts_with("--api-key")),
+            "{argv:?}"
+        );
+    }
+
+    /// Acceptance 3, the secret kind: its name is handed down as a name, `--api-key-secret
+    /// <namespace>/<name>`, and no token file, pointer or key variable is named beside it.
+    #[test]
+    fn a_secret_reaches_the_loop_as_its_name_alone() {
+        let dir = scratch("kind-secret");
+        committed(&dir.0, &[TODO]);
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::secret("llm/some-key").expect("a secret's name"),
+        };
+        let launched = b10x_launched(&config, &dir.0);
+        assert_eq!(launched.len(), 1, "one child: {launched:?}");
+        let argv = &launched[0];
+        assert_eq!(
+            after(argv, "--api-key-secret"),
+            Some("llm/some-key"),
+            "{argv:?}"
+        );
+        assert!(!names_a_token(argv), "{argv:?}");
+    }
+
+    /// Acceptance 7: the trial arm's two endpoints, each over what takt hands b10x-harness: its
+    /// base URL, wire and model, and the secret `llm/opencode-go-api-key` by name, no token.
+    #[test]
+    fn the_opencode_go_endpoints_reach_the_loop_with_the_secret_by_name() {
+        let dir = scratch("opencode-go-launch");
+        committed(&dir.0, &[TODO]);
+        for (wire, base_url, model) in [
+            (
+                "anthropic-messages",
+                "https://opencode.ai/inference/go/anthropic/v1",
+                "claude-haiku-5-5",
+            ),
+            (
+                "openai-responses",
+                "https://opencode.ai/inference/go/openai/v1",
+                "gpt-6-luna",
+            ),
+        ] {
+            let flags = EndpointFields {
+                base_url: Some(base_url.to_owned()),
+                wire: Some(wire.to_owned()),
+                model: Some(model.to_owned()),
+                secret: Some("llm/opencode-go-api-key".to_owned()),
+                ..EndpointFields::default()
+            };
+            let config = EndpointConfig::of(&flags, None, None).expect("no HOME needed");
+            let launched = b10x_launched(&config, &dir.0);
+            assert_eq!(launched.len(), 1, "{wire}: one child: {launched:?}");
+            let argv = &launched[0];
+            assert_eq!(after(argv, "--base-url"), Some(base_url), "{argv:?}");
+            assert_eq!(after(argv, "--wire"), Some(wire), "{argv:?}");
+            assert_eq!(after(argv, "--model"), Some(model), "{argv:?}");
+            assert_eq!(
+                after(argv, "--api-key-secret"),
+                Some("llm/opencode-go-api-key"),
+                "{argv:?}"
+            );
+            assert!(!names_a_token(argv), "{wire}: {argv:?}");
+        }
+    }
+
     /// The paths of the context files metaharness rendered into a child's arguments, in order:
     /// each `<context-file-N path="…"` line of every argument.
     fn context_paths(argv: &[String]) -> Vec<String> {
@@ -3105,6 +3761,982 @@ mod tests {
         assert!(
             prompt.contains("Files in scope, attached: @todo.py\n"),
             "{prompt}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// A scratch directory under the temporary directory, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("takt-endpoint-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        Scratch(dir)
+    }
+
+    /// The endpoint file `text` written in `dir`, read back as the fields it gives.
+    fn from_file(dir: &Path, text: &str) -> EndpointFields {
+        let path = dir.join("endpoint.toml");
+        std::fs::write(&path, text).expect("an endpoint file");
+        EndpointFields::read(&path).expect("the endpoint file reads")
+    }
+
+    fn home() -> PathBuf {
+        PathBuf::from("/nonexistent-home")
+    }
+
+    fn resolved(flags: &EndpointFields, file: Option<&EndpointFields>) -> EndpointConfig {
+        EndpointConfig::of(flags, file, Some(&home())).expect("the endpoint resolves")
+    }
+
+    /// Acceptance 1: no flag and no file build the endpoint the `harness` arm built before.
+    #[test]
+    fn endpoint_with_nothing_given_is_the_one_built_before() {
+        let config = resolved(&EndpointFields::default(), None);
+        assert_eq!(config.api_key_secret(), None, "no secret named");
+        let built = config.session_endpoint();
+        let before = Endpoint {
+            base_url: "https://api.anthropic.com/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "claude-opus-5".to_owned(),
+            token_file: home().join(".claude/.credentials.json"),
+            token_pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+        };
+        assert_eq!(built.base_url, before.base_url);
+        assert_eq!(built.wire, before.wire);
+        assert_eq!(built.model, before.model);
+        assert_eq!(built.token_file, before.token_file);
+        assert_eq!(built.token_pointer, before.token_pointer);
+        assert_eq!(built, before);
+    }
+
+    /// Acceptance 1: the default credential lives under HOME; without one it is refused.
+    #[test]
+    fn endpoint_default_credential_without_home_is_refused() {
+        let error = EndpointConfig::of(&EndpointFields::default(), None, None)
+            .expect_err("no HOME, no default token file");
+        let message = format!("{error:#}");
+        assert!(message.contains("HOME"), "{message}");
+    }
+
+    /// Acceptance 2: the base URL by flag, by file, the flag winning; each names a credential,
+    /// since the default one goes to the default base URL alone.
+    #[test]
+    fn endpoint_base_url_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("base-url");
+        let file = from_file(
+            &dir.0,
+            "base_url = \"https://file.example/v1\"\n\n[credential]\ntoken_file = \"/file/token.json\"\n",
+        );
+        let flags = EndpointFields {
+            base_url: Some("https://flag.example/v1".to_owned()),
+            token_file: Some(PathBuf::from("/flag/token.json")),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).base_url,
+            "https://file.example/v1"
+        );
+        assert_eq!(resolved(&flags, None).base_url, "https://flag.example/v1");
+        assert_eq!(
+            resolved(&flags, Some(&file)).base_url,
+            "https://flag.example/v1"
+        );
+    }
+
+    /// Acceptance 2: the wire by flag, by file, the flag winning; an unknown wire is refused.
+    #[test]
+    fn endpoint_wire_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("wire");
+        let file = from_file(&dir.0, "wire = \"openai-responses\"\n");
+        let flags = EndpointFields {
+            wire: Some("anthropic-messages".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).wire,
+            "openai-responses"
+        );
+        assert_eq!(resolved(&flags, None).wire, "anthropic-messages");
+        assert_eq!(resolved(&flags, Some(&file)).wire, "anthropic-messages");
+        let unknown = EndpointFields {
+            wire: Some("smoke-signals".to_owned()),
+            ..EndpointFields::default()
+        };
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&unknown, None, Some(&home())).expect_err("an unknown wire")
+        );
+        assert!(
+            message.contains("smoke-signals")
+                && message.contains("anthropic-messages")
+                && message.contains("openai-responses"),
+            "{message}"
+        );
+    }
+
+    /// Acceptance 2: the model by flag, by file, the flag winning.
+    #[test]
+    fn endpoint_model_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("model");
+        let file = from_file(&dir.0, "model = \"file-model\"\n");
+        let flags = EndpointFields {
+            model: Some("flag-model".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).model,
+            "file-model"
+        );
+        assert_eq!(resolved(&flags, None).model, "flag-model");
+        assert_eq!(resolved(&flags, Some(&file)).model, "flag-model");
+    }
+
+    /// Acceptance 2: the credential by flag, by file, the flag winning, whichever kind each
+    /// names; a relative token file in the file is read beside it.
+    #[test]
+    fn endpoint_credential_is_set_by_flag_and_by_file_the_flag_winning() {
+        let dir = scratch("credential");
+        let file = from_file(
+            &dir.0,
+            "[credential]\ntoken_file = \"token.json\"\ntoken_pointer = \"/a\"\n",
+        );
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&file)).credential,
+            Credential::SubscriptionFile {
+                path: dir.0.join("token.json"),
+                pointer: Some("/a".to_owned()),
+            }
+        );
+        let by_flag = EndpointFields {
+            token_file: Some(PathBuf::from("/flag/token.json")),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&by_flag, None).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/flag/token.json"),
+                pointer: None,
+            }
+        );
+        assert_eq!(
+            resolved(&by_flag, Some(&file)).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/flag/token.json"),
+                pointer: None,
+            },
+            "the flag's token file is taken whole, its pointer with it"
+        );
+        let secret_file = from_file(&dir.0, "[credential]\nsecret = \"llm/from-file\"\n");
+        assert_eq!(
+            resolved(&EndpointFields::default(), Some(&secret_file)).credential,
+            Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "from-file".to_owned(),
+            }
+        );
+        assert_eq!(
+            resolved(&by_flag, Some(&secret_file)).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/flag/token.json"),
+                pointer: None,
+            }
+        );
+        let secret_flag = EndpointFields {
+            secret: Some("llm/from-flag".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&secret_flag, Some(&file)).credential,
+            Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "from-flag".to_owned(),
+            }
+        );
+    }
+
+    /// Two credentials at once, a pointer with no token file, a file naming no credential or
+    /// a key it does not know: each refused.
+    #[test]
+    fn endpoint_credential_given_twice_or_half_is_refused() {
+        let both = EndpointFields {
+            token_file: Some(PathBuf::from("/t.json")),
+            secret: Some("llm/key".to_owned()),
+            ..EndpointFields::default()
+        };
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&both, None, Some(&home())).expect_err("two credentials")
+        );
+        assert!(
+            message.contains("--endpoint-token-file") && message.contains("--endpoint-secret"),
+            "{message}"
+        );
+        let lone = EndpointFields {
+            token_pointer: Some("/a".to_owned()),
+            ..EndpointFields::default()
+        };
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&lone, None, Some(&home())).expect_err("a lone pointer")
+        );
+        assert!(message.contains("--endpoint-token-pointer"), "{message}");
+        let dir = scratch("half");
+        let path = dir.0.join("endpoint.toml");
+        for text in [
+            "[credential]\ntoken_file = \"t.json\"\nsecret = \"llm/key\"\n",
+            "[credential]\ntoken_pointer = \"/a\"\n",
+            "[credential]\n",
+            "api_key = \"x\"\n",
+            "base_url = 5\n",
+        ] {
+            std::fs::write(&path, text).expect("an endpoint file");
+            let message = format!(
+                "{:#}",
+                EndpointFields::read(&path).expect_err("refused: {text}")
+            );
+            assert!(message.contains(&path.display().to_string()), "{message}");
+        }
+    }
+
+    /// Acceptance 3: the subscription kind maps onto the session's token file and pointer.
+    #[test]
+    fn endpoint_subscription_file_maps_onto_the_session_token_file() {
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: Some("/x/y".to_owned()),
+            },
+        };
+        assert_eq!(
+            config.session_endpoint(),
+            Endpoint {
+                base_url: "https://b.example/v1".to_owned(),
+                wire: "openai-responses".to_owned(),
+                model: "m".to_owned(),
+                token_file: PathBuf::from("/t/token.json"),
+                token_pointer: Some("/x/y".to_owned()),
+            }
+        );
+        assert_eq!(config.api_key_secret(), None, "no secret named");
+    }
+
+    /// Acceptance 3: the secret kind is handed down by its name: the session's endpoint names
+    /// no token (`token_file` empty, no pointer), and the session executor is given
+    /// `api_key_secret` `<namespace>/<name>`; the harness pointed at it carries both.
+    #[test]
+    fn endpoint_secret_is_handed_down_as_its_name() {
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "some-key".to_owned(),
+            },
+        };
+        let endpoint = Endpoint {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            token_file: PathBuf::new(),
+            token_pointer: None,
+        };
+        assert_eq!(config.session_endpoint(), endpoint);
+        assert_eq!(config.api_key_secret().as_deref(), Some("llm/some-key"));
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.point_at(&config);
+        assert_eq!(harness.endpoint, Some(endpoint));
+        assert_eq!(harness.api_key_secret.as_deref(), Some("llm/some-key"));
+        let token = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: None,
+            },
+            ..config
+        };
+        harness.point_at(&token);
+        assert_eq!(harness.api_key_secret, None, "a token file names no secret");
+        for kind in [Kind::Claude, Kind::Codex] {
+            assert_eq!(SessionHarness::of(kind).api_key_secret, None, "{kind:?}");
+        }
+    }
+
+    /// A secret's name is `<namespace>/<name>`, each part non-empty, with no `/` and no white
+    /// space; any other shape is refused naming what was given.
+    #[test]
+    fn endpoint_secret_shape_is_checked() {
+        assert_eq!(
+            Credential::secret("llm/opencode-go-api-key").expect("a secret's name"),
+            Credential::Secret {
+                namespace: "llm".to_owned(),
+                name: "opencode-go-api-key".to_owned(),
+            }
+        );
+        for bad in [
+            "",
+            "llm",
+            "/key",
+            "llm/",
+            "llm/a/b",
+            "l m/key",
+            "llm/ke y",
+            "llm/key\n",
+        ] {
+            assert!(
+                Credential::secret(bad).is_err(),
+                "{bad:?} is no secret's name"
+            );
+        }
+    }
+
+    /// Acceptance 4: with a secret's name the endpoint resolves with no HOME, the token check
+    /// reads nothing, and the harness is pointed at it: takt has no secrets store to open.
+    #[test]
+    fn endpoint_secret_needs_no_home_and_reads_nothing() {
+        let flags = EndpointFields {
+            secret: Some("llm/opencode-go-api-key".to_owned()),
+            ..EndpointFields::default()
+        };
+        let config = EndpointConfig::of(&flags, None, None).expect("no HOME needed");
+        config
+            .check_token()
+            .expect("a secret's name is checked by no read");
+        assert_eq!(
+            config.credential.reference(),
+            "secret llm/opencode-go-api-key"
+        );
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.point_at(&config);
+        assert_eq!(
+            harness.api_key_secret.as_deref(),
+            Some("llm/opencode-go-api-key")
+        );
+    }
+
+    /// Acceptance 5: a token in its file reaches no value takt builds from the endpoint: not
+    /// the configuration, its reference, the session's endpoint, nor a refusal.
+    #[test]
+    fn endpoint_token_never_leaves_its_file() {
+        let dir = scratch("marker");
+        let marker = "MARKER-7f3a1c-not-a-real-token";
+        let token = dir.0.join("token.json");
+        std::fs::write(&token, format!("{{\"a\":{{\"b\":\"{marker}\"}}}}")).expect("token");
+        let flags = EndpointFields {
+            token_file: Some(token.clone()),
+            token_pointer: Some("/a/b".to_owned()),
+            ..EndpointFields::default()
+        };
+        let config = resolved(&flags, None);
+        config.check_token().expect("the pointer resolves");
+        let endpoint = config.session_endpoint();
+        let dangling = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: token.clone(),
+                pointer: Some("/a/c".to_owned()),
+            },
+            ..config.clone()
+        };
+        let refusal = format!("{:#}", dangling.check_token().expect_err("dangling"));
+        for seen in [
+            format!("{config:?}"),
+            config.credential.reference(),
+            format!("{endpoint:?}"),
+            refusal,
+        ] {
+            assert!(!seen.contains(marker), "the token leaked: {seen}");
+        }
+        assert!(
+            config
+                .credential
+                .reference()
+                .contains(&token.display().to_string())
+        );
+    }
+
+    /// Acceptance 6: a missing token file fails naming its path and its pointer.
+    #[test]
+    fn endpoint_token_file_missing_is_refused_naming_path_and_pointer() {
+        let dir = scratch("missing");
+        let path = dir.0.join("absent.json");
+        let config = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: path.clone(),
+                pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+            },
+            ..resolved(&EndpointFields::default(), None)
+        };
+        let message = format!("{:#}", config.check_token().expect_err("missing"));
+        assert!(
+            message.contains(&path.display().to_string())
+                && message.contains("/claudeAiOauth/accessToken"),
+            "{message}"
+        );
+    }
+
+    /// Acceptance 6: a pointer that resolves to nothing, or to no non-empty string, fails
+    /// naming the path and the pointer; so does a pointer into a file that is not JSON.
+    #[test]
+    fn endpoint_token_pointer_resolving_to_nothing_is_refused_naming_path_and_pointer() {
+        let dir = scratch("dangling");
+        let path = dir.0.join("token.json");
+        for (text, pointer) in [
+            ("{\"a\":{}}", "/a/b"),
+            ("{\"a\":{\"b\":\"\"}}", "/a/b"),
+            ("{\"a\":{\"b\":7}}", "/a/b"),
+            ("not json", "/a/b"),
+        ] {
+            std::fs::write(&path, text).expect("a token file");
+            let config = EndpointConfig {
+                credential: Credential::SubscriptionFile {
+                    path: path.clone(),
+                    pointer: Some(pointer.to_owned()),
+                },
+                ..resolved(&EndpointFields::default(), None)
+            };
+            let message = format!("{:#}", config.check_token().expect_err("dangling"));
+            assert!(
+                message.contains(&path.display().to_string()) && message.contains(pointer),
+                "{text}: {message}"
+            );
+        }
+        std::fs::write(&path, "").expect("an empty token file");
+        let whole = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: path.clone(),
+                pointer: None,
+            },
+            ..resolved(&EndpointFields::default(), None)
+        };
+        let message = format!("{:#}", whole.check_token().expect_err("empty"));
+        assert!(message.contains(&path.display().to_string()), "{message}");
+    }
+
+    /// Acceptance 7: the trial arm's two endpoints, each with the secret `llm` /
+    /// `opencode-go-api-key`, read from a file into what takt hands the harness: the endpoint's
+    /// base URL, wire and model with its token fields empty, and `api_key_secret` set.
+    #[test]
+    fn endpoint_opencode_go_endpoints_read_from_a_file() {
+        let dir = scratch("opencode-go");
+        for (wire, base_url, model) in [
+            (
+                "anthropic-messages",
+                "https://opencode.ai/inference/go/anthropic/v1",
+                "claude-haiku-5-5",
+            ),
+            (
+                "openai-responses",
+                "https://opencode.ai/inference/go/openai/v1",
+                "gpt-6-luna",
+            ),
+        ] {
+            let file = from_file(
+                &dir.0,
+                &format!(
+                    "base_url = \"{base_url}\"\nwire = \"{wire}\"\nmodel = \"{model}\"\n\n[credential]\nsecret = \"llm/opencode-go-api-key\"\n"
+                ),
+            );
+            let config = EndpointConfig::of(&EndpointFields::default(), Some(&file), None)
+                .expect("the file resolves with no HOME");
+            assert_eq!(
+                config,
+                EndpointConfig {
+                    base_url: base_url.to_owned(),
+                    wire: wire.to_owned(),
+                    model: model.to_owned(),
+                    credential: Credential::Secret {
+                        namespace: "llm".to_owned(),
+                        name: "opencode-go-api-key".to_owned(),
+                    },
+                }
+            );
+            let mut harness = SessionHarness::of(Kind::B10x);
+            harness.point_at(&config);
+            assert_eq!(
+                harness.endpoint,
+                Some(Endpoint {
+                    base_url: base_url.to_owned(),
+                    wire: wire.to_owned(),
+                    model: model.to_owned(),
+                    token_file: PathBuf::new(),
+                    token_pointer: None,
+                }),
+                "{wire}"
+            );
+            assert_eq!(
+                harness.api_key_secret.as_deref(),
+                Some("llm/opencode-go-api-key"),
+                "{wire}"
+            );
+        }
+    }
+
+    /// The `opened` line a run would write with `endpoint`, as JSON.
+    fn opened_with(endpoint: Option<EndpointConfig>) -> serde_json::Value {
+        serde_json::to_value(crate::events::Event::Opened {
+            case: "c".to_owned(),
+            protocol: "software.change/1".to_owned(),
+            story: None,
+            inputs: Vec::new(),
+            base: None,
+            binary: None,
+            layers: None,
+            confinement: None,
+            endpoint,
+        })
+        .expect("the opened line serializes")
+    }
+
+    /// Acceptance 5: only `--harness harness` names an endpoint for the run to record, as its
+    /// session is pointed at it, `--model` over the endpoint's model; Claude Code, Codex and a
+    /// b10x-harness pointed at nothing name none.
+    #[test]
+    fn endpoint_reference_is_named_by_the_harness_harness_only() {
+        let endpoint = Endpoint {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "endpoint-model".to_owned(),
+            token_file: PathBuf::from("/t/token.json"),
+            token_pointer: Some("/x/y".to_owned()),
+        };
+        let mut harness = SessionHarness::of(Kind::B10x);
+        assert_eq!(harness.endpoint_reference(), None, "pointed at nothing");
+        harness.endpoint = Some(endpoint.clone());
+        let named = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "endpoint-model".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: Some("/x/y".to_owned()),
+            },
+        };
+        assert_eq!(harness.endpoint_reference(), Some(named.clone()));
+        harness.model = Some("flag-model".to_owned());
+        assert_eq!(
+            harness.endpoint_reference(),
+            Some(EndpointConfig {
+                model: "flag-model".to_owned(),
+                ..named.clone()
+            })
+        );
+        let secret = EndpointConfig {
+            credential: Credential::secret("llm/opencode-go-api-key").expect("a secret's name"),
+            ..named
+        };
+        let mut pointed = SessionHarness::of(Kind::B10x);
+        pointed.point_at(&secret);
+        assert_eq!(
+            pointed.endpoint_reference(),
+            Some(secret),
+            "the secret read back by its name"
+        );
+        for kind in [Kind::Claude, Kind::Codex] {
+            let mut other = SessionHarness::of(kind);
+            other.endpoint = Some(endpoint.clone());
+            assert_eq!(other.endpoint_reference(), None, "{kind:?}");
+        }
+    }
+
+    /// Acceptance 5 over the record's shape, for both kinds: the `opened` line carries the
+    /// endpoint's base URL, wire and model and the credential's reference, the token file's path
+    /// and pointer or the secret's namespace and name, and never the token; a run with no
+    /// endpoint writes no `endpoint` field.
+    #[test]
+    fn endpoint_is_recorded_by_reference_never_by_its_token() {
+        let dir = scratch("recorded");
+        let marker = "MARKER-51d0e2-not-a-real-token";
+        let token = dir.0.join("token.json");
+        std::fs::write(&token, format!("{{\"a\":{{\"b\":\"{marker}\"}}}}")).expect("token");
+        let subscription = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: token.clone(),
+                pointer: Some("/a/b".to_owned()),
+            },
+        };
+        subscription.check_token().expect("the pointer resolves");
+        let line = opened_with(Some(subscription));
+        assert_eq!(
+            line["endpoint"],
+            serde_json::json!({
+                "base_url": "https://b.example/v1",
+                "wire": "anthropic-messages",
+                "model": "m",
+                "credential": {
+                    "kind": "subscription_file",
+                    "path": token.display().to_string(),
+                    "pointer": "/a/b",
+                },
+            })
+        );
+        assert!(!line.to_string().contains(marker), "{line}");
+        let whole = opened_with(Some(EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: token.clone(),
+                pointer: None,
+            },
+        }));
+        assert_eq!(
+            whole["endpoint"]["credential"],
+            serde_json::json!({"kind": "subscription_file", "path": token.display().to_string()})
+        );
+        let secret = opened_with(Some(EndpointConfig {
+            base_url: "https://opencode.ai/inference/go/openai/v1".to_owned(),
+            wire: "openai-responses".to_owned(),
+            model: "gpt-6-luna".to_owned(),
+            credential: Credential::secret("llm/opencode-go-api-key").expect("a secret's name"),
+        }));
+        assert_eq!(
+            secret["endpoint"],
+            serde_json::json!({
+                "base_url": "https://opencode.ai/inference/go/openai/v1",
+                "wire": "openai-responses",
+                "model": "gpt-6-luna",
+                "credential": {
+                    "kind": "secret",
+                    "namespace": "llm",
+                    "name": "opencode-go-api-key",
+                },
+            })
+        );
+        let none = opened_with(None);
+        assert!(none.get("endpoint").is_none(), "{none}");
+    }
+
+    /// A token file by flag, so a refusal is the base URL's own.
+    fn with_token(base_url: &str) -> EndpointFields {
+        EndpointFields {
+            base_url: Some(base_url.to_owned()),
+            token_file: Some(PathBuf::from("/t/token.json")),
+            ..EndpointFields::default()
+        }
+    }
+
+    /// F2: the default credential, the user's claude.ai token, goes to the default base URL
+    /// alone. Another base URL by flag or by file with no credential is refused naming the base
+    /// URL, with HOME or without; the default base URL, given or not, still builds the endpoint
+    /// built before, and another base URL with a credential of its own is taken.
+    #[test]
+    fn endpoint_default_credential_is_sent_to_the_default_base_url_alone() {
+        let dir = scratch("default-credential");
+        let by_flag = EndpointFields {
+            base_url: Some("https://other.example/v1".to_owned()),
+            ..EndpointFields::default()
+        };
+        let by_file = from_file(&dir.0, "base_url = \"https://other.example/v1\"\n");
+        for (flags, file, home) in [
+            (&by_flag, None, Some(home())),
+            (&by_flag, None, None),
+            (&EndpointFields::default(), Some(&by_file), Some(home())),
+        ] {
+            let message = format!(
+                "{:#}",
+                EndpointConfig::of(flags, file, home.as_deref())
+                    .expect_err("the default credential to another host")
+            );
+            assert!(
+                message.contains("https://other.example/v1")
+                    && message.contains("not sent to another host")
+                    && message.contains("--endpoint-token-file"),
+                "{message}"
+            );
+        }
+        let before = resolved(&EndpointFields::default(), None);
+        assert_eq!(
+            before,
+            EndpointConfig {
+                base_url: EndpointConfig::BASE_URL.to_owned(),
+                wire: EndpointConfig::WIRE.to_owned(),
+                model: EndpointConfig::MODEL.to_owned(),
+                credential: Credential::SubscriptionFile {
+                    path: home().join(".claude/.credentials.json"),
+                    pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+                },
+            }
+        );
+        let default_given = EndpointFields {
+            base_url: Some("https://api.anthropic.com/v1".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(resolved(&default_given, None), before);
+        assert_eq!(
+            resolved(&with_token("https://other.example/v1"), None).credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: None,
+            }
+        );
+        let with_secret = EndpointFields {
+            base_url: Some("https://other.example/v1".to_owned()),
+            secret: Some("llm/opencode-go-api-key".to_owned()),
+            ..EndpointFields::default()
+        };
+        let taken = EndpointConfig::of(&with_secret, None, None).expect("a secret of its own");
+        assert_eq!(taken.base_url, "https://other.example/v1");
+        assert_eq!(
+            taken.api_key_secret().as_deref(),
+            Some("llm/opencode-go-api-key")
+        );
+    }
+
+    /// F2: `http://` carries the credential in the clear, so it is taken only to a loopback
+    /// host: `localhost`, `127.0.0.0/8` or `[::1]`, with a port or without.
+    #[test]
+    fn endpoint_http_base_url_is_refused_unless_its_host_is_loopback() {
+        for taken in [
+            "http://localhost/v1",
+            "http://LOCALHOST:8080/v1",
+            "http://127.0.0.1/v1",
+            "http://127.1.2.3:9/v1",
+            "http://[::1]:8080/v1",
+            "http://[::1]",
+            "https://[2001:db8::1]:8443/v1",
+            "https://b.example:443",
+        ] {
+            assert_eq!(
+                resolved(&with_token(taken), None).base_url,
+                taken,
+                "{taken} is taken"
+            );
+        }
+        for refused in [
+            "http://b.example/v1",
+            "http://10.0.0.1:8080/v1",
+            "http://128.0.0.1/v1",
+            "http://[::2]/v1",
+            "http://[::ffff:127.0.0.1]/v1",
+            "http://localhost.example/v1",
+            "http://127.0.0.1.example/v1",
+        ] {
+            let message = format!(
+                "{:#}",
+                EndpointConfig::of(&with_token(refused), None, Some(&home()))
+                    .expect_err("http to a host that is not loopback")
+            );
+            assert!(
+                message.contains(refused) && message.contains("no loopback host"),
+                "{refused}: {message}"
+            );
+        }
+    }
+
+    /// F3: a base URL with a userinfo, a query or a fragment, each of which can carry a key, is
+    /// refused naming each part found and holding nothing of what was written in it; so is a
+    /// base URL whose host takt cannot read, or that is no http(s) URL, holding nothing of it.
+    #[test]
+    fn endpoint_base_url_with_userinfo_query_or_fragment_is_refused_without_echoing_it() {
+        let marker = "MARKER-2b7e44-not-a-real-key";
+        let refusal = |base_url: &str| {
+            format!(
+                "{:#}",
+                EndpointConfig::of(&with_token(base_url), None, Some(&home()))
+                    .expect_err("refused")
+            )
+        };
+        for (base_url, parts, shown) in [
+            (
+                format!("https://user:{marker}@b.example/v1"),
+                &["userinfo"][..],
+                "https://b.example/v1",
+            ),
+            (
+                format!("https://{marker}@b.example:8443/v1"),
+                &["userinfo"][..],
+                "https://b.example:8443/v1",
+            ),
+            (
+                format!("https://b.example/v1?key={marker}"),
+                &["query"][..],
+                "https://b.example/v1",
+            ),
+            (
+                format!("https://b.example?key={marker}"),
+                &["query"][..],
+                "https://b.example",
+            ),
+            (
+                format!("https://b.example/v1#{marker}"),
+                &["fragment"][..],
+                "https://b.example/v1",
+            ),
+            (
+                format!("http://u:{marker}@localhost/v1?key={marker}#{marker}"),
+                &["userinfo", "query", "fragment"][..],
+                "http://localhost/v1",
+            ),
+            (
+                format!("https://b.example\\{marker}@c.example/v1"),
+                &["userinfo"][..],
+                "https://c.example/v1",
+            ),
+        ] {
+            let message = refusal(&base_url);
+            assert!(!message.contains(marker), "the key leaked: {message}");
+            assert!(message.contains(shown), "{shown}: {message}");
+            for part in parts {
+                assert!(message.contains(part), "{part}: {message}");
+            }
+        }
+        for unread in [
+            format!("https://u:{marker}/x@b.example/v1"),
+            format!("https://u:{marker}@/v1"),
+            format!("https://b.exa{marker}mple:{marker}/v1"),
+            format!("https://[{marker}]/v1"),
+        ] {
+            let message = refusal(&unread);
+            assert!(!message.contains(marker), "the key leaked: {message}");
+            assert!(
+                message.contains("no host takt reads"),
+                "{unread}: {message}"
+            );
+        }
+        for unlike in [
+            format!("ftp://u:{marker}@b.example/v1"),
+            format!("b.example/v1?key={marker}"),
+            format!("https://b.example/v1 {marker}"),
+            format!("https://b.example/v1\n{marker}"),
+        ] {
+            let message = refusal(&unlike);
+            assert!(!message.contains(marker), "the key leaked: {message}");
+            assert!(message.contains("no http(s) URL"), "{unlike:?}: {message}");
+        }
+        let dir = scratch("userinfo-file");
+        let file = from_file(
+            &dir.0,
+            &format!(
+                "base_url = \"https://u:{marker}@b.example/v1\"\n\n[credential]\ntoken_file = \"/t.json\"\n"
+            ),
+        );
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&EndpointFields::default(), Some(&file), None)
+                .expect_err("a userinfo by file")
+        );
+        assert!(
+            message.contains("userinfo") && !message.contains(marker),
+            "{message}"
+        );
+    }
+
+    /// F7: a relative token file, by flag or by an endpoint file read by a relative path, is made
+    /// absolute against the current directory before it is checked, handed to the session or
+    /// recorded, since b10x-harness runs in a scratch copy of the tree.
+    #[test]
+    fn endpoint_relative_token_file_is_made_absolute_against_the_current_directory() {
+        let here = std::env::current_dir().expect("a current directory");
+        let by_flag = EndpointFields {
+            token_file: Some(PathBuf::from("relative/token.json")),
+            token_pointer: Some("/a".to_owned()),
+            ..EndpointFields::default()
+        };
+        let by_file = EndpointFields {
+            token_file: Some(PathBuf::from("token.json")),
+            ..EndpointFields::default()
+        };
+        for (flags, file, path) in [
+            (&by_flag, None, here.join("relative/token.json")),
+            (
+                &EndpointFields::default(),
+                Some(&by_file),
+                here.join("token.json"),
+            ),
+        ] {
+            let config = resolved(flags, file);
+            let Credential::SubscriptionFile { path: taken, .. } = &config.credential else {
+                panic!("a token file: {config:?}");
+            };
+            assert_eq!(taken, &path);
+            let message = format!("{:#}", config.check_token().expect_err("no such file"));
+            assert!(message.contains(&path.display().to_string()), "{message}");
+            assert_eq!(config.session_endpoint().token_file, path);
+            assert_eq!(
+                opened_with(Some(config.recorded(None)))["endpoint"]["credential"]["path"],
+                path.display().to_string()
+            );
+        }
+    }
+
+    /// F10: the record names a token file under HOME from `~`, so a case record carries no
+    /// user's directory, while the session is given the path whole; a file elsewhere, or a HOME
+    /// that is relative or the root, is recorded as given.
+    #[test]
+    fn endpoint_token_file_under_home_is_recorded_from_tilde() {
+        let config = resolved(&EndpointFields::default(), None);
+        let absolute = home().join(".claude/.credentials.json");
+        assert_eq!(config.session_endpoint().token_file, absolute);
+        let line = opened_with(Some(config.clone().recorded(Some(&home()))));
+        assert_eq!(
+            line["endpoint"]["credential"],
+            serde_json::json!({
+                "kind": "subscription_file",
+                "path": "~/.claude/.credentials.json",
+                "pointer": "/claudeAiOauth/accessToken",
+            })
+        );
+        assert!(
+            !line.to_string().contains(&home().display().to_string()),
+            "{line}"
+        );
+        for other in [
+            Some(PathBuf::from("/nonexistent-home-2")),
+            Some(PathBuf::from("/nonexistent")),
+            Some(PathBuf::from("/")),
+            Some(PathBuf::from("nonexistent-home")),
+            None,
+        ] {
+            assert_eq!(
+                opened_with(Some(config.clone().recorded(other.as_deref())))["endpoint"]["credential"]
+                    ["path"],
+                absolute.display().to_string(),
+                "{other:?}"
+            );
+        }
+        let secret = EndpointConfig {
+            credential: Credential::secret("llm/key").expect("a secret's name"),
+            ..config.clone()
+        };
+        assert_eq!(secret.clone().recorded(Some(&home())), secret);
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.endpoint = Some(config.session_endpoint());
+        harness.home = Some(home());
+        let reference = harness
+            .endpoint_reference()
+            .expect("pointed at an endpoint");
+        assert_eq!(
+            reference.credential,
+            Credential::SubscriptionFile {
+                path: PathBuf::from("~/.claude/.credentials.json"),
+                pointer: Some("/claudeAiOauth/accessToken".to_owned()),
+            }
+        );
+        assert_eq!(
+            harness
+                .endpoint
+                .as_ref()
+                .map(|endpoint| &endpoint.token_file),
+            Some(&absolute),
+            "the session keeps the path whole"
         );
     }
 }

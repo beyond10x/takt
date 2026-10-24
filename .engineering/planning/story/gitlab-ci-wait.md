@@ -2,14 +2,25 @@
 format: aep.planning-md/3
 id: story:gitlab-ci-wait
 kind: story
-status: draft
+status: implemented
 title: ci.wait and its progress events work on GitLab
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - depends_on: story:gitlab-forge
 - depends_on: story:ci-progress-events
-revision: 1
+scope:
+- confidence: inferred
+  path: crates/takt-cli/tests/gitlab_ci_cli.rs
+- confidence: inferred
+  path: crates/takt/src/forge/gitlab.rs
+- confidence: inferred
+  path: ess/domains/takt.yaml
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-23T21:51:35Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-23T21:51:35Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-23T23:58:32Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":2,"review_outcome":1}}}
 ---
 ## Outcome
 
@@ -26,3 +37,17 @@ Owner decision of 2026-10-19: "later same thing with gitlab". `glab ci status -F
 ## Acceptance
 
 story:ci-progress-events' fake-tool test passes with a fake `glab`; one real run on the GitLab trial project records `ci_result` and the events.
+
+## Delivered
+
+Wave 36 (docs/waves/wave-36.md): U2 at 6f8c42d, the review's fixes at db65aad, under
+approval-record:wave-36-gitlab D4: the merge request's head pipeline is read as `ci.read`'s
+checks through `glab api` (`success`, `skipped` pass; `failed`, `canceled` fail; the rest, a
+pipeline of an older push or one naming no `sha`, pending), under the run's own poll and
+`--hours`, and a pass or fail writes one `ci_result` record; a `glab api` that exits non-zero
+is an error, never a reading (F8). `crates/takt/tests/gitlab_ci_wait.rs` proves it against a
+scripted glab double. The acceptance's real run: the same case as story:gitlab-forge's, 44
+`ci.read` steps, 43 pending at 30 s each, the 44th `ci_result` pass once the head pipeline
+(1084 s) succeeded, recorded as the case's `0008-ci-result-95.json`. The events part
+(`ci.check`, `ci.done`) is story:ci-progress-events', which has not landed; the fake-tool test
+of that story follows it.

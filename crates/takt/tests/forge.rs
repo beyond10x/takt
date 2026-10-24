@@ -16,11 +16,15 @@ use std::rc::Rc;
 use anyhow::anyhow;
 use takt::case::{Branch, current};
 use takt::evidence::Record;
+use takt::forge::gitlab::{Glab, encoded, project_of};
 use takt::forge::{
-    BotRoute, Checks, Exit, Forge, Head, Memory, PullRequest, PullRequestState, PullRequestView,
-    Runner, repository_of, without_userinfo,
+    BotRoute, Checks, Exit, Forge, Head, LOGIN_LOCATIONS, Memory, Outgoing, PullRequest,
+    PullRequestState, PullRequestView, Runner, repository_of, without_login, without_userinfo,
 };
 use takt::harness::{Harness, StepContext, StepReport};
+use takt::run::{
+    GITLAB_CI, GITLAB_DIR, GITLAB_TOKEN_PREFIXES, JUDGE_SURFACE, JudgeSurface, credential_shape,
+};
 use takt::validator::{CiRead, PrOpen, Validator};
 use takt::{Decision, Run, RunOptions, Stop};
 
@@ -114,8 +118,15 @@ fn record(n: usize, kind: &str, result: &str, revision: &str) -> Record {
 /// One commit on the case's branch beyond its base, as an implementation step leaves it, and the
 /// case's `implementation` moved to it; answers the new revision.
 fn implemented(tree: &Path, case: &mut takt::CaseDir) -> String {
-    fs::write(tree.join("implemented.txt"), "done\n").expect("a file");
-    git(tree, &["add", "implemented.txt"]);
+    implemented_at(tree, case, "implemented.txt")
+}
+
+/// [`implemented`], the commit writing `path`.
+fn implemented_at(tree: &Path, case: &mut takt::CaseDir, path: &str) -> String {
+    let at = tree.join(path);
+    fs::create_dir_all(at.parent().expect("a parent")).expect("a directory");
+    fs::write(&at, "done\n").expect("a file");
+    git(tree, &["add", path]);
     git(tree, &["commit", "-q", "-m", "implemented by the test"]);
     let revision = git(tree, &["rev-parse", "HEAD"]);
     case.set_revision("implementation", &revision)
@@ -139,6 +150,11 @@ struct Outcome {
 /// beyond the base recorded at HEAD (four records), two steps at most: the budget stops the run
 /// before a judgement step would be offered to the harness.
 fn delivered(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> Outcome {
+    delivered_at(tree, id, forge, "implemented.txt")
+}
+
+/// [`delivered`], the implementation commit writing `path`.
+fn delivered_at(tree: &Path, id: &str, forge: Rc<dyn Forge>, path: &str) -> Outcome {
     let options = RunOptions {
         protocol: PROTOCOL.to_owned(),
         intent: "deliver the story\n\nThe story's body.".to_owned(),
@@ -154,7 +170,7 @@ fn delivered(tree: &Path, id: &str, forge: Rc<dyn Forge>) -> Outcome {
         Box::new(CiRead::new(forge)),
     ];
     let mut run = Run::open(tree, options, &NoHarness, &validators).expect("the case opens");
-    let revision = implemented(tree, &mut run.case);
+    let revision = implemented_at(tree, &mut run.case, path);
     run.case
         .add_evidence(&record(1, "test_result", "pass", &revision))
         .expect("the record is written");
@@ -2405,4 +2421,946 @@ fn the_bot_route_reports_no_target_tip_when_the_object_fetch_fails() {
     assert!(shown.contains("--no-write-fetch-head"), "{shown}");
     assert!(shown.contains("not our ref"), "{shown}");
     assert_eq!(runner.lines.borrow().len(), 2);
+}
+
+// story:gitlab-forge: the adapter over `glab` for a repository on a GitLab host. A recording
+// runner stands in for `glab`, the HTTPS push and fetch and `b10x-gates scan-text`; nothing
+// leaves the machine.
+
+/// What a program the double stands in for answers: `code`, `stdout`, `stderr`.
+fn exit(code: i32, stdout: &str, stderr: &str) -> Exit {
+    Exit {
+        code: Some(code),
+        stdout: stdout.to_owned(),
+        stderr: stderr.to_owned(),
+    }
+}
+
+/// A line the double ran and the environment it was given.
+type Ran = (String, Vec<(String, String)>);
+
+/// How the double answers a line.
+type Answer = Box<dyn Fn(&str) -> anyhow::Result<Exit>>;
+
+/// Records each line with the environment it was given, and answers it with `answer`.
+struct GlabLines {
+    lines: RefCell<Vec<Ran>>,
+    answer: Answer,
+}
+
+impl Runner for GlabLines {
+    fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+        self.run_env(tree, argv, &[])
+    }
+
+    fn run_env(&self, _: &Path, argv: &[String], env: &[(&str, &str)]) -> anyhow::Result<Exit> {
+        let line = argv.join(" ");
+        self.lines.borrow_mut().push((
+            line.clone(),
+            env.iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+        ));
+        (self.answer)(&line)
+    }
+}
+
+/// The adapter over `group/sub/repo` on `gitlab.example` with the policy `policy.yaml`, every
+/// line answered by `answer`; the lines it ran are read from the second.
+fn glab_over(answer: impl Fn(&str) -> anyhow::Result<Exit> + 'static) -> (Glab, Rc<GlabLines>) {
+    struct Shared(Rc<GlabLines>);
+    impl Runner for Shared {
+        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+            self.0.run(tree, argv)
+        }
+        fn run_env(
+            &self,
+            tree: &Path,
+            argv: &[String],
+            env: &[(&str, &str)],
+        ) -> anyhow::Result<Exit> {
+            self.0.run_env(tree, argv, env)
+        }
+    }
+    let lines = Rc::new(GlabLines {
+        lines: RefCell::new(Vec::new()),
+        answer: Box::new(answer),
+    });
+    let glab = Glab::new(
+        "gitlab.example",
+        "group/sub/repo",
+        Some(PathBuf::from("policy.yaml")),
+        Box::new(Shared(lines.clone())),
+    );
+    (glab, lines)
+}
+
+/// The adapter runs exactly these argument lines, in this order: the push over HTTPS under
+/// `glab`'s credential helper alone, the base read through `glab api` for the scan, the scan of
+/// the push and of the merge request through `b10x-gates scan-text` under the project, the merge
+/// request opened, read twice (state, then head pipeline) and merged through `glab api` on the
+/// percent-encoded project, and the target's tip read and fetched into no ref. The push and the
+/// fetch run over HTTPS alone; every `glab` line names the host; no token is in any of them.
+#[test]
+fn the_gitlab_adapter_runs_these_argument_lines() {
+    let tree = scratch("glab-argv");
+    let dir = tree.join("out");
+    let main = git(&tree, &["rev-parse", "main"]);
+    git(&tree, &["update-ref", "refs/remotes/origin/main", &main]);
+    git(&tree, &["checkout", "-q", "-b", "takt/c1"]);
+    fs::write(tree.join("work.txt"), "the work\n").expect("a file");
+    git(&tree, &["add", "work.txt"]);
+    git(&tree, &["commit", "-q", "-m", "the work"]);
+    let c1 = git(&tree, &["rev-parse", "HEAD"]);
+    let merge_request = format!(
+        r#"{{"iid":7,"state":"opened","source_branch":"takt/c1","target_branch":"trunk","sha":"{c1}","head_pipeline":{{"sha":"{c1}","status":"success"}}}}"#
+    );
+    let branch = format!(r#"{{"name":"main","commit":{{"id":"{main}"}}}}"#);
+    let (forge, lines) = glab_over(move |line| {
+        Ok(if line.contains("--method POST") {
+            exit(0, r#"{"iid": 7, "id": 1234}"#, "")
+        } else if line.contains("--method PUT") {
+            exit(0, r#"{"iid": 7, "state": "merged"}"#, "")
+        } else if line.ends_with("/repository/branches/main") {
+            exit(0, &branch, "")
+        } else if line.ends_with("/merge_requests/7") {
+            exit(0, &merge_request, "")
+        } else {
+            exit(0, "", "")
+        })
+    });
+    assert_eq!(forge.name(), "gitlab");
+    forge.push(&tree, "takt/c1").expect("pushes");
+    let request = PullRequest {
+        branch: "takt/c1".to_owned(),
+        base: "main".to_owned(),
+        title: "deliver the story".to_owned(),
+        body: "the body".to_owned(),
+    };
+    forge
+        .scan_outgoing(
+            &tree,
+            &dir,
+            &Outgoing {
+                branch: "takt/c1",
+                base: "main",
+                head: &c1,
+                request: Some(&request),
+            },
+        )
+        .expect("scans");
+    let number = forge
+        .open_pull_request(&tree, &dir, &request)
+        .expect("opens");
+    assert_eq!(number, 7);
+    assert_eq!(
+        forge.pull_request(&tree, number).expect("reads"),
+        PullRequestView {
+            state: PullRequestState::Open,
+            head: Head {
+                branch: "takt/c1".to_owned(),
+                sha: c1.clone(),
+            },
+            base: "trunk".to_owned(),
+        }
+    );
+    assert_eq!(forge.checks(&tree, number).expect("reads"), Checks::Pass);
+    forge.merge(&tree, &dir, number, &c1).expect("merges");
+    assert_eq!(forge.target_tip(&tree, "main").expect("a tip"), main);
+
+    let request_file = dir.join(Glab::REQUEST);
+    let published = dir.join(Glab::PUBLISHED);
+    let https = vec![("GIT_ALLOW_PROTOCOL".to_owned(), "https".to_owned())];
+    let api = "glab api --hostname gitlab.example";
+    let project = "projects/group%2Fsub%2Frepo";
+    let json = "--header Content-Type: application/json";
+    let expected: Vec<(String, Vec<(String, String)>)> = vec![
+        (
+            format!(
+                "git -c credential.helper= -c credential.helper=!glab auth git-credential push https://gitlab.example/group/sub/repo.git {c1}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
+            ),
+            https.clone(),
+        ),
+        (
+            format!("{api} {project}/repository/branches/main"),
+            Vec::new(),
+        ),
+        (
+            format!(
+                "b10x-gates scan-text --repository group/sub/repo --policy policy.yaml {} {} {} {}",
+                request_file.display(),
+                published.display(),
+                dir.join("push.messages.txt").display(),
+                dir.join("push.files.txt").display()
+            ),
+            Vec::new(),
+        ),
+        (
+            format!(
+                "b10x-gates scan-text --repository group/sub/repo --policy policy.yaml {} {}",
+                request_file.display(),
+                published.display()
+            ),
+            Vec::new(),
+        ),
+        (
+            format!(
+                "{api} --method POST {json} {project}/merge_requests --input {}",
+                request_file.display()
+            ),
+            Vec::new(),
+        ),
+        (format!("{api} {project}/merge_requests/7"), Vec::new()),
+        (format!("{api} {project}/merge_requests/7"), Vec::new()),
+        (
+            format!(
+                "{api} --method PUT {json} {project}/merge_requests/7/merge --input {}",
+                dir.join(Glab::MERGE_BODY).display()
+            ),
+            Vec::new(),
+        ),
+        (
+            format!("{api} {project}/repository/branches/main"),
+            Vec::new(),
+        ),
+        (
+            format!(
+                "git -c credential.helper= -c credential.helper=!glab auth git-credential fetch https://gitlab.example/group/sub/repo.git {main} --no-write-fetch-head --no-tags --recurse-submodules=no"
+            ),
+            https,
+        ),
+    ];
+    assert_eq!(lines.lines.borrow().as_slice(), expected.as_slice());
+
+    let sent: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&request_file).expect("the request"))
+            .expect("json");
+    assert_eq!(
+        sent,
+        serde_json::json!({
+            "source_branch": "takt/c1",
+            "target_branch": "main",
+            "title": "deliver the story",
+            "description": "the body",
+        })
+    );
+    assert_eq!(
+        fs::read_to_string(&published).expect("the published text"),
+        "deliver the story\n\nthe body"
+    );
+    assert!(
+        fs::read_to_string(dir.join(Glab::RESPONSE))
+            .expect("the response is kept")
+            .contains("\"iid\": 7")
+    );
+    let merge: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(dir.join(Glab::MERGE_BODY)).expect("the merge request"),
+    )
+    .expect("json");
+    assert_eq!(merge, serde_json::json!({ "sha": c1 }));
+    assert!(
+        fs::read_to_string(dir.join(Glab::MERGE_RESPONSE))
+            .expect("the merge response is kept")
+            .contains("merged")
+    );
+    // The project holds `main` as the tracking ref says: only the case's commit is scanned.
+    let messages = fs::read_to_string(dir.join("push.messages.txt")).expect("the messages");
+    assert!(messages.contains(&format!("commit {c1}")), "{messages}");
+    assert!(!messages.contains(&format!("commit {main}")), "{messages}");
+}
+
+/// A merge request with `state` and `head_pipeline` as given, its head at `sha`.
+fn merge_request(state: &str, pipeline: &str) -> String {
+    format!(
+        r#"{{"state":"{state}","source_branch":"takt/c3","target_branch":"main","sha":"{}","head_pipeline":{pipeline}}}"#,
+        "c".repeat(40)
+    )
+}
+
+/// The states `glab api` reports map onto the three (`locked`, a merge in progress, is open),
+/// and the head pipeline onto the three check results: none yet, one of an older push, or one
+/// that names no commit, is pending. An unknown state or status, or a reply without a field the view needs, is an error
+/// naming it, never a record.
+#[test]
+fn the_gitlab_adapter_maps_states_and_head_pipelines() {
+    let tree = scratch("glab-map");
+    let read = |document: String| {
+        let (forge, _) = glab_over(move |_| Ok(exit(0, &document, "")));
+        (forge.pull_request(&tree, 3), forge.checks(&tree, 3))
+    };
+    let current = |status: &str| format!(r#"{{"sha":"{}","status":"{status}"}}"#, "c".repeat(40));
+    for (state, expected) in [
+        ("opened", PullRequestState::Open),
+        ("locked", PullRequestState::Open),
+        ("merged", PullRequestState::Merged),
+        ("closed", PullRequestState::Closed),
+    ] {
+        let (view, _) = read(merge_request(state, "null"));
+        let view = view.expect(state);
+        assert_eq!(view.state, expected, "{state}");
+        assert_eq!(view.head.branch, "takt/c3");
+        assert_eq!(view.head.sha, "c".repeat(40));
+        assert_eq!(view.base, "main");
+    }
+    let (view, _) = read(merge_request("draft", "null"));
+    let error = format!("{:#}", view.expect_err("an unknown state"));
+    assert!(error.contains("\"draft\""), "{error}");
+    for (status, expected) in [
+        ("success", Checks::Pass),
+        ("skipped", Checks::Pass),
+        ("failed", Checks::Fail),
+        ("canceled", Checks::Fail),
+        ("created", Checks::Pending),
+        ("waiting_for_resource", Checks::Pending),
+        ("preparing", Checks::Pending),
+        ("pending", Checks::Pending),
+        ("running", Checks::Pending),
+        ("manual", Checks::Pending),
+        ("scheduled", Checks::Pending),
+    ] {
+        let (_, checks) = read(merge_request("opened", &current(status)));
+        assert_eq!(checks.expect(status), expected, "{status}");
+    }
+    let (_, checks) = read(merge_request("opened", "null"));
+    assert_eq!(checks.expect("no pipeline yet"), Checks::Pending);
+    // A pipeline of an older push says nothing about the head.
+    let stale = format!(r#"{{"sha":"{}","status":"success"}}"#, "d".repeat(40));
+    let (_, checks) = read(merge_request("opened", &stale));
+    assert_eq!(checks.expect("a stale pipeline"), Checks::Pending);
+    // Nor does one that names no commit, whatever its status.
+    for pipeline in [
+        r#"{"status":"success"}"#,
+        r#"{"sha":null,"status":"success"}"#,
+        r#"{"sha":7,"status":"failed"}"#,
+    ] {
+        let (_, checks) = read(merge_request("opened", pipeline));
+        assert_eq!(checks.expect(pipeline), Checks::Pending, "{pipeline}");
+    }
+    let (_, checks) = read(merge_request("opened", &current("exploded")));
+    let error = format!("{:#}", checks.expect_err("an unknown status"));
+    assert!(error.contains("\"exploded\""), "{error}");
+    let (view, _) = read(r#"{"state":"opened","sha":"abc","target_branch":"main"}"#.to_owned());
+    let error = format!("{:#}", view.expect_err("no source branch"));
+    assert!(error.contains("source_branch"), "{error}");
+    let (view, checks) = read("not json".to_owned());
+    assert!(view.is_err());
+    assert!(checks.is_err());
+}
+
+/// An API reply without an `iid` opens nothing a validator could record; a merge the reply does
+/// not say is `merged` is an error with the reply's message; a push a URL rewrite would send
+/// over SSH is refused naming the transport.
+#[test]
+fn the_gitlab_adapter_refuses_what_it_cannot_read() {
+    let tree = scratch("glab-refuse");
+    let dir = tree.join("out");
+    let (forge, _) = glab_over(|line| {
+        Ok(if line.contains("--method POST") {
+            exit(0, r#"{"id": 1234}"#, "")
+        } else if line.contains("--method PUT") {
+            exit(0, r#"{"state":"opened","message":"the head moved"}"#, "")
+        } else if line.starts_with("git ") {
+            exit(128, "", "fatal: transport 'ssh' not allowed\n")
+        } else {
+            exit(0, "", "")
+        })
+    });
+    let request = PullRequest {
+        branch: "takt/c1".to_owned(),
+        base: "main".to_owned(),
+        title: "t".to_owned(),
+        body: "b".to_owned(),
+    };
+    let error = format!(
+        "{:#}",
+        forge
+            .open_pull_request(&tree, &dir, &request)
+            .expect_err("no iid")
+    );
+    assert!(error.contains("no iid"), "{error}");
+    let error = format!(
+        "{:#}",
+        forge
+            .merge(&tree, &dir, 7, &"c".repeat(40))
+            .expect_err("not merged")
+    );
+    assert!(error.contains("the head moved"), "{error}");
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    let error = format!(
+        "{:#}",
+        forge
+            .push_revision(&tree, "takt/c1", &head)
+            .expect_err("over ssh")
+    );
+    assert!(
+        error.contains("would go over ssh") && error.contains("the forge gitlab"),
+        "{error}"
+    );
+    // A project with no such branch: no tip, and nothing fetched.
+    let (forge, lines) = glab_over(|_| Ok(exit(1, "", "glab: 404 Branch Not Found (HTTP 404)")));
+    let error = format!(
+        "{:#}",
+        forge.target_tip(&tree, "main").expect_err("no branch")
+    );
+    assert!(
+        error.contains("group/sub/repo") && error.contains("no branch main"),
+        "{error}"
+    );
+    assert_eq!(lines.lines.borrow().len(), 1);
+}
+
+/// The host and the full project path of an `origin` URL in the forms git writes them, a nested
+/// group and a port included; a URL with one segment, an empty, `.` or `..` segment, or no host
+/// names none. Userinfo never reaches the host or what the adapter pushes to.
+#[test]
+fn the_project_is_read_from_the_origin_url() {
+    for url in [
+        "git@gitlab.example:group/sub/repo.git",
+        "git@gitlab.example:group/sub/repo",
+        "ssh://git@gitlab.example/group/sub/repo.git",
+        "ssh://git@gitlab.example:2222/group/sub/repo.git",
+        "https://gitlab.example/group/sub/repo.git",
+        "https://gitlab.example/group/sub/repo",
+        "https://gitlab.example/group/sub/repo/",
+        "https://ci:t0k3n-not-real@gitlab.example/group/sub/repo.git",
+    ] {
+        assert_eq!(
+            project_of(url),
+            Some(("gitlab.example".to_owned(), "group/sub/repo".to_owned())),
+            "{url}"
+        );
+    }
+    assert_eq!(
+        project_of("git@gitlab.example:owner/repo.git"),
+        Some(("gitlab.example".to_owned(), "owner/repo".to_owned()))
+    );
+    for url in [
+        "https://gitlab.example/repo.git",
+        "https://gitlab.example/group//repo.git",
+        "https://gitlab.example/group/../repo.git",
+        "/var/lib/git/repo",
+        "../repo",
+        "repo",
+        "",
+        "file:///srv/git/group/repo.git",
+    ] {
+        assert_eq!(project_of(url), None, "{url}");
+    }
+    let (host, project) =
+        project_of("https://ci:t0k3n-not-real@gitlab.example/group/sub/repo.git").expect("named");
+    let glab = Glab::new(
+        host,
+        project,
+        None,
+        Box::new(GlabLines {
+            lines: RefCell::new(Vec::new()),
+            answer: Box::new(|_| Ok(exit(0, "", ""))),
+        }),
+    );
+    assert_eq!(glab.push_url(), "https://gitlab.example/group/sub/repo.git");
+    assert_eq!(encoded("group/sub/repo"), "group%2Fsub%2Frepo");
+    assert_eq!(encoded("takt/case-1"), "takt%2Fcase-1");
+}
+
+/// An HTTPS origin on a port of its own keeps the port: the push goes to it and every `glab`
+/// line names the host with it, as `glab auth login --hostname` stored the login. An SSH port
+/// is the SSH server's and is dropped.
+#[test]
+fn an_https_origin_keeps_its_port() {
+    let at_port = Some(("gitlab.example:8443".to_owned(), "group/repo".to_owned()));
+    for url in [
+        "https://gitlab.example:8443/group/repo.git",
+        "HTTPS://gitlab.example:8443/group/repo",
+        "https://ci:t0k3n-not-real@gitlab.example:8443/group/repo.git",
+    ] {
+        assert_eq!(project_of(url), at_port, "{url}");
+    }
+    for url in [
+        "ssh://git@gitlab.example:2222/group/repo.git",
+        "https://gitlab.example:/group/repo.git",
+    ] {
+        assert_eq!(
+            project_of(url),
+            Some(("gitlab.example".to_owned(), "group/repo".to_owned())),
+            "{url}"
+        );
+    }
+    let tree = scratch("glab-port");
+    git(
+        &tree,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://gitlab.example:8443/group/repo.git",
+        ],
+    );
+    let lines = Rc::new(GlabLines {
+        lines: RefCell::new(Vec::new()),
+        answer: Box::new(|_| Ok(exit(0, "", ""))),
+    });
+    struct Shared(Rc<GlabLines>);
+    impl Runner for Shared {
+        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
+            self.0.run(tree, argv)
+        }
+        fn run_env(
+            &self,
+            tree: &Path,
+            argv: &[String],
+            env: &[(&str, &str)],
+        ) -> anyhow::Result<Exit> {
+            self.0.run_env(tree, argv, env)
+        }
+    }
+    let glab = Glab::for_tree_through(&tree, Box::new(Shared(lines.clone()))).expect("logged in");
+    assert_eq!(glab.host, "gitlab.example:8443");
+    assert_eq!(
+        glab.push_url(),
+        "https://gitlab.example:8443/group/repo.git"
+    );
+    assert_eq!(
+        lines.lines.borrow()[0].0,
+        "glab auth status --hostname gitlab.example:8443"
+    );
+    let head = git(&tree, &["rev-parse", "HEAD"]);
+    glab.push_revision(&tree, "takt/c1", &head).expect("pushes");
+    let ran = lines.lines.borrow();
+    let pushed: Vec<&str> = ran
+        .iter()
+        .map(|(line, _)| line.as_str())
+        .filter(|line| line.contains(" push "))
+        .collect();
+    assert_eq!(
+        pushed,
+        [format!(
+            "git -c credential.helper= -c credential.helper=!glab auth git-credential push https://gitlab.example:8443/group/repo.git {head}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
+        )],
+        "{ran:?}"
+    );
+    drop(ran);
+    // github.com on its HTTPS port is still the bot route's host.
+    git(
+        &tree,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://github.com:443/owner/repo.git",
+        ],
+    );
+    let asked = lines.lines.borrow().len();
+    let error = format!(
+        "{:#}",
+        Glab::for_tree_through(&tree, Box::new(Shared(lines.clone())))
+            .expect_err("github.com is the bot route's")
+    );
+    assert!(error.contains("--forge bot"), "{error}");
+    assert_eq!(lines.lines.borrow().len(), asked, "glab was not asked");
+}
+
+/// `glab auth status --hostname <host>` decides whether the adapter is made: one that exits 1,
+/// or a `glab` that cannot be run, is an error naming `glab`, the host and what it said. An
+/// origin on github.com is refused before `glab` runs, naming the bot route, and a credential in
+/// the origin URL is not printed.
+#[test]
+fn the_gitlab_adapter_needs_glab_logged_in_to_the_host() {
+    let tree = scratch("glab-login");
+    let (forge, lines) = glab_over(|_| {
+        Ok(exit(
+            1,
+            "",
+            "gitlab.example\n  x gitlab.example has not been authenticated with glab.\n",
+        ))
+    });
+    let error = format!("{:#}", forge.logged_in(&tree).expect_err("not logged in"));
+    for named in [
+        "glab",
+        "gitlab.example",
+        "has not been authenticated with glab",
+    ] {
+        assert!(error.contains(named), "{named}: {error}");
+    }
+    assert!(!error.contains('\n'), "one line: {error}");
+    assert_eq!(
+        lines
+            .lines
+            .borrow()
+            .iter()
+            .map(|(line, _)| line.as_str())
+            .collect::<Vec<_>>(),
+        ["glab auth status --hostname gitlab.example"]
+    );
+    let (forge, _) = glab_over(|_| {
+        Err(
+            anyhow::Error::new(std::io::Error::from(std::io::ErrorKind::NotFound))
+                .context("run glab"),
+        )
+    });
+    let error = format!("{:#}", forge.logged_in(&tree).expect_err("no glab"));
+    assert!(
+        error.contains("glab could not be run") && error.contains("gitlab.example"),
+        "{error}"
+    );
+    let (forge, _) = glab_over(|_| Ok(exit(0, "", "")));
+    forge.logged_in(&tree).expect("logged in");
+
+    git(
+        &tree,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://ci:t0k3n-not-real@github.com/owner/repo.git",
+        ],
+    );
+    let error = format!(
+        "{:#}",
+        Glab::for_tree(&tree).expect_err("github.com is the bot route's")
+    );
+    assert!(
+        error.contains("bot route") && error.contains("--forge bot"),
+        "{error}"
+    );
+    assert!(!error.contains("t0k3n"), "{error}");
+}
+
+/// `.gitlab-ci.yml` at the tree's root decides what a GitLab pipeline runs: it is on the judge
+/// surface as `.github/**` is, a link to it is read through, and a case whose branch changed it
+/// leaves `ci.read` nothing to read.
+#[test]
+fn the_gitlab_ci_definition_is_on_the_judge_surface() {
+    let tree = scratch("gitlab-ci");
+    let surface = JudgeSurface::new(&[], &tree);
+    assert!(surface.contains(GITLAB_CI));
+    assert!(surface.contains(".GitLab-CI.yml"));
+    assert!(!surface.contains("sub/.gitlab-ci.yml"));
+    assert!(surface.without_store().reads_through(GITLAB_CI));
+    assert!(JUDGE_SURFACE.contains("`.gitlab-ci.yml` at the root"));
+
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let outcome = delivered_at(&tree, "gitlab-ci", memory, GITLAB_CI);
+    assert!(
+        outcome.text.contains("evidence: pull_request open"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        !outcome
+            .records
+            .iter()
+            .any(|record| record["kind"] == "ci_result"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.contains("changed the judge surface") && outcome.text.contains(GITLAB_CI),
+        "{}",
+        outcome.text
+    );
+}
+
+/// What a GitLab pipeline runs is decided by `.gitlab-ci.yml` and by what it includes, kept
+/// under `.gitlab/` at the root (`include: local: .gitlab/ci/build.yml`), with the review rules
+/// (`.gitlab/CODEOWNERS`): every path under `.gitlab/` is on the judge surface, so a case whose
+/// branch changed one leaves `ci.read` nothing to read. A `.gitlab/` deeper down is not, nor is
+/// a file an `include: local:` names outside both.
+#[test]
+fn the_gitlab_directory_is_on_the_judge_surface() {
+    let tree = scratch("gitlab-dir");
+    let surface = JudgeSurface::new(&[], &tree);
+    for path in [
+        GITLAB_DIR,
+        ".gitlab/",
+        ".gitlab/ci/build.yml",
+        ".GitLab/CODEOWNERS",
+    ] {
+        assert!(surface.contains(path), "{path}");
+    }
+    for path in [
+        "sub/.gitlab/ci/build.yml",
+        ".gitlab-ci",
+        ".gitlabx/build.yml",
+        "ci/build.yml",
+    ] {
+        assert!(!surface.contains(path), "{path}");
+    }
+    assert!(JUDGE_SURFACE.contains("`.gitlab/**`"));
+
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let outcome = delivered_at(&tree, "gitlab-dir", memory, ".gitlab/ci/build.yml");
+    assert!(
+        outcome.text.contains("evidence: pull_request open"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        !outcome
+            .records
+            .iter()
+            .any(|record| record["kind"] == "ci_result"),
+        "{}",
+        outcome.text
+    );
+    assert!(
+        outcome.text.contains("changed the judge surface")
+            && outcome.text.contains(".gitlab/ci/build.yml"),
+        "{}",
+        outcome.text
+    );
+}
+
+/// A fresh run on the delivery protocol over `tree`, no validator and no harness, two steps at
+/// most: how it stopped and what it printed. Its first step is a judgement step, so the step
+/// guard reads the surface before it; nothing is set aside but under the scratch directory.
+fn first_step(tree: &Path, id: &str) -> (anyhow::Result<Stop>, String) {
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "deliver the story\n\nThe story's body.".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(2),
+        hours: None,
+        tokens: None,
+        case_id: Some(id.to_owned()),
+        gate: None,
+    };
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let mut run = Run::open(tree, options, &NoHarness, &validators).expect("the case opens");
+    run.set_aside_in(
+        Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("forge-{}-{id}-aside", std::process::id())),
+    )
+    .expect("a set-aside root");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    (stop, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// The refusal a run stopped on before the harness; fails the case on any other stop.
+fn refused_before_the_harness(stop: anyhow::Result<Stop>, text: &str) -> String {
+    match stop {
+        Ok(Stop::StepRefused(why)) if text.contains("refused before the harness") => why,
+        other => panic!("refused before the harness, not {other:?}\n{text}"),
+    }
+}
+
+/// A link under `.gitlab/` that git tracks is read through (`include: local:` would read what
+/// it points at): no judgement step is taken while it is there, and the refusal names it.
+#[test]
+fn a_tracked_link_under_the_gitlab_directory_is_refused() {
+    let tree = scratch("gitlab-link");
+    fs::create_dir_all(tree.join("ci-real")).expect("a directory");
+    fs::write(
+        tree.join("ci-real/build.yml"),
+        "build:\n  script: [\"true\"]\n",
+    )
+    .expect("a file");
+    fs::create_dir_all(tree.join(GITLAB_DIR)).expect("a directory");
+    std::os::unix::fs::symlink("../ci-real", tree.join(".gitlab/ci")).expect("a link");
+    git(&tree, &["add", "-A"]);
+    git(
+        &tree,
+        &["commit", "-q", "-m", "the CI includes through a link"],
+    );
+    let surface = JudgeSurface::new(&[], &tree).without_store();
+    for link in [GITLAB_DIR, ".gitlab/ci", ".GitLab/ci/build.yml"] {
+        assert!(surface.reads_through(link), "{link}");
+    }
+    assert!(!surface.reads_through("sub/.gitlab/ci"));
+    let (stop, text) = first_step(&tree, "gitlab-link");
+    let why = refused_before_the_harness(stop, &text);
+    assert!(
+        why.contains("reached through a link") && why.contains(".gitlab/ci -> ../ci-real"),
+        "{why}"
+    );
+}
+
+/// `.gitlab` itself a link git ignores and does not track: only the read of the tree's root
+/// finds it, and it is refused as a tracked one is.
+#[test]
+fn an_ignored_link_at_the_gitlab_directory_is_refused() {
+    let tree = scratch("gitlab-ignored-link");
+    fs::write(tree.join(".gitignore"), "/.gitlab\n").expect("a file");
+    git(&tree, &["add", ".gitignore"]);
+    git(&tree, &["commit", "-q", "-m", "ignore .gitlab"]);
+    std::os::unix::fs::symlink("../gitlab-elsewhere", tree.join(GITLAB_DIR)).expect("a link");
+    assert_eq!(git(&tree, &["status", "--porcelain"]), "");
+    assert_eq!(git(&tree, &["ls-files", "--", GITLAB_DIR]), "");
+    let (stop, text) = first_step(&tree, "gitlab-ignored-link");
+    let why = refused_before_the_harness(stop, &text);
+    assert!(
+        why.contains("reached through a link") && why.contains(".gitlab -> ../gitlab-elsewhere"),
+        "{why}"
+    );
+}
+
+/// A `glab api` that exits non-zero is an error naming the line, how it exited, the message
+/// of the JSON body glab printed and the HTTP status: never a pending pipeline, an open merge
+/// request or no branch. Only a 404 on the branch read means the project has no such branch.
+#[test]
+fn a_failed_glab_api_is_an_error_naming_the_line_and_the_status() {
+    let tree = scratch("glab-failed");
+    let dir = tree.join("out");
+    let api = "glab api --hostname gitlab.example projects/group%2Fsub%2Frepo";
+    let (forge, _) = glab_over(|line| {
+        Ok(if line.starts_with("b10x-gates ") {
+            exit(0, "", "")
+        } else {
+            exit(
+                1,
+                r#"{"message":"401 Unauthorized"}"#,
+                "glab: 401 Unauthorized (HTTP 401)\n",
+            )
+        })
+    });
+    let checks = forge.checks(&tree, 7).map(|_| ());
+    let view = forge.pull_request(&tree, 7).map(|_| ());
+    for (what, result) in [("checks", checks), ("the merge request", view)] {
+        let error = format!("{:#}", result.expect_err(what));
+        assert!(
+            error.contains(&format!("`{api}/merge_requests/7` failed: exit 1, 401 Unauthorized (glab: 401 Unauthorized (HTTP 401))")),
+            "{what}: {error}"
+        );
+    }
+    let error = format!(
+        "{:#}",
+        forge
+            .target_tip(&tree, "main")
+            .expect_err("a 401 is no tip")
+    );
+    assert!(
+        error.contains(&format!("`{api}/repository/branches/main` failed"))
+            && error.contains("HTTP 401")
+            && !error.contains("no branch"),
+        "{error}"
+    );
+    let request = PullRequest {
+        branch: "takt/c1".to_owned(),
+        base: "main".to_owned(),
+        title: "t".to_owned(),
+        body: "b".to_owned(),
+    };
+    let (forge, _) = glab_over(|line| {
+        Ok(if line.starts_with("b10x-gates ") {
+            exit(0, "", "")
+        } else if line.contains("--method POST") {
+            exit(
+                1,
+                r#"{"message":["Another open merge request already exists for this source branch: !6"]}"#,
+                "glab: 409 Conflict (HTTP 409)\n",
+            )
+        } else {
+            exit(
+                1,
+                r#"{"message":"405 Method Not Allowed"}"#,
+                "glab: 405 Method Not Allowed (HTTP 405)\n",
+            )
+        })
+    });
+    let error = format!(
+        "{:#}",
+        forge
+            .open_pull_request(&tree, &dir, &request)
+            .expect_err("a conflict opens nothing")
+    );
+    assert!(
+        error.contains("--method POST")
+            && error.contains("Another open merge request already exists")
+            && error.contains("HTTP 409"),
+        "{error}"
+    );
+    let error = format!(
+        "{:#}",
+        forge
+            .merge(&tree, &dir, 7, &"c".repeat(40))
+            .expect_err("a refused merge")
+    );
+    assert!(
+        error.contains("--method PUT")
+            && error.contains("405 Method Not Allowed")
+            && error.contains("HTTP 405"),
+        "{error}"
+    );
+    // A 404 on the branch read, the body glab prints with it, is no such branch.
+    let (forge, lines) = glab_over(|_| {
+        Ok(exit(
+            1,
+            r#"{"message":"404 Branch Not Found"}"#,
+            "glab: 404 Branch Not Found (HTTP 404)\n",
+        ))
+    });
+    let error = format!(
+        "{:#}",
+        forge.target_tip(&tree, "main").expect_err("no branch")
+    );
+    assert!(
+        error.contains("has no branch main to merge into"),
+        "{error}"
+    );
+    assert_eq!(lines.lines.borrow().len(), 1, "nothing fetched");
+}
+
+/// glab reads its login from `GLAB_CONFIG_DIR` when it is set, as gh does from
+/// `GH_CONFIG_DIR`: a command started with no login of the user's in reach does not inherit it.
+#[test]
+fn glab_s_configuration_directory_is_no_login_a_child_inherits() {
+    assert!(LOGIN_LOCATIONS.contains(&"GLAB_CONFIG_DIR"));
+    let mut command = takt::confinement::Command::new("true");
+    command.env("GLAB_CONFIG_DIR", "/elsewhere/glab-cli");
+    without_login(&mut command, Path::new("/nonexistent/home"));
+    assert!(
+        command
+            .get_envs()
+            .any(|(name, value)| name == "GLAB_CONFIG_DIR" && value.is_none()),
+        "{:?}",
+        command.get_envs().collect::<Vec<_>>()
+    );
+}
+
+/// A token GitLab issues, by each prefix GitLab's documentation lists, and the token glab keeps
+/// under `token:` in its `config.yml`, are credentials a proposal may not carry; the prefixes
+/// in prose, a short value and a line of code that names a token are not.
+#[test]
+fn gitlab_tokens_and_glab_s_token_key_are_credential_shapes() {
+    // Built here, never written whole in the source: no scanner reads a token in this file.
+    let body: String = "Zq8xR2vL0pW4nB6tY1cK".to_owned();
+    for prefix in GITLAB_TOKEN_PREFIXES {
+        for text in [
+            format!("{prefix}{body}"),
+            format!("export GITLAB_TOKEN={prefix}{body}\n"),
+            format!("\"{prefix}{body}.01.0w1h2k3n4\""),
+        ] {
+            assert_eq!(credential_shape(&text), Some("gitlab-token"), "{text}");
+        }
+    }
+    let hex = "0123456789abcdef".repeat(4);
+    for text in [
+        format!(
+            "hosts:\n    gitlab.example:\n        token: {hex}\n        api_host: gitlab.example\n"
+        ),
+        format!("token: \"{hex}\"\n"),
+        format!("  token: '{hex}'"),
+    ] {
+        assert_eq!(credential_shape(&text), Some("token-field"), "{text}");
+    }
+    for clean in [
+        "The glpat- prefix names a personal access token; gldt- a deploy token.\n",
+        "glrt-runner and glagent-config are names, not tokens\n",
+        "token: read_token_from_file(path),\n",
+        "let token = glab_token();\ntoken: Some(token),\n",
+        "token: !!null\n",
+        "token: short-1\n",
+        "tokens: 12345678901234567890abc\n",
+    ] {
+        assert_eq!(credential_shape(clean), None, "{clean}");
+    }
+    // A prefix inside a longer word starts no token.
+    let inside = format!("x{}{body}", GITLAB_TOKEN_PREFIXES[0]);
+    assert_eq!(credential_shape(&inside), None, "{inside}");
 }
