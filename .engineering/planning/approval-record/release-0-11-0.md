@@ -8,7 +8,7 @@ relations:
 - decides: story:gitlab-forge
 - decides: story:gitlab-ci-wait
 - decides: story:harness-endpoint-is-configured
-revision: 2
+revision: 3
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-24T00:31:47Z", actor: "human:timo", revision: 2}
 ---
@@ -36,3 +36,25 @@ so the dispatcher sends no `[TRIAL takt]`.
 | ESS | stays 0.68.0 | the newest ESS release is 0.68.0 (`gh release view -R beyond10x/ess`) |
 | loom | 0.39.1 with metaharness 0.15.0, as merged at f7ecb80 | the pin moved in the wave (731d111) |
 | gate | the pull request's checks on the release commit, the three `main` runs at f7ecb80, and `release.yml` with `darwin.yml` on the tag | |
+
+## Gates
+
+The shared source gate (common / Security and privacy) failed on `main` at f7ecb80 (run 40045300805)
+and on the release pull request 12 (run 40046230738): 4 gitleaks `generic-api-key` findings from two
+lines, neither a secret. One is a clean-shape fixture in `crates/takt/tests/forge.rs` (db65aad), the
+key `tokens:` with a 23-character value of digits and letters, passed to `credential_shape` and
+expected to yield none; the fixture is not repeated here, since the scanner reads this record too. The other
+is the citation needle "holds no token there" beside its sha256 digest in
+`ess/domains/takt.citations.tsv` (8c171e0, re-digested at 731d111). `b10x-gates check` from the
+policy's baseline 68f6b6d to 3643522, `main` before the wave, passes over 32 commits; to f7ecb80 it
+reports exactly the 4; the pinned gitleaks run per commit over 3643522..f7ecb80 names only those two
+lines, and over f7ecb80..0d59fc1, the release commit, none.
+
+The orchestrator, under the owner's grant (2026-10-24), chose a baseline move over two policy
+exceptions, which would grow the policy secret for the same result: the takt baseline moves
+68f6b6d -> f7ecb80 in the policy repository at 290fa29, through the bot route; the orchestrator
+published the policy to the CI secret at 00:59Z, and the gate on `main` at f7ecb80 passed on its
+re-run (run 40045300805). The first record of this decision, 46619e4 on `release/0.11.0`, quoted
+the fixture and so failed the gate itself (run 40047728395, one finding); the release moves to
+`release/0.11.0-2`, the same release commit 0d59fc1 and this record without the quote, and
+`release/0.11.0` with pull request 12 stays unmerged, its deletion not under the grant.
