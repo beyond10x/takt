@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-24
+
+`--forge gitlab` delivers through `glab` on a GitLab host, and `--harness harness` takes its endpoint from flags or
+a file, with a token file or a secret's name handed to b10x-harness; loom 0.39.1 with metaharness 0.15.0.
+
 ### Added
 
 - `--harness harness` takes its endpoint from `--endpoint-base-url`, `--endpoint-wire`, `--endpoint-model`, `--endpoint-token-file` and `--endpoint-token-pointer`.
@@ -459,7 +464,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.10.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.11.0...HEAD
+[0.11.0]: https://github.com/beyond10x/takt/compare/0.10.1...0.11.0
 [0.10.1]: https://github.com/beyond10x/takt/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/beyond10x/takt/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/beyond10x/takt/compare/0.8.0...0.9.0

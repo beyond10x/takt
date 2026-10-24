@@ -75,7 +75,7 @@ the pin and handed the name down.
 - 2026-10-24: the reviewer at 05c5708: needs-revision on four misstatements in the two review
   records as filed, none a finding or a verdict, and no code since 731d111: in wave-36-731d111
   the CLI suites' counts stood under the wrong names (forge_cli 3, gitlab_forge_cli 5,
-  harness_endpoint_cli 14 is the order the reviewer's output had) and the checks were placed at
+  harness_endpoint_cli 14 is the order cargo runs the suites in) and the checks were placed at
   731d111 where they ran at c319340; in wave-36-1782919, F1 read as observed where it was
   established by reading the assertions, and F6 lacked "when glab is logged in to the host" and
   "read, not run". A review record is immutable, so both are archived and superseded by
