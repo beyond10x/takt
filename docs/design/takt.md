@@ -20,7 +20,7 @@ The name: takt time is the pace at which units of work are finished. One run is 
 
 | foundation | what it gives | release |
 |---|---|---|
-| Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.39.0 (`Cargo.toml`) |
+| Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.39.1 (`Cargo.toml`) |
 | Canon | `protocol/1`; `evaluate` is a pure function from protocol, case snapshot, evidence records, authority and instant to claims (TRUE, FALSE, UNKNOWN), obligations, admissible actions and legitimate outcomes, with an explanation; evidence is bound to the revision it was observed on. takt reaches it through Loom's governor and calls no `b10x_canon::eval` itself (`crates/takt/tests/no_own_evaluation.rs`) | `b10x-canon` 0.6.0 |
 | Engineering protocols | `software.change/1` and the other engineering protocols as Canon documents, validated by Canon; assertion providers and the gates command line | `b10x-canon-engineering` 0.9.0 |
 | AEP | the planning store: stories, scope, waves derived from scope, evidence on a story | `aep` 0.74.0 |
@@ -55,11 +55,11 @@ Each part of the loop and what performs it now:
 
 | part | performed by | held in |
 |---|---|---|
-| the step | Commission's runtime of loom-sdk: `run_until_blocked`, one call per step | `crates/takt/src/run.rs` (`Run`), crate `b10x-loom-commission` 0.39.0 |
-| evaluate, frontier, admit | the governor of Loom (`CanonGovernor`) over the case's files (`CaseFiles`), deciding with Canon; each decision is written as `decisions/NNNN.json` | `crates/takt/src/case.rs`, crate `b10x-loom-governor` 0.39.0 |
+| the step | Commission's runtime of loom-sdk: `run_until_blocked`, one call per step | `crates/takt/src/run.rs` (`Run`), crate `b10x-loom-commission` 0.39.1 |
+| evaluate, frontier, admit | the governor of Loom (`CanonGovernor`) over the case's files (`CaseFiles`), deciding with Canon; each decision is written as `decisions/NNNN.json` | `crates/takt/src/case.rs`, crate `b10x-loom-governor` 0.39.1 |
 | a grant | the case's authority provider (`CaseAuthority`, Loom's `AuthorityProvider`) over `authority.yaml` | `crates/takt/src/case.rs` |
 | pre-check | takt itself, ahead of each Loom step: `Shape::only_behind` stops `ApprovalRequired` (exit 4), `Shape::unperformable` stops `Unperformable` (exit 7) | `crates/takt/src/run.rs` |
-| propose | the composite executor (`TurnExecutor`, Loom's `AgentExecutor`): the due validator's action, else a judgement step of a session executor (`SessionHarness` over Loom's `SessionExecutor` and metaharness) | `crates/takt/src/run.rs`, `crates/takt/src/harness.rs`, crate `b10x-loom-session-executor` 0.39.0 |
+| propose | the composite executor (`TurnExecutor`, Loom's `AgentExecutor`): the due validator's action, else a judgement step of a session executor (`SessionHarness` over Loom's `SessionExecutor` and metaharness) | `crates/takt/src/run.rs`, `crates/takt/src/harness.rs`, crate `b10x-loom-session-executor` 0.39.1 |
 | perform | the composite effect (`TurnEffect`, Loom's `EffectPort`): the edit effect applies a proposal under the step guard; `ValidatorEffect` performs a validator's action, `ChoiceEffect` records a choice | `crates/takt/src/run.rs`, `crates/takt/src/validator.rs` |
 | observation | the session's `AgentSession` record, observed into `observations.json` through the governor | `crates/takt/src/run.rs`, `crates/takt/src/case.rs` |
 | validator | a validator (`TestsRun`, `GateRun`, `PrOpen`, `CiRead`, `PrMerged`, `ChangeRead`) turns an observation into a `canon-evidence/1` record, which reaches the case through the evidence port | `crates/takt/src/validator.rs` |
@@ -104,9 +104,9 @@ The endpoint b10x-harness's loop is pointed at under `--harness harness` is conf
 user's claude.ai login. A credential is named, never given: a token file with an optional JSON pointer, or a
 secret's name (`--endpoint-secret <namespace>/<name>`). The case records the endpoint by reference on its `opened`
 event (base URL, wire, model and the credential's `kind`, `subscription_file` with `path` and `pointer` or `secret`
-with `namespace` and `name`, never a secret), and only a `--harness harness` run writes that `endpoint` key. Not
-built: a secret's name is refused before the case opens until the pinned session executor (loom 0.39.0) can hand it
-to the harness (story:harness-endpoint-is-configured).
+with `namespace` and `name`, never a secret), and only a `--harness harness` run writes that `endpoint` key. A
+secret's name is handed to b10x-harness as that name through the session executor's `api_key_secret` (loom 0.39.1);
+the harness's loop opens the secret store itself, so the key never enters takt, metaharness or the child's environment (story:harness-endpoint-is-configured).
 
 ## 4. Milestones
 
