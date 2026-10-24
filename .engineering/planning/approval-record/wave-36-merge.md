@@ -8,7 +8,7 @@ relations:
 - decides: story:gitlab-forge
 - decides: story:gitlab-ci-wait
 - decides: story:harness-endpoint-is-configured
-revision: 2
+revision: 3
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-24T00:18:21Z", actor: "human:timo", revision: 2}
 ---
@@ -24,12 +24,14 @@ story:harness-endpoint-is-configured ahead of them, and the orchestrator's word 
 refusal, release. All three hold at 731d111: the real run (case takt-20261023T225103Z) opened
 the merge request through glab, recorded `ci_result` pass and stopped at merge approval, exit 4;
 U3c hands the secret's name to b10x-harness on loom 0.39.1. The reviewer rejected at 1782919 on
-two stale assertions (review-result:wave-36-1782919) and approves at 731d111
-(review-result:wave-36-731d111), fourteen findings fixed with tests, two filed. The diff touches
-judge surfaces (`crates/**`, `Cargo.toml`, both lockfiles, `ess/**`, `.engineering/planning/**`);
+two stale assertions (review-result:wave-36-1782919-2) and approves at 731d111
+(review-result:wave-36-731d111-2), fourteen findings fixed with tests, two filed; both records
+supersede the ones first filed, which the reviewer's confirmation at 05c5708 found misstated
+in four places, none of them a finding or a verdict. The diff touches judge surfaces
+(`crates/**`, `Cargo.toml`, both lockfiles, `ess/**`, `.engineering/planning/**`);
 `.engineering/delegations.yaml` names no delegation, so the grant is the owner's side's, recorded
-here under the orchestrator's grant, and the planner merges on it, at the store commit that
-follows 731d111 once the reviewer confirms that commit.
+here under the orchestrator's grant, and the planner merges on it, at the store commit after
+731d111 that the reviewer confirms.
 
 ## What it does not grant
 
