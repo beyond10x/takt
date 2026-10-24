@@ -8,7 +8,7 @@ relations:
 - decides: story:gitlab-forge
 - decides: story:gitlab-ci-wait
 - decides: story:harness-endpoint-is-configured
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-24T00:31:47Z", actor: "human:timo", revision: 2}
 ---
@@ -58,3 +58,14 @@ re-run (run 40045300805). The first record of this decision, 46619e4 on `release
 the fixture and so failed the gate itself (run 40047728395, one finding); the release moves to
 `release/0.11.0-2`, the same release commit 0d59fc1 and this record without the quote, and
 `release/0.11.0` with pull request 12 stays unmerged, its deletion not under the grant.
+
+## Released
+
+| item | value |
+|---|---|
+| tag | `0.11.0`, annotated, tag object ea60728, on `main` at 45e54d7 (merge of `release/0.11.0-2` at 5be8c3a), author and committer `b10x-bot[bot]` |
+| pull request | 13 from `release/0.11.0-2` (0d59fc1 the release commit, 5be8c3a the gates record): Build documentation, Security and privacy and the three task check jobs passed; pull request 12 from `release/0.11.0` closed unmerged, its record commit 46619e4 having quoted the fixture the gate flags |
+| release run | 40049567292 success: tag provenance, three builds, `darwin.yml` (test-cli, test-library) and `task check` on the tagged commit, publish; darwin test-library failed once at teardown (`hdiutil detach` of the test's disk image, "Resource busy", `across_file_systems`) and passed on its re-run |
+| GitHub Release | https://github.com/beyond10x/takt/releases/tag/0.11.0, not a draft: `takt-0.11.0-x86_64-unknown-linux-gnu.tar.gz`, `takt-0.11.0-aarch64-unknown-linux-gnu.tar.gz`, `takt-0.11.0-aarch64-apple-darwin.tar.gz`, `SHA256SUMS` |
+| verification | the orchestrator's verify-release exit 0 at 02:08Z, with the announcement file |
+| trial | started by the orchestrator on the two endpoints from the tag; the dispatcher sent no `[TRIAL takt]` |
