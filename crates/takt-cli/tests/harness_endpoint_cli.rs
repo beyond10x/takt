@@ -86,8 +86,9 @@ impl World {
         self.repo().join(".engineering/cases")
     }
 
-    /// `takt run` on the repository with `args` after the intent, HOME the scratch one and the
-    /// double first on the program path.
+    /// `takt run` on the repository with `args` after the intent, HOME the scratch one, the
+    /// double first on the program path, and no session bus, so no secrets store or keychain is
+    /// reachable.
     fn run(&self, args: &[&str]) -> Output {
         self.run_in(None, args)
     }
@@ -119,6 +120,8 @@ impl World {
                 ),
             )
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
+            .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            .env_remove("XDG_RUNTIME_DIR")
             .env_remove("B10X_GATES_POLICY")
             .env_remove("ANTHROPIC_API_KEY")
             .output()
@@ -254,43 +257,100 @@ fn two_credentials_are_refused_before_any_case() {
     assert!(!world.cases().exists(), "no case was opened");
 }
 
-/// Acceptance 4 and 7: the trial arm's endpoint file with the secret `llm` /
-/// `opencode-go-api-key`, HOME an empty directory so no store or keychain is reachable through
-/// it: takt reads no secret, and since the pinned session executor carries no secret's name,
-/// the run is refused before any case, naming it, the endpoint and the secret's parts.
-#[test]
-fn a_secret_name_is_refused_naming_the_session_executor_and_the_secret() {
-    let world = World::new("secret");
-    let file = world.outer().join("endpoint.toml");
-    fs::write(
-        &file,
-        "base_url = \"https://opencode.ai/inference/go/anthropic/v1\"\nwire = \"anthropic-messages\"\nmodel = \"claude-haiku-5-5\"\n\n[credential]\nsecret = \"llm/opencode-go-api-key\"\n",
-    )
-    .expect("an endpoint file");
-    let output = world.run(&[
-        "--harness",
-        "harness",
-        "--endpoint-file",
-        file.to_str().expect("utf-8"),
-    ]);
-    let (stdout, stderr) = text(&output);
-    assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
-    for part in [
-        "loom 0.39.0",
-        "namespace llm",
-        "name opencode-go-api-key",
-        "https://opencode.ai/inference/go/anthropic/v1",
-        "anthropic-messages",
-        "claude-haiku-5-5",
-    ] {
-        assert!(stderr.contains(part), "{part}: {stderr}");
-    }
-    assert!(!world.cases().exists(), "no case was opened");
+/// Asserts `output` opened a case on `--iterations 0` (exit 3) without starting b10x-harness or
+/// writing under HOME, and that its `opened` line records the endpoint `base_url`, `wire` and
+/// `model` with the secret `llm/opencode-go-api-key` by its namespace and name.
+fn opened_on_the_secret(world: &World, output: &Output, base_url: &str, wire: &str, model: &str) {
+    let (stdout, stderr) = text(output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
     assert!(!world.started().exists(), "b10x-harness was not started");
     assert_eq!(
         fs::read_dir(world.home()).expect("HOME").count(),
         0,
         "nothing was written under HOME"
+    );
+    let opened = opened_lines(&world.cases());
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert_eq!(
+        opened[0]["endpoint"],
+        serde_json::json!({
+            "base_url": base_url,
+            "wire": wire,
+            "model": model,
+            "credential": {
+                "kind": "secret",
+                "namespace": "llm",
+                "name": "opencode-go-api-key",
+            },
+        })
+    );
+}
+
+/// Acceptance 4 and 7: the trial arm's two endpoint files, each with the secret `llm` /
+/// `opencode-go-api-key`, HOME an empty directory and no session bus, so no store or keychain is
+/// reachable: takt reads no secret, the case opens and records the secret by name, and nothing
+/// is written under HOME.
+#[test]
+fn the_trial_arm_endpoints_open_a_case_naming_the_secret() {
+    for (name, wire, base_url, model) in [
+        (
+            "secret-anthropic",
+            "anthropic-messages",
+            "https://opencode.ai/inference/go/anthropic/v1",
+            "claude-haiku-5-5",
+        ),
+        (
+            "secret-openai",
+            "openai-responses",
+            "https://opencode.ai/inference/go/openai/v1",
+            "gpt-6-luna",
+        ),
+    ] {
+        let world = World::new(name);
+        let file = world.outer().join("endpoint.toml");
+        fs::write(
+            &file,
+            format!(
+                "base_url = \"{base_url}\"\nwire = \"{wire}\"\nmodel = \"{model}\"\n\n[credential]\nsecret = \"llm/opencode-go-api-key\"\n"
+            ),
+        )
+        .expect("an endpoint file");
+        let output = world.run(&[
+            "--harness",
+            "harness",
+            "--endpoint-file",
+            file.to_str().expect("utf-8"),
+            "--iterations",
+            "0",
+        ]);
+        opened_on_the_secret(&world, &output, base_url, wire, model);
+    }
+}
+
+/// `--endpoint-secret llm/opencode-go-api-key` with another base URL reaches a case: the secret
+/// is the endpoint's own credential, so F2's refusal of the default credential to another host
+/// does not apply, and the case records the secret by name.
+#[test]
+fn an_endpoint_secret_by_flag_reaches_a_case() {
+    let world = World::new("secret-flag");
+    let output = world.run(&[
+        "--harness",
+        "harness",
+        "--endpoint-base-url",
+        "https://opencode.ai/inference/go/anthropic/v1",
+        "--endpoint-model",
+        "claude-haiku-5-5",
+        "--endpoint-secret",
+        "llm/opencode-go-api-key",
+        "--iterations",
+        "0",
+    ]);
+    opened_on_the_secret(
+        &world,
+        &output,
+        "https://opencode.ai/inference/go/anthropic/v1",
+        "anthropic-messages",
+        "claude-haiku-5-5",
     );
 }
 

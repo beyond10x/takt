@@ -13,7 +13,7 @@ takt's releases.
 - An `--endpoint-*` flag given with a harness other than `harness` is refused before the case opens.
 - An endpoint's credential is a subscription token file with an optional JSON pointer, or a secret's name (`--endpoint-secret <namespace>/<name>`); takt reads no secret.
 - A missing token file, or a pointer that resolves to no token, exits 1 before the case opens, naming the path and the pointer.
-- A secret's name is refused before the case opens: loom 0.39.0's session executor hands b10x-harness no secret's name, and handing it down waits on the loom release that does.
+- A secret's name is handed to b10x-harness by name, as the session executor's `api_key_secret`, and the harness resolves it; takt reads no secret and opens no store.
 - A `--harness harness` run records its endpoint on the `opened` line by reference: base URL, wire, model, the token file's path (`~/…` under HOME) and pointer or the secret's name; never a token.
 - `--endpoint-base-url` takes `https://`, or `http://` to a loopback host only (`localhost`, `127.0.0.0/8`, `::1`).
 - A base URL with a userinfo, a query or a fragment is refused before the case opens, naming the part and repeating none of it.
@@ -31,6 +31,7 @@ takt's releases.
 
 ### Changed
 
+- `b10x-loom-sdk` moves from loom 0.39.0 to 0.39.1, whose session executor carries an endpoint's `api_key_secret` to b10x-harness; metaharness stays at 0.15.0.
 - Without `--forge`, an `origin` on a host other than github.com gets the forge `gitlab` when `glab` is logged in to it, and otherwise `forge: none` with what `glab` said in one line.
 - Without `--forge`, `takt scenario run` on an `origin` that is not on github.com runs with no forge and says so in one line; `glab` is not asked.
 - A harness or test command's child no longer inherits `GLAB_CONFIG_DIR`, as it no longer inherits `GH_CONFIG_DIR`.

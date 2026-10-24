@@ -1414,7 +1414,7 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         "harness" => {
             let home = std::env::var_os("HOME").map(PathBuf::from);
             let mut session = session(Kind::B10x);
-            session.endpoint = Some(looping.endpoint.session_endpoint(home.as_deref())?);
+            session.point_at(&looping.endpoint.config(home.as_deref())?);
             session.home = home;
             Ok(Box::new(session))
         }
@@ -1456,9 +1456,8 @@ struct EndpointArgs {
     #[arg(long, value_name = "JSON POINTER")]
     endpoint_token_pointer: Option<String>,
     /// `--harness harness`: the API key as a secret's name in the owner's secrets store,
-    /// `<namespace>/<name>`, which the harness resolves and takt never reads; not with
-    /// --endpoint-token-file. Refused before the case opens while the session executor takt is
-    /// built with (loom 0.39.0) carries no secret's name.
+    /// `<namespace>/<name>`, handed to b10x-harness by name, which the harness resolves; takt
+    /// reads no secret and opens no store. Not with --endpoint-token-file.
     #[arg(long, value_name = "NAMESPACE/NAME")]
     endpoint_secret: Option<String>,
     /// `--harness harness`: a TOML file of the same fields, each under a flag: `base_url`,
@@ -1487,10 +1486,10 @@ impl EndpointArgs {
         .find_map(|(flag, given)| given.then_some(flag))
     }
 
-    /// The endpoint the session is built with: the flags over the file over the default under
+    /// The endpoint the session is pointed at: the flags over the file over the default under
     /// `home`, a token file made absolute and checked to hold a token where its pointer points,
-    /// before any case opens.
-    fn session_endpoint(&self, home: Option<&Path>) -> Result<takt::harness::Endpoint> {
+    /// a secret's name checked by no read, before any case opens.
+    fn config(&self, home: Option<&Path>) -> Result<takt::harness::EndpointConfig> {
         use takt::harness::{EndpointConfig, EndpointFields};
         let flags = EndpointFields {
             base_url: self.endpoint_base_url.clone(),
@@ -1507,7 +1506,7 @@ impl EndpointArgs {
             .transpose()?;
         let config = EndpointConfig::of(&flags, file.as_ref(), home)?;
         config.check_token()?;
-        config.session_endpoint()
+        Ok(config)
     }
 }
 

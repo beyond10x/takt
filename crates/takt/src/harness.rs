@@ -195,8 +195,13 @@ pub struct SessionHarness {
     /// metaharness finds itself, on that same `PATH`.
     pub program: String,
     /// For `Kind::B10x`, the endpoint its loop is pointed at and the subscription token it
-    /// reads.
+    /// reads, or none (`token_file` empty) when [`Self::api_key_secret`] names its key.
     pub endpoint: Option<loom_sdk::session::Endpoint>,
+    /// For `Kind::B10x`, the name of the endpoint's API key in the owner's secrets store,
+    /// `<namespace>/<name>`, handed to the session executor as its `api_key_secret`: the loop
+    /// opens the store by it, and the key never reaches takt, metaharness or the child's
+    /// environment. None for a token file and for Claude Code and Codex.
+    pub api_key_secret: Option<String>,
     /// The user's HOME, under which the endpoint's token file is recorded as `~/…`
     /// ([`EndpointConfig::recorded`]); the session is given the path whole. None records it whole.
     pub home: Option<std::path::PathBuf>,
@@ -263,6 +268,7 @@ impl SessionHarness {
             }
             .to_owned(),
             endpoint: None,
+            api_key_secret: None,
             home: None,
             runner: None,
             reported: std::cell::Cell::new(None),
@@ -281,6 +287,14 @@ impl SessionHarness {
     ) -> Self {
         self.runner = Some(Box::new(runner));
         self
+    }
+
+    /// Points the harness at `config`: the session's endpoint
+    /// ([`EndpointConfig::session_endpoint`]) and, for a secret, its name
+    /// ([`EndpointConfig::api_key_secret`]), each from the one configuration so the two agree.
+    pub fn point_at(&mut self, config: &EndpointConfig) {
+        self.endpoint = Some(config.session_endpoint());
+        self.api_key_secret = config.api_key_secret();
     }
 
     /// `program` by path: as given when it names a directory, else the first executable file
@@ -453,11 +467,11 @@ impl Harness for SessionHarness {
     }
 
     /// b10x-harness's endpoint as its sessions are pointed at it, `--model` over the
-    /// endpoint's model as the session executor takes it, its token file under HOME as `~/…`;
-    /// Claude Code and Codex are pointed at none.
+    /// endpoint's model as the session executor takes it, its token file under HOME as `~/…`
+    /// or its secret's name; Claude Code and Codex are pointed at none.
     fn endpoint_reference(&self) -> Option<EndpointConfig> {
         let endpoint = self.endpoint.as_ref().filter(|_| self.kind == Kind::B10x)?;
-        let mut reference = EndpointConfig::of_session(endpoint);
+        let mut reference = EndpointConfig::of_session(endpoint, self.api_key_secret.as_deref());
         if let Some(model) = &self.model {
             reference.model.clone_from(model);
         }
@@ -536,6 +550,8 @@ impl Harness for SessionHarness {
         executor.model.clone_from(&self.model);
         executor.max_turns = (self.kind != Kind::Codex).then_some(self.max_turns);
         executor.endpoint.clone_from(&self.endpoint);
+        // The secret's name alone: the loop opens the store by it, so takt reads no key.
+        executor.api_key_secret.clone_from(&self.api_key_secret);
         // The user's login where there is one to copy (`~/.claude/.credentials.json`,
         // `~/.codex/auth.json`, the file metaharness copies); on a home with none, no
         // credential, as the program run there would have none.
@@ -1994,10 +2010,6 @@ pub fn is_test_path(path: &str) -> bool {
         || stem.ends_with(".spec")
 }
 
-/// The session executor takt is built with, as a refusal of a secret's name names it: it hands
-/// b10x-harness a subscription token file and no secret's name.
-pub const SESSION_EXECUTOR: &str = "b10x-loom-session-executor 0.39.0 (loom 0.39.0)";
-
 /// The wires a `--harness harness` endpoint may speak, as b10x-harness names them.
 pub const ENDPOINT_WIRES: [&str; 2] = ["anthropic-messages", "openai-responses"];
 
@@ -2184,18 +2196,30 @@ impl EndpointConfig {
     /// The default token file's pointer.
     pub const TOKEN_POINTER: &str = "/claudeAiOauth/accessToken";
 
-    /// The endpoint a session is built with, read back by reference: the session executor's
-    /// endpoint carries a subscription token file and its pointer, the one kind it knows.
+    /// The endpoint a session is built with, read back by reference: the secret
+    /// `api_key_secret` names when the session is given one, else the endpoint's token file and
+    /// pointer. A name not of the shape `<namespace>/<name>`, which the session executor refuses,
+    /// is read back whole as the `name`, its `namespace` empty.
     #[must_use]
-    pub fn of_session(endpoint: &Endpoint) -> Self {
+    pub fn of_session(endpoint: &Endpoint, api_key_secret: Option<&str>) -> Self {
+        let credential = match api_key_secret {
+            Some(given) => {
+                let (namespace, name) = given.split_once('/').unwrap_or(("", given));
+                Credential::Secret {
+                    namespace: namespace.to_owned(),
+                    name: name.to_owned(),
+                }
+            }
+            None => Credential::SubscriptionFile {
+                path: endpoint.token_file.clone(),
+                pointer: endpoint.token_pointer.clone(),
+            },
+        };
         Self {
             base_url: endpoint.base_url.clone(),
             wire: endpoint.wire.clone(),
             model: endpoint.model.clone(),
-            credential: Credential::SubscriptionFile {
-                path: endpoint.token_file.clone(),
-                pointer: endpoint.token_pointer.clone(),
-            },
+            credential,
         }
     }
 
@@ -2342,24 +2366,32 @@ impl EndpointConfig {
     }
 
     /// The endpoint the session is built with ([`SessionHarness::endpoint`]): a subscription
-    /// token file maps onto the session executor's token file and pointer. A secret's name is
-    /// refused by name before the first step, in its one arm: the session executor takt is
-    /// built with ([`SESSION_EXECUTOR`]) hands b10x-harness no secret's name.
-    pub fn session_endpoint(&self) -> Result<Endpoint> {
+    /// token file maps onto the session executor's token file and pointer; a secret's name
+    /// leaves both empty (`token_file` empty, no pointer), the key named by
+    /// [`Self::api_key_secret`] alone.
+    #[must_use]
+    pub fn session_endpoint(&self) -> Endpoint {
+        let (token_file, token_pointer) = match &self.credential {
+            Credential::SubscriptionFile { path, pointer } => (path.clone(), pointer.clone()),
+            Credential::Secret { .. } => (std::path::PathBuf::new(), None),
+        };
+        Endpoint {
+            base_url: self.base_url.clone(),
+            wire: self.wire.clone(),
+            model: self.model.clone(),
+            token_file,
+            token_pointer,
+        }
+    }
+
+    /// The secret's name the session executor hands b10x-harness (`api_key_secret`),
+    /// `<namespace>/<name>`, which the harness resolves; takt reads no secret and opens no
+    /// store. None for a subscription token file.
+    #[must_use]
+    pub fn api_key_secret(&self) -> Option<String> {
         match &self.credential {
-            Credential::SubscriptionFile { path, pointer } => Ok(Endpoint {
-                base_url: self.base_url.clone(),
-                wire: self.wire.clone(),
-                model: self.model.clone(),
-                token_file: path.clone(),
-                token_pointer: pointer.clone(),
-            }),
-            Credential::Secret { namespace, name } => Err(anyhow!(
-                "the endpoint {} ({}, {}) names its credential as the secret {namespace}/{name} (namespace {namespace}, name {name}) for the harness to resolve; the session executor takt is built with, {SESSION_EXECUTOR}, hands b10x-harness a subscription token file and no secret's name, so the run is refused before its first step; takt read no secret and opened no store",
-                self.base_url,
-                self.wire,
-                self.model
-            )),
+            Credential::Secret { namespace, name } => Some(format!("{namespace}/{name}")),
+            Credential::SubscriptionFile { .. } => None,
         }
     }
 }
@@ -3049,6 +3081,138 @@ mod tests {
         (line, log.launched())
     }
 
+    /// The argv of each child a scripted b10x-harness step in `tree` starts, the harness
+    /// pointed at `config` as `--harness harness` points it ([`SessionHarness::point_at`]).
+    fn b10x_launched(config: &EndpointConfig, tree: &Path) -> Vec<Vec<String>> {
+        use loom_sdk::session::metaharness::{ScriptedLog, ScriptedRunner};
+        let log = ScriptedLog::new();
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.point_at(config);
+        let kept = log.clone();
+        let harness = harness.with_runner(move || {
+            Box::new(ScriptedRunner::of_lines(Vec::<String>::new(), kept.clone()))
+        });
+        in_context(tree, &scoped(&["todo.py"]), |context| {
+            let _ = harness.step(context);
+        });
+        log.launched()
+    }
+
+    /// The word after `flag` in `argv`, when `flag` is there.
+    fn after<'a>(argv: &'a [String], flag: &str) -> Option<&'a str> {
+        let at = argv.iter().position(|word| word == flag)?;
+        argv.get(at + 1).map(String::as_str)
+    }
+
+    /// Whether `argv` names a credential of the loop's other than a secret's name: a token
+    /// file or variable, or a key file or variable.
+    fn names_a_token(argv: &[String]) -> bool {
+        argv.iter().any(|word| {
+            ["--oauth-token", "--api-key-env", "--api-key-file"]
+                .iter()
+                .any(|flag| word.starts_with(flag))
+        })
+    }
+
+    /// Acceptance 3, over what the session hands b10x-harness, a test per kind: the token kind
+    /// as it was, its file and pointer as `--oauth-token-file` and `--oauth-token-pointer` and
+    /// no secret named.
+    #[test]
+    fn a_token_file_reaches_the_loop_as_its_path_and_pointer() {
+        let dir = scratch("kind-token");
+        committed(&dir.0, &[TODO]);
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::SubscriptionFile {
+                path: std::path::PathBuf::from("/t/token.json"),
+                pointer: Some("/x/y".to_owned()),
+            },
+        };
+        let launched = b10x_launched(&config, &dir.0);
+        assert_eq!(launched.len(), 1, "one child: {launched:?}");
+        let argv = &launched[0];
+        assert_eq!(
+            after(argv, "--oauth-token-file"),
+            Some("/t/token.json"),
+            "{argv:?}"
+        );
+        assert_eq!(
+            after(argv, "--oauth-token-pointer"),
+            Some("/x/y"),
+            "{argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|word| word.starts_with("--api-key")),
+            "{argv:?}"
+        );
+    }
+
+    /// Acceptance 3, the secret kind: its name is handed down as a name, `--api-key-secret
+    /// <namespace>/<name>`, and no token file, pointer or key variable is named beside it.
+    #[test]
+    fn a_secret_reaches_the_loop_as_its_name_alone() {
+        let dir = scratch("kind-secret");
+        committed(&dir.0, &[TODO]);
+        let config = EndpointConfig {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            credential: Credential::secret("llm/some-key").expect("a secret's name"),
+        };
+        let launched = b10x_launched(&config, &dir.0);
+        assert_eq!(launched.len(), 1, "one child: {launched:?}");
+        let argv = &launched[0];
+        assert_eq!(
+            after(argv, "--api-key-secret"),
+            Some("llm/some-key"),
+            "{argv:?}"
+        );
+        assert!(!names_a_token(argv), "{argv:?}");
+    }
+
+    /// Acceptance 7: the trial arm's two endpoints, each over what takt hands b10x-harness: its
+    /// base URL, wire and model, and the secret `llm/opencode-go-api-key` by name, no token.
+    #[test]
+    fn the_opencode_go_endpoints_reach_the_loop_with_the_secret_by_name() {
+        let dir = scratch("opencode-go-launch");
+        committed(&dir.0, &[TODO]);
+        for (wire, base_url, model) in [
+            (
+                "anthropic-messages",
+                "https://opencode.ai/inference/go/anthropic/v1",
+                "claude-haiku-5-5",
+            ),
+            (
+                "openai-responses",
+                "https://opencode.ai/inference/go/openai/v1",
+                "gpt-6-luna",
+            ),
+        ] {
+            let flags = EndpointFields {
+                base_url: Some(base_url.to_owned()),
+                wire: Some(wire.to_owned()),
+                model: Some(model.to_owned()),
+                secret: Some("llm/opencode-go-api-key".to_owned()),
+                ..EndpointFields::default()
+            };
+            let config = EndpointConfig::of(&flags, None, None).expect("no HOME needed");
+            let launched = b10x_launched(&config, &dir.0);
+            assert_eq!(launched.len(), 1, "{wire}: one child: {launched:?}");
+            let argv = &launched[0];
+            assert_eq!(after(argv, "--base-url"), Some(base_url), "{argv:?}");
+            assert_eq!(after(argv, "--wire"), Some(wire), "{argv:?}");
+            assert_eq!(after(argv, "--model"), Some(model), "{argv:?}");
+            assert_eq!(
+                after(argv, "--api-key-secret"),
+                Some("llm/opencode-go-api-key"),
+                "{argv:?}"
+            );
+            assert!(!names_a_token(argv), "{wire}: {argv:?}");
+        }
+    }
+
     /// The paths of the context files metaharness rendered into a child's arguments, in order:
     /// each `<context-file-N path="…"` line of every argument.
     fn context_paths(argv: &[String]) -> Vec<String> {
@@ -3640,9 +3804,9 @@ mod endpoint_tests {
     /// Acceptance 1: no flag and no file build the endpoint the `harness` arm built before.
     #[test]
     fn endpoint_with_nothing_given_is_the_one_built_before() {
-        let built = resolved(&EndpointFields::default(), None)
-            .session_endpoint()
-            .expect("a subscription endpoint maps");
+        let config = resolved(&EndpointFields::default(), None);
+        assert_eq!(config.api_key_secret(), None, "no secret named");
+        let built = config.session_endpoint();
         let before = Endpoint {
             base_url: "https://api.anthropic.com/v1".to_owned(),
             wire: "anthropic-messages".to_owned(),
@@ -3860,7 +4024,7 @@ mod endpoint_tests {
             },
         };
         assert_eq!(
-            config.session_endpoint().expect("maps"),
+            config.session_endpoint(),
             Endpoint {
                 base_url: "https://b.example/v1".to_owned(),
                 wire: "openai-responses".to_owned(),
@@ -3869,12 +4033,14 @@ mod endpoint_tests {
                 token_pointer: Some("/x/y".to_owned()),
             }
         );
+        assert_eq!(config.api_key_secret(), None, "no secret named");
     }
 
-    /// Acceptance 3: the secret kind is refused by name: the pinned session executor carries no
-    /// secret's name; the refusal names it, the namespace and the name.
+    /// Acceptance 3: the secret kind is handed down by its name: the session's endpoint names
+    /// no token (`token_file` empty, no pointer), and the session executor is given
+    /// `api_key_secret` `<namespace>/<name>`; the harness pointed at it carries both.
     #[test]
-    fn endpoint_secret_is_refused_naming_the_session_executor_namespace_and_name() {
+    fn endpoint_secret_is_handed_down_as_its_name() {
         let config = EndpointConfig {
             base_url: "https://b.example/v1".to_owned(),
             wire: "anthropic-messages".to_owned(),
@@ -3884,14 +4050,31 @@ mod endpoint_tests {
                 name: "some-key".to_owned(),
             },
         };
-        let message = format!("{:#}", config.session_endpoint().expect_err("refused"));
-        assert!(
-            message.contains(SESSION_EXECUTOR)
-                && message.contains("loom 0.39.0")
-                && message.contains("namespace llm")
-                && message.contains("name some-key"),
-            "{message}"
-        );
+        let endpoint = Endpoint {
+            base_url: "https://b.example/v1".to_owned(),
+            wire: "anthropic-messages".to_owned(),
+            model: "m".to_owned(),
+            token_file: PathBuf::new(),
+            token_pointer: None,
+        };
+        assert_eq!(config.session_endpoint(), endpoint);
+        assert_eq!(config.api_key_secret().as_deref(), Some("llm/some-key"));
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.point_at(&config);
+        assert_eq!(harness.endpoint, Some(endpoint));
+        assert_eq!(harness.api_key_secret.as_deref(), Some("llm/some-key"));
+        let token = EndpointConfig {
+            credential: Credential::SubscriptionFile {
+                path: PathBuf::from("/t/token.json"),
+                pointer: None,
+            },
+            ..config
+        };
+        harness.point_at(&token);
+        assert_eq!(harness.api_key_secret, None, "a token file names no secret");
+        for kind in [Kind::Claude, Kind::Codex] {
+            assert_eq!(SessionHarness::of(kind).api_key_secret, None, "{kind:?}");
+        }
     }
 
     /// A secret's name is `<namespace>/<name>`, each part non-empty, with no `/` and no white
@@ -3922,8 +4105,8 @@ mod endpoint_tests {
         }
     }
 
-    /// Acceptance 4: with a secret's name the endpoint resolves with no HOME, and the token
-    /// check reads nothing: takt has no secrets store to open.
+    /// Acceptance 4: with a secret's name the endpoint resolves with no HOME, the token check
+    /// reads nothing, and the harness is pointed at it: takt has no secrets store to open.
     #[test]
     fn endpoint_secret_needs_no_home_and_reads_nothing() {
         let flags = EndpointFields {
@@ -3937,6 +4120,12 @@ mod endpoint_tests {
         assert_eq!(
             config.credential.reference(),
             "secret llm/opencode-go-api-key"
+        );
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.point_at(&config);
+        assert_eq!(
+            harness.api_key_secret.as_deref(),
+            Some("llm/opencode-go-api-key")
         );
     }
 
@@ -3955,7 +4144,7 @@ mod endpoint_tests {
         };
         let config = resolved(&flags, None);
         config.check_token().expect("the pointer resolves");
-        let endpoint = config.session_endpoint().expect("maps");
+        let endpoint = config.session_endpoint();
         let dangling = EndpointConfig {
             credential: Credential::SubscriptionFile {
                 path: token.clone(),
@@ -4039,8 +4228,8 @@ mod endpoint_tests {
     }
 
     /// Acceptance 7: the trial arm's two endpoints, each with the secret `llm` /
-    /// `opencode-go-api-key`, read from a file into what takt would hand the harness; the
-    /// hand-down waits on the session executor, so the refusal names each part.
+    /// `opencode-go-api-key`, read from a file into what takt hands the harness: the endpoint's
+    /// base URL, wire and model with its token fields empty, and `api_key_secret` set.
     #[test]
     fn endpoint_opencode_go_endpoints_read_from_a_file() {
         let dir = scratch("opencode-go");
@@ -4076,17 +4265,24 @@ mod endpoint_tests {
                     },
                 }
             );
-            let message = format!("{:#}", config.session_endpoint().expect_err("the loom gap"));
-            for part in [
-                base_url,
-                wire,
-                model,
-                "namespace llm",
-                "name opencode-go-api-key",
-                "loom 0.39.0",
-            ] {
-                assert!(message.contains(part), "{part}: {message}");
-            }
+            let mut harness = SessionHarness::of(Kind::B10x);
+            harness.point_at(&config);
+            assert_eq!(
+                harness.endpoint,
+                Some(Endpoint {
+                    base_url: base_url.to_owned(),
+                    wire: wire.to_owned(),
+                    model: model.to_owned(),
+                    token_file: PathBuf::new(),
+                    token_pointer: None,
+                }),
+                "{wire}"
+            );
+            assert_eq!(
+                harness.api_key_secret.as_deref(),
+                Some("llm/opencode-go-api-key"),
+                "{wire}"
+            );
         }
     }
 
@@ -4136,8 +4332,19 @@ mod endpoint_tests {
             harness.endpoint_reference(),
             Some(EndpointConfig {
                 model: "flag-model".to_owned(),
-                ..named
+                ..named.clone()
             })
+        );
+        let secret = EndpointConfig {
+            credential: Credential::secret("llm/opencode-go-api-key").expect("a secret's name"),
+            ..named
+        };
+        let mut pointed = SessionHarness::of(Kind::B10x);
+        pointed.point_at(&secret);
+        assert_eq!(
+            pointed.endpoint_reference(),
+            Some(secret),
+            "the secret read back by its name"
         );
         for kind in [Kind::Claude, Kind::Codex] {
             let mut other = SessionHarness::of(kind);
@@ -4279,6 +4486,17 @@ mod endpoint_tests {
                 path: PathBuf::from("/t/token.json"),
                 pointer: None,
             }
+        );
+        let with_secret = EndpointFields {
+            base_url: Some("https://other.example/v1".to_owned()),
+            secret: Some("llm/opencode-go-api-key".to_owned()),
+            ..EndpointFields::default()
+        };
+        let taken = EndpointConfig::of(&with_secret, None, None).expect("a secret of its own");
+        assert_eq!(taken.base_url, "https://other.example/v1");
+        assert_eq!(
+            taken.api_key_secret().as_deref(),
+            Some("llm/opencode-go-api-key")
         );
     }
 
@@ -4451,7 +4669,7 @@ mod endpoint_tests {
             assert_eq!(taken, &path);
             let message = format!("{:#}", config.check_token().expect_err("no such file"));
             assert!(message.contains(&path.display().to_string()), "{message}");
-            assert_eq!(config.session_endpoint().expect("maps").token_file, path);
+            assert_eq!(config.session_endpoint().token_file, path);
             assert_eq!(
                 opened_with(Some(config.recorded(None)))["endpoint"]["credential"]["path"],
                 path.display().to_string()
@@ -4466,10 +4684,7 @@ mod endpoint_tests {
     fn endpoint_token_file_under_home_is_recorded_from_tilde() {
         let config = resolved(&EndpointFields::default(), None);
         let absolute = home().join(".claude/.credentials.json");
-        assert_eq!(
-            config.session_endpoint().expect("maps").token_file,
-            absolute
-        );
+        assert_eq!(config.session_endpoint().token_file, absolute);
         let line = opened_with(Some(config.clone().recorded(Some(&home()))));
         assert_eq!(
             line["endpoint"]["credential"],
@@ -4503,7 +4718,7 @@ mod endpoint_tests {
         };
         assert_eq!(secret.clone().recorded(Some(&home())), secret);
         let mut harness = SessionHarness::of(Kind::B10x);
-        harness.endpoint = Some(config.session_endpoint().expect("maps"));
+        harness.endpoint = Some(config.session_endpoint());
         harness.home = Some(home());
         let reference = harness
             .endpoint_reference()
