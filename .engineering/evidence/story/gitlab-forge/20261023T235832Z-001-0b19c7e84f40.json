@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-23T23:58:32Z",
+  "actor": "human:timo",
+  "artifact": "story:gitlab-forge",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "one real takt run on the private trial project, case takt-20261023T225103Z on story.delivery/1 with --forge gitlab: pr.open opened the merge request through glab, 44 ci.read steps, ci_result pass, stopped ApprovalRequired (repository.merge), exit 4",
+    "reference": "docs/waves/wave-36.md"
+  }
+}

@@ -34,7 +34,7 @@ takt's releases.
 - `b10x-loom-sdk` moves from loom 0.39.0 to 0.39.1, whose session executor carries an endpoint's `api_key_secret` to b10x-harness; metaharness stays at 0.15.0.
 - Without `--forge`, an `origin` on a host other than github.com gets the forge `gitlab` when `glab` is logged in to it, and otherwise `forge: none` with what `glab` said in one line.
 - Without `--forge`, `takt scenario run` on an `origin` that is not on github.com runs with no forge and says so in one line; `glab` is not asked.
-- A harness or test command's child no longer inherits `GLAB_CONFIG_DIR`, as it no longer inherits `GH_CONFIG_DIR`.
+- The test command run under `--confinement none` no longer inherits `GLAB_CONFIG_DIR`, as it no longer inherits `GH_CONFIG_DIR`; a harness child never did, its environment being built from nothing.
 
 ## [0.10.1] - 2026-10-23
 

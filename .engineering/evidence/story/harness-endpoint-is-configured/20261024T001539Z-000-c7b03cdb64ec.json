@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-24T00:15:39Z",
+  "actor": "human:timo",
+  "artifact": "story:harness-endpoint-is-configured",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --no-fail-fast on the tree committed as db65aad: 160 results, 1728 passed, 0 failed, 5 ignored, exit 0; U3c at 731d111 by its implementor: lib 113, 17 library suites 253, 6 CLI suites 131 passed, 0 failed",
+    "reference": "docs/waves/wave-36.md"
+  }
+}
