@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:one-config-contract-with-loom
 kind: story
-status: active
+status: implemented
 title: 'One configuration contract with Loom: --config reads /config/agent.yaml'
 summary: --config by extension, TOML or YAML; a loom.agent/1 document's takt member is the run configuration
 tags:
@@ -23,10 +23,11 @@ scope:
   path: crates/takt/src/run_config.rs
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:04Z", actor: "human:timo", revision: 8}
 - {from: "proposed", to: "active", at: "2026-10-26T13:48:04Z", actor: "human:timo", revision: 9}
+- {from: "active", to: "implemented", at: "2026-10-26T16:16:36Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: one-config-contract-with-loom
 

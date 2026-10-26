@@ -10,7 +10,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:declared-loops
 - informed_by: design:recursive-self-improvement
-revision: 9
+revision: 10
 ---
 # Design: continuous work and orchestration as a tree of takt cases
 
@@ -232,6 +232,11 @@ against qualities 1 (secure) and 4 (deterministic).
 | 8 | the root across repositories | 4, 5, 6 (PRD § 6) |
 
 Steps 1 to 4 earn the PRD success row "wave delivery through takt".
+
+Step 8 is superseded by conductor's design "conductor on Agency's API"
+(https://github.com/beyond10x/conductor/pull/80, `docs/design/conductor-on-agency.md`, its D1) once
+that design is accepted: orchestration across repositories belongs to conductor, and takt stays
+inside one repository (noted in wave 37, 2026-10-26, at the orchestrator's request).
 
 ## 12. Risks
 

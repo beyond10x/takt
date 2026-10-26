@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-26T16:16:34Z",
+  "actor": "human:timo",
+  "artifact": "story:image-runs-the-toolchain-it-tests-with",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check on wave/37 at b8fa404: 169 results, 1797 passed, 0 failed, 6 ignored, exit 0; citations 1158/1158; release-notes --check 17 releases; probe image: b10x-harness 0.20.0, tini 0.19.0, /opt/rust 755 root"
+  }
+}

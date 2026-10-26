@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:image-runs-the-toolchain-it-tests-with
 kind: story
-status: active
+status: implemented
 title: The image tests a repository whose dependencies build against OpenSSL
 summary: pkg-config and libssl-dev in the final stage (trial run 1)
 tags:
@@ -13,10 +13,11 @@ relations:
 scope:
 - confidence: cited
   path: Dockerfile
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:03Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T13:48:03Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-26T16:16:36Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: image-runs-the-toolchain-it-tests-with
 

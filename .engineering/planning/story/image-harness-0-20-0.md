@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:image-harness-0-20-0
 kind: story
-status: draft
+status: implemented
 title: The image runs b10x-harness 0.20.0, admitted by the metaharness takt reaches
 summary: harness 0.20.0 sends x-opencode-session; needs a loom release on metaharness 0.19.0 (trial runs 3, 4)
 tags:
@@ -19,7 +19,11 @@ scope:
   path: Dockerfile
 - confidence: cited
   path: fuzz/Cargo.lock
-revision: 5
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T16:16:30Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-26T16:16:30Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-26T16:16:36Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: image-harness-0-20-0
 

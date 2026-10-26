@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:protocols-are-engineering-protocols-built-ins
 kind: story
-status: active
+status: implemented
 title: takt reads its three protocols from the engineering protocols' registry
 summary: engineering-protocols 0.10.0 ships story.delivery/1, self.improvement/1, loop.improvement/1; takt drops its copies
 tags:
@@ -22,10 +22,11 @@ scope:
   path: fuzz/Cargo.lock
 - confidence: cited
   path: protocols
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:59:35Z", actor: "human:timo", revision: 8}
 - {from: "proposed", to: "active", at: "2026-10-26T13:59:35Z", actor: "human:timo", revision: 9}
+- {from: "active", to: "implemented", at: "2026-10-26T16:16:37Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: protocols-are-engineering-protocols-built-ins
 
