@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-26
+
+takt runs as a Loom agent: `--config` reads the `loom.agent/1` document, `--endpoint-token-env` takes the key from the
+environment, `--story` names the story, and the image tests and gates what it builds; loom 0.43.0.
+
 ### Added
 
 - `takt run --story <ID>` resumes or takes the named story instead of the frontier's next; one not listed or not ready is refused before any case opens, exit 1, naming why.
@@ -509,7 +514,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.12.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.13.0...HEAD
+[0.13.0]: https://github.com/beyond10x/takt/compare/0.12.0...0.13.0
 [0.12.0]: https://github.com/beyond10x/takt/compare/0.11.1...0.12.0
 [0.11.1]: https://github.com/beyond10x/takt/compare/0.11.0...0.11.1
 [0.11.0]: https://github.com/beyond10x/takt/compare/0.10.1...0.11.0
