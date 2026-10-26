@@ -133,8 +133,16 @@ pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<St
     if let Some(stdout) = child.stdout.take() {
         let read = stdout
             .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-            .read_to_end(&mut kept);
-        read.with_context(|| format!("read git {}", args.join(" ")))?;
+            .read_to_end(&mut kept)
+            .with_context(|| format!("read git {}", args.join(" ")));
+        if let Err(error) = read {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(reader) = stderr {
+                let _ = reader.join();
+            }
+            return Err(error);
+        }
         over = kept.len() > limit;
     }
     if over {
