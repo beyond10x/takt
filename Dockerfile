@@ -11,7 +11,8 @@ RUN cargo build --release --locked -p b10x-takt-cli
 
 FROM ${RUST_IMAGE} AS toolchain
 RUN rustup component add clippy rustfmt \
- && mv "$(rustc --print sysroot)" /opt/rust
+ && mv "$(rustc --print sysroot)" /opt/rust \
+ && chmod -R go-w /opt/rust
 
 FROM ${RUST_IMAGE} AS tools
 ARG AEP_VERSION=0.77.1

@@ -59,8 +59,10 @@ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:<version> .   # 
 The image's mount contract (`/workspace`, `/config/agent.yaml`, `/config/endpoint.toml`) is in
 `README.md` § Container. `agent.yaml` is `takt run --config` (`crates/takt/src/run_config.rs`); a
 key added there is a flag of `takt run` first, and the README table moves with it. `Dockerfile`
-pins `aep`, `b10x-harness` and `ess` by version and SHA256: move `ESS_VERSION` with `check.yml`,
-and `HARNESS_VERSION` with the harness wire the `Cargo.lock` holds.
+pins `aep`, `b10x-harness`, `b10x-gates` and `ess` by version and SHA256: move `ESS_VERSION`
+with `check.yml`, `HARNESS_VERSION` with the harness wire the `Cargo.lock` holds, and
+`GATES_VERSION` to the newest gates release. The toolchain under `/opt/rust` stays unwritable
+by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
 
 ## Rules
 
