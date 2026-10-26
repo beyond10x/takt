@@ -254,6 +254,7 @@ fn delivery_run(repo: &Path, harness: &dyn Harness) -> (anyhow::Result<Stop>, Pa
     .expect("the frontier answers")
     .expect("story:ready-one is taken");
     run.record_on(&store);
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     (
         stop,
@@ -591,6 +592,7 @@ fn a_step_that_cannot_be_printed_is_discarded_with_its_commit() {
         written: Vec::new(),
         needle: "(commits-itself)",
     };
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     assert!(stop.is_err(), "{stop:?}");
     assert_ne!(taken, start);
@@ -643,6 +645,7 @@ fn a_harness_that_panics_still_ends_the_record() {
     .expect("story:ready-one is taken");
     run.record_on(&store);
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.run(&mut out)));
     assert!(caught.is_err(), "the harness panicked");
     let lines = events(&run.case.dir);

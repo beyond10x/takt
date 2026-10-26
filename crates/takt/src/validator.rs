@@ -837,10 +837,10 @@ impl TestsRun {
 
 /// What the test command's output says about its tests, for the step's summary. With one or
 /// more `test result:` lines (cargo's, one per test binary and doc-test run): passed, failed and
-/// ignored summed over every one, the number of such lines, and, when any failed, the failed
-/// tests by name from the `test <name> ... FAILED` lines in output order; so a workspace run
-/// whose last block is an empty doc-test run is not read as `0 passed`, and a block that failed
-/// is not hidden by a later one that passed. Without one: the first non-empty line beside the
+/// ignored summed over every one and the number of such lines; so a workspace run whose last
+/// block is an empty doc-test run is not read as `0 passed`, and a block that failed is not
+/// hidden by a later one that passed. The failed tests by name follow it outside its bound
+/// ([`failed_tests`], [`TestsRun`]). Without one: the first non-empty line beside the
 /// last four when the output has more than five, so a summary a command prints first is kept,
 /// else every non-empty line; lines joined by ` | `.
 fn summarise_tests(printed: &str, success: bool) -> String {
@@ -876,32 +876,6 @@ fn summarise_tests(printed: &str, success: bool) -> String {
         let mut summary = format!(
             "{passed} passed, {failed} failed, {ignored} ignored over {results} result line{plural}"
         );
-        if failed > 0 {
-            // `test <name> ... FAILED` lines, or, under `cargo test --quiet`, which prints none,
-            // the names listed under the last `failures:` heading, one indented a line.
-            let mut names: Vec<&str> = lines
-                .iter()
-                .filter_map(|line| {
-                    line.trim()
-                        .strip_prefix("test ")?
-                        .strip_suffix(" ... FAILED")
-                })
-                .collect();
-            if names.is_empty()
-                && let Some(heading) = lines.iter().rposition(|line| line.trim() == "failures:")
-            {
-                names = lines[heading + 1..]
-                    .iter()
-                    .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
-                    .map(|line| line.trim())
-                    .filter(|line| !line.is_empty())
-                    .collect();
-            }
-            if !names.is_empty() {
-                summary.push_str("; failed: ");
-                summary.push_str(&names.join(", "));
-            }
-        }
         // A failure the result lines do not show (a binary killed by a signal, a runner whose
         // `test result:` line carries no counts): the last line says what the counts cannot.
         if !success
@@ -919,6 +893,155 @@ fn summarise_tests(printed: &str, success: bool) -> String {
     let mut shown = vec![kept[0], "…"];
     shown.extend_from_slice(&kept[kept.len() - 4..]);
     shown.join(" | ")
+}
+
+/// Adds `name`, trimmed, to `names` unless it is empty or there already.
+fn push_once(names: &mut Vec<String>, name: &str) {
+    let name = name.trim();
+    if !name.is_empty() && !names.iter().any(|named| named == name) {
+        names.push(name.to_owned());
+    }
+}
+
+/// The tests a failing test command's output names as failed, in output order, each once:
+/// cargo's `test <name> ... FAILED` lines, or, under `cargo test --quiet`, which prints none,
+/// the names listed under the last `failures:` heading, one indented a line, when a `test
+/// result: FAILED` line says one failed; Python unittest's `FAIL: <test>` and `ERROR: <test>`
+/// headings; pytest's `FAILED <id>` lines, up to ` - `. Empty for output that names none.
+fn failed_tests(printed: &str) -> Vec<String> {
+    let lines: Vec<&str> = printed.lines().collect();
+    let mut names = Vec::new();
+    for line in &lines {
+        let line = line.trim();
+        if let Some(name) = line
+            .strip_prefix("test ")
+            .and_then(|rest| rest.strip_suffix(" ... FAILED"))
+        {
+            push_once(&mut names, name);
+        } else if let Some(name) = line
+            .strip_prefix("FAIL: ")
+            .or_else(|| line.strip_prefix("ERROR: "))
+        {
+            push_once(&mut names, name);
+        } else if let Some(id) = line.strip_prefix("FAILED ")
+            && !id.starts_with('(')
+        {
+            push_once(&mut names, id.split(" - ").next().unwrap_or(id));
+        }
+    }
+    if names.is_empty()
+        && lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("test result: FAILED"))
+        && let Some(heading) = lines.iter().rposition(|line| line.trim() == "failures:")
+    {
+        for line in lines[heading + 1..]
+            .iter()
+            .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
+        {
+            push_once(&mut names, line);
+        }
+    }
+    names
+}
+
+/// The runner's hint for running a failure again, from `to rerun` on, on the first line that
+/// says it: cargo's `error: test failed, to rerun pass `-p <crate> --lib``.
+fn rerun_hint(printed: &str) -> Option<String> {
+    printed
+        .lines()
+        .find_map(|line| line.find("to rerun").map(|at| line[at..].trim().to_owned()))
+}
+
+/// Where a `tests.run` summary lists the failed tests ([`TestsRun`]): after the last of these.
+const FAILED_MARK: &str = "; failed: ";
+
+/// The most characters a `tests.run` summary keeps of what the runner said, and the most its
+/// printed line shows after its `the test command exited` part ([`tests_line`]); a part cut to
+/// it ends in `…`.
+const SUMMARY_LIMIT: usize = 300;
+
+/// The fewest characters of what the runner said that a failing `tests.run` line shows before
+/// its rerun hint and failed tests ([`tests_line`]): room the two leave over goes to it as well.
+const SUMMARY_LEAST: usize = 100;
+
+/// The most characters of the rerun hint a `tests.run` summary keeps.
+const RERUN_LIMIT: usize = 200;
+
+/// The most failed tests a `tests.run` summary names, 64, and the most bytes of their list,
+/// 8 KiB: a set past either is cut and ends in `…`, and names no set ([`failures_in`]).
+const FAILED_NAMES: usize = 64;
+const FAILED_BYTES: usize = 8 << 10;
+
+/// The failed tests `failed` as a `tests.run` summary lists them, joined by `, `: the whole set
+/// within [`FAILED_NAMES`] and [`FAILED_BYTES`], or the names that fit and `…`.
+fn failed_list(failed: &[String]) -> String {
+    let mut list = String::new();
+    for (at, name) in failed.iter().enumerate() {
+        let sep = if at == 0 { "" } else { ", " };
+        if at == FAILED_NAMES || list.len() + sep.len() + name.len() > FAILED_BYTES {
+            list.push_str(sep);
+            list.push('…');
+            return list;
+        }
+        list.push_str(sep);
+        list.push_str(name);
+    }
+    list
+}
+
+/// The `tests.run` summary `summary` as the run prints it on its `effect:` line: its `the test
+/// command exited` part, then the rest within [`SUMMARY_LIMIT`] characters, what the runner said
+/// giving way to the rerun hint and the failed tests down to [`SUMMARY_LEAST`]. The summary the
+/// run records keeps the whole set ([`failures_in`]).
+#[must_use]
+pub fn tests_line(summary: &str) -> String {
+    let Some(at) = summary.find("; ") else {
+        return summary.to_owned();
+    };
+    let (exited, rest) = summary.split_at(at + 2);
+    let named_at = [rest.rfind("; to rerun"), rest.rfind(FAILED_MARK)]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(rest.len());
+    let (said, named) = rest.split_at(named_at);
+    let room = SUMMARY_LIMIT
+        .saturating_sub(named.chars().count())
+        .max(SUMMARY_LEAST);
+    let shown = bounded(&format!("{}{named}", bounded(said, room)), SUMMARY_LIMIT);
+    format!("{exited}{shown}")
+}
+
+/// What a failing `tests.run` summary names ([`TestsRun`] writes it, [`failures_in`] reads it):
+/// the failed tests, and the runner's hint for running them again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Failures {
+    /// The failed tests in output order; empty when the summary names none, or its list was cut
+    /// short, so a set a reader compares is never a part of one.
+    pub tests: Vec<String>,
+    /// The runner's rerun hint (`to rerun pass ...`), when its output had one.
+    pub rerun: Option<String>,
+}
+
+/// What the `tests.run` summary `summary` names as failed: the list after its last `; failed: `
+/// and the hint after its `; to rerun`, as [`TestsRun`] writes them.
+#[must_use]
+pub fn failures_in(summary: &str) -> Failures {
+    let (head, list) = match summary.rfind(FAILED_MARK) {
+        Some(at) => (&summary[..at], Some(&summary[at + FAILED_MARK.len()..])),
+        None => (summary, None),
+    };
+    let tests = match list {
+        Some(list) if !list.ends_with('…') => list
+            .split(", ")
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let rerun = head.rfind("; to rerun").map(|at| head[at + 2..].to_owned());
+    Failures { tests, rerun }
 }
 
 /// `text` within `limit` characters: the whole of it, or its first `limit - 1` characters and
@@ -1046,12 +1169,27 @@ impl TestsRun {
             revision,
             self.name(),
         );
+        // What the runner said, bounded; then a failure's rerun hint and the failed tests by
+        // name, the names last ([`failures_in`] reads them back), within their own bounds: the
+        // printed line is cut apart ([`tests_line`]), so the set never depends on it.
+        let mut summary = format!(
+            "the test command exited {}: {result}; {}",
+            output.code.map_or("signal".to_owned(), |c| c.to_string()),
+            bounded(&tail, SUMMARY_LIMIT),
+        );
+        if !output.success() {
+            if let Some(hint) = rerun_hint(&printed) {
+                summary.push_str("; ");
+                summary.push_str(&bounded(&hint, RERUN_LIMIT));
+            }
+            let failed = failed_tests(&printed);
+            if !failed.is_empty() {
+                summary.push_str(FAILED_MARK);
+                summary.push_str(&failed_list(&failed));
+            }
+        }
         Ok(Observation {
-            summary: format!(
-                "the test command exited {}: {result}; {}",
-                output.code.map_or("signal".to_owned(), |c| c.to_string()),
-                bounded(&tail, 300)
-            ),
+            summary,
             records: vec![record],
             artifact: None,
         })

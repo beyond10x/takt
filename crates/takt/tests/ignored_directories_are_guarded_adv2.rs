@@ -179,6 +179,7 @@ fn go(scratch: &Scratch, attack: Attack) -> (anyhow::Result<Stop>, String) {
     run.set_aside_in(scratch.aside_root())
         .expect("a set-aside root");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     (stop, String::from_utf8_lossy(&out).into_owned())
 }
@@ -378,6 +379,7 @@ fn a_refused_tests_run_removes_what_it_created_below_target() {
     let mut run = Run::open(&s.repo, options(protocol), &harness, &validators).expect("opens");
     run.set_aside_in(s.aside_root()).expect("a set-aside root");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     let said = said(&stop);
     assert!(

@@ -105,6 +105,7 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args([
             "run",
+            "--continue-past-red-base",
             "--repo",
             repo.to_str().expect("utf-8"),
             "--intent",
@@ -235,6 +236,7 @@ fn takt_run_on_an_empty_home_keeps_the_transcript_and_refuses_no_step() {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args([
             "run",
+            "--continue-past-red-base",
             "--repo",
             repo.to_str().expect("utf-8"),
             "--intent",
@@ -358,6 +360,7 @@ impl Home {
         command
             .args([
                 "run",
+                "--continue-past-red-base",
                 "--repo",
                 self.repo.to_str().expect("utf-8"),
                 "--intent",

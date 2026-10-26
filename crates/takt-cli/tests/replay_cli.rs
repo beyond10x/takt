@@ -138,6 +138,7 @@ fn recorded_with(outer: &Path, intent: &str, files: &[(&str, &str)]) -> Recorded
     let output = takt(&bin, &state)
         .args([
             "run",
+            "--continue-past-red-base",
             "--repo",
             repo.to_str().expect("utf-8"),
             "--intent",

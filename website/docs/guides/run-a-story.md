@@ -60,7 +60,7 @@ base: one approval per grant, one `test_result` and the move to `implemented`.
 | `ApprovalRequired` | 4 | merges under the grant once one is recorded |
 | `Waiting` on the forge until the budget ended | 6 | reads the forge again |
 | an error once the case was open | 5 | resumes the open case |
-| a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` | 3 | resumes the open case of the story |
+| a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `RedBase`, `RepeatedTestFailure` | 3 | resumes the open case of the story; after `RedBase` or `RepeatedTestFailure` it runs the tests again first and stops again while they fail the same way |
 
 `--case <id>` resumes a named case instead.
 

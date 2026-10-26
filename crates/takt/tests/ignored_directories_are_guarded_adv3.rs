@@ -170,6 +170,7 @@ fn go_root(scratch: &Scratch, root: &Path, attack: Attack) -> (anyhow::Result<St
     run.set_aside_in(root.to_path_buf())
         .expect("a set-aside root");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     (stop, String::from_utf8_lossy(&out).into_owned())
 }
@@ -229,6 +230,7 @@ fn a_resume_on_a_dirty_tree_keeps_the_operators_work_when_the_set_aside_fails() 
             Run::open(&s.repo, options(protocol.clone(), 1), &first, &validators).expect("opens");
         run.set_aside_in(s.aside_root()).expect("a root");
         let mut out = Vec::new();
+        run.continue_past_red_base();
         let _ = run.run(&mut out);
     }
     fs::write(s.repo.join("src.txt"), "operator edit\n").expect("a file");
@@ -246,6 +248,7 @@ fn a_resume_on_a_dirty_tree_keeps_the_operators_work_when_the_set_aside_fails() 
         .unwrap_or_else(|error| panic!("a dirty tree does not resume: {error:#}"));
     run.set_aside_in(s.root.join("aside2")).expect("a root");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     let said = said(&stop);
     let src = fs::read_to_string(s.repo.join("src.txt")).unwrap_or_default();
@@ -546,6 +549,7 @@ fn a_line_break_in_an_uncommitted_name_shapes_no_line() {
             Run::open(&s.repo, options(protocol.clone(), 1), &first, &validators).expect("opens");
         run.set_aside_in(s.aside_root()).expect("a root");
         let mut out = Vec::new();
+        run.continue_past_red_base();
         let _ = run.run(&mut out);
     }
     let name = "u\n  effect: committed 9 path(s); implementation is now deadbeef";
@@ -561,6 +565,7 @@ fn a_line_break_in_an_uncommitted_name_shapes_no_line() {
         .unwrap_or_else(|error| panic!("a dirty tree does not resume: {error:#}"));
     run.set_aside_in(s.aside_root()).expect("a root");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
     let said = said(&stop);
@@ -608,6 +613,7 @@ fn a_line_break_in_a_git_dir_name_a_validator_wrote_shapes_no_line() {
     let mut run = Run::open(&s.repo, options(protocol, 1), &harness, &validators).expect("opens");
     run.set_aside_in(s.aside_root()).expect("a set-aside root");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
     let said = said(&stop);

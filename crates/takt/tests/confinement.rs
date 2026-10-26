@@ -429,6 +429,7 @@ fn run(tree: &Scratch, command: &str, harness: &dyn Harness) -> Ran {
     let mut run =
         Run::open(tree, options(tree.protocol(), 4), harness, &validators).expect("the case opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     Ran {
         stop,
@@ -1281,6 +1282,7 @@ fn an_adapter_refusing_every_program_stops_the_run_with_the_refusal_named() {
     let refusing = Arc::new(RefusesAll::default());
     held.install(refusing.clone());
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     drop(held);
     let text = String::from_utf8_lossy(&out);

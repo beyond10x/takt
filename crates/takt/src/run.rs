@@ -142,12 +142,39 @@ pub enum Stop {
         /// The threshold: the least free space a step needs, in bytes.
         min_bytes: u64,
     },
+    /// The case's first `tests.run` failed before any effect: at a revision its branch reaches
+    /// from the base commit it pinned through takt's store commits alone (the take), so no step
+    /// has changed anything yet. The run stops before the first judgement step, no model token
+    /// spent; the failure is recorded as the case's test result like any other, and the case
+    /// stays open.
+    RedBase {
+        /// The revision the tests failed at.
+        revision: String,
+        /// The tests the output names as failed ([`crate::validator::failures_in`]); empty
+        /// when it names none.
+        tests: Vec<String>,
+        /// The runner's hint for running them again, when its output had one.
+        rerun: Option<String>,
+    },
+    /// [`REPEATED_FAILURES`] `tests.run` results in a row failed the same set of tests, each at
+    /// a revision the one before was not at: the edits between them moved nothing the tests
+    /// decide. The run stops after the last, before another judgement step; the case stays open.
+    RepeatedTestFailure {
+        /// The tests every one of the results failed, never empty.
+        tests: Vec<String>,
+        /// The results in a row.
+        count: u64,
+    },
 }
+
+/// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
+/// stop the run ([`Stop::RepeatedTestFailure`]).
+pub const REPEATED_FAILURES: u64 = 2;
 
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 11] = [
+pub const STOP_KINDS: [&str; 13] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -159,6 +186,8 @@ pub const STOP_KINDS: [&str; 11] = [
     "Unperformable",
     "DiskLow",
     "ActiveTime",
+    "RedBase",
+    "RepeatedTestFailure",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -216,6 +245,31 @@ impl std::fmt::Display for Stop {
                 path.display(),
                 bytes_shown(*free_bytes),
                 bytes_shown(*min_bytes)
+            ),
+            Stop::RedBase {
+                revision,
+                tests,
+                rerun,
+            } => {
+                write!(
+                    f,
+                    "RedBase (the tests fail at the case's base {}, before any step changed it: ",
+                    short(revision)
+                )?;
+                if tests.is_empty() {
+                    write!(f, "the output names no failed test")?;
+                } else {
+                    write!(f, "{}", tests.join(", "))?;
+                }
+                match rerun {
+                    Some(rerun) => write!(f, "; {rerun})"),
+                    None => write!(f, ")"),
+                }
+            }
+            Stop::RepeatedTestFailure { tests, count } => write!(
+                f,
+                "RepeatedTestFailure ({count} tests.run results in a row, each at a new revision, failed the same tests: {})",
+                tests.join(", ")
             ),
         }
     }
@@ -303,6 +357,121 @@ enum Taken {
         observation: crate::validator::Observation,
         waits: bool,
     },
+}
+
+/// The `tests.run` results in a row that failed the same tests ([`Run::tests_stop`]): the set,
+/// the tests in the order the first result named them, the revision of the last, and how many.
+struct Failing {
+    set: BTreeSet<String>,
+    tests: Vec<String>,
+    revision: String,
+    count: u64,
+}
+
+impl Failing {
+    /// `failing` after a `tests.run` result at `revision`: `failed` the tests it failed, none
+    /// for a pass. A failure of the set the row failed adds one at a revision the last was not
+    /// at and none at the same; another set starts a row of one; a pass, and a failure that
+    /// names no test, end the row.
+    fn after(failing: &mut Option<Failing>, revision: &str, failed: Option<Vec<String>>) {
+        let Some(tests) = failed.filter(|tests| !tests.is_empty()) else {
+            *failing = None;
+            return;
+        };
+        let set: BTreeSet<String> = tests.iter().cloned().collect();
+        match failing {
+            Some(row) if row.set == set => {
+                if row.revision != revision {
+                    row.revision = revision.to_owned();
+                    row.count += 1;
+                }
+            }
+            _ => {
+                *failing = Some(Failing {
+                    set,
+                    tests,
+                    revision: revision.to_owned(),
+                    count: 1,
+                });
+            }
+        }
+    }
+}
+
+/// What the case's record holds of its `tests.run` results as a run opens ([`TestsSoFar::read`]),
+/// for [`Run::tests_stop`].
+struct TestsSoFar {
+    /// No `tests.run` result is recorded in the case yet: its next is the case's first.
+    first: bool,
+    /// The results in a row that failed the same tests, as the record ends.
+    failing: Option<Failing>,
+    /// The case's last run stopped on its tests: its next run observes `tests.run` again before
+    /// any judgement step ([`Again`]).
+    again: Option<Again>,
+}
+
+/// The stop on its tests a case's last run ended with, which its next run checks again at once:
+/// `RedBase`, with the tests its result failed, or `RepeatedTestFailure`.
+enum Again {
+    RedBase(BTreeSet<String>),
+    Repeated,
+}
+
+impl TestsSoFar {
+    /// What `record`, the case's record before this run's own lines, holds: whether any
+    /// `tests.run` step wrote a `test_result` record; the row of failures of the same tests its
+    /// results end with ([`Failing::after`], each result's tests read from its step's summary,
+    /// [`crate::validator::failures_in`]); and the stop of its last run, from its last `stop`
+    /// line after the last `opened` one, when it is `RedBase` or `RepeatedTestFailure`.
+    fn read(record: &[serde_json::Value]) -> Self {
+        let mut first = true;
+        let mut failing = None;
+        let mut last_failed: BTreeSet<String> = BTreeSet::new();
+        let mut stop: Option<&str> = None;
+        // The `tests.run` step the lines that follow belong to: its number, revision, summary.
+        let mut current: Option<(&serde_json::Value, &str, &str)> = None;
+        for line in record {
+            match line["event"].as_str() {
+                Some("opened") => stop = None,
+                Some("stop") => stop = line["stop"].as_str(),
+                Some("step") => {
+                    current = (line["by"] == "validator"
+                        && line["action"] == crate::validator::TestsRun::ACTION)
+                        .then(|| {
+                            (
+                                &line["step"],
+                                line["revision"].as_str().unwrap_or_default(),
+                                line["summary"].as_str().unwrap_or_default(),
+                            )
+                        });
+                }
+                _ if line["event"] == "evidence" => {
+                    let Some((step, revision, summary)) = current else {
+                        continue;
+                    };
+                    if line["step"] != *step || line["kind"] != crate::validator::TestsRun::KIND {
+                        continue;
+                    }
+                    first = false;
+                    let failed = (line["result"] == "fail")
+                        .then(|| crate::validator::failures_in(summary).tests);
+                    last_failed = failed.iter().flatten().cloned().collect();
+                    Failing::after(&mut failing, revision, failed);
+                }
+                _ => {}
+            }
+        }
+        let again = match stop.and_then(|stop| stop.split([' ', '(']).next()) {
+            Some("RedBase") => Some(Again::RedBase(last_failed)),
+            Some("RepeatedTestFailure") => Some(Again::Repeated),
+            _ => None,
+        };
+        TestsSoFar {
+            first,
+            failing,
+            again,
+        }
+    }
 }
 
 /// Where a validator's step is taken: the run's record and output, the evaluation it follows,
@@ -8478,6 +8647,8 @@ pub struct Run<'a> {
     modules: Modules,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
+    /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
+    stops_red_base: bool,
     /// The least free space, in bytes, a step needs on the file system of the tree and of the
     /// build directory; 0 reads nothing, and is the default until [`Run::stop_when_disk_below`].
     min_free: u64,
@@ -8624,6 +8795,7 @@ impl<'a> Run<'a> {
             options,
             modules,
             stops_unperformable: false,
+            stops_red_base: true,
             min_free: 0,
             build_dir: None,
             read_free: Box::new(free_space),
@@ -8889,6 +9061,7 @@ impl<'a> Run<'a> {
             options,
             modules,
             stops_unperformable: false,
+            stops_red_base: true,
             min_free: 0,
             build_dir: None,
             read_free: Box::new(free_space),
@@ -9210,6 +9383,14 @@ impl<'a> Run<'a> {
     /// caller opts in here, and without this call a run offers the harness its step as before.
     pub fn stop_when_unperformable(&mut self) {
         self.stops_unperformable = true;
+    }
+
+    /// Goes on past a red base: the case's first `tests.run` failing before any effect is
+    /// recorded like any other result, and the harness is offered its step, instead of the run
+    /// stopping [`Stop::RedBase`]. For a caller whose base fails on purpose; every run stops so
+    /// without this call.
+    pub fn continue_past_red_base(&mut self) {
+        self.stops_red_base = false;
     }
 
     /// Stops the run [`Stop::DiskLow`] before a step (a harness step, a deterministic step, the
@@ -10181,7 +10362,13 @@ impl<'a> Run<'a> {
             &observation.summary,
         )?;
         writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
-        writeln!(out, "  effect: {}", observation.summary)?;
+        // A `tests.run` summary keeps its failed tests whole; its printed line is bounded.
+        if validator.action() == crate::validator::TestsRun::ACTION {
+            let line = crate::validator::tests_line(&observation.summary);
+            writeln!(out, "  effect: {line}")?;
+        } else {
+            writeln!(out, "  effect: {}", observation.summary)?;
+        }
         // What the validator retains lands before the records that refer to it: a
         // retention that fails ends the run with nothing written for the step.
         if let Some(artifact) = &observation.artifact {
@@ -10226,6 +10413,94 @@ impl<'a> Run<'a> {
         })
     }
 
+    /// What the `tests.run` observation `observation` at `revision` stops, from its record's
+    /// result and the failed tests its summary names ([`crate::validator::failures_in`]), with
+    /// `so_far` what the case's record held as the run opened ([`TestsSoFar`]), kept up to date:
+    /// [`Stop::RedBase`] when it failed before any effect, at a revision no step has changed
+    /// ([`Run::before_any_effect`]), and is the case's first result (no `tests.run` result
+    /// recorded in the case before it) or the check again after a `RedBase` the case's last run
+    /// stopped on, failing the same tests; unless the run goes on past it
+    /// ([`Run::continue_past_red_base`]). Else [`Stop::RepeatedTestFailure`] when it leaves the
+    /// row of failures of the same tests ([`Failing::after`], seeded from the case's record) at
+    /// [`REPEATED_FAILURES`] or more: after a `RepeatedTestFailure` the check again at the same
+    /// revision failing the same set stops the same way, and a pass or another set goes on. An
+    /// observation that wrote no record changes nothing but the check again, which it uses up.
+    fn tests_stop(
+        &self,
+        revision: &str,
+        observation: &crate::validator::Observation,
+        so_far: &mut TestsSoFar,
+    ) -> Result<Option<Stop>> {
+        let again = so_far.again.take();
+        let Some(result) = observation
+            .records
+            .iter()
+            .find(|record| record.kind == crate::validator::TestsRun::KIND)
+            .and_then(|record| record.result.as_deref())
+        else {
+            return Ok(None);
+        };
+        let first = std::mem::replace(&mut so_far.first, false);
+        if result != "fail" {
+            so_far.failing = None;
+            return Ok(None);
+        }
+        let failures = crate::validator::failures_in(&observation.summary);
+        let red_again = match &again {
+            Some(Again::RedBase(set)) => {
+                *set == failures.tests.iter().cloned().collect::<BTreeSet<_>>()
+            }
+            _ => false,
+        };
+        if (first || red_again) && self.stops_red_base && self.before_any_effect(revision)? {
+            return Ok(Some(Stop::RedBase {
+                revision: revision.to_owned(),
+                tests: failures.tests,
+                rerun: failures.rerun,
+            }));
+        }
+        Failing::after(&mut so_far.failing, revision, Some(failures.tests));
+        Ok(so_far
+            .failing
+            .as_ref()
+            .filter(|row| row.count >= REPEATED_FAILURES)
+            .map(|row| Stop::RepeatedTestFailure {
+                tests: row.tests.clone(),
+                count: row.count,
+            }))
+    }
+
+    /// Whether `revision` is before any effect of the case: its branch reaches it from the base
+    /// commit the case pinned at open through takt's store commits alone ([`is_store_commit`]:
+    /// the take), so no step has changed a file. False for a case that pins no base.
+    fn before_any_effect(&self, revision: &str) -> Result<bool> {
+        let Some(base) = crate::case::Branch::read(&self.case.dir)
+            .ok()
+            .and_then(|branch| branch.base_commit)
+        else {
+            return Ok(false);
+        };
+        let story = self.case.story()?;
+        let listed = crate::git::run(
+            &self.tree,
+            &[
+                "rev-list",
+                "--end-of-options",
+                &format!("{base}..{revision}"),
+            ],
+        )?;
+        for id in listed.lines().filter(|id| !id.is_empty()) {
+            let commit = crate::git::commit(&self.tree, id)?;
+            if !story
+                .as_deref()
+                .is_some_and(|story| is_store_commit(&commit, story))
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     /// The loop, the case held.
     fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
         let inputs: Vec<String> = self
@@ -10237,6 +10512,20 @@ impl<'a> Run<'a> {
         // This run's number in the case, which names its step transcripts' directory: one
         // more than the `opened` lines the case's record holds before this run writes its own.
         let run_number = crate::harness::run_number(events.path())?;
+        // What the case's record holds of its tests before this run's own lines
+        // ([`Run::tests_stop`]); a record that does not read names no first result and no row,
+        // so it stops nothing, and a `RedBase` the run goes on past is not checked again.
+        let mut tests_so_far = events.read().map_or(
+            TestsSoFar {
+                first: false,
+                failing: None,
+                again: None,
+            },
+            |record| TestsSoFar::read(&record),
+        );
+        if !self.stops_red_base && matches!(tests_so_far.again, Some(Again::RedBase(_))) {
+            tests_so_far.again = None;
+        }
         // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
         // revision as the caller gave it. The harness's version and the model are read from
         // the harness's stream at each step, so their layers are on the step lines: takt runs
@@ -10361,7 +10650,18 @@ impl<'a> Run<'a> {
                 .collect();
             // A deterministic step first: a validator due at this decision.
             let mut due = None;
-            if open {
+            // After a stop on the case's tests, its tests are observed again first, its record
+            // there or not, before any judgement step; once ([`TestsSoFar`]).
+            if open && tests_so_far.again.is_some() {
+                due = self.validators.iter().find(|validator| {
+                    validator.action() == crate::validator::TestsRun::ACTION
+                        && admissible.iter().any(|a| a == validator.action())
+                });
+                if due.is_none() {
+                    tests_so_far.again = None;
+                }
+            }
+            if open && due.is_none() {
                 for validator in self.validators {
                     if is_due(
                         &self.case,
@@ -10553,6 +10853,14 @@ impl<'a> Run<'a> {
                     // again after the pause above; when every wait is on something local, the
                     // run stops here, with no pause and no further decision.
                     awaited.retain(|(name, _, _, _)| name != validator.name());
+                    // A failing `tests.run` before any effect, or the last of a run of failures
+                    // on the same tests, stops the run before another judgement step.
+                    if validator.action() == crate::validator::TestsRun::ACTION
+                        && let Some(stop) =
+                            self.tests_stop(&revision, &observation, &mut tests_so_far)?
+                    {
+                        return Ok(stop);
+                    }
                     if observation.records.is_empty() {
                         observed_without_record
                             .insert((validator.name().to_owned(), revision.clone()));
