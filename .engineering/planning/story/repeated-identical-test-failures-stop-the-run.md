@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:repeated-identical-test-failures-stop-the-run
 kind: story
-status: active
+status: implemented
 title: Identical test failures across revisions stop the run
 summary: 18 tests.run failed on the same four tests while the model edited on, 13.8M tokens (second kind-cluster trial)
 tags:
@@ -15,10 +15,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T20:53:18Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:53Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-26T22:53:17Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 ## Outcome
 
