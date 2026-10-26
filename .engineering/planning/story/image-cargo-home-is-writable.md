@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:image-cargo-home-is-writable
 kind: story
-status: active
+status: implemented
 title: cargo in the image writes its caches under the user's HOME by default
 summary: no CARGO_HOME in the final image; HOME outside /home
 tags:
@@ -15,10 +15,11 @@ scope:
   path: Dockerfile
 - confidence: cited
   path: README.md
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:04Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-26T13:48:04Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-26T16:16:36Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: image-cargo-home-is-writable
 

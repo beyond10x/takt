@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-names-its-story
 kind: story
-status: active
+status: implemented
 title: takt run --story names the story a run delivers
 summary: a named story instead of the frontier's next, refused unless ready
 tags:
@@ -17,10 +17,11 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:05Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-26T13:48:05Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-26T16:16:36Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: run-names-its-story
 

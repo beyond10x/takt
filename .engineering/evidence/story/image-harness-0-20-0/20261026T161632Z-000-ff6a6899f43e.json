@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-26T16:16:32Z",
+  "actor": "human:timo",
+  "artifact": "story:image-harness-0-20-0",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:image-harness-0-20-0-adv1",
+    "review": "review-result:image-harness-0-20-0-adv1",
+    "outcome": "fixed"
+  }
+}

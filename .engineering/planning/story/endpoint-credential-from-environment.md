@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:endpoint-credential-from-environment
 kind: story
-status: active
+status: implemented
 title: The harness endpoint's credential comes from an environment variable
 summary: takt stages the variable as a protected token file; the variable reaches no child (trial run 5)
 tags:
@@ -19,10 +19,11 @@ scope:
   path: crates/takt/src/harness.rs
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:04Z", actor: "human:timo", revision: 6}
 - {from: "proposed", to: "active", at: "2026-10-26T13:48:04Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-26T16:16:36Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: endpoint-credential-from-environment
 
