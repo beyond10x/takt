@@ -1393,6 +1393,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         Some(named) => named,
                         None => &store,
                     };
+                    // Where the tree is before the take, which reads the store on the base and
+                    // so moves a tree on a case's branch there: a refused `--story` puts it back.
+                    let left = match &story {
+                        Some(_) => Some(match takt::git::current_branch(&repo)? {
+                            Some(branch) => branch,
+                            None => takt::git::head(&repo)?,
+                        }),
+                        None => None,
+                    };
                     match Run::take_next_as(
                         &repo,
                         options,
@@ -1404,8 +1413,18 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     )? {
                         Some(run) => run,
                         None => {
-                            if let Some(story) = &story {
-                                return Err(story_not_taken(&repo, &store, story)?);
+                            if let (Some(story), Some(left)) = (&story, &left) {
+                                let refusal = match story_not_taken(&repo, &store, story) {
+                                    Ok(refusal) | Err(refusal) => refusal,
+                                };
+                                return Err(
+                                    match takt::git::run(&repo, &["checkout", "-q", left]) {
+                                        Ok(_) => refusal,
+                                        Err(undo) => refusal.context(format!(
+                                            "and the tree could not be put back on {left}: {undo:#}"
+                                        )),
+                                    },
+                                );
                             }
                             writeln!(out, "frontier: nothing ready")?;
                             return Ok(EXIT_DONE);
