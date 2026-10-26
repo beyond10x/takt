@@ -13,10 +13,7 @@ use takt::case::{Authority, grant};
 use takt::evidence::Record;
 use takt::{CaseDir, Decision, LoadedProtocol};
 
-const SELF_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/self-improvement/1.yaml"
-);
+const SELF_IMPROVEMENT: &str = "self.improvement/1";
 
 /// The producer that delivered the candidate, and the one that verifies it.
 const VERIFIER: &str = "operator-run";
@@ -184,7 +181,7 @@ fn action<'a>(decision: &'a Decision, id: &str) -> &'a str {
 /// The improvement turn at its judge-surface merge gate: the finding filed, reproduced on the
 /// baseline and gone on the candidate.
 fn at_the_judge_surface_gate(tree: &Path, id: &str) -> CaseDir {
-    let protocol = LoadedProtocol::from_file(Path::new(SELF_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(SELF_IMPROVEMENT).expect("loads");
     let mut case = open(tree, protocol, id, &[("surface", "judge")]);
     add(&mut case, 1, "finding_record", "filed", "finding");
     add(&mut case, 2, "scenario_result", "reproduced", "baseline");

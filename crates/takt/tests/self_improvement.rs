@@ -21,10 +21,7 @@ use takt::promotion::{Kind, Promotion};
 use takt::scorecard::{HeldOut, Row, Rule, Scorecard};
 use takt::{CaseDir, LoadedProtocol, Validator};
 
-const SELF_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/self-improvement/1.yaml"
-);
+const SELF_IMPROVEMENT: &str = "self.improvement/1";
 
 /// The finding scripts of this repository, committed into a scratch repository's base.
 const SCRIPTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts");
@@ -111,7 +108,7 @@ fn turn_with(name: &str, finding: &str, surface: &str, forge: Option<&str>) -> T
     git(&tree, &["commit", "-q", "-m", "fix"]);
     let candidate = git(&tree, &["rev-parse", "HEAD"]);
     git(&tree, &["checkout", "-q", "main"]);
-    let protocol = LoadedProtocol::from_file(Path::new(SELF_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(SELF_IMPROVEMENT).expect("loads");
     let mut case = CaseDir::open(
         &tree,
         protocol,

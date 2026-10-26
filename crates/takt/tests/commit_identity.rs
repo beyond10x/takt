@@ -22,11 +22,8 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-/// The delivery protocol, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The delivery protocol, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The fixture stores, one directory each, relative to this crate.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");

@@ -1,4 +1,4 @@
-//! The forge seam through the loop: a run on `protocols/story-delivery/1.yaml` with no harness,
+//! The forge seam through the loop: a run on the built-in `story-delivery@1` with no harness,
 //! the tests and the gate already green at HEAD, and an in-memory forge double. `pr.open` pushes
 //! the case's branch, opens one pull request through the forge and writes one `pull_request`
 //! record with result `open`; `ci.read` writes one `ci_result` record from what the forge
@@ -28,11 +28,8 @@ use takt::run::{
 use takt::validator::{CiRead, PrOpen, Validator};
 use takt::{Decision, Run, RunOptions, Stop};
 
-/// The protocol under test, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The protocol under test, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// Runs `git <args>` in `tree`; its trimmed standard output.
 fn git(tree: &Path, args: &[&str]) -> String {
@@ -556,8 +553,7 @@ fn pr_open_refuses_a_head_that_is_not_the_implementation_revision() {
 #[test]
 fn a_discarded_case_leaves_no_directory_and_no_branch() {
     let tree = scratch("discard");
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let case = takt::CaseDir::open(&tree, protocol, "discard", "deliver the story", &[])
         .expect("the case opens");
     assert_eq!(case.branch, "takt/discard");
@@ -875,8 +871,7 @@ impl Forge for AnyNumber {
 fn adv_pr_open_on_a_detached_head_pushes_nothing_before_refusing() {
     let tree = scratch("adv-detached");
     git(&tree, &["checkout", "-q", "--detach"]);
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let case = takt::CaseDir::open(&tree, protocol, "adv-detached", "deliver the story", &[])
         .expect("the case opens");
     let revision = case
@@ -903,8 +898,7 @@ fn adv_pr_open_on_a_detached_head_pushes_nothing_before_refusing() {
 #[test]
 fn pr_open_at_the_untouched_base_pushes_nothing_and_writes_no_record() {
     let tree = scratch("untouched");
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let case = takt::CaseDir::open(&tree, protocol, "untouched", "deliver the story", &[])
         .expect("the case opens");
     let revision = case
@@ -1005,8 +999,7 @@ fn at_the_untouched_base_the_harness_is_offered_a_step_before_anything_is_pushed
 #[test]
 fn adv_a_case_discarded_over_another_cases_branch_returns_the_tree_to_that_branch() {
     let tree = scratch("adv-over");
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let first = takt::CaseDir::open(
         &tree,
         protocol.clone(),
@@ -1439,8 +1432,7 @@ fn adv_a_cancelled_check_fails_and_an_unknown_bucket_is_an_error() {
 fn a_case_opened_over_another_cases_branch_forks_from_the_base_not_from_that_branch() {
     let tree = scratch("fork");
     let main_tip = git(&tree, &["rev-parse", "HEAD"]);
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let first = takt::CaseDir::open(&tree, protocol.clone(), "fork-a", "deliver the story", &[])
         .expect("the first case opens");
     fs::write(tree.join("README.md"), "a's work\n").expect("a change");
@@ -1684,8 +1676,7 @@ fn first_case_on_its_branch(tree: &Path, first: &str, detached: bool, gone: bool
     if detached {
         git(tree, &["checkout", "-q", "--detach"]);
     }
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let case = takt::CaseDir::open(tree, protocol, first, "deliver the story", &[])
         .expect("the first case opens");
     fs::write(tree.join("README.md"), "a's work\n").expect("a change");
@@ -1700,8 +1691,7 @@ fn first_case_on_its_branch(tree: &Path, first: &str, detached: bool, gone: bool
 /// Opens `second` over the tree as it is; a refusal leaves the tree on `left`, an opened case
 /// has its `HEAD` elsewhere than `tip`, the other case's commits.
 fn second_case_does_not_fork_from(tree: &Path, second: &str, left: &str, tip: &str, what: &str) {
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     match takt::CaseDir::open(tree, protocol, second, "deliver another", &[]) {
         Err(_) => {
             assert_eq!(
@@ -1816,8 +1806,7 @@ fn adv2_an_origin_host_written_in_upper_case_is_github() {
 fn adv2_a_chain_of_cases_each_forks_from_the_shared_base_and_discards_to_the_branch_it_left() {
     let tree = scratch("adv2-chain");
     let main_tip = git(&tree, &["rev-parse", "HEAD"]);
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let first = takt::CaseDir::open(
         &tree,
         protocol.clone(),
@@ -1874,8 +1863,7 @@ fn adv2_a_chain_of_cases_each_forks_from_the_shared_base_and_discards_to_the_bra
 fn adv2_a_case_opened_over_another_cases_branch_forks_from_the_bases_tip_as_it_is_now() {
     let tree = scratch("adv2-moved");
     let old_tip = git(&tree, &["rev-parse", "HEAD"]);
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let first = takt::CaseDir::open(
         &tree,
         protocol.clone(),
@@ -1920,8 +1908,7 @@ fn adv2_a_case_opened_from_a_detached_head_discards_back_to_that_detached_head()
     let tree = scratch("adv2-detached-discard");
     git(&tree, &["checkout", "-q", "--detach"]);
     let tip = git(&tree, &["rev-parse", "HEAD"]);
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let case = takt::CaseDir::open(&tree, protocol, "adv2-dd", "deliver the story", &[])
         .expect("the case opens");
     let branch = Branch::read(&case.dir).expect("the branch file");
@@ -1939,8 +1926,7 @@ fn adv2_a_case_opened_from_a_detached_head_discards_back_to_that_detached_head()
 #[test]
 fn adv2_a_dirty_tree_over_another_cases_branch_is_refused_before_the_case_is_written() {
     let tree = scratch("adv2-dirty");
-    let protocol =
-        takt::LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = takt::LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let first = takt::CaseDir::open(
         &tree,
         protocol.clone(),

@@ -21,11 +21,8 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-/// The delivery protocol, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The delivery protocol, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The allow-list every scratch repository's `main` starts with.
 const ALLOW: &str = "paths:\n  - docs/**\n  - README.md\n  - CHANGELOG.md\n";
@@ -108,7 +105,10 @@ fn repository(name: &str, delegations: Option<&str>) -> (Scratch, PathBuf) {
         ),
         (
             "protocols/story-delivery/1.yaml",
-            fs::read_to_string(PROTOCOL).expect("the protocol"),
+            canon_engineering::registry::get("story-delivery", 1)
+                .expect("the protocol")
+                .yaml
+                .to_owned(),
         ),
         (".engineering/judge-allow.yaml", ALLOW.to_owned()),
     ];

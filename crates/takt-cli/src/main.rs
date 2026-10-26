@@ -3113,11 +3113,9 @@ mod tests {
         );
     }
 
-    /// The delivery protocol of this repository, which declares `pr.open` and `ci.read`.
-    const DELIVERY_PROTOCOL: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../protocols/story-delivery/1.yaml"
-    );
+    /// The delivery protocol, the engineering protocols' built-in, which declares `pr.open` and
+    /// `ci.read`.
+    const DELIVERY_PROTOCOL: &str = "story.delivery/1";
 
     /// `takt run` on the delivery protocol with no harness and a passing test command, `extra`
     /// last.

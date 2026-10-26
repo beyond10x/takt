@@ -14,7 +14,7 @@ in. takt has no Rust model of a protocol.
 
 `takt protocols` lists the built-in ids, and `--protocol` takes one of them or a `protocol/1`
 file. [Protocols](../reference/protocols.md) describes each; the
-[protocol viewer](pathname:///takt/protocols/) draws every protocol under `protocols/`.
+[protocol viewer](pathname:///takt/protocols/) draws takt's three protocols.
 
 In `story.delivery/1` every claim is about the implementation at its current revision, and a new
 commit returns all of them to unknown.
@@ -31,4 +31,4 @@ A later run resumes a case from its files, and a reviewer can replay every decis
 inputs. Neither a judgement step nor a validator's command may write to a case's directory, so
 every line in it was written by takt.
 
-Sources: `protocols/story-delivery/1.yaml`, `docs/design/takt.md` § 2 and § 3, `takt run --help`.
+Sources: engineering-protocols 0.10.0 `protocols/story-delivery/1.yaml`, `docs/design/takt.md` § 2 and § 3, `takt run --help`.

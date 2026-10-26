@@ -33,14 +33,8 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrMerged, PrOpen, Validator};
 use takt::{Decision, LoadedProtocol, Run, RunOptions, Stop};
 
-/// The protocol under test, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
-
-/// This repository's protocols, relative to this crate.
-const PROTOCOLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../protocols");
+/// The protocol under test, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -727,11 +721,11 @@ fn a_case_left_at_its_merge_grant_by_the_last_release_resumes_after_approve_and_
 fn every_takt_protocol_action_requires_one_capability_and_the_governor_takes_it() {
     let expected: &[(&str, &[(&str, &str)])] = &[
         (
-            "story-delivery/1.yaml",
+            "story.delivery/1",
             &[("repository.merge", "repository.merge")],
         ),
         (
-            "self-improvement/1.yaml",
+            "self.improvement/1",
             &[
                 ("binary.promote", "takt.promote"),
                 ("candidate.merge", "repository.merge"),
@@ -742,13 +736,12 @@ fn every_takt_protocol_action_requires_one_capability_and_the_governor_takes_it(
             ],
         ),
         (
-            "loop-improvement/1.yaml",
+            "loop.improvement/1",
             &[("loop.merge", "repository.merge.judge_surface")],
         ),
     ];
-    for (file, actions) in expected {
-        let protocol =
-            LoadedProtocol::from_file(&Path::new(PROTOCOLS).join(file)).expect("the protocol");
+    for (id, actions) in expected {
+        let protocol = LoadedProtocol::builtin(id).expect("the protocol");
         let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&protocol.yaml).expect("yaml");
         let mut found: Vec<(String, Vec<String>)> = doc["actions"]
             .as_mapping()
@@ -770,9 +763,9 @@ fn every_takt_protocol_action_requires_one_capability_and_the_governor_takes_it(
             .iter()
             .map(|(action, capability)| ((*action).to_owned(), vec![(*capability).to_owned()]))
             .collect();
-        assert_eq!(found, named, "{file}");
+        assert_eq!(found, named, "{id}");
         CanonGovernor::new(MemoryCaseStore::default())
             .with_protocol_yaml(&protocol.id, &protocol.yaml)
-            .unwrap_or_else(|error| panic!("{file}: {error:?}"));
+            .unwrap_or_else(|error| panic!("{id}: {error:?}"));
     }
 }

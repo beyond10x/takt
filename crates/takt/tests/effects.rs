@@ -38,9 +38,6 @@ use takt::validator::{
 };
 use takt::{LoadedProtocol, Run, RunOptions, Stop};
 
-/// This repository's protocols, relative to this crate.
-const PROTOCOLS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../protocols");
-
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
@@ -92,7 +89,7 @@ fn scratch(name: &str) -> Scratch {
 
 fn options(id: &str) -> RunOptions {
     RunOptions {
-        protocol: format!("{PROTOCOLS}/story-delivery/1.yaml"),
+        protocol: "story.delivery/1".to_owned(),
         intent: "remove a todo by its number".to_owned(),
         inputs: Vec::new(),
         iterations: Some(40),
@@ -318,14 +315,14 @@ fn validator_steps(text: &str, action: &str) -> usize {
         .count()
 }
 
-/// Acceptance 1: the actions each protocol in `protocols/` gives a validator are the actions of
+/// Acceptance 1: the actions each of takt's protocols gives a validator are the actions of
 /// takt's built-in validators it declares, and each is performed by the effect of the built-in
 /// validator for it, which performs that action and no other.
 #[test]
 fn every_action_a_protocol_gives_a_validator_is_performed_by_its_validators_effect() {
     let expected: [(&str, &[&str]); 3] = [
         (
-            "story-delivery/1.yaml",
+            "story.delivery/1",
             &[
                 "change.read",
                 "tests.run",
@@ -336,7 +333,7 @@ fn every_action_a_protocol_gives_a_validator_is_performed_by_its_validators_effe
             ],
         ),
         (
-            "self-improvement/1.yaml",
+            "self.improvement/1",
             &[
                 "finding.file",
                 "scenario.reproduce",
@@ -348,15 +345,14 @@ fn every_action_a_protocol_gives_a_validator_is_performed_by_its_validators_effe
             ],
         ),
         (
-            "loop-improvement/1.yaml",
+            "loop.improvement/1",
             &["loop.measure", "loop.definition.check", "loop.compare"],
         ),
     ];
     let forge: Rc<dyn Forge> = Rc::new(Memory::default());
     let validators = built_in(&forge);
-    for (file, actions) in expected {
-        let protocol =
-            LoadedProtocol::from_file(Path::new(&format!("{PROTOCOLS}/{file}"))).expect("reads");
+    for (id, actions) in expected {
+        let protocol = LoadedProtocol::builtin(id).expect("reads");
         let given: BTreeSet<&str> = protocol
             .actions
             .iter()
@@ -366,7 +362,7 @@ fn every_action_a_protocol_gives_a_validator_is_performed_by_its_validators_effe
         assert_eq!(
             given,
             actions.iter().copied().collect::<BTreeSet<_>>(),
-            "{file}"
+            "{id}"
         );
         for action in actions {
             let validator = validators
@@ -375,7 +371,7 @@ fn every_action_a_protocol_gives_a_validator_is_performed_by_its_validators_effe
                 .unwrap_or_else(|| panic!("no built-in validator performs {action}"));
             let mut never = Never;
             let effect = ValidatorEffect::new(validator.as_ref(), &mut never);
-            assert!(effect.performs(action), "{file}: {action}");
+            assert!(effect.performs(action), "{id}: {action}");
         }
     }
 }

@@ -14,10 +14,7 @@ use takt::evidence::Record;
 use takt::improvement::{FindingFile, ScenarioReproduce, ScenarioVerify};
 use takt::{CaseDir, LoadedProtocol};
 
-const SELF_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/self-improvement/1.yaml"
-);
+const SELF_IMPROVEMENT: &str = "self.improvement/1";
 
 const JUDGE_SURFACE: &str = "repository.merge.judge_surface";
 
@@ -108,7 +105,7 @@ fn a_bot_forge_turns_grant_records_the_tip_the_bot_route_reports() {
         ],
     );
 
-    let protocol = LoadedProtocol::from_file(Path::new(SELF_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(SELF_IMPROVEMENT).expect("loads");
     let mut case = CaseDir::open(
         &tree,
         protocol,

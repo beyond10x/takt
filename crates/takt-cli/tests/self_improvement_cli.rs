@@ -24,11 +24,8 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The self-improvement protocol of this repository.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/self-improvement/1.yaml"
-);
+/// The self-improvement protocol, the engineering protocols' built-in.
+const PROTOCOL: &str = "self.improvement/1";
 
 /// The finding scripts of this repository, committed into the scratch repository's base.
 const SCRIPTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts");
@@ -2196,7 +2193,9 @@ fn a_judge_surface_merge_before_the_owners_approval_records_nothing() {
 fn a_turn_on_another_protocol_document_of_its_id_is_refused() {
     let world = world("protocol-file", true, false);
     let dir = world.repo.parent().expect("a parent").to_path_buf();
-    let text = fs::read_to_string(PROTOCOL).expect("the protocol");
+    let text = canon_engineering::registry::get("self-improvement", 1)
+        .expect("the protocol")
+        .yaml;
     let extra = text.replacen(
         "\nactions:\n",
         "\nactions:\n  turn.note:\n    description: a note\n    effect: write\n",

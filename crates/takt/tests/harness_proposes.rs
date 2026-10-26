@@ -19,10 +19,7 @@ use takt::harness::{ClaudeSession, Harness, StepContext, StepReport};
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The executor is loom-sdk's `AgentExecutor`.
 #[test]

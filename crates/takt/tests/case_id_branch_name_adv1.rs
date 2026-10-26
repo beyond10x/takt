@@ -9,10 +9,7 @@ use std::process::Command;
 use takt::LoadedProtocol;
 use takt::case::{CASES_DIR, CaseDir, check_id};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -56,7 +53,7 @@ fn repository(name: &str) -> Scratch {
 }
 
 fn protocol() -> LoadedProtocol {
-    LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads")
+    LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads")
 }
 
 /// Whether git creates the branch `takt/<id>` in `tree`, asked of `git branch` itself (not

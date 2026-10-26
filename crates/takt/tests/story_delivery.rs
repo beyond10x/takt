@@ -1,5 +1,6 @@
-//! The story-delivery protocol as data: `protocols/story-delivery/1.yaml` is loaded, validated
-//! and compiled by Canon, a case is opened on it over a scratch git tree, and the seven records
+//! The story-delivery protocol as data: `story.delivery/1`, the engineering protocols'
+//! built-in, is loaded, validated and compiled by Canon, a case is opened on it over a scratch
+//! git tree, and the seven records
 //! the delivery of a story produces are added one at a time, each evaluated: one more claim true
 //! after each, `pr.open` admissible only once the change is handed over and a change to
 //! publish recorded, `repository.merge` approval-required before the last, `accepted`
@@ -14,11 +15,8 @@ use std::process::Command;
 use takt::evidence::Record;
 use takt::{CaseDir, Decision, LoadedProtocol};
 
-/// The protocol under test, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The protocol under test, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The records a delivery produces, in order, each with the claim it establishes. The merge is
 /// its own kind: Canon leaves a match unknown when records of one kind disagree, so a `merged`
@@ -84,8 +82,8 @@ fn scratch(name: &str) -> Scratch {
 }
 
 fn open(tree: &Path, id: &str) -> CaseDir {
-    let protocol = LoadedProtocol::from_file(Path::new(PROTOCOL))
-        .expect("the protocol loads, validates and compiles");
+    let protocol =
+        LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads, validates and compiles");
     CaseDir::open(tree, protocol, id, "deliver the story", &[]).expect("the case opens")
 }
 
@@ -224,8 +222,8 @@ fn a_scratch_tree_that_cannot_be_removed_fails_the_case_loudly() {
 
 /// Adversary cases, added after the unit declared itself green; each is named `adv_*` so the
 /// suite runs without them under `--skip adv_`. The protocol they load may be overridden with
-/// `STORY_DELIVERY_PROTOCOL`, so a mutated copy of the document outside the tree shows which
-/// mutation each case turns red on.
+/// `STORY_DELIVERY_PROTOCOL`, a file read in place of the built-in, so a mutated copy of the
+/// document shows which mutation each case turns red on.
 mod adv {
     use std::collections::BTreeMap;
 
@@ -241,7 +239,7 @@ mod adv {
     }
 
     fn adv_open(tree: &Path, id: &str) -> CaseDir {
-        let protocol = LoadedProtocol::from_file(&protocol_path())
+        let protocol = LoadedProtocol::resolve(&protocol_path().to_string_lossy())
             .expect("the protocol loads, validates and compiles");
         CaseDir::open(tree, protocol, id, "deliver the story", &[]).expect("the case opens")
     }
@@ -298,9 +296,9 @@ mod adv {
         );
     }
 
-    /// README.md names `--protocol protocols/story-delivery/1.yaml` as the way to run on this
-    /// protocol; `takt run` adds no case input for a protocol file, so the case opens with the
-    /// inputs that command line gives: none.
+    /// `--protocol story.delivery/1` is the way to run on this protocol; `takt run` adds no case
+    /// input for a protocol it is given, so the case opens with the inputs that command line
+    /// gives: none.
     #[test]
     fn adv_the_readme_invocation_opens_a_case_without_inputs() {
         let tree = scratch("adv-readme");
@@ -512,7 +510,7 @@ mod adv2 {
     }
 
     fn adv2_open(tree: &Path, id: &str) -> CaseDir {
-        let protocol = LoadedProtocol::from_file(&protocol_path())
+        let protocol = LoadedProtocol::resolve(&protocol_path().to_string_lossy())
             .expect("the protocol loads, validates and compiles");
         CaseDir::open(tree, protocol, id, "deliver the story", &[]).expect("the case opens")
     }

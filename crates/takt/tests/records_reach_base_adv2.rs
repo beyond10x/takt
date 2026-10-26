@@ -19,10 +19,7 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Frontier, Run, RunOptions, Stop, Story};
 
-const DELIVERY: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const DELIVERY: &str = "story.delivery/1";
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 const APPROVER: &str = "human:operator";
 

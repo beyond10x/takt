@@ -17,10 +17,7 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -855,23 +852,16 @@ fn a_built_in_kind_a_foreign_read_action_may_produce_is_refused_at_open() {
     );
     assert!(!written);
 
-    for (name, file, inputs) in [
-        (
-            "self-improvement",
-            "self-improvement/1.yaml",
-            &[("surface", "judge")][..],
-        ),
-        ("loop-improvement", "loop-improvement/1.yaml", &[][..]),
+    for (name, inputs) in [
+        ("self-improvement", &[("surface", "judge")][..]),
+        ("loop-improvement", &[][..]),
     ] {
-        let yaml = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../protocols")
-                .join(file),
-        )
-        .expect("the protocol");
-        let (error, written) = open_on(name, &yaml, inputs);
-        assert_eq!(error, None, "{file}");
-        assert!(written, "{file}");
+        let yaml = canon_engineering::registry::get(name, 1)
+            .expect("the protocol")
+            .yaml;
+        let (error, written) = open_on(name, yaml, inputs);
+        assert_eq!(error, None, "{name}");
+        assert!(written, "{name}");
     }
 }
 
