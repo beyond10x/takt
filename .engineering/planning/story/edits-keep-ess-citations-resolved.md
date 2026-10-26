@@ -12,9 +12,13 @@ relations:
 - decomposes: epic:takt-as-a-loom-agent
 - informed_by: approval-record:wave-38-trial-s7-defects
 scope:
+- confidence: cited
+  path: crates/takt/src/harness.rs
 - confidence: inferred
   path: crates/takt/src/run.rs
-revision: 5
+- confidence: cited
+  path: crates/takt/src/validator.rs
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:10Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:54Z", actor: "human:timo", revision: 5}

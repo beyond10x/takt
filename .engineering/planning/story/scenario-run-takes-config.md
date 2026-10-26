@@ -14,7 +14,10 @@ refs:
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 4
+scope:
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T20:53:25Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:56Z", actor: "human:timo", revision: 4}
