@@ -6,7 +6,7 @@ status: approved
 title: 'Release 0.13.0 from main at 378159a with wave 37: takt as a Loom agent, loom 0.43.0'
 tags:
 - loom-agent
-revision: 2
+revision: 3
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-26T16:17:41Z", actor: "human:timo", revision: 2}
 ---
@@ -31,3 +31,7 @@ and pushing it nowhere.
 | gate | `task check` on the release tree, then the pull request's checks, the merge into `main` and `release.yml` with `darwin.yml` on the tag | |
 | trial | the diff touches `crates/` and `Cargo.lock`, so a `[TRIAL takt] 0.13.0 <sha>` is due after the tag; the orchestrator, which directs this item, routes it | `AGENTS.md` § Messages |
 | branches | `release/0.11.0` and `release/0.12.0` kept: neither tip is on `main` | approval-record:wave-37-engineering-protocols-0-10-0 § Branches |
+
+## Rebuild
+
+Pull request 18 from `release/0.13.0` failed `common / Security and privacy` on one finding: gitleaks' `generic-api-key` read a needle of `ess/domains/takt.citations.tsv` ending "API-key file" before its tab and `sha256:` digest as a key, in 6f244ac and the six later commits that change the file. `release/0.13.0-2` rebuilds the fifteen commits from `main` at 378159a through the bot with that needle shortened to end at "can pass an"; every tree is otherwise identical, and the wave page, this record and the commit messages name the rebuilt commits (the wave's last commit before this release is c99f46d, not on `wave/37`). Pull request 18 is closed unmerged and `release/0.13.0` kept; the review records and the stories' test results name the commits they were made at, which stay on it. gitleaks over `378159a..release/0.13.0-2`: no leaks.
