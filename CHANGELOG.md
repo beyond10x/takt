@@ -9,11 +9,13 @@ takt's releases.
 ### Added
 
 - `takt run --story <ID>` resumes or takes the named story instead of the frontier's next; one not listed or not ready is refused before any case opens, exit 1, naming why.
+- `takt run --config` reads YAML (`.yaml`, `.yml`) beside TOML, and a `loom.agent/1` document by its `takt` member: the file Loom mounts for a `LoomAgent` at `/config/agent.yaml`.
 - `--endpoint-token-env <NAME>` (or `[credential] env`, `openai-responses` wire only) stages a variable's key as a token file, removed at exit or on SIGTERM/SIGINT/SIGHUP; no child sees the variable.
 - The image ships `b10x-gates` 0.1.23, `pkg-config` and the OpenSSL headers, so a run in it scans its edits and tests a repository that builds against OpenSSL.
 
 ### Changed
 
+- **Breaking:** the image's entrypoint reads `/config/agent.yaml`, not `/config/run.toml`; `--config` refuses a file whose extension is not `.toml`, `.yaml` or `.yml`.
 - The image is built on Debian trixie with the Rust toolchain linked into `/usr/local/bin` where a gate finds it, and sets no `CARGO_HOME`, so cargo writes its caches under `$HOME/.cargo`.
 - takt's three protocols are engineering-protocols 0.10.0's built-ins, unchanged; `takt protocols` lists them as the registry names them, `story-delivery/1`.
 

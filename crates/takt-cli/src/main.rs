@@ -609,9 +609,11 @@ struct RunArgs {
     /// what the case keeps. Not read by any other case.
     #[arg(long)]
     install_root: Option<PathBuf>,
-    /// A TOML file of the run's configuration: `iterations`, `hours`, `harness`, `model`,
-    /// `endpoint_file` (a relative path read beside the file), `forge` and `test_cmd`, each the
-    /// flag's of that name. A flag given on the command line wins over the file, the file over
+    /// A file of the run's configuration, TOML (`.toml`) or YAML (`.yaml`, `.yml`):
+    /// `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path read beside
+    /// the file), `forge` and `test_cmd`, each the flag's of that name. A YAML `loom.agent/1`
+    /// document, as Loom mounts it at `/config/agent.yaml`, gives them in its `takt` member, and
+    /// nothing without one. A flag given on the command line wins over the file, the file over
     /// the flag's default. The file's `endpoint_file` is read only when the harness is `harness`.
     /// Any other key is refused before the case opens, naming the file and the line, never a
     /// value written there. A container takes its run from a mounted one.

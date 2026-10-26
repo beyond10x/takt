@@ -87,7 +87,12 @@ impl World {
 
     /// Writes `text` as `config/run.toml` and returns its path.
     fn config(&self, text: &str) -> PathBuf {
-        let path = self.config_dir().join("run.toml");
+        self.config_named("run.toml", text)
+    }
+
+    /// Writes `text` as `config/<name>` and returns its path.
+    fn config_named(&self, name: &str, text: &str) -> PathBuf {
+        let path = self.config_dir().join(name);
         fs::write(&path, text).expect("a run configuration file");
         path
     }
@@ -304,4 +309,132 @@ fn a_harness_flag_over_the_file_leaves_its_endpoint_out() {
         "{:?}",
         world.opened()
     );
+}
+
+// story:one-config-contract-with-loom: `--config` reads TOML or YAML by the file's extension, and
+// a `loom.agent/1` document, the file Loom mounts at `/config/agent.yaml`, by its `takt` member.
+
+/// A Loom agent document as a `LoomAgent`'s `spec.agent` carries it, with `takt` appended.
+const LOOM_AGENT: &str = "format: loom.agent/1\nagent:\n  id: takt-a\n  name: takt A\n  brief: delivers stories\nmodel:\n  routes: routes.yaml\n  roles:\n    - {role: agent, model: luna}\ndeploy:\n  kubernetes:\n    namespace: loom-agents\n    egress:\n      - {name: models, host: models.example, port: 443}\n";
+
+/// The expected `opened` endpoint of a run whose configuration names `endpoint.toml` and the
+/// model `run-model`.
+fn configured_endpoint() -> serde_json::Value {
+    serde_json::json!({
+        "base_url": "https://models.example/v1",
+        "wire": "openai-responses",
+        "model": "run-model",
+        "credential": {"kind": "secret", "namespace": "llm", "name": "model-key"},
+    })
+}
+
+/// A YAML file sets the same run as the TOML one from the same fields.
+#[test]
+fn a_yaml_file_sets_the_run_as_toml_does() {
+    for name in ["run.yaml", "run.yml"] {
+        let world = World::new(&format!("yaml-{name}"));
+        let config = world.config_named(
+            name,
+            "iterations: 0\nharness: harness\nmodel: run-model\nendpoint_file: endpoint.toml\nforge: none\ntest_cmd: \"true\"\n",
+        );
+        let output = world.run(&config, &[]);
+        assert_eq!(output.status.code(), Some(3), "{name}: {}", text(&output));
+        assert!(!world.started().exists(), "b10x-harness was not started");
+        assert_eq!(world.opened()[0]["endpoint"], configured_endpoint(), "{name}");
+    }
+}
+
+/// A `loom.agent/1` document's `takt` member is the run configuration; Loom's members are not
+/// read by takt.
+#[test]
+fn a_loom_agent_documents_takt_member_sets_the_run() {
+    let world = World::new("loom-takt");
+    let config = world.config_named(
+        "agent.yaml",
+        &format!(
+            "{LOOM_AGENT}takt:\n  iterations: 0\n  harness: harness\n  model: run-model\n  endpoint_file: endpoint.toml\n  forge: none\n  test_cmd: \"true\"\n"
+        ),
+    );
+    let output = world.run(&config, &[]);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    assert!(!world.started().exists(), "b10x-harness was not started");
+    assert_eq!(world.opened()[0]["endpoint"], configured_endpoint());
+}
+
+/// A `loom.agent/1` document with no `takt` member sets nothing: the run takes its flags, as a
+/// resource's `spec.command.args` give them.
+#[test]
+fn a_loom_agent_document_without_takt_sets_nothing() {
+    let world = World::new("loom-bare");
+    let config = world.config_named("agent.yaml", LOOM_AGENT);
+    let output = world.run(
+        &config,
+        &["--iterations", "0", "--harness", "none", "--forge", "none"],
+    );
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    assert_eq!(world.opened().len(), 1);
+    assert!(
+        world.opened()[0]
+            .get("endpoint")
+            .is_none_or(|e| e.is_null()),
+        "{:?}",
+        world.opened()
+    );
+}
+
+/// A key the `takt` member may not hold is refused before any case opens, exit 1, naming the
+/// file and the line and repeating no value; so is one in a plain YAML file.
+#[test]
+fn an_unknown_yaml_key_is_refused_naming_file_and_line() {
+    let world = World::new("loom-unknown");
+    let config = world.config_named(
+        "agent.yaml",
+        &format!("{LOOM_AGENT}takt:\n  iterations: 0\n  api_key: MARKER-loom-config-value\n"),
+    );
+    let output = world.run(&config, &["--forge", "none"]);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains(&config.display().to_string()), "{all}");
+    let line = LOOM_AGENT.lines().count() + 3;
+    assert!(all.contains(&format!("line {line}")), "{all}");
+    assert!(!all.contains("MARKER-loom-config-value"), "{all}");
+    assert!(!world.cases().exists(), "no case was opened");
+
+    let world = World::new("yaml-unknown");
+    let config = world.config_named(
+        "run.yaml",
+        "iterations: 0\napi_key: MARKER-yaml-config-value\n",
+    );
+    let output = world.run(&config, &["--forge", "none"]);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains(&config.display().to_string()), "{all}");
+    assert!(all.contains("line 2"), "{all}");
+    assert!(!all.contains("MARKER-yaml-config-value"), "{all}");
+    assert!(!world.cases().exists(), "no case was opened");
+}
+
+/// A file of another extension, or a YAML document of another format, is refused before any case
+/// opens, exit 1, naming the file and repeating no value.
+#[test]
+fn another_extension_or_format_is_refused_naming_the_file() {
+    let world = World::new("extension");
+    let config = world.config_named("run.json", "{\"iterations\": 0}\n");
+    let output = world.run(&config, &["--forge", "none"]);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains(&config.display().to_string()), "{all}");
+    assert!(!world.cases().exists(), "no case was opened");
+
+    let world = World::new("format");
+    let config = world.config_named(
+        "agent.yaml",
+        "format: MARKER-other-format/1\ntakt:\n  iterations: 0\n",
+    );
+    let output = world.run(&config, &["--forge", "none"]);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains(&config.display().to_string()), "{all}");
+    assert!(!all.contains("MARKER-other-format"), "{all}");
+    assert!(!world.cases().exists(), "no case was opened");
 }
