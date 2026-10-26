@@ -15,7 +15,7 @@
 [![ESS citations resolved: 578 of 578](https://img.shields.io/badge/ESS%20citations%20resolved-578%20of%20578-brightgreen)](ess/domains)
 <!-- badges end -->
 
-Point `takt` at a repository and say "work on this". It takes an intent, or the next ready story
+Point `takt` at a repository and say "work on this". It takes an intent, a story you name, or the next ready story
 from the planning store, opens a case on a protocol, and lets a harness such as Claude Code take
 one admissible step at a time. Each step's result is checked by a program, not by the model that
 made it. [Canon](https://github.com/beyond10x/canon) decides what is permitted, what is owed and
@@ -60,7 +60,7 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 
 ## Status
 
-0.12.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.13.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and `self.improvement/1`
 embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64). A harness step
 runs through a metaharness session with Claude Code, Codex or b10x-harness (`--harness`). Since 0.1.0 it
@@ -90,6 +90,7 @@ their figures are in `docs/metrics/`.
 ```
 takt run --repo <path> --intent "make the failing test pass" --iterations 1
 takt run --repo <path> --hours 1
+takt run --repo <path> --story <id> --hours 1
 takt approve --repo <path> <case> repository.merge --by human:<id>
 takt scenario run --repo <path> <id> --hours 1
 takt protocols
@@ -119,22 +120,39 @@ takt --version
 ## Container
 
 `Dockerfile` builds an x86_64 image of takt from this source tree, with `aep`, `b10x-harness`,
-`ess`, git, Python 3 and the Rust toolchain beside it (`docker build -t takt:<version> .`).
-No image is published; a cluster loads a local build. The container runs
-`takt run --repo /workspace --config /config/run.toml` as uid 10001, and what it mounts is:
+`b10x-gates`, `ess`, git, Python 3, a C toolchain with `pkg-config` and the OpenSSL headers, and
+the Rust toolchain with clippy and rustfmt beside it (`docker build -t takt:<version> .`). The
+Rust programs are linked into `/usr/local/bin`, so a gate's system path finds them, and no
+`CARGO_HOME` is set: cargo keeps its caches in `$HOME/.cargo`. No image is published; a cluster
+loads a local build. The container runs
+`takt run --repo /workspace --config /config/agent.yaml` under `tini`, so a stop signal reaches
+a takt that is not PID 1, as uid 10001, whose home is
+`/var/lib/takt`, and what it mounts is:
 
 | path | what | mode |
 |---|---|---|
 | `/workspace` | a git checkout of the repository to work on, its planning store included | read-write, owned by uid 10001 |
-| `/config/run.toml` | the run's configuration: `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, each a `takt run` flag's (`takt run --help`, `--config`) | read-only |
-| `/config/endpoint.toml` | the endpoint file `run.toml` names as `endpoint_file = "endpoint.toml"`: `base_url`, `wire`, `model` and a `[credential]` table naming the credential, `secret = "<namespace>/<name>"` or `token_file`, never a token | read-only |
+| `/config/agent.yaml` | the run's configuration: a `loom.agent/1` document whose `takt` member holds `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, each a `takt run` flag's (`takt run --help`, `--config`), or those fields alone as YAML | read-only |
+| `/config/endpoint.toml` | the endpoint file the configuration names as `endpoint_file: endpoint.toml`: `base_url`, `wire`, `model` and a `[credential]` table naming the credential, `secret = "<namespace>/<name>"`, `token_file` or `env = "<NAME>"`, never a token | read-only |
 
-Arguments after the image name are flags of `takt run` and win over `run.toml`. The run's
-outcome is in `/workspace/.engineering/cases` and the exit code (`takt run --help`); with
-`forge = "none"` the delivery stays a branch in `/workspace`.
+A `LoomAgent` of the `Command` variant gets `/config/agent.yaml` from its `spec.agent`, written
+verbatim. A Loom release that does not admit a `takt` member in `loom.agent/1` refuses the
+resource, so there the document carries no `takt` member and the run's settings are flags in
+`spec.command.args`. Loom keeps `/config` for its own ConfigMap (`agent.yaml`, `routes.yaml`,
+`connectors.toml`), so under Loom there is no `/config/endpoint.toml`: the endpoint is the
+flags `--endpoint-base-url`, `--endpoint-wire openai-responses`, `--endpoint-model` and
+`--endpoint-token-env <NAME>`, the variable from the agent's `spec.secretRef`. Arguments
+after the image name are flags of `takt run` and win over the
+file. The run's outcome is in `/workspace/.engineering/cases` and the exit code
+(`takt run --help`); with `forge: none` the delivery stays a branch in `/workspace`. A gates
+policy for `b10x-gates` comes from the deployment (`B10X_GATES_POLICY`), never the image;
+`b10x-gates` reads it only when the file and its directory are owned by the run's uid (10001),
+the file has no group or other bits and the directory is not group- or other-writable.
+The Rust toolchain is fixed in the image under `/opt/rust`, without `rustup`, so a target
+repository's `rust-toolchain.toml` is ignored.
 
-The image holds b10x-harness and no other harness, and no `b10x-gates`, `gh` or `glab`: set
-`harness = "harness"` (or `"none"`) and `forge = "none"`, since the defaults, `claude` and the
+The image holds b10x-harness and no other harness, and no `gh` or `glab`: set
+`harness: harness` (or `none`) and `forge: none`, since the defaults, `claude` and the
 forge `origin` names, are not there. The test command runs in a user and mount namespace of its
 own, which the container runtime's default seccomp and AppArmor profiles refuse: run the
 container with both unconfined (`docker run --security-opt seccomp=unconfined --security-opt
@@ -142,11 +160,15 @@ apparmor=unconfined`; in Kubernetes, `seccompProfile` and `appArmorProfile` of t
 `Unconfined`). A build from a clone, where `.git` is a directory, names its commit in
 `takt --version`; a build from a linked worktree says `unknown revision`.
 
-```toml
-iterations = 1
-harness = "harness"
-endpoint_file = "endpoint.toml"
-forge = "none"
+```yaml
+format: loom.agent/1
+agent: {id: takt, name: takt, brief: delivers the repository's stories}
+model: {routes: routes.yaml}
+takt:
+  iterations: 1
+  harness: harness
+  endpoint_file: endpoint.toml
+  forge: none
 ```
 
 ## Requirements
@@ -160,7 +182,15 @@ A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests (`glab`
 or `--endpoint-file`, a TOML file of `base_url`, `wire`, `model` and a `[credential]` table; a
 flag wins over the file. A credential is named, never given: a token file's path, or a secret's
 name in your secrets store (`--endpoint-secret <namespace>/<name>`), handed to b10x-harness
-by name, which the harness resolves; takt reads no secret. Your
+by name, which the harness resolves; takt reads no secret; or an environment variable's name
+(`--endpoint-token-env <NAME>`, the file's `env = "<NAME>"`), on the `openai-responses` wire
+only until the session executor can pass an API-key file. takt takes that variable out of its
+environment before it starts anything, so no process it starts sees it (except, under
+`--confinement substrate` outside a delegated cgroup, `systemd-run` and the takt it re-runs),
+overwrites its value in its own `/proc/<pid>/environ` on Linux with glibc, and stages it as
+a token file of mode 0600 in a new directory of mode 0700 under `$XDG_RUNTIME_DIR`,
+`/dev/shm` or the temporary directory, the first b10x-harness's token-file reader accepts, removed when the run ends, by
+SIGTERM, SIGINT or SIGHUP too; the case records the variable's name only. Your
 claude.ai token goes to the default base URL only, so another base URL needs a credential of
 its own; a base URL is `https://`, or `http://` to a loopback host, with no userinfo, query or
 fragment.
@@ -193,14 +223,14 @@ nothing sandboxes the harness session yet (`story:harness-child-confined`).
 ## Built on
 
 takt is an application on [Loom](https://github.com/beyond10x/loom)'s `b10x-loom-sdk`, pinned
-in `Cargo.toml` at the Loom tag 0.41.0 (ADR 0099, `epic:takt-on-loom-sdk`):
+in `Cargo.toml` at the Loom tag 0.43.0 (ADR 0099, `epic:takt-on-loom-sdk`):
 
 - Commission's runtime drives each step of a case (`run_until_blocked`).
 - Loom's governor decides the case with [Canon](https://github.com/beyond10x/canon) over the
   case's files, and takt's `CaseAuthority` answers it from `authority.yaml` when a step needs a
   grant.
-- Each harness step runs in a metaharness 0.15.0 session started by Loom's session executor, the
-  crate `b10x-loom-session-executor` 0.41.0 (`loom_sdk::session`). The harness proposes a change
+- Each harness step runs in a metaharness 0.19.0 session started by Loom's session executor, the
+  crate `b10x-loom-session-executor` 0.43.0 (`loom_sdk::session`). The harness proposes a change
   from a scratch copy, and takt's edit effect applies it under the step guard.
 
 takt keeps its validators and their evidence, git and the forge, the planning-store seam,

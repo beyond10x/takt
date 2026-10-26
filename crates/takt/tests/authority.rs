@@ -26,11 +26,8 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{PrMerged, Validator};
 use takt::{Decision, LoadedProtocol, Run, RunOptions};
 
-/// The protocol under test, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The protocol under test, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// Runs `git <args>` in `tree`; its trimmed standard output.
 fn git(tree: &Path, args: &[&str]) -> String {
@@ -91,7 +88,7 @@ fn scratch(name: &str) -> Scratch {
 }
 
 fn protocol() -> LoadedProtocol {
-    LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads")
+    LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads")
 }
 
 fn record(n: usize, kind: &str, result: &str, revision: &str) -> Record {

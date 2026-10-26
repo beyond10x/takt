@@ -26,11 +26,8 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{PrOpen, Validator};
 use takt::{Run, RunOptions, Stop};
 
-/// The protocol under test, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The protocol under test, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The policy file the forge is given; nothing is read from it, the runner only checks that a
 /// line names it.

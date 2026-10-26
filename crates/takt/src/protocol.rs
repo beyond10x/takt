@@ -1,6 +1,5 @@
-//! A protocol as data: a built-in of the engineering protocols, one of this repository's
-//! `protocol/1` files embedded in the crate, or a `protocol/1` file, validated and compiled by
-//! Canon. Nothing here models a protocol in Rust.
+//! A protocol as data: a built-in of the engineering protocols or a `protocol/1` file,
+//! validated and compiled by Canon. Nothing here models a protocol in Rust.
 
 use std::path::Path;
 
@@ -27,38 +26,23 @@ pub struct LoadedProtocol {
     pub actions: Vec<String>,
 }
 
-/// The protocols this crate ships beside the engineering protocols' built-ins, `(name, major,
-/// document)`: the `protocol/1` files of this repository's `protocols/`, embedded so that a
-/// repository a story is delivered in need not carry them.
-const EMBEDDED: &[(&str, u32, &str)] = &[
-    (
-        "story.delivery",
-        1,
-        include_str!("../../../protocols/story-delivery/1.yaml"),
-    ),
-    (
-        "self.improvement",
-        1,
-        include_str!("../../../protocols/self-improvement/1.yaml"),
-    ),
-];
-
 impl LoadedProtocol {
-    /// A built-in, by `name/major` (`software.change/1`): one this crate embeds
-    /// (`story.delivery/1`, `self.improvement/1`), else one of the engineering protocols.
+    /// A built-in of the engineering protocols, by `name/major`: `software.change/1`,
+    /// `story.delivery/1`, `self.improvement/1`, `loop.improvement/1` and the rest of the
+    /// registry.
     pub fn builtin(id: &str) -> Result<Self> {
         let (name, major) = split_id(id)?;
-        // An embedded protocol answers to its own id, `story.delivery`, and to its directory's
-        // name, `story-delivery`, as the registry's built-ins do.
-        if let Some((_, _, yaml)) = EMBEDDED.iter().find(|(embedded, revision, _)| {
-            *revision == major && (*embedded == name || embedded.replace('.', "-") == name)
-        }) {
-            return Self::from_yaml(yaml);
-        }
-        // The registry names a protocol by its directory, `software-change`; the protocol's own
-        // id is `software.change`. Both spellings are accepted.
+        // The registry names a protocol by its directory, `software-change` or
+        // `eval-gated-change`; the protocol's own id is `software.change` or
+        // `eval.gated_change`. Both spellings are accepted. A name the registry knows under its
+        // own spelling reports that spelling's refusal, so an unknown major is called one.
+        let listed = name.replace(['.', '_'], "-");
         let builtin = canon_engineering::registry::get(name, major).or_else(|first| {
-            canon_engineering::registry::get(&name.replace('.', "-"), major).map_err(|_| first)
+            if listed == name {
+                Err(first)
+            } else {
+                canon_engineering::registry::get(&listed, major)
+            }
         });
         let builtin = builtin.map_err(|error| anyhow!("protocol {id}: {error:?}"))?;
         Self::from_yaml(builtin.yaml)
@@ -290,18 +274,13 @@ impl LoadedProtocol {
             .and_then(|(name, _)| name.as_str().map(str::to_owned))
     }
 
-    /// The built-in protocols, `(name, major)` each: the engineering protocols', then the ones
-    /// this crate embeds.
+    /// The built-in protocols, `(name, major)` each, as the engineering protocols' registry
+    /// names them (`story-delivery`).
     #[must_use]
     pub fn builtins() -> Vec<(String, u32)> {
         canon_engineering::registry::list()
             .into_iter()
             .map(|(name, major)| (name.to_owned(), major))
-            .chain(
-                EMBEDDED
-                    .iter()
-                    .map(|(name, major, _)| ((*name).to_owned(), *major)),
-            )
             .collect()
     }
 }
@@ -321,38 +300,49 @@ mod tests {
         assert!(protocol.ir_json.contains("canon-ir/1"));
     }
 
-    /// The story-delivery protocol ships embedded, byte for byte the repository's file, under
-    /// both spellings, and is listed among the built-ins.
+    /// Story delivery, self-improvement and loop improvement are the engineering protocols'
+    /// built-ins: each answers to its own id and to the registry's name, byte for byte the
+    /// registry's document, and is listed among the built-ins.
     #[test]
-    fn the_story_delivery_builtin_is_embedded() {
-        let file = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../protocols/story-delivery/1.yaml"
-        ))
-        .expect("the repository's file");
-        for id in ["story.delivery/1", "story-delivery/1"] {
-            let protocol = LoadedProtocol::builtin(id).expect("a built-in");
-            assert_eq!(protocol.id, "story.delivery/1");
-            assert_eq!(protocol.yaml, file);
-            assert!(protocol.actions.contains(&"pr.open".to_owned()));
+    fn the_three_protocols_are_the_registrys_builtins() {
+        for (id, name, action) in [
+            ("story.delivery/1", "story-delivery", "pr.open"),
+            ("self.improvement/1", "self-improvement", "finding.file"),
+            ("loop.improvement/1", "loop-improvement", "loop.measure"),
+        ] {
+            let registry = canon_engineering::registry::get(name, 1).expect("a registry built-in");
+            for given in [id.to_owned(), format!("{name}/1")] {
+                let protocol = LoadedProtocol::builtin(&given).expect("a built-in");
+                assert_eq!(protocol.id, id);
+                assert_eq!(protocol.yaml, registry.yaml);
+                assert!(protocol.actions.contains(&action.to_owned()), "{id}");
+            }
+            assert!(
+                LoadedProtocol::builtins()
+                    .iter()
+                    .any(|(listed, major)| listed == name && *major == 1),
+                "{id}"
+            );
         }
         assert!(LoadedProtocol::builtin("story.delivery/2").is_err());
-        assert!(
-            LoadedProtocol::builtins()
-                .iter()
-                .any(|(name, major)| name == "story.delivery" && *major == 1)
-        );
     }
 
     /// A protocol given as an id or as a file resolves to the same protocol.
     #[test]
     fn resolve_takes_a_file_or_a_builtin() {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../protocols/story-delivery/1.yaml"
-        );
-        let file = LoadedProtocol::resolve(path).expect("the file");
+        let dir = std::env::temp_dir().join(format!("takt-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let path = dir.join("story-delivery.yaml");
+        std::fs::write(
+            &path,
+            canon_engineering::registry::get("story-delivery", 1)
+                .expect("a registry built-in")
+                .yaml,
+        )
+        .expect("the file");
+        let file = LoadedProtocol::resolve(path.to_str().expect("a UTF-8 path")).expect("the file");
         let builtin = LoadedProtocol::resolve("story.delivery/1").expect("the built-in");
+        std::fs::remove_dir_all(&dir).expect("removed");
         assert_eq!(file.id, builtin.id);
         assert_eq!(file.ir_json, builtin.ir_json);
         assert!(LoadedProtocol::resolve("no.such/1").is_err());

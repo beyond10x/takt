@@ -18,10 +18,7 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{GateRun, Observation, Validator};
 use takt::{Run, RunOptions};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The project file: the gate's one command is the system shell running a script of the tree,
 /// which is only an argument to it, and a data directory the script reads.

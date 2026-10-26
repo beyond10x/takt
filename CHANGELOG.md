@@ -6,6 +6,26 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-26
+
+takt runs as a Loom agent: `--config` reads the `loom.agent/1` document, `--endpoint-token-env` takes the key from the
+environment, `--story` names the story, and the image tests and gates what it builds; loom 0.43.0.
+
+### Added
+
+- `takt run --story <ID>` resumes or takes the named story instead of the frontier's next; one not listed or not ready is refused before any case opens, exit 1, naming why.
+- `takt run --config` reads YAML (`.yaml`, `.yml`) beside TOML, and a `loom.agent/1` document by its `takt` member: the file Loom mounts for a `LoomAgent` at `/config/agent.yaml`.
+- `--endpoint-token-env <NAME>` (`[credential] env`, `openai-responses` only) stages a variable's key as a file, removed at exit or on SIGTERM, SIGINT, SIGHUP; no child sees it (substrate: README).
+- The image ships `b10x-gates` 0.1.23, `pkg-config` and the OpenSSL headers, so a run in it scans its edits and tests a repository that builds against OpenSSL.
+
+### Changed
+
+- **Breaking:** the image's entrypoint reads `/config/agent.yaml`, not `/config/run.toml`; `--config` refuses a file whose extension is not `.toml`, `.yaml` or `.yml`.
+- The image is built on Debian trixie with the Rust toolchain, unwritable by the run, linked into `/usr/local/bin` where a gate finds it; no `CARGO_HOME`, so cargo caches under `$HOME/.cargo`.
+- The image runs takt under `tini`, so `docker stop` or a pod's stop ends it on SIGTERM rather than SIGKILL.
+- **Breaking:** `takt protocols` lists the three protocols as engineering-protocols 0.10.0, whose built-ins they now are, names them: `story-delivery/1`; either spelling is read.
+- **Breaking:** `b10x-loom-sdk` moves from loom 0.41.0 to 0.43.0 with metaharness 0.19.0, so `--harness harness` needs b10x-harness 0.20.0 on the `PATH`; the image ships it.
+
 ## [0.12.0] - 2026-10-26
 
 `takt run --config` takes the run's configuration from a TOML file, and a `Dockerfile` builds a container image
@@ -494,7 +514,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.12.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.13.0...HEAD
+[0.13.0]: https://github.com/beyond10x/takt/compare/0.12.0...0.13.0
 [0.12.0]: https://github.com/beyond10x/takt/compare/0.11.1...0.12.0
 [0.11.1]: https://github.com/beyond10x/takt/compare/0.11.0...0.11.1
 [0.11.0]: https://github.com/beyond10x/takt/compare/0.10.1...0.11.0

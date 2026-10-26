@@ -11,15 +11,9 @@ use takt::case::{Authority, grant};
 use takt::evidence::Record;
 use takt::{CaseDir, Decision, LoadedProtocol};
 
-const SELF_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/self-improvement/1.yaml"
-);
+const SELF_IMPROVEMENT: &str = "self.improvement/1";
 
-const LOOP_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/loop-improvement/1.yaml"
-);
+const LOOP_IMPROVEMENT: &str = "loop.improvement/1";
 
 /// The producer of every record; declared independent where the protocol has the dimension.
 const VERIFIER: &str = "operator-run";
@@ -399,7 +393,7 @@ fn grants_on_two_artifacts_authorise_each_its_own_action_only() {
 #[test]
 fn an_improvement_turn_is_granted_again_after_its_candidate_moves() {
     let tree = scratch("regrant");
-    let protocol = LoadedProtocol::from_file(Path::new(SELF_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(SELF_IMPROVEMENT).expect("loads");
     let mut case = open(&tree, protocol, "turn", &[("surface", "judge")]);
     add(&mut case, 1, "finding_record", "filed", "finding");
     add(&mut case, 2, "scenario_result", "reproduced", "baseline");
@@ -472,7 +466,7 @@ fn an_improvement_turn_is_granted_again_after_its_candidate_moves() {
 #[test]
 fn a_loop_turn_is_granted_at_its_loop_candidate_and_loses_it_when_it_moves() {
     let tree = scratch("loop");
-    let protocol = LoadedProtocol::from_file(Path::new(LOOP_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(LOOP_IMPROVEMENT).expect("loads");
     let mut case = open(&tree, protocol, "loopturn", &[]);
     add(
         &mut case,
@@ -532,7 +526,7 @@ fn the_shipped_protocols_bind_each_capability_to_the_artifact_it_merges() {
             .expect("one subject"),
         "implementation"
     );
-    let turn = LoadedProtocol::from_file(Path::new(SELF_IMPROVEMENT)).expect("loads");
+    let turn = LoadedProtocol::builtin(SELF_IMPROVEMENT).expect("loads");
     for capability in [
         "repository.merge",
         "repository.merge.judge_surface",
@@ -544,7 +538,7 @@ fn the_shipped_protocols_bind_each_capability_to_the_artifact_it_merges() {
             "{capability}"
         );
     }
-    let loop_turn = LoadedProtocol::from_file(Path::new(LOOP_IMPROVEMENT)).expect("loads");
+    let loop_turn = LoadedProtocol::builtin(LOOP_IMPROVEMENT).expect("loads");
     assert_eq!(
         loop_turn
             .grant_subject("repository.merge.judge_surface")

@@ -21,10 +21,7 @@ use takt::run::{CREDENTIAL_SHAPES, ChangeScan, PROPOSAL_NOT_RECORDED, credential
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 const KINDS: [Kind; 3] = [Kind::Claude, Kind::Codex, Kind::B10x];
 

@@ -9,7 +9,7 @@
 //! itself, with every host path read-only but its own run directory, the caller's home hidden
 //! and a PID namespace of its own, and prints `reproduced`, `not_reproduced` (only when the
 //! command ended with the exit the predicate names as the healthy one) or `error`, the results
-//! of the `scenario_result` evidence kind (`protocols/self-improvement/1.yaml`). The scratch
+//! of the `scenario_result` evidence kind (the built-in `self-improvement@1`). The scratch
 //! takt is a workspace with no dependencies, so each build takes seconds; nothing reaches a
 //! network. On macOS the confiner is Seatbelt (`sandbox-exec`) in place of bubblewrap: the
 //! caller's home is hidden, every write but to the build's or the run's own directories is

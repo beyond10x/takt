@@ -1,5 +1,5 @@
 //! The validators of an improvement turn, a `self.improvement/1` case
-//! (`protocols/self-improvement/1.yaml`, design:recursive-self-improvement § The loops as
+//! (the built-in `self-improvement@1`, design:recursive-self-improvement § The loops as
 //! protocols): [`FindingFile`] (`finding.file`), [`ScenarioReproduce`] (`scenario.reproduce`),
 //! [`ScenarioVerify`] (`scenario.verify`), [`ScorecardCompare`] (`scorecard.compare`),
 //! [`CandidateMerged`] (`candidate.merge` and `candidate.merge_judge_surface`) and

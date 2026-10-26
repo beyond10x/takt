@@ -558,6 +558,13 @@ struct RunArgs {
     /// The case to resume, by id, instead of opening one; not with --intent.
     #[arg(long)]
     case: Option<String>,
+    /// The story to deliver, by id, instead of the frontier's next ready one: its open case is
+    /// resumed, if it has one; else it is taken as the frontier takes a story, which it must be
+    /// ready for (`proposed`, nothing blocking it, every dependency done). A story the store
+    /// does not list, or one not ready, is refused before any case opens, naming why. Not with
+    /// --intent or --case.
+    #[arg(long, value_name = "ID", conflicts_with_all = ["intent", "case"])]
+    story: Option<String>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
     /// the planning store gives opens on `story.delivery/1`, an --intent on `software.change/1`,
     /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
@@ -602,9 +609,11 @@ struct RunArgs {
     /// what the case keeps. Not read by any other case.
     #[arg(long)]
     install_root: Option<PathBuf>,
-    /// A TOML file of the run's configuration: `iterations`, `hours`, `harness`, `model`,
-    /// `endpoint_file` (a relative path read beside the file), `forge` and `test_cmd`, each the
-    /// flag's of that name. A flag given on the command line wins over the file, the file over
+    /// A file of the run's configuration, TOML (`.toml`) or YAML (`.yaml`, `.yml`):
+    /// `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path read beside
+    /// the file), `forge` and `test_cmd`, each the flag's of that name. A YAML `loom.agent/1`
+    /// document, as Loom mounts it at `/config/agent.yaml`, gives them in its `takt` member, and
+    /// nothing without one. A flag given on the command line wins over the file, the file over
     /// the flag's default. The file's `endpoint_file` is read only when the harness is `harness`.
     /// Any other key is refused before the case opens, naming the file and the line, never a
     /// value written there. A container takes its run from a mounted one.
@@ -841,13 +850,20 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
 
 fn main() -> ExitCode {
-    let cli = match parsed() {
+    let mut cli = match parsed() {
         Ok(cli) => cli,
         Err(error) => {
             eprintln!("takt: {error:#}");
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    // The endpoint's credential variable leaves takt's environment here, on the one thread
+    // takt has, before it starts any process.
+    match &mut cli.command {
+        Commands::Run(args) => args.looping.take_variable(false),
+        Commands::Scenario(ScenarioCommands::Run(args)) => args.looping.take_variable(false),
+        _ => {}
+    }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     match run(cli, &mut out) {
@@ -1065,13 +1081,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 repo,
                 intent,
                 case,
+                story,
                 protocol,
                 inputs,
                 case_id,
                 scenarios,
                 install_root,
                 config: _,
-                looping,
+                mut looping,
             } = *args;
             looping.check()?;
             let repo = repo
@@ -1112,8 +1129,22 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // A turn opens a case whether or not an intent is given: with none, its finding's
             // title is the intent, and no case of the planning store is resumed for it.
             let opens_turn = case.is_none() && opens_on.id == takt::case::TURN_PROTOCOL;
-            let resuming =
-                case_to_resume(&repo, case.as_deref(), intent.is_some() || opens_turn, out)?;
+            if let Some(story) = &story
+                && opens_turn
+            {
+                return Err(anyhow!(
+                    "--story {story}: a {} turn opens on its finding (--input {}=<story id>), never on a named story; nothing was changed",
+                    takt::case::TURN_PROTOCOL,
+                    takt::case::TURN_FINDING
+                ));
+            }
+            let resuming = case_to_resume(
+                &repo,
+                case.as_deref(),
+                story.as_deref(),
+                intent.is_some() || opens_turn,
+                out,
+            )?;
             let given_for_resume = given.as_ref().zip(protocol.as_deref());
             let first_input = inputs.first().map(|(name, _)| name.clone());
             if let Some(resuming) = &resuming {
@@ -1351,12 +1382,30 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 // Nothing to resume, as found above: the next ready story is taken, and nothing
                 // is resumed whatever the store says by now, so no case runs that was not
-                // checked.
+                // checked. A story `--story` names is taken the same way, the frontier narrowed
+                // to it; one it does not offer is refused, no case opened.
                 (None, None, None) => {
+                    let named = story.as_deref().map(|story| Named {
+                        store: &store,
+                        story,
+                    });
+                    let frontier: &dyn takt::Frontier = match &named {
+                        Some(named) => named,
+                        None => &store,
+                    };
+                    // Where the tree is before the take, which reads the store on the base and
+                    // so moves a tree on a case's branch there: a refused `--story` puts it back.
+                    let left = match &story {
+                        Some(_) => Some(match takt::git::current_branch(&repo)? {
+                            Some(branch) => branch,
+                            None => takt::git::head(&repo)?,
+                        }),
+                        None => None,
+                    };
                     match Run::take_next_as(
                         &repo,
                         options,
-                        &store,
+                        frontier,
                         &commit_as,
                         harness,
                         &validators,
@@ -1364,6 +1413,19 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     )? {
                         Some(run) => run,
                         None => {
+                            if let (Some(story), Some(left)) = (&story, &left) {
+                                let refusal = match story_not_taken(&repo, &store, story) {
+                                    Ok(refusal) | Err(refusal) => refusal,
+                                };
+                                return Err(
+                                    match takt::git::run(&repo, &["checkout", "-q", left]) {
+                                        Ok(_) => refusal,
+                                        Err(undo) => refusal.context(format!(
+                                            "and the tree could not be put back on {left}: {undo:#}"
+                                        )),
+                                    },
+                                );
+                            }
                             writeln!(out, "frontier: nothing ready")?;
                             return Ok(EXIT_DONE);
                         }
@@ -1411,12 +1473,13 @@ impl LoopArgs {
     /// Installs the adapter --confinement names for a run on `repo`, before anything of the
     /// run is done. For `substrate` outside a delegated cgroup, the same command is run again
     /// inside one and its exit code is this run's: `Some(code)`.
-    fn confine(&self, repo: &Path) -> Result<Option<u8>> {
+    fn confine(&mut self, repo: &Path) -> Result<Option<u8>> {
         if self.confinement != "substrate" {
             return Ok(None);
         }
         match takt::confinement::Substrate::open(repo) {
             Ok(substrate) => {
+                self.take_variable(true);
                 takt::confinement::install(std::sync::Arc::new(substrate));
                 Ok(None)
             }
@@ -1432,6 +1495,21 @@ impl LoopArgs {
                 repo.display()
             )),
         }
+    }
+
+    /// Under `--harness harness`, takes the variable the endpoint's credential names out of
+    /// takt's environment ([`EndpointArgs::take_variable`]). Under `--confinement substrate`
+    /// outside a delegated run it is left until `substrate` has opened in this run
+    /// (`substrate_open`), since a run delegated again under `systemd-run` reads it there.
+    fn take_variable(&mut self, substrate_open: bool) {
+        if self.harness != "harness"
+            || (self.confinement == "substrate"
+                && !substrate_open
+                && std::env::var_os(takt::confinement::DELEGATED).is_none())
+        {
+            return;
+        }
+        self.endpoint.take_variable();
     }
 
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
@@ -1483,7 +1561,18 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         "harness" => {
             let home = std::env::var_os("HOME").map(PathBuf::from);
             let mut session = session(Kind::B10x);
-            session.point_at(&looping.endpoint.config(home.as_deref())?);
+            let config = looping.endpoint.config(home.as_deref())?;
+            session.point_at(&config);
+            // A variable's value is staged now, before any case opens, and held by the harness,
+            // so the file goes when the run ends, on success or on an error.
+            if let takt::harness::Credential::Environment { name } = &config.credential {
+                use takt::harness::StagedToken;
+                session.hold_staged(StagedToken::stage(
+                    name,
+                    looping.endpoint.variable.as_ref(),
+                    &StagedToken::candidates(),
+                )?);
+            }
             session.home = home;
             Ok(Box::new(session))
         }
@@ -1529,11 +1618,30 @@ struct EndpointArgs {
     /// reads no secret and opens no store. Not with --endpoint-token-file.
     #[arg(long, value_name = "NAMESPACE/NAME")]
     endpoint_secret: Option<String>,
+    /// `--harness harness`: the name of the environment variable holding the API key, on the
+    /// openai-responses wire only (--endpoint-wire openai-responses) until the session
+    /// executor can pass an API-key file. takt takes it out of its own environment before it
+    /// starts anything, so no process it starts sees it, and on Linux with glibc overwrites
+    /// its value in takt's initial environment block, which /proc/<pid>/environ reads. It
+    /// stages the value as a token file of mode 0600 in a new directory of mode 0700 under the
+    /// first of `$XDG_RUNTIME_DIR`, `/dev/shm` and the temporary directory that b10x-harness's
+    /// token-file reader accepts, removed when the run ends, by SIGTERM, SIGINT or SIGHUP too
+    /// (SIGKILL leaves it). Under --confinement substrate outside a delegated cgroup, the
+    /// variable is passed to systemd-run and to the takt it re-runs, which takes it out; the
+    /// first takt keeps it in its environment while it waits. Not with --endpoint-token-file or
+    /// --endpoint-secret. A name that is no portable variable name, another wire, a variable
+    /// unset or empty, or no directory accepted, is refused before the case opens, exit 1.
+    #[arg(long, value_name = "NAME")]
+    endpoint_token_env: Option<String>,
     /// `--harness harness`: a TOML file of the same fields, each under a flag: `base_url`,
     /// `wire`, `model`, and a `[credential]` table of `token_file` with an optional
-    /// `token_pointer` (a relative path read beside the file), or of `secret`.
+    /// `token_pointer` (a relative path read beside the file), of `secret`, or of `env`.
     #[arg(long, value_name = "PATH")]
     endpoint_file: Option<PathBuf>,
+    /// The value of the variable the credential names, taken out of takt's environment
+    /// ([`Self::take_variable`]).
+    #[arg(skip)]
+    variable: Option<takt::harness::VariableValue>,
 }
 
 impl EndpointArgs {
@@ -1549,25 +1657,62 @@ impl EndpointArgs {
                 self.endpoint_token_pointer.is_some(),
             ),
             ("--endpoint-secret", self.endpoint_secret.is_some()),
+            ("--endpoint-token-env", self.endpoint_token_env.is_some()),
             ("--endpoint-file", self.endpoint_file.is_some()),
         ]
         .into_iter()
         .find_map(|(flag, given)| given.then_some(flag))
     }
 
-    /// The endpoint the session is pointed at: the flags over the file over the default under
-    /// `home`, a token file made absolute and checked to hold a token where its pointer points,
-    /// a secret's name checked by no read, before any case opens.
-    fn config(&self, home: Option<&Path>) -> Result<takt::harness::EndpointConfig> {
-        use takt::harness::{EndpointConfig, EndpointFields};
-        let flags = EndpointFields {
+    /// The fields the flags give.
+    fn fields(&self) -> takt::harness::EndpointFields {
+        takt::harness::EndpointFields {
             base_url: self.endpoint_base_url.clone(),
             wire: self.endpoint_wire.clone(),
             model: self.endpoint_model.clone(),
             token_file: self.endpoint_token_file.clone(),
             token_pointer: self.endpoint_token_pointer.clone(),
             secret: self.endpoint_secret.clone(),
+            env: self.endpoint_token_env.clone(),
+        }
+    }
+
+    /// Takes the variable the credential names, the flags' or else the endpoint file's, out of
+    /// takt's environment and keeps its value, so no process takt starts inherits it. A name
+    /// that is no portable variable name, or a file that does not read, takes nothing; the
+    /// endpoint's own reading refuses it before any case opens. Called only while takt runs one
+    /// thread.
+    fn take_variable(&mut self) {
+        use takt::harness::{
+            EndpointFields, VariableValue, portable_variable_name, take_environment_variable,
         };
+        let file = self
+            .endpoint_file
+            .as_deref()
+            .and_then(|path| EndpointFields::read(path).ok());
+        let flags = self.fields();
+        let Some(name) = EndpointFields::variable(&flags, file.as_ref())
+            .filter(|name| portable_variable_name(name))
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        // SAFETY: takt has started no thread yet (its callers run before any is started), so
+        // nothing reads the environment while it changes; the name is non-empty and holds no
+        // `=` or NUL.
+        let value: Option<VariableValue> = unsafe { take_environment_variable(&name) };
+        if self.variable.is_none() {
+            self.variable = value;
+        }
+    }
+
+    /// The endpoint the session is pointed at: the flags over the file over the default under
+    /// `home`, a token file made absolute and checked to hold a token where its pointer points,
+    /// a secret's name checked by no read, a variable's name checked to be one, before any case
+    /// opens.
+    fn config(&self, home: Option<&Path>) -> Result<takt::harness::EndpointConfig> {
+        use takt::harness::{EndpointConfig, EndpointFields};
+        let flags = self.fields();
         let file = self
             .endpoint_file
             .as_deref()
@@ -2181,7 +2326,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         repo,
         scenario,
         declared_on,
-        looping,
+        mut looping,
     } = args;
     looping.check()?;
     let repo = repo
@@ -2381,6 +2526,95 @@ fn not_ready(story: &takt::frontier::Listed, all: &[takt::frontier::Listed]) -> 
     }
 }
 
+/// The store's frontier narrowed to the one story `takt run --story` names: its candidates and
+/// its active stories are the store's own, kept only when they are that story, and every other
+/// answer and write is the store's, so [`Run::take_next_as`] takes it exactly as it takes the
+/// frontier's next, or takes nothing when the frontier would not offer it.
+struct Named<'a> {
+    store: &'a Aep,
+    story: &'a str,
+}
+
+impl takt::Frontier for Named<'_> {
+    fn name(&self) -> &str {
+        self.store.name()
+    }
+
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        let mut candidates = self.store.candidates(repo)?;
+        candidates.retain(|id| id == self.story);
+        Ok(candidates)
+    }
+
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        let mut active = self.store.active(repo)?;
+        active.retain(|id| id == self.story);
+        Ok(active)
+    }
+
+    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
+        self.store.show(repo, id)
+    }
+
+    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
+        self.store.take(repo, id)
+    }
+
+    fn record_approval(
+        &self,
+        repo: &Path,
+        story: &str,
+        approval: &takt::case::Approval,
+    ) -> Result<()> {
+        self.store.record_approval(repo, story, approval)
+    }
+
+    fn record_test_result(
+        &self,
+        repo: &Path,
+        story: &str,
+        reference: &str,
+        at: &str,
+    ) -> Result<takt::frontier::Written> {
+        self.store.record_test_result(repo, story, reference, at)
+    }
+
+    fn implemented(&self, repo: &Path, story: &str) -> Result<takt::frontier::Written> {
+        self.store.implemented(repo, story)
+    }
+}
+
+/// The refusal of `takt run --story <story>` when the frontier narrowed to it took nothing and
+/// opened no case: why, read from the store as the take read it (on the base), by the frontier's
+/// own rule ([`takt::frontier::is_ready`], [`not_ready`]).
+fn story_not_taken(repo: &Path, store: &Aep, story: &str) -> Result<anyhow::Error> {
+    let all = store.list(repo)?;
+    let why = match all.iter().find(|listed| listed.id == story) {
+        None => format!("the store lists no {story}"),
+        Some(listed) if listed.kind != "story" => {
+            format!("{story} is a {}, not a story", listed.kind)
+        }
+        Some(listed) if listed.status == takt::frontier::TAKEN => format!(
+            "{story} is {}, and no open case of it is under the tree to resume",
+            takt::frontier::TAKEN
+        ),
+        Some(listed) if listed.status != takt::frontier::READY => format!(
+            "{story} is {}, not {}",
+            listed.status,
+            takt::frontier::READY
+        ),
+        Some(listed) if !takt::frontier::is_ready(listed, &all) => format!(
+            "{story} is {} but not ready ({})",
+            takt::frontier::READY,
+            not_ready(listed, &all)
+        ),
+        Some(_) => format!("{story} is ready but was not taken, as the line above says"),
+    };
+    Ok(anyhow!(
+        "--story {story}: {why}; the frontier would not take it, so no case was opened"
+    ))
+}
+
 /// The first eight characters of a commit id.
 fn short(revision: &str) -> &str {
     &revision[..8.min(revision.len())]
@@ -2480,20 +2714,28 @@ struct Resuming {
 /// The case a run will resume, read without resuming it: the one `--case` names, when its
 /// directory holds a case; for a run with neither `--case` nor `--intent`, the open case of a
 /// story being worked, as [`Run::next_to_resume`] names it, the one case such a run resumes, a
-/// decision that does not read said on `out`. `None` when the run opens a case, or when
-/// `--case` names none (`Run::resume` refuses that). Nothing is checked out and nothing
-/// written.
+/// decision that does not read said on `out`; for a run given `--story`, that story's open case
+/// alone, the first not finished in case order ([`takt::case::resumable`]), whatever other case
+/// is open. `None` when the run opens a case, or when `--case` names none (`Run::resume`
+/// refuses that). Nothing is checked out and nothing written.
 fn case_to_resume(
     repo: &Path,
     case: Option<&str>,
+    story: Option<&str>,
     intent: bool,
     out: &mut dyn Write,
 ) -> Result<Option<Resuming>> {
     let (id, story) = match (case, intent) {
         (Some(id), false) => (id.to_owned(), None),
-        (None, false) => match Run::next_to_resume(repo, &Aep::default(), out)? {
-            Some((id, story)) => (id, Some(story)),
-            None => return Ok(None),
+        (None, false) => match story {
+            Some(story) => match takt::case::resumable(repo, &[story.to_owned()], out)? {
+                Some((id, story)) => (id, Some(story)),
+                None => return Ok(None),
+            },
+            None => match Run::next_to_resume(repo, &Aep::default(), out)? {
+                Some((id, story)) => (id, Some(story)),
+                None => return Ok(None),
+            },
         },
         (_, true) => return Ok(None),
     };
@@ -3113,11 +3355,9 @@ mod tests {
         );
     }
 
-    /// The delivery protocol of this repository, which declares `pr.open` and `ci.read`.
-    const DELIVERY_PROTOCOL: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../protocols/story-delivery/1.yaml"
-    );
+    /// The delivery protocol, the engineering protocols' built-in, which declares `pr.open` and
+    /// `ci.read`.
+    const DELIVERY_PROTOCOL: &str = "story.delivery/1";
 
     /// `takt run` on the delivery protocol with no harness and a passing test command, `extra`
     /// last.

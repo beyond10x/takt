@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuilds the protocol viewer from protocols/*/*.yaml and publishes it at /takt/protocols/ on the
+# Rebuilds the protocol viewer from the engineering protocols' documents takt pins and publishes it at /takt/protocols/ on the
 # gh-pages branch. Run from anywhere inside the repository after a protocol changes:
 #   docs/site/publish-protocols.sh            build, commit to gh-pages and push gh-pages only
 #   docs/site/publish-protocols.sh --no-push  build and commit, push nothing
@@ -25,8 +25,8 @@ if git diff --cached --quiet; then
   echo "protocol viewer unchanged at $rev"
 else
   msg=$(mktemp)
-  printf '%s\n' "Protocol viewer rebuilt from protocols/ at $rev" '' \
-    "- Built by docs/site/publish-protocols.sh from the protocol/1 files at $rev." > "$msg"
+  printf '%s\n' "Protocol viewer rebuilt at $rev" '' \
+    "- Built by docs/site/publish-protocols.sh from the protocol/1 documents takt pins at $rev." > "$msg"
   b10x-gates bot -- commit -F "$msg"
   rm -f "$msg"
   [ "$push" = 1 ] && b10x-gates bot -- push origin HEAD:refs/heads/gh-pages

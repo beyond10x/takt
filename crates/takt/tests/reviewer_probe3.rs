@@ -14,10 +14,7 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, Validator};
 use takt::{Run, RunOptions, Stop};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -794,22 +791,10 @@ fn probe3_f2_main_has_fix_and_more() {
 #[test]
 fn probe3_improvement_protocols_open() {
     for (protocol, inputs) in [
-        (
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../protocols/self-improvement/1.yaml"
-            ),
-            vec![("surface", "non_judge")],
-        ),
-        (
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../../protocols/loop-improvement/1.yaml"
-            ),
-            vec![],
-        ),
+        ("self.improvement/1", vec![("surface", "non_judge")]),
+        ("loop.improvement/1", vec![]),
     ] {
-        let name = format!("p3-imp-{}", protocol.len());
+        let name = format!("p3-imp-{}", protocol.replace(['.', '/'], "-"));
         let tree = scratch(&name);
         let validators: Vec<Box<dyn Validator>> = Vec::new();
         let mut opts = options(protocol, &name, 1);

@@ -99,6 +99,6 @@ In R0, turns 1 to 3 were performed by the agents, who recorded the evidence by h
 validators record the evidence of an L1 turn. So far that has happened only in the trials, in
 scratch state; the operator's installed takt has not yet promoted a revision through a turn.
 
-Sources: `design:recursive-self-improvement`, `protocols/self-improvement/1.yaml`,
+Sources: `design:recursive-self-improvement`, engineering-protocols 0.10.0 `protocols/self-improvement/1.yaml`,
 `takt run --help`, `takt promote --help`, `docs/runs/2026-10-19-self-improvement-trials/README.md`,
 `docs/design/takt.md` § 6.

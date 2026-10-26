@@ -30,7 +30,7 @@ every step validated by Canon over evidence. This file is for agents working on 
 | `crates/takt` | the library `b10x-takt` (`use takt::…`): protocol loading (`protocol`), case files, the decision the governor of Loom renders and the evidence records (`case`, `evidence`), the loop (`run`, on Commission's runtime of `loom-sdk`, each harness session through its session executor `b10x-loom-session-executor`), the seams and their first adapters (`harness`, `frontier`, `validator`, `forge`), the git reads and writes (`git`), the run record read back (`scorecard`, `trace`, `report`) |
 | `crates/takt/tests`, `crates/takt-cli/tests` | integration tests and their fixtures |
 | `crates/takt-cli` | the binary `takt` |
-| `protocols/` | this repository's `protocol/1` documents: story delivery (embedded in the binary as `story.delivery/1`), self-improvement, loop improvement |
+| `protocols/` | `loop-improvement/metrics.yaml` only, the loop metrics' definitions; the protocols takt runs (`story.delivery/1`, `self.improvement/1`, `loop.improvement/1`) are the engineering protocols' built-ins (`b10x-canon-engineering`) |
 | `ess/` | the ESS specification of takt's nouns and their relations |
 | `docs/design/` | design documents |
 | `docs/waves/`, `docs/runs/`, `docs/handoff/` | wave pages, recorded runs, handoff notes |
@@ -56,11 +56,13 @@ cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
 docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:<version> .   # the container image; never pushed to a registry
 ```
 
-The image's mount contract (`/workspace`, `/config/run.toml`, `/config/endpoint.toml`) is in
-`README.md` § Container. `run.toml` is `takt run --config` (`crates/takt/src/run_config.rs`); a
+The image's mount contract (`/workspace`, `/config/agent.yaml`, `/config/endpoint.toml`) is in
+`README.md` § Container. `agent.yaml` is `takt run --config` (`crates/takt/src/run_config.rs`); a
 key added there is a flag of `takt run` first, and the README table moves with it. `Dockerfile`
-pins `aep`, `b10x-harness` and `ess` by version and SHA256: move `ESS_VERSION` with `check.yml`,
-and `HARNESS_VERSION` with the harness wire the `Cargo.lock` holds.
+pins `aep`, `b10x-harness`, `b10x-gates` and `ess` by version and SHA256: move `ESS_VERSION`
+with `check.yml`, `HARNESS_VERSION` with the harness wire the `Cargo.lock` holds, and
+`GATES_VERSION` to the newest gates release. The toolchain under `/opt/rust` stays unwritable
+by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
 
 ## Rules
 

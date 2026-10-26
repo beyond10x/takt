@@ -1,5 +1,5 @@
-//! The improvement loops as data: `protocols/self-improvement/1.yaml` (one turn improving takt)
-//! and `protocols/loop-improvement/1.yaml` (one turn improving that loop) are loaded, validated
+//! The improvement loops as data: the built-in `self-improvement@1` (one turn improving takt)
+//! and the built-in `loop-improvement@1` (one turn improving that loop) are loaded, validated
 //! and compiled by Canon, and cases on them are driven record by record to the outcomes the
 //! design names: a fix verified by another run, merged under the authority its surface needs,
 //! with no regression and promoted is accepted; a fix that leaves the finding reproducing is
@@ -23,14 +23,8 @@ use takt::evidence::Record;
 use takt::improvement::{FindingFile, ScenarioReproduce, ScenarioVerify, ScorecardCompare};
 use takt::{CaseDir, Decision, LoadedProtocol};
 
-const SELF_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/self-improvement/1.yaml"
-);
-const LOOP_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/loop-improvement/1.yaml"
-);
+const SELF_IMPROVEMENT: &str = "self.improvement/1";
+const LOOP_IMPROVEMENT: &str = "loop.improvement/1";
 
 /// The producer that delivered the candidate, and the one that verifies a loop change.
 const DELIVERER: &str = "developer-run";
@@ -94,8 +88,8 @@ fn scratch(name: &str) -> Scratch {
 /// verifier independent by hand, as the loop protocol's opening does not yet (story:loop-scorecard).
 fn open(tree: &Path, protocol: &str, id: &str, inputs: &[(&str, &str)]) -> CaseDir {
     let turn = protocol == SELF_IMPROVEMENT;
-    let protocol = LoadedProtocol::from_file(Path::new(protocol))
-        .expect("the protocol loads, validates and compiles");
+    let protocol =
+        LoadedProtocol::builtin(protocol).expect("the protocol loads, validates and compiles");
     let inputs: Vec<(String, String)> = inputs
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -174,13 +168,13 @@ fn status<'a>(section: &'a std::collections::BTreeMap<String, String>, id: &str)
 
 #[test]
 fn both_loops_load_as_protocols() {
-    let turn = LoadedProtocol::from_file(Path::new(SELF_IMPROVEMENT)).expect("loads");
+    let turn = LoadedProtocol::builtin(SELF_IMPROVEMENT).expect("loads");
     assert_eq!(turn.id, "self.improvement/1");
     assert_eq!(
         turn.artifacts,
         ["finding", "baseline", "candidate", "promotion"]
     );
-    let meta = LoadedProtocol::from_file(Path::new(LOOP_IMPROVEMENT)).expect("loads");
+    let meta = LoadedProtocol::builtin(LOOP_IMPROVEMENT).expect("loads");
     assert_eq!(meta.id, "loop.improvement/1");
     assert!(meta.actions.contains(&"loop.merge".to_owned()));
 }

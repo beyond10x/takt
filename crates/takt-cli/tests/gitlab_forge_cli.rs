@@ -10,11 +10,8 @@ use std::process::Command;
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
 
-/// The delivery protocol of this repository, which declares `pr.open` and `ci.read`.
-const DELIVERY_PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The delivery protocol, the engineering protocols' built-in, which declares `pr.open` and `ci.read`.
+const DELIVERY_PROTOCOL: &str = "story.delivery/1";
 
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \

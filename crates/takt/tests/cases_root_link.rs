@@ -18,11 +18,8 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-/// The delivery protocol, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The delivery protocol, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// Where the link made in the cases directory's place points: `../x` as written beside the
 /// copy, which from `.engineering/` names `x` in the tree, where nothing is; and `../../x`, the

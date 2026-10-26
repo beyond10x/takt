@@ -9,10 +9,7 @@ use takt::case::{CaseDir, grant};
 use takt::evidence::Record;
 use takt::{Decision, LoadedProtocol};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -63,7 +60,7 @@ fn scratch(name: &str) -> Scratch {
 }
 
 fn protocol() -> LoadedProtocol {
-    LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads")
+    LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads")
 }
 
 fn record(n: usize, kind: &str, result: &str, revision: &str) -> Record {

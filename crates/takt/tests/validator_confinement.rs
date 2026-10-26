@@ -24,11 +24,8 @@ use takt::harness::{ClaudeCode, Harness, StepContext, StepReport};
 use takt::validator::{CiRead, GateRun, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-/// The delivery protocol, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The delivery protocol, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The credentials no child but the forge's receives, set in the child test process below.
 const CREDENTIALS: [&str; 7] = [

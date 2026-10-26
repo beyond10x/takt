@@ -468,11 +468,8 @@ fn git(tree: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// The delivery protocol, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The delivery protocol, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The brief: a step event carries the four token components the harness reports beside
 /// their sum. The harness parses all four from `claude`'s `usage` today

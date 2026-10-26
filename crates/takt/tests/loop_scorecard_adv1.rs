@@ -1,7 +1,7 @@
 //! Adversary pass 1 on the loop scorecard (`crates/takt/src/loop_scorecard.rs`): cases that
 //! drive the three loop validators and the row reader against what the unit says of them (its
 //! module documentation, the ESS prose in `ess/domains/takt.yaml`, the protocol
-//! `protocols/loop-improvement/1.yaml`). Each case is named for the defect it shows.
+//! the built-in `loop-improvement@1`). Each case is named for the defect it shows.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,10 +13,7 @@ use takt::loop_scorecard::{
 use takt::validator::Validator;
 use takt::{CaseDir, LoadedProtocol};
 
-const LOOP_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/loop-improvement/1.yaml"
-);
+const LOOP_IMPROVEMENT: &str = "loop.improvement/1";
 
 /// Definitions with one target: accepted share at least three quarters.
 const DEFINED: &str = "format: takt-loop-metrics/1
@@ -237,7 +234,7 @@ fn run_record(dir: &Path, tokens: Option<u64>) {
 }
 
 fn loop_case(tree: &Path, id: &str, baseline: &str, candidate: &str) -> CaseDir {
-    let protocol = LoadedProtocol::from_file(Path::new(LOOP_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(LOOP_IMPROVEMENT).expect("loads");
     let mut case =
         CaseDir::open(tree, protocol, id, "one turn on the loop", &[]).expect("the case opens");
     case.set_revision("loop_baseline", baseline)

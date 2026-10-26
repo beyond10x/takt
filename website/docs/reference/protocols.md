@@ -5,10 +5,10 @@ description: The protocols takt runs and the ones it holds for its own improveme
 
 # Protocols
 
-The [protocol viewer](pathname:///takt/protocols/) shows every `protocol/1` document under
-`protocols/`, `story.delivery/1` among them: its actions, evidence kinds, claims, obligations and
-outcomes as tables, and as one graph of how they connect. It is built from the protocol files on
-every site build.
+The [protocol viewer](pathname:///takt/protocols/) shows takt's three protocols, `story.delivery/1`
+among them: their actions, evidence kinds, claims, obligations and outcomes as tables, and as one
+graph of how they connect. It is built on every site build from the documents of the
+`b10x-canon-engineering` release takt pins.
 
 ## Built in
 
@@ -16,9 +16,10 @@ every site build.
 
 | id | from | a case is |
 |---|---|---|
-| `story.delivery/1` | this repository, embedded in the binary | one planning-store story |
-| `self.improvement/1` (from 0.2.2) | this repository, embedded in the binary | one improvement turn on takt |
+| `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story |
+| `self.improvement/1` (listed as `self-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |
+| `loop.improvement/1` (listed as `loop-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one turn on the improvement loop itself |
 | `eval-gated-change/1`, `incident-response/1`, `ml-experiment/1`, `support-triage/1` | `b10x-canon-engineering` | see [Engineering protocols](https://beyond10x.github.io/engineering-protocols/) |
 
 `--protocol` also takes a `protocol/1` file, read from the directory `takt` runs in.
@@ -27,10 +28,10 @@ every site build.
 
 | protocol | a case is | outcomes |
 |---|---|---|
-| `self.improvement/1` (`protocols/self-improvement/1.yaml`) | one improvement turn on takt | accepted, declined, unreproducible, abandoned |
-| `loop.improvement/1` (`protocols/loop-improvement/1.yaml`) | one turn on the improvement loop itself | accepted, declined, abandoned |
+| `self.improvement/1` | one improvement turn on takt | accepted, declined, unreproducible, abandoned |
+| `loop.improvement/1` | one turn on the improvement loop itself | accepted, declined, abandoned |
 
-`takt run --protocol protocols/loop-improvement/1.yaml --intent "<text>" --input
+`takt run --protocol loop.improvement/1 --intent "<text>" --input
 loop_baseline=<full commit id>` opens a `loop.improvement/1` case, and validators drive it (`loop.measure`,
 `loop.definition.check`, `loop.compare`).
 
@@ -40,7 +41,7 @@ end `unreproducible` or `declined`. From 0.2.2 there are also `candidate.merge`,
 `candidate.merge_judge_surface` and `binary.promote`, so a turn can reach `accepted`. How an
 operator runs one: [The loop](../self-improvement/the-loop.md#running-a-turn).
 
-Sources: `takt protocols`, `protocols/`, `crates/takt/src/protocol.rs`,
+Sources: `takt protocols`, engineering-protocols 0.10.0 `protocols/`, `crates/takt/src/protocol.rs`,
 `crates/takt-cli/src/main.rs` (`--input`), `crates/takt/src/loop_scorecard.rs`,
 `crates/takt/tests/improvement_protocols.rs`, `design:recursive-self-improvement` § The loops as
 protocols.

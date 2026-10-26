@@ -1,5 +1,5 @@
 //! The loop scorecard and the three validators that drive a `loop.improvement/1` case
-//! (`protocols/loop-improvement/1.yaml`): `loop.measure` over the recorded `self.improvement`
+//! (the built-in `loop-improvement@1`): `loop.measure` over the recorded `self.improvement`
 //! cases under `.engineering/cases/`, one row per turn and the figures computed from the rows;
 //! `loop.definition.check` comparing the metric definitions at the candidate with those at the
 //! baseline; `loop.compare` comparing the figures of the turns filed after the candidate merged
@@ -18,10 +18,7 @@ use takt::loop_scorecard::{
 use takt::validator::Validator;
 use takt::{CaseDir, LoadedProtocol, Run, RunOptions};
 
-const LOOP_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/loop-improvement/1.yaml"
-);
+const LOOP_IMPROVEMENT: &str = "loop.improvement/1";
 
 /// The recorded first improvement turn, as the run record copied it.
 const TURN_1: &str = concat!(
@@ -286,7 +283,7 @@ impl Harness for NoHarness {
 /// Opens a loop case `id` on `tree` with `loop_baseline` at `baseline` and `loop_candidate` at
 /// `candidate`, the loop validators' producers declared independent of the case's work.
 fn loop_case(tree: &Path, id: &str, baseline: &str, candidate: &str) -> CaseDir {
-    let protocol = LoadedProtocol::from_file(Path::new(LOOP_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(LOOP_IMPROVEMENT).expect("loads");
     let mut case =
         CaseDir::open(tree, protocol, id, "one turn on the loop", &[]).expect("the case opens");
     case.set_revision("loop_baseline", baseline)
@@ -1093,7 +1090,7 @@ fn a_planted_replace_ref_changes_no_read_at_the_base_and_the_restore_removes_it(
 /// the artifacts its claims read.
 #[test]
 fn the_validators_name_the_protocols_actions_kinds_and_subjects() {
-    let protocol = LoadedProtocol::from_file(Path::new(LOOP_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(LOOP_IMPROVEMENT).expect("loads");
     for (validator, action, kind, subject) in [
         (
             &LoopMeasure as &dyn Validator,

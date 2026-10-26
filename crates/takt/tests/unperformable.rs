@@ -18,10 +18,7 @@ use takt::scorecard::{HeldOut, Row};
 use takt::validator::{ChangeRead, CiRead, GateRun, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
