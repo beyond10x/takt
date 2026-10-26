@@ -340,7 +340,11 @@ fn a_yaml_file_sets_the_run_as_toml_does() {
         let output = world.run(&config, &[]);
         assert_eq!(output.status.code(), Some(3), "{name}: {}", text(&output));
         assert!(!world.started().exists(), "b10x-harness was not started");
-        assert_eq!(world.opened()[0]["endpoint"], configured_endpoint(), "{name}");
+        assert_eq!(
+            world.opened()[0]["endpoint"],
+            configured_endpoint(),
+            "{name}"
+        );
     }
 }
 

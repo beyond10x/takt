@@ -13,11 +13,41 @@ use anyhow::{Context as _, Result, anyhow};
 /// The `format` of the agent document Loom writes to `/config/agent.yaml`.
 pub const LOOM_AGENT_FORMAT: &str = "loom.agent/1";
 
-/// A `loom.agent/1` document as takt reads it: its `takt` member alone. Its other members are
-/// Loom's, which Loom checks before it mounts the document; takt does not read them.
+/// A `loom.agent/1` document as takt reads it for the lines of its refusals: its `takt` member
+/// alone, the members checked against [`LOOM_AGENT_MEMBERS`] beforehand.
 #[derive(serde::Deserialize)]
 struct LoomAgentDocument {
     takt: Option<RunConfig>,
+}
+
+/// The members of a `loom.agent/1` document Loom declares (Loom 0.42.0, `loom-sdk` `agent.rs`
+/// `spec`). takt reads none of them; a member that is neither one of these nor `takt` is refused,
+/// so a run field written beside `format`, or `takt` misspelt, is not dropped.
+pub const LOOM_AGENT_MEMBERS: [&str; 13] = [
+    "format", "agent", "model", "session", "loops", "states", "bindings", "channel", "writes",
+    "policy", "expose", "runtime", "deploy",
+];
+
+/// Whether `value` or anything in it carries a YAML tag, which neither takt nor Loom declares.
+fn tagged(value: &serde_yaml_ng::Value) -> bool {
+    match value {
+        serde_yaml_ng::Value::Tagged(_) => true,
+        serde_yaml_ng::Value::Sequence(items) => items.iter().any(tagged),
+        serde_yaml_ng::Value::Mapping(mapping) => mapping
+            .iter()
+            .any(|(key, item)| tagged(key) || tagged(item)),
+        _ => false,
+    }
+}
+
+/// The run configuration `value` holds, its types as strict as TOML's: a number or a boolean
+/// where a string field is, or a fraction where `iterations` is, is refused. YAML reads any
+/// scalar as a string when a string is asked for; JSON's reader does not.
+fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .ok_or_else(|| refused(path, None))
 }
 
 /// The fields a run configuration file may set, each one a `takt run` flag's: `iterations`,
@@ -72,19 +102,52 @@ fn from_toml(path: &Path, text: &str) -> Result<RunConfig> {
 
 /// The run configuration in `text`, YAML: a `loom.agent/1` document's `takt` member, nothing
 /// when it has none, or else the whole document. A document with a `format` other than
-/// `loom.agent/1` is refused without repeating it.
+/// `loom.agent/1`, a member of one that is neither Loom's nor `takt`, or a YAML tag anywhere is
+/// refused without repeating what is written.
 fn from_yaml(path: &Path, text: &str) -> Result<RunConfig> {
     let line = |error: &serde_yaml_ng::Error| error.location().map(|at| at.line());
     let document: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(text).map_err(|error| refused(path, line(&error)))?;
-    let format = document.as_mapping().and_then(|mapping| mapping.get("format"));
+    if tagged(&document) {
+        return Err(anyhow!(
+            "the run configuration file {} is refused: it carries a YAML tag, which no member \
+             declares",
+            path.display()
+        ));
+    }
+    let format = document
+        .as_mapping()
+        .and_then(|mapping| mapping.get("format"));
     match format {
         None if document.is_null() => Ok(RunConfig::default()),
-        None => serde_yaml_ng::from_str(text).map_err(|error| refused(path, line(&error))),
+        None => {
+            let _: RunConfig =
+                serde_yaml_ng::from_str(text).map_err(|error| refused(path, line(&error)))?;
+            strict(path, &document)
+        }
         Some(format) if format.as_str() == Some(LOOM_AGENT_FORMAT) => {
+            let mut keys = document
+                .as_mapping()
+                .into_iter()
+                .flatten()
+                .map(|(key, _)| key);
+            if keys.any(|key| {
+                key.as_str()
+                    .is_none_or(|key| key != "takt" && !LOOM_AGENT_MEMBERS.contains(&key))
+            }) {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: a {LOOM_AGENT_FORMAT} document \
+                     holds a member that is neither one of Loom's ({}) nor `takt`",
+                    path.display(),
+                    LOOM_AGENT_MEMBERS.join(", ")
+                ));
+            }
             let agent: LoomAgentDocument =
                 serde_yaml_ng::from_str(text).map_err(|error| refused(path, line(&error)))?;
-            Ok(agent.takt.unwrap_or_default())
+            match (agent.takt, document.get("takt")) {
+                (Some(_), Some(takt)) => strict(path, takt),
+                _ => Ok(RunConfig::default()),
+            }
         }
         Some(_) => Err(anyhow!(
             "the run configuration file {} is refused: its `format` is not {LOOM_AGENT_FORMAT}, \
@@ -111,10 +174,12 @@ impl RunConfig {
         }
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("the run configuration file {}", path.display()))?;
+        // A byte order mark opens no member: it is read past in either form.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let mut config = if extension == Some("toml") {
-            from_toml(path, &text)?
+            from_toml(path, text)?
         } else {
-            from_yaml(path, &text)?
+            from_yaml(path, text)?
         };
         if let Some(file) = config.endpoint_file.take() {
             config.endpoint_file = Some(match path.parent() {
@@ -237,7 +302,11 @@ mod tests {
         for (name, file, text) in [
             ("yaml-list", "run.yaml", "- MARKER-list\n"),
             ("yaml-type", "run.yaml", "iterations: MARKER-type\n"),
-            ("loom-type", "agent.yaml", "format: loom.agent/1\ntakt: MARKER-scalar\n"),
+            (
+                "loom-type",
+                "agent.yaml",
+                "format: loom.agent/1\ntakt: MARKER-scalar\n",
+            ),
             ("ext", "run.conf", "iterations = 1\n"),
             ("no-ext", "run", "iterations = 1\n"),
         ] {

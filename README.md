@@ -137,7 +137,11 @@ loads a local build. The container runs
 A `LoomAgent` of the `Command` variant gets `/config/agent.yaml` from its `spec.agent`, written
 verbatim. A Loom release that does not admit a `takt` member in `loom.agent/1` refuses the
 resource, so there the document carries no `takt` member and the run's settings are flags in
-`spec.command.args`. Arguments after the image name are flags of `takt run` and win over the
+`spec.command.args`. Loom keeps `/config` for its own ConfigMap (`agent.yaml`, `routes.yaml`,
+`connectors.toml`), so under Loom there is no `/config/endpoint.toml`: the endpoint is the
+flags `--endpoint-base-url`, `--endpoint-wire openai-responses`, `--endpoint-model` and
+`--endpoint-token-env <NAME>`, the variable from the agent's `spec.secretRef`. Arguments
+after the image name are flags of `takt run` and win over the
 file. The run's outcome is in `/workspace/.engineering/cases` and the exit code
 (`takt run --help`); with `forge: none` the delivery stays a branch in `/workspace`. A gates
 policy for `b10x-gates` comes from the deployment (`B10X_GATES_POLICY`), never the image.

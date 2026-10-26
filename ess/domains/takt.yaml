@@ -539,16 +539,21 @@ types:
   # file and the line and repeating no value. A YAML document whose `format` is `loom.agent/1`,
   # the agent document Loom writes to `/config/agent.yaml` for a `LoomAgent` of the `Command`
   # variant, gives these fields in its `takt` member and nothing without one; its other members
-  # are Loom's and are not read; a YAML document of any other `format` is refused. A flag given
+  # must be Loom's thirteen, which takt does not read, and any other is refused, as is a YAML
+  # tag anywhere, a value of another type than its field's (YAML read as strictly as TOML) and a
+  # YAML document of any other `format`; a leading byte order mark is read past. A flag given
   # on the command line wins over the file, the file over the flag's default. A relative
   # `endpoint_file` is read beside the file; the endpoint file holds the credential's reference,
   # never a token, and is read only when the harness in effect is `harness`, a flag's or the
   # file's. A container started from takt's image reads it at `/config/agent.yaml`.
-  # read from: crates/takt/src/run_config.rs:26-42
-  # read from: crates/takt/src/run_config.rs:49-52
-  # read from: crates/takt/src/run_config.rs:119-123
-  # read from: crates/takt/src/run_config.rs:84-89
-  # read from: crates/takt/src/run_config.rs:105-106
+  # read from: crates/takt/src/run_config.rs:56-72
+  # read from: crates/takt/src/run_config.rs:79-82
+  # read from: crates/takt/src/run_config.rs:184-188
+  # read from: crates/takt/src/run_config.rs:128-143
+  # read from: crates/takt/src/run_config.rs:168-169
+  # read from: crates/takt/src/run_config.rs:23-29
+  # read from: crates/takt/src/run_config.rs:31-50
+  # read from: crates/takt/src/run_config.rs:177-178
   # read from: crates/takt-cli/src/main.rs:629-640
   # read from: crates/takt-cli/src/main.rs:656-660
   - name: takt.work.RunConfiguration

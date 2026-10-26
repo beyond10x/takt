@@ -119,7 +119,12 @@ fn case_names(repo: &Path) -> Vec<String> {
     }
     let mut names: Vec<String> = fs::read_dir(&dir)
         .expect("a readable cases directory")
-        .map(|e| e.expect("an entry").file_name().to_string_lossy().into_owned())
+        .map(|e| {
+            e.expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
         .collect();
     names.sort();
     names
@@ -158,7 +163,13 @@ fn a_refused_story_leaves_the_tree_on_the_branch_it_was_on() {
 /// commit, no change in the tree, the store as it was.
 #[test]
 fn a_refused_story_from_the_base_writes_nothing() {
-    for story in ["story:no-such", "second-ready", "", "story:sécond-ready", "story:blocked-one"] {
+    for story in [
+        "story:no-such",
+        "second-ready",
+        "",
+        "story:sécond-ready",
+        "story:blocked-one",
+    ] {
         let repo = repository(&format!("refusal-writes-nothing-{}", story.len()));
         let head = git_out(&repo, &["rev-parse", "HEAD"]);
         let (code, out, err) = run(&repo, &["--story", story]);
@@ -167,7 +178,11 @@ fn a_refused_story_from_the_base_writes_nothing() {
         assert!(case_names(&repo).is_empty(), "{story:?}");
         assert_eq!(branch(&repo), "main", "{story:?}");
         assert_eq!(git_out(&repo, &["rev-parse", "HEAD"]), head, "{story:?}");
-        assert_eq!(git_out(&repo, &["branch", "--list", "takt/*"]), "", "{story:?}");
+        assert_eq!(
+            git_out(&repo, &["branch", "--list", "takt/*"]),
+            "",
+            "{story:?}"
+        );
         assert_eq!(git_out(&repo, &["status", "--porcelain"]), "", "{story:?}");
         assert_eq!(status(&repo, "story:second-ready"), "proposed", "{story:?}");
     }
