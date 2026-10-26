@@ -2296,8 +2296,9 @@ mod on_signal {
     }
 
     /// Unlinks every staged file and removes its directory, then ends takt by `signal` with its
-    /// default disposition. Only async-signal-safe calls: atomic loads, `unlink`, `rmdir`,
-    /// `sigaction`, `raise`.
+    /// default disposition; as a container's PID 1, which ignores a default-action signal it
+    /// sends itself, by `_exit(128 + signal)`. Only async-signal-safe calls: atomic loads,
+    /// `unlink`, `rmdir`, `sigaction`, `pthread_sigmask`, `raise`, `_exit`.
     extern "C" fn handle(signal: libc::c_int) {
         for slot in &STAGED {
             let paths = slot.load(Ordering::SeqCst);
@@ -2317,7 +2318,12 @@ mod on_signal {
             let mut default: libc::sigaction = std::mem::zeroed();
             default.sa_sigaction = libc::SIG_DFL;
             libc::sigaction(signal, &raw const default, std::ptr::null_mut());
+            let mut unblock: libc::sigset_t = std::mem::zeroed();
+            libc::sigemptyset(&raw mut unblock);
+            libc::sigaddset(&raw mut unblock, signal);
+            libc::pthread_sigmask(libc::SIG_UNBLOCK, &raw const unblock, std::ptr::null_mut());
             libc::raise(signal);
+            libc::_exit(128 + signal);
         }
     }
 }

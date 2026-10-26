@@ -160,9 +160,9 @@ Both loops are `protocol/1` documents, validated and compiled by Canon like any 
 
 | level | protocol | case | outcomes |
 |---|---|---|---|
-| L0 | `protocols/story-delivery/1.yaml` | one story | accepted, abandoned |
-| L1 | `protocols/self-improvement/1.yaml` | one improvement turn on takt | accepted, declined, unreproducible, abandoned |
-| L2 | `protocols/loop-improvement/1.yaml` | one turn on the loop itself | accepted, declined, abandoned |
+| L0 | `story.delivery/1` (engineering-protocols 0.10.0) | one story | accepted, abandoned |
+| L1 | `self.improvement/1` (engineering-protocols 0.10.0) | one improvement turn on takt | accepted, declined, unreproducible, abandoned |
+| L2 | `loop.improvement/1` (engineering-protocols 0.10.0) | one turn on the loop itself | accepted, declined, abandoned |
 
 `self.improvement/1` has artifacts `finding`, `baseline` (the promoted revision), `candidate` (the
 fix) and `promotion`, so claims about the baseline survive commits to the candidate. Its input

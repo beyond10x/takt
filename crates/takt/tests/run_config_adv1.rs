@@ -133,3 +133,24 @@ fn a_byte_order_mark_loom_agent_document_gives_its_takt_member() {
     let read = RunConfig::read(&agent).map_err(|error| format!("{error:#}"));
     assert_eq!(read.map(|config| config.iterations), Ok(Some(2)));
 }
+
+/// The wave-37 review: `strict` reads YAML through JSON, which has no infinity or NaN, so
+/// `hours: .inf` came back as no `hours` at all, an unbounded run where TOML's `hours = inf`
+/// reaches `--hours`' own check. A number that is not finite is refused at the read.
+#[test]
+fn a_yaml_number_that_is_not_finite_is_refused_not_dropped() {
+    for (index, yaml) in [
+        "hours: .inf\n",
+        "hours: -.inf\n",
+        "hours: .nan\n",
+        "format: loom.agent/1\ntakt:\n  hours: .inf\n",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let path = file(&format!("finite-{index}"), "run.yaml", yaml);
+        assert!(RunConfig::read(&path).is_err(), "{yaml:?} was read");
+    }
+    let path = file("finite-ok", "run.yaml", "hours: 1.5\n");
+    assert_eq!(RunConfig::read(&path).expect("read").hours, Some(1.5));
+}

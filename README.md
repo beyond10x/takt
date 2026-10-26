@@ -184,10 +184,11 @@ name in your secrets store (`--endpoint-secret <namespace>/<name>`), handed to b
 by name, which the harness resolves; takt reads no secret; or an environment variable's name
 (`--endpoint-token-env <NAME>`, the file's `env = "<NAME>"`), on the `openai-responses` wire
 only until the session executor can pass an API-key file. takt takes that variable out of its
-environment before it starts anything, so no process it starts sees it, overwrites its value
-in its own `/proc/<pid>/environ` on Linux with glibc, and stages it as a token file of mode
-0600 in a new directory of mode 0700 under `$XDG_RUNTIME_DIR`, `/dev/shm` or the temporary
-directory, the first b10x-harness's token-file reader accepts, removed when the run ends, by
+environment before it starts anything, so no process it starts sees it (except, under
+`--confinement substrate` outside a delegated cgroup, `systemd-run` and the takt it re-runs),
+overwrites its value in its own `/proc/<pid>/environ` on Linux with glibc, and stages it as
+a token file of mode 0600 in a new directory of mode 0700 under `$XDG_RUNTIME_DIR`,
+`/dev/shm` or the temporary directory, the first b10x-harness's token-file reader accepts, removed when the run ends, by
 SIGTERM, SIGINT or SIGHUP too; the case records the variable's name only. Your
 claude.ai token goes to the default base URL only, so another base URL needs a credential of
 its own; a base URL is `https://`, or `http://` to a loopback host, with no userinfo, query or
