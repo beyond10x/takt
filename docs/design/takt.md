@@ -20,11 +20,11 @@ The name: takt time is the pace at which units of work are finished. One run is 
 
 | foundation | what it gives | release |
 |---|---|---|
-| Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.41.0 (`Cargo.toml`) |
+| Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.43.0 (`Cargo.toml`) |
 | Canon | `protocol/1`; `evaluate` is a pure function from protocol, case snapshot, evidence records, authority and instant to claims (TRUE, FALSE, UNKNOWN), obligations, admissible actions and legitimate outcomes, with an explanation; evidence is bound to the revision it was observed on. takt reaches it through Loom's governor and calls no `b10x_canon::eval` itself (`crates/takt/tests/no_own_evaluation.rs`) | `b10x-canon` 0.6.0 |
 | Engineering protocols | `software.change/1` and the other engineering protocols as Canon documents, validated by Canon; assertion providers and the gates command line | `b10x-canon-engineering` 0.9.0 |
 | AEP | the planning store: stories, scope, waves derived from scope, evidence on a story | `aep` 0.74.0 |
-| metaharness | the harness sessions Loom's session executor starts: Claude Code, Codex or b10x-harness (`--harness claude\|codex\|harness`), each working in a scratch copy of the case tree and proposing its change | `metaharness` 0.15.0 (`Cargo.lock`) |
+| metaharness | the harness sessions Loom's session executor starts: Claude Code, Codex or b10x-harness (`--harness claude\|codex\|harness`), each working in a scratch copy of the case tree and proposing its change | `metaharness` 0.19.0 (`Cargo.lock`) |
 
 ADR 0090 (Loom) and ADR 0099 put the runtime in Loom, and the owner's decision of 2026-10-20 has
 Loom reach agent harnesses only through metaharness. takt keeps what is its own: validators and
@@ -55,11 +55,11 @@ Each part of the loop and what performs it now:
 
 | part | performed by | held in |
 |---|---|---|
-| the step | Commission's runtime of loom-sdk: `run_until_blocked`, one call per step | `crates/takt/src/run.rs` (`Run`), crate `b10x-loom-commission` 0.41.0 |
-| evaluate, frontier, admit | the governor of Loom (`CanonGovernor`) over the case's files (`CaseFiles`), deciding with Canon; each decision is written as `decisions/NNNN.json` | `crates/takt/src/case.rs`, crate `b10x-loom-governor` 0.41.0 |
+| the step | Commission's runtime of loom-sdk: `run_until_blocked`, one call per step | `crates/takt/src/run.rs` (`Run`), crate `b10x-loom-commission` 0.43.0 |
+| evaluate, frontier, admit | the governor of Loom (`CanonGovernor`) over the case's files (`CaseFiles`), deciding with Canon; each decision is written as `decisions/NNNN.json` | `crates/takt/src/case.rs`, crate `b10x-loom-governor` 0.43.0 |
 | a grant | the case's authority provider (`CaseAuthority`, Loom's `AuthorityProvider`) over `authority.yaml` | `crates/takt/src/case.rs` |
 | pre-check | takt itself, ahead of each Loom step: `Shape::only_behind` stops `ApprovalRequired` (exit 4), `Shape::unperformable` stops `Unperformable` (exit 7) | `crates/takt/src/run.rs` |
-| propose | the composite executor (`TurnExecutor`, Loom's `AgentExecutor`): the due validator's action, else a judgement step of a session executor (`SessionHarness` over Loom's `SessionExecutor` and metaharness) | `crates/takt/src/run.rs`, `crates/takt/src/harness.rs`, crate `b10x-loom-session-executor` 0.41.0 |
+| propose | the composite executor (`TurnExecutor`, Loom's `AgentExecutor`): the due validator's action, else a judgement step of a session executor (`SessionHarness` over Loom's `SessionExecutor` and metaharness) | `crates/takt/src/run.rs`, `crates/takt/src/harness.rs`, crate `b10x-loom-session-executor` 0.43.0 |
 | perform | the composite effect (`TurnEffect`, Loom's `EffectPort`): the edit effect applies a proposal under the step guard; `ValidatorEffect` performs a validator's action, `ChoiceEffect` records a choice | `crates/takt/src/run.rs`, `crates/takt/src/validator.rs` |
 | observation | the session's `AgentSession` record, observed into `observations.json` through the governor | `crates/takt/src/run.rs`, `crates/takt/src/case.rs` |
 | validator | a validator (`TestsRun`, `GateRun`, `PrOpen`, `CiRead`, `PrMerged`, `ChangeRead`) turns an observation into a `canon-evidence/1` record, which reaches the case through the evidence port | `crates/takt/src/validator.rs` |
