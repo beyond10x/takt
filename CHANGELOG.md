@@ -6,6 +6,22 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-26
+
+`takt run --config` takes the run's configuration from a TOML file, and a `Dockerfile` builds a container image
+that runs takt on a mounted repository and configuration; loom 0.41.0.
+
+### Added
+
+- `takt run --config <FILE>` reads `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd` from TOML; a flag wins over the file, the file over the default.
+- A relative `endpoint_file` in a run configuration is read beside the file; any other key is refused before the case opens, naming the file and the line, never a value.
+- `Dockerfile` builds an x86_64 image with `aep`, `b10x-harness` and `ess` pinned by SHA256, running `takt run --repo /workspace --config /config/run.toml` as uid 10001.
+
+### Changed
+
+- `b10x-loom-sdk` moves from loom 0.40.0 to 0.41.0; metaharness stays at 0.15.0. loom 0.41.0 marks nothing breaking.
+- The `ess` that `task check` runs in CI (`check.yml`, `darwin.yml`) moves from 0.69.0 to 0.69.2, and the specification requires ess 0.69.
+
 ## [0.11.1] - 2026-10-24
 
 `--harness harness` reads an action line that b10x-harness streams in several text-delta events as one line,
@@ -478,7 +494,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.11.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.12.0...HEAD
+[0.12.0]: https://github.com/beyond10x/takt/compare/0.11.1...0.12.0
 [0.11.1]: https://github.com/beyond10x/takt/compare/0.11.0...0.11.1
 [0.11.0]: https://github.com/beyond10x/takt/compare/0.10.1...0.11.0
 [0.10.1]: https://github.com/beyond10x/takt/compare/0.10.0...0.10.1

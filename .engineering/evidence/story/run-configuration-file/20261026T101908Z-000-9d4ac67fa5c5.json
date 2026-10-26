@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-26T10:19:08Z",
+  "actor": "human:timo",
+  "artifact": "story:run-configuration-file",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check in the release tree with a private ess 0.69.2: 162 results, 1747 passed, 0 failed, 5 ignored, exit 0; run_config_cli 9 and run_config_adv1 1 passed; the image's smoke run on a mounted /workspace and /config: exit 3 at Iterations (0), case written"
+  }
+}

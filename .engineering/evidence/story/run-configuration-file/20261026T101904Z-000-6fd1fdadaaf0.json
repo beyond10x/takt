@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-26T10:19:04Z",
+  "actor": "human:timo",
+  "artifact": "story:run-configuration-file",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:run-configuration-file-adv1",
+    "review": "review-result:run-configuration-file-adv1",
+    "outcome": "fixed"
+  }
+}

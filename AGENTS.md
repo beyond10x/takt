@@ -53,7 +53,14 @@ git add <paths> && b10x-gates bot -- commit -F <file>   # staging is plain git; 
 b10x-gates scan-text --policy <file> <path>...           # or B10X_GATES_POLICY; no policy found is "not scanned", never "passed"
 cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>" --iterations 1
 cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:<version> .   # the container image; never pushed to a registry
 ```
+
+The image's mount contract (`/workspace`, `/config/run.toml`, `/config/endpoint.toml`) is in
+`README.md` § Container. `run.toml` is `takt run --config` (`crates/takt/src/run_config.rs`); a
+key added there is a flag of `takt run` first, and the README table moves with it. `Dockerfile`
+pins `aep`, `b10x-harness` and `ess` by version and SHA256: move `ESS_VERSION` with `check.yml`,
+and `HARNESS_VERSION` with the harness wire the `Cargo.lock` holds.
 
 ## Rules
 

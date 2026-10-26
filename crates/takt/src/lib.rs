@@ -23,6 +23,7 @@ pub mod protocol;
 pub mod replay;
 pub mod report;
 pub mod run;
+pub mod run_config;
 pub mod scorecard;
 pub mod seatbelt;
 pub mod trace;

@@ -60,7 +60,7 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 
 ## Status
 
-0.11.1 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.12.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and `self.improvement/1`
 embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64). A harness step
 runs through a metaharness session with Claude Code, Codex or b10x-harness (`--harness`). Since 0.1.0 it
@@ -116,6 +116,39 @@ cargo install --locked --path crates/takt-cli
 takt --version
 ```
 
+## Container
+
+`Dockerfile` builds an x86_64 image of takt from this source tree, with `aep`, `b10x-harness`,
+`ess`, git, Python 3 and the Rust toolchain beside it (`docker build -t takt:<version> .`).
+No image is published; a cluster loads a local build. The container runs
+`takt run --repo /workspace --config /config/run.toml` as uid 10001, and what it mounts is:
+
+| path | what | mode |
+|---|---|---|
+| `/workspace` | a git checkout of the repository to work on, its planning store included | read-write, owned by uid 10001 |
+| `/config/run.toml` | the run's configuration: `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, each a `takt run` flag's (`takt run --help`, `--config`) | read-only |
+| `/config/endpoint.toml` | the endpoint file `run.toml` names as `endpoint_file = "endpoint.toml"`: `base_url`, `wire`, `model` and a `[credential]` table naming the credential, `secret = "<namespace>/<name>"` or `token_file`, never a token | read-only |
+
+Arguments after the image name are flags of `takt run` and win over `run.toml`. The run's
+outcome is in `/workspace/.engineering/cases` and the exit code (`takt run --help`); with
+`forge = "none"` the delivery stays a branch in `/workspace`.
+
+The image holds b10x-harness and no other harness, and no `b10x-gates`, `gh` or `glab`: set
+`harness = "harness"` (or `"none"`) and `forge = "none"`, since the defaults, `claude` and the
+forge `origin` names, are not there. The test command runs in a user and mount namespace of its
+own, which the container runtime's default seccomp and AppArmor profiles refuse: run the
+container with both unconfined (`docker run --security-opt seccomp=unconfined --security-opt
+apparmor=unconfined`; in Kubernetes, `seccompProfile` and `appArmorProfile` of type
+`Unconfined`). A build from a clone, where `.git` is a directory, names its commit in
+`takt --version`; a build from a linked worktree says `unknown revision`.
+
+```toml
+iterations = 1
+harness = "harness"
+endpoint_file = "endpoint.toml"
+forge = "none"
+```
+
 ## Requirements
 
 A harness, `aep` for story runs, `b10x-gates` and `gh` for pull requests (`glab` instead of
@@ -160,14 +193,14 @@ nothing sandboxes the harness session yet (`story:harness-child-confined`).
 ## Built on
 
 takt is an application on [Loom](https://github.com/beyond10x/loom)'s `b10x-loom-sdk`, pinned
-in `Cargo.toml` at the Loom tag 0.40.0 (ADR 0099, `epic:takt-on-loom-sdk`):
+in `Cargo.toml` at the Loom tag 0.41.0 (ADR 0099, `epic:takt-on-loom-sdk`):
 
 - Commission's runtime drives each step of a case (`run_until_blocked`).
 - Loom's governor decides the case with [Canon](https://github.com/beyond10x/canon) over the
   case's files, and takt's `CaseAuthority` answers it from `authority.yaml` when a step needs a
   grant.
 - Each harness step runs in a metaharness 0.15.0 session started by Loom's session executor, the
-  crate `b10x-loom-session-executor` 0.40.0 (`loom_sdk::session`). The harness proposes a change
+  crate `b10x-loom-session-executor` 0.41.0 (`loom_sdk::session`). The harness proposes a change
   from a scratch copy, and takt's edit effect applies it under the step guard.
 
 takt keeps its validators and their evidence, git and the forge, the planning-store seam,
