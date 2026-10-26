@@ -1,6 +1,6 @@
 # Wave 37: takt as a Loom agent
 
-Stage: **closing**. Shape: one dispatcher in one managed worktree, one wave branch `wave/37` cut
+Stage: **closed**. Shape: one dispatcher in one managed worktree, one wave branch `wave/37` cut
 from `main` at 378159a, approved by the orchestrator under the owner's delegation
 (approval-record:wave-37-takt-as-a-loom-agent). The stories are the ten takt gaps of the first
 trial of takt 0.12.0 as a `LoomAgent` on loom 0.42.0 in a local kind cluster
@@ -47,3 +47,6 @@ story:edits-keep-ess-citations-resolved, proposed.
   citations 1158/1158. Nine stories implemented on it and their reviews; the probe image
   as uid 10001: takt, b10x-gates 0.1.23, cargo 1.99.1, b10x-harness 0.20.0.
 - 2026-10-26: `release/0.11.0` and `release/0.12.0` kept: neither tip is on `main`.
+- 2026-10-26: 0.13.0 tagged at 7c4295a; its release run failed on macOS (staging under `/var`, a
+  link; two Linux-only probes) and published nothing. 0.13.1 released at 02a6806 with the fix
+  (approval-record:release-0-13-1); image `b10x/takt:0.13.1` built from the tag, not pushed.
