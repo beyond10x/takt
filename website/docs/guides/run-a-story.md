@@ -59,8 +59,8 @@ base: one approval per grant, one `test_result` and the move to `implemented`.
 |---|---|---|
 | `ApprovalRequired` | 4 | merges under the grant once one is recorded |
 | `Waiting` on the forge until the budget ended | 6 | reads the forge again |
-| an error once the case was open | 5 | resumes the open case |
-| a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` | 3 | resumes the open case of the story |
+| an error once the case was open; a judgement step whose session ends without the line naming its action is tried 3 times first, each try a step that `--iterations` counts (a budget a try spent is exit 3) | 5 | resumes the open case |
+| a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `RedBase`, `RepeatedTestFailure` | 3 | resumes the open case of the story |
 
 `--case <id>` resumes a named case instead.
 

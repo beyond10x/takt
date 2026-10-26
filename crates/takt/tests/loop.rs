@@ -104,6 +104,7 @@ fn a_change_is_validated_and_stops_at_the_merge_gate() {
         vec![Box::new(TestsRun::new("./check.sh").expect("a command"))];
     let mut run = Run::open(&tree, options, &Scripted, &validators).expect("opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out).expect("runs");
     let text = String::from_utf8(out).expect("utf-8");
     assert_eq!(

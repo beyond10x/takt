@@ -132,7 +132,7 @@ a takt that is not PID 1, as uid 10001, whose home is
 | path | what | mode |
 |---|---|---|
 | `/workspace` | a git checkout of the repository to work on, its planning store included | read-write, owned by uid 10001 |
-| `/config/agent.yaml` | the run's configuration: a `loom.agent/1` document whose `takt` member holds `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, each a `takt run` flag's (`takt run --help`, `--config`), or those fields alone as YAML | read-only |
+| `/config/agent.yaml` | the run's configuration: a `loom.agent/1` document whose `takt` member holds `story`, `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `endpoint_token_env` (the variable's name, never its value), `forge`, `test_cmd`, `state_dir` (it moves only the session transcripts, to `<state_dir>/transcripts`; what a discarded step sets aside, the identity scans and the promotion, scorecard and judge records stay under `$XDG_STATE_HOME/takt`; a named one that cannot be used is refused before the case opens), `continue_past_red_base` (a boolean: the run goes on past a `RedBase`), each a `takt run` flag's (`takt run --help`, `--config`; `takt scenario run --config` reads the same file and refuses its `story`), or those fields alone as YAML | read-only |
 | `/config/endpoint.toml` | the endpoint file the configuration names as `endpoint_file: endpoint.toml`: `base_url`, `wire`, `model` and a `[credential]` table naming the credential, `secret = "<namespace>/<name>"`, `token_file` or `env = "<NAME>"`, never a token | read-only |
 
 A `LoomAgent` of the `Command` variant gets `/config/agent.yaml` from its `spec.agent`, written

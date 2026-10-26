@@ -358,3 +358,107 @@ fn story_with_an_improvement_turn_is_refused() {
     assert!(cases(&repo).is_empty());
     assert_eq!(status(&repo, "story:second-ready"), "proposed");
 }
+
+// story:run-configuration-names-the-story-and-token-variable: the run configuration file's
+// `story` names the story as `--story` does.
+
+/// A run configuration file holding `text`, beside the scratch tree `repo` and out of it, so
+/// the tree stays clean; named after it.
+fn config_beside(repo: &Path, text: &str) -> PathBuf {
+    let mut name = repo.file_name().expect("a name").to_owned();
+    name.push(".config.toml");
+    let path = repo.with_file_name(name);
+    fs::write(&path, text).expect("a run configuration file");
+    path
+}
+
+/// Acceptance 1: `story = "<id>"` in `--config`'s file takes that story as `--story <id>` does,
+/// not the frontier's next ready one.
+#[test]
+fn the_configurations_story_is_taken_as_the_flags_is() {
+    let repo = repository("config-taken");
+    let config = config_beside(&repo, "story = \"story:second-ready\"\n");
+    let (code, out, err) = run(&repo, &["--config", config.to_str().expect("utf-8")]);
+    let _ = fs::remove_file(&config);
+    assert_eq!(code, 7, "stdout {out} stderr {err}");
+    assert!(
+        out.starts_with("frontier: took story:second-ready: Make the second check pass\n"),
+        "{out}"
+    );
+    let cases = cases(&repo);
+    assert_eq!(cases.len(), 1, "{cases:?}");
+    let id = cases[0].file_name().expect("a name").to_string_lossy();
+    assert!(id.starts_with("story-second-ready-"), "{id}");
+    assert_eq!(status(&repo, "story:second-ready"), "active");
+    assert_eq!(status(&repo, "story:ready-one"), "proposed");
+}
+
+/// Acceptance 1: a story the file names that is not ready is refused as the flag's is, before
+/// any case opens, exit 1, the store left as it was; the refusal names the file's key and the
+/// file, not `--story`.
+#[test]
+fn the_configurations_story_not_ready_is_refused_as_the_flags_is() {
+    let repo = repository("config-not-ready");
+    let config = config_beside(&repo, "story = \"story:draft-dep\"\n");
+    let (code, out, err) = run(&repo, &["--config", config.to_str().expect("utf-8")]);
+    let _ = fs::remove_file(&config);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains(&format!("story story:draft-dep from {}", config.display()))
+            && err.contains("is draft, not proposed"),
+        "{err}"
+    );
+    assert!(!err.contains("--story"), "{err}");
+    assert!(err.contains("no case was opened"), "{err}");
+    assert!(cases(&repo).is_empty(), "no case is opened");
+    assert_eq!(status(&repo, "story:draft-dep"), "draft");
+    assert_eq!(status(&repo, "story:ready-one"), "proposed");
+}
+
+/// Acceptance 1: `--story` on the command line wins over the file's `story`; so does
+/// `--intent`, which names the work too: the file's story is not taken.
+#[test]
+fn a_story_or_intent_flag_wins_over_the_configurations_story() {
+    let repo = repository("config-flag-wins");
+    let config = config_beside(&repo, "story = \"story:draft-dep\"\n");
+    let path = config.to_str().expect("utf-8");
+    let (code, out, err) = run(&repo, &["--config", path, "--story", "story:second-ready"]);
+    assert_eq!(code, 7, "stdout {out} stderr {err}");
+    assert!(
+        out.starts_with("frontier: took story:second-ready"),
+        "{out}"
+    );
+
+    let repo = repository("config-intent-wins");
+    let (code, out, err) = run(&repo, &["--config", path, "--intent", "probe"]);
+    let _ = fs::remove_file(&config);
+    assert_ne!(code, 1, "stdout {out} stderr {err}");
+    assert!(!out.contains("frontier: took"), "{out}");
+    assert!(!err.contains("story:draft-dep"), "{err}");
+    assert_eq!(cases(&repo).len(), 1);
+    assert_eq!(status(&repo, "story:draft-dep"), "draft");
+}
+
+/// A `self.improvement/1` turn opens no story: the file's `story` is left out for it, where
+/// `--story` is refused; the turn is refused only for what it lacks itself (its finding).
+#[test]
+fn an_improvement_turn_leaves_the_configurations_story_out() {
+    let repo = repository("config-turn");
+    let config = config_beside(&repo, "story = \"story:second-ready\"\n");
+    let (code, out, err) = run(
+        &repo,
+        &[
+            "--config",
+            config.to_str().expect("utf-8"),
+            "--protocol",
+            "self.improvement/1",
+        ],
+    );
+    let _ = fs::remove_file(&config);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(!err.contains("never on a named story"), "{err}");
+    assert!(!err.contains("story:second-ready"), "{err}");
+    assert!(err.contains("finding"), "the turn's own refusal: {err}");
+    assert!(!out.contains("frontier: took"), "{out}");
+    assert_eq!(status(&repo, "story:second-ready"), "proposed");
+}

@@ -1,6 +1,8 @@
-//! A run's configuration file, `takt run --config <FILE>`: the loop's budget, the harness, its
-//! model and endpoint file, the forge and the test command, read from one file so a run started
-//! in a container takes them from a mounted file. The file is TOML (`.toml`) or YAML (`.yaml`,
+//! A run's configuration file, `takt run --config <FILE>` and `takt scenario run --config
+//! <FILE>`: the story, the loop's budget, the harness, its model, endpoint file and token
+//! variable, the forge, the test command, the state directory and whether the run goes on past
+//! a red base, read from one file so a run started in a container takes them from a mounted
+//! file. The file is TOML (`.toml`) or YAML (`.yaml`,
 //! `.yml`), the same fields in either; a YAML file whose `format` is `loom.agent/1` is the agent
 //! document Loom mounts for a `LoomAgent` at `/config/agent.yaml`, and its `takt` member is the
 //! run configuration. A flag given on the command line wins over the file, and the file over the
@@ -66,11 +68,14 @@ fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
         .ok_or_else(|| refused(path, None))
 }
 
-/// The fields a run configuration file may set, each one a `takt run` flag's: `iterations`,
-/// `hours`, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`. None is required.
+/// The fields a run configuration file may set, each one a `takt run` flag's: `story`,
+/// `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`,
+/// `test_cmd`, `state_dir` and `continue_past_red_base`. None is required.
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfig {
+    /// `--story`, a story's id.
+    pub story: Option<String>,
     /// `--iterations`.
     pub iterations: Option<u64>,
     /// `--hours`.
@@ -81,13 +86,20 @@ pub struct RunConfig {
     pub model: Option<String>,
     /// `--endpoint-file`; a relative path is read beside the configuration file.
     pub endpoint_file: Option<PathBuf>,
+    /// `--endpoint-token-env`, the name of the variable holding the endpoint's API key, never
+    /// its value.
+    pub endpoint_token_env: Option<String>,
     /// `--forge`.
     pub forge: Option<String>,
     /// `--test-cmd`.
     pub test_cmd: Option<String>,
+    /// `--state-dir`; a relative path is read beside the configuration file.
+    pub state_dir: Option<PathBuf>,
+    /// `--continue-past-red-base`.
+    pub continue_past_red_base: Option<bool>,
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, and `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, each optional";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, and `continue_past_red_base`, a boolean, each optional";
 
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
@@ -178,7 +190,7 @@ impl RunConfig {
     /// ends in `.yaml` or `.yml`, any other refused. A YAML `loom.agent/1` document gives its
     /// `takt` member, or nothing without one. Any other key, or a value of another type, is
     /// refused naming the path and, for a parse, the line, never a value written there. A
-    /// relative `endpoint_file` is made relative to the file's directory.
+    /// relative `endpoint_file` or `state_dir` is made relative to the file's directory.
     pub fn read(path: &Path) -> Result<Self> {
         let extension = path.extension().and_then(|extension| extension.to_str());
         if !matches!(extension, Some("toml" | "yaml" | "yml")) {
@@ -197,12 +209,12 @@ impl RunConfig {
         } else {
             from_yaml(path, text)?
         };
-        if let Some(file) = config.endpoint_file.take() {
-            config.endpoint_file = Some(match path.parent() {
-                Some(dir) if file.is_relative() => dir.join(file),
-                _ => file,
-            });
-        }
+        let beside = |file: PathBuf| match path.parent() {
+            Some(dir) if file.is_relative() => dir.join(file),
+            _ => file,
+        };
+        config.endpoint_file = config.endpoint_file.take().map(beside);
+        config.state_dir = config.state_dir.take().map(beside);
         Ok(config)
     }
 }
@@ -237,6 +249,50 @@ mod tests {
         );
         assert_eq!(config.forge.as_deref(), Some("none"));
         assert_eq!(config.test_cmd.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn story_token_variable_and_a_relative_state_dir_beside_the_file_are_read() {
+        let path = scratch(
+            "story-env-state",
+            "story = \"story:s\"\nendpoint_token_env = \"KEY\"\nstate_dir = \"state\"\n",
+        );
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.story.as_deref(), Some("story:s"));
+        assert_eq!(config.endpoint_token_env.as_deref(), Some("KEY"));
+        assert_eq!(
+            config.state_dir,
+            Some(path.parent().expect("a directory").join("state"))
+        );
+        let path = scratch_named(
+            "loom-state",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  story: story:s\n  endpoint_token_env: KEY\n  state_dir: /data/takt\n",
+        );
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.story.as_deref(), Some("story:s"));
+        assert_eq!(config.endpoint_token_env.as_deref(), Some("KEY"));
+        assert_eq!(config.state_dir, Some(PathBuf::from("/data/takt")));
+    }
+
+    #[test]
+    fn continue_past_red_base_is_a_boolean_in_either_format() {
+        let path = scratch("red-base", "continue_past_red_base = true\n");
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.continue_past_red_base, Some(true));
+        let path = scratch_named(
+            "red-base-loom",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  continue_past_red_base: false\n",
+        );
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.continue_past_red_base, Some(false));
+        let path = scratch("red-base-string", "continue_past_red_base = \"yes\"\n");
+        let error = format!("{:#}", RunConfig::read(&path).expect_err("refused"));
+        assert!(
+            error.contains("`continue_past_red_base`, a boolean"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -372,6 +372,7 @@ fn run_scanned(
     let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
     run.scan_change_with(scan);
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     (stop, String::from_utf8_lossy(&out).into_owned())
 }

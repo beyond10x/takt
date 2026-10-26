@@ -6,6 +6,23 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- `takt run` stops `RedBase` (exit 3) when a case's first test run fails before any step; a resume at the same red base stops again with no model call.
+- `takt run` stops `RepeatedTestFailure` (exit 3) after three test runs at new revisions fail the same tests.
+- `--continue-past-red-base` (`takt run`, `takt scenario run`, `continue_past_red_base` in `--config`) goes on past a red base.
+- A failed `gate.run` shows the next judgement step what each failed gate printed, at most 4 KiB per gate and 8 KiB in total.
+- That output has terminal escape codes stripped and credentials withheld, and passes the secret scan when a policy is set.
+- `takt run --config` takes `story`, `endpoint_token_env` and `state_dir`; `--state-dir` puts transcripts under `<state_dir>/transcripts`.
+- `takt scenario run` takes `--config`.
+
+### Fixed
+
+- The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.
+- The endpoint token staging tests pass when the temporary directory is writable by others without the sticky bit.
+- A judgement step whose session ends without its action line is tried again, 3 times at most; each try counts against `--iterations`.
+- Each such try is charged the tokens its session reported; the run ends exit 5 after the third, or exit 3 if a try spent the budget.
+
 ## [0.13.1] - 2026-10-26
 
 0.13.0's release run failed on macOS, so 0.13.0 has no GitHub Release; 0.13.1 is the first release that ships its

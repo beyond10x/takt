@@ -1633,6 +1633,7 @@ fn adv2_pr_open_pushes_the_case_branch_not_the_name_the_harness_wrote_into_branc
     ];
     let mut run = Run::open(&tree, options, &Repointer, &validators).expect("the case opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8(out).expect("utf-8");
     let calls = memory.calls.borrow().clone();

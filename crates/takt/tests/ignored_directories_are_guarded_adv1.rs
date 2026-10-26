@@ -173,6 +173,7 @@ fn go<F: Fn(&Path)>(scratch: &Scratch, attack: F) -> (anyhow::Result<Stop>, Stri
     run.set_aside_in(scratch.root.join("aside"))
         .expect("a set-aside root");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     (stop, String::from_utf8_lossy(&out).into_owned())
 }

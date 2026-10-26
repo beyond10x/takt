@@ -261,6 +261,7 @@ fn run_writing(tree: &Scratch, command: &str, files: &[(&str, &str)]) -> Ran {
     let mut run =
         Run::open(tree, options(protocol), &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     Ran {
         stop,
@@ -917,6 +918,7 @@ fn the_test_and_gate_commands_run_in_a_fresh_home() {
     };
     let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out);
     assert_eq!(
@@ -1316,6 +1318,136 @@ fn the_outside_path_run() {
             "{variant}: takt removed {} the step made outside the tree",
             made.display()
         );
+    }
+}
+
+/// The variable that names the variant [`the_fresh_home_run`] runs.
+const FRESH_VARIANT: &str = "TAKT_TEST_FRESH_HOME_VARIANT";
+
+/// The scenario's test script in a fresh home: it leaves cargo's caches in `$CARGO_HOME`, the
+/// caller's `~/.cargo` takt passes on, as the first `cargo test` there does (`registry`, `git`,
+/// `.package-cache`), then runs the tests.
+const CACHING_CHECK: &str = "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nmkdir -p \"$CARGO_HOME/registry/cache\" \"$CARGO_HOME/git/db\"\ntouch \"$CARGO_HOME/.package-cache\"\nPYTHONPATH=. python3 -m unittest discover -s tests -v\n";
+
+/// [`CACHING_CHECK`] that also writes a program into `$CARGO_HOME/bin`, which it makes: a
+/// `cargo-forge` cargo would run as `cargo forge`.
+const PLANTING_CHECK: &str = "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nmkdir -p \"$CARGO_HOME/registry/cache\" \"$CARGO_HOME/git/db\" \"$CARGO_HOME/bin\"\ntouch \"$CARGO_HOME/.package-cache\"\nprintf '#!/bin/sh\\nexit 0\\n' > \"$CARGO_HOME/bin/cargo-forge\"\nchmod 755 \"$CARGO_HOME/bin/cargo-forge\"\nPYTHONPATH=. python3 -m unittest discover -s tests -v\n";
+
+/// Runs [`the_fresh_home_run`] as `variant` in a child of this test binary whose `HOME` is an
+/// empty directory, with neither `CARGO_HOME` nor `RUSTUP_HOME` set; answers why it failed.
+fn fresh_home_variant(variant: &str) -> Option<String> {
+    let scratch = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "script-imports-fresh-{}-{variant}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&scratch);
+    let home = scratch.join("home");
+    fs::create_dir_all(&home).expect("a home");
+    let output = Command::new(std::env::current_exe().expect("this test binary"))
+        .args([
+            "--exact",
+            "the_fresh_home_run",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("HOME", &home)
+        .env_remove("CARGO_HOME")
+        .env_remove("RUSTUP_HOME")
+        .env(FRESH_VARIANT, variant)
+        .env(OUTSIDE_HOME, &home)
+        .output()
+        .expect("the test binary runs");
+    let _ = fs::remove_dir_all(&scratch);
+    let text = String::from_utf8_lossy(&output.stdout) + String::from_utf8_lossy(&output.stderr);
+    if !output.status.success() {
+        return Some(format!("{variant}: {text}"));
+    }
+    (!text.contains("1 passed")).then(|| format!("{variant}: the inner case did not run: {text}"))
+}
+
+/// Expected before: a run whose `HOME` held no `.cargo` yet stopped `StepRefused` at its first
+/// `tests.run`, "tests.run wrote what its validator does not: <home>/.cargo", for the cache
+/// cargo leaves there. A directory made where there was none on the way to what takt reads
+/// (`~/.cargo` before `~/.cargo/bin` and `~/.cargo/config.toml`), with nothing it reads under
+/// it changed, is no change: the run reaches its test result and the cache is left as it is.
+#[test]
+fn a_fresh_homes_first_tests_run_is_not_refused_for_the_cargo_cache() {
+    assert_eq!(fresh_home_variant("cache"), None);
+}
+
+/// A program a step writes into `~/.cargo/bin` in a fresh home, beside the cache it makes in
+/// `~/.cargo`, is still a change outside the tree: the run stops naming it and nothing is
+/// recorded.
+#[test]
+fn a_program_written_into_a_fresh_homes_cargo_bin_still_stops_the_run() {
+    assert_eq!(fresh_home_variant("bin"), None);
+}
+
+/// The run [`fresh_home_variant`] makes for one variant, under the empty home it names;
+/// nothing at all without it. The tree sits under the home, as a container's checkout under
+/// the agent's home does, so `~/.cargo` is both `$CARGO_HOME` and a `.cargo` above the tree.
+#[test]
+fn the_fresh_home_run() {
+    let (Some(variant), Some(home)) = (
+        std::env::var(FRESH_VARIANT).ok(),
+        std::env::var_os(OUTSIDE_HOME).map(PathBuf::from),
+    ) else {
+        return;
+    };
+    assert_eq!(
+        std::env::var_os("HOME"),
+        Some(home.clone().into_os_string())
+    );
+    assert!(
+        fs::read_dir(&home).expect("the home").next().is_none(),
+        "the home is empty"
+    );
+    let check = if variant == "bin" {
+        PLANTING_CHECK
+    } else {
+        CACHING_CHECK
+    };
+    let tree = repository_in(
+        home.join("work"),
+        &[
+            ("check.sh", check, true),
+            ("todo.py", CODE, false),
+            ("tests/test_todo.py", TEST, false),
+        ],
+    );
+    match variant.as_str() {
+        "cache" => {
+            let ran = run_writing(&tree, "./check.sh", &[("todo.py", FIXED)]);
+            assert!(
+                !matches!(ran.stop, Ok(Stop::StepRefused(_))),
+                "the run is refused: {:?}\n{}",
+                ran.stop.as_ref().map_err(ToString::to_string),
+                ran.text
+            );
+            assert!(
+                ran.records.iter().any(|r| r["kind"] == "test_result"),
+                "no test result; stop {:?}\n{}",
+                ran.stop.as_ref().map_err(ToString::to_string),
+                ran.text
+            );
+            assert!(
+                home.join(".cargo/registry/cache").is_dir(),
+                "takt removed the cargo cache\n{}",
+                ran.text
+            );
+        }
+        "bin" => {
+            let program = home.join(".cargo/bin/cargo-forge");
+            let ran = run_writing(&tree, "./check.sh", &[("todo.py", FIXED)]);
+            assert!(ran.records.is_empty(), "{:?}\n{}", ran.records, ran.text);
+            let why = ran.refusal();
+            assert!(
+                why.contains(&program.display().to_string()),
+                "the refusal names {}: {why}",
+                program.display()
+            );
+        }
+        other => panic!("no variant {other}"),
     }
 }
 

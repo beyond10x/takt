@@ -154,6 +154,7 @@ fn run(tree: &Path, options: RunOptions, harness: &Scripted) -> (Stop, u64, u64,
     let validators = validators();
     let mut run = Run::open(tree, options, harness, &validators).expect("opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out).expect("the run stops without an error");
     (
         stop,

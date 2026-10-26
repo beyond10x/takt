@@ -122,6 +122,143 @@ pub trait Validator {
     fn runs(&self) -> Vec<String> {
         Vec::new()
     }
+    /// What the checks of the last observation that failed printed that names what failed
+    /// ([`FailedCheck`]), taken once: the run keeps it on the run record's evidence line of the
+    /// observation's record and shows it to the next judgement step. None by default.
+    fn take_failed(&self) -> Vec<FailedCheck> {
+        Vec::new()
+    }
+}
+
+/// The most bytes [`failing_lines`] keeps of one failed check's output, 4 KiB, each kept line
+/// counted with its line end.
+pub const FAILED_LINES_PER_CHECK: usize = 4 << 10;
+
+/// The most bytes one observation keeps of its failed checks' lines over all of them, 8 KiB: a
+/// check keeps the smaller of [`FAILED_LINES_PER_CHECK`] and what the checks before it left.
+pub const FAILED_LINES_TOTAL: usize = 8 << 10;
+
+/// The most bytes of one kept line: a longer one is cut there and ends in `…`.
+const FAILED_LINE_BYTES: usize = 512;
+
+/// What a check that failed printed that names what failed: the check's id (a gate's), the
+/// lines kept of its output ([`failing_lines`]), and how many of its non-blank lines were left
+/// out.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FailedCheck {
+    pub id: String,
+    pub lines: Vec<String>,
+    pub omitted: u64,
+}
+
+/// `line` without its terminal escape sequences (CSI, such as a colour, `ESC [ … <final>`; OSC,
+/// `ESC ] … BEL` or `ESC ] … ESC \`; any other `ESC <char>`) and without any other control
+/// character but a tab, so a colour code before a token cannot hide its shape.
+fn plain(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            match chars.next() {
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else if c == '\t' || !c.is_control() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The lines of a failed command's output `printed` that name what failed, within `budget`
+/// bytes (each line counted with its line end), and how many non-blank lines were left out.
+/// Every non-blank line, its terminal escape sequences and every other control character but a
+/// tab taken out ([`plain`]), its trailing white space cut, a line past 512 bytes cut there and
+/// ended in `…`. Whatever the room, so none reaches a record or a prompt, a line of a
+/// credential's shape ([`crate::run::credential_shape`], read on the line so cleaned) is left
+/// out, and so is a private key's block, from a `-----BEGIN … PRIVATE KEY-----` line through
+/// its `-----END` line, or to the end without one; each counted as left out. When they do not
+/// all fit: the last line first (a checker's summary), then the
+/// lines that do not start with white space, from the start in order until one does not fit,
+/// and, once all of those fit, the indented detail lines the same way; kept lines stay in their
+/// order. No rule of any one command's: `<document>:<line>: unresolved: <cited>` lines of a
+/// citation checker and `error:`/`warning:` lines of a compiler are kept before their indented
+/// detail alike.
+#[must_use]
+pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
+    let mut withheld = 0u64;
+    let mut in_key = false;
+    let mut lines: Vec<String> = Vec::new();
+    for line in printed.lines() {
+        let line = plain(line);
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        // A private key's block, from its `BEGIN` line through its `END` line or the end.
+        if line.contains("-----BEGIN ") && line.contains("PRIVATE KEY-----") {
+            in_key = true;
+        }
+        if in_key || crate::run::credential_shape(line).is_some() {
+            in_key = in_key && !line.contains("-----END ");
+            withheld += 1;
+            continue;
+        }
+        if line.len() <= FAILED_LINE_BYTES {
+            lines.push(line.to_owned());
+            continue;
+        }
+        let mut end = FAILED_LINE_BYTES - '…'.len_utf8();
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        lines.push(format!("{}…", &line[..end]));
+    }
+    let cost = |line: &String| line.len() + 1;
+    if lines.iter().map(cost).sum::<usize>() <= budget {
+        return (lines, withheld);
+    }
+    let mut keep = vec![false; lines.len()];
+    let mut left = budget;
+    if let Some(last) = lines.last()
+        && cost(last) <= left
+    {
+        keep[lines.len() - 1] = true;
+        left -= cost(last);
+    }
+    let body = lines.len().saturating_sub(1);
+    'passes: for detail in [false, true] {
+        for (index, line) in lines[..body].iter().enumerate() {
+            if line.starts_with(char::is_whitespace) != detail {
+                continue;
+            }
+            if cost(line) > left {
+                break 'passes;
+            }
+            keep[index] = true;
+            left -= cost(line);
+        }
+    }
+    let omitted = keep.iter().filter(|kept| !**kept).count() as u64 + withheld;
+    let kept = lines
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(line, kept)| kept.then_some(line))
+        .collect();
+    (kept, omitted)
 }
 
 /// How an effect performs the request it was handed: the validator's observation, taken where
@@ -837,10 +974,10 @@ impl TestsRun {
 
 /// What the test command's output says about its tests, for the step's summary. With one or
 /// more `test result:` lines (cargo's, one per test binary and doc-test run): passed, failed and
-/// ignored summed over every one, the number of such lines, and, when any failed, the failed
-/// tests by name from the `test <name> ... FAILED` lines in output order; so a workspace run
-/// whose last block is an empty doc-test run is not read as `0 passed`, and a block that failed
-/// is not hidden by a later one that passed. Without one: the first non-empty line beside the
+/// ignored summed over every one and the number of such lines; so a workspace run whose last
+/// block is an empty doc-test run is not read as `0 passed`, and a block that failed is not
+/// hidden by a later one that passed. The failed tests by name follow it outside its bound
+/// ([`failed_tests`], [`TestsRun`]). Without one: the first non-empty line beside the
 /// last four when the output has more than five, so a summary a command prints first is kept,
 /// else every non-empty line; lines joined by ` | `.
 fn summarise_tests(printed: &str, success: bool) -> String {
@@ -876,32 +1013,6 @@ fn summarise_tests(printed: &str, success: bool) -> String {
         let mut summary = format!(
             "{passed} passed, {failed} failed, {ignored} ignored over {results} result line{plural}"
         );
-        if failed > 0 {
-            // `test <name> ... FAILED` lines, or, under `cargo test --quiet`, which prints none,
-            // the names listed under the last `failures:` heading, one indented a line.
-            let mut names: Vec<&str> = lines
-                .iter()
-                .filter_map(|line| {
-                    line.trim()
-                        .strip_prefix("test ")?
-                        .strip_suffix(" ... FAILED")
-                })
-                .collect();
-            if names.is_empty()
-                && let Some(heading) = lines.iter().rposition(|line| line.trim() == "failures:")
-            {
-                names = lines[heading + 1..]
-                    .iter()
-                    .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
-                    .map(|line| line.trim())
-                    .filter(|line| !line.is_empty())
-                    .collect();
-            }
-            if !names.is_empty() {
-                summary.push_str("; failed: ");
-                summary.push_str(&names.join(", "));
-            }
-        }
         // A failure the result lines do not show (a binary killed by a signal, a runner whose
         // `test result:` line carries no counts): the last line says what the counts cannot.
         if !success
@@ -919,6 +1030,155 @@ fn summarise_tests(printed: &str, success: bool) -> String {
     let mut shown = vec![kept[0], "…"];
     shown.extend_from_slice(&kept[kept.len() - 4..]);
     shown.join(" | ")
+}
+
+/// Adds `name`, trimmed, to `names` unless it is empty or there already.
+fn push_once(names: &mut Vec<String>, name: &str) {
+    let name = name.trim();
+    if !name.is_empty() && !names.iter().any(|named| named == name) {
+        names.push(name.to_owned());
+    }
+}
+
+/// The tests a failing test command's output names as failed, in output order, each once:
+/// cargo's `test <name> ... FAILED` lines, or, under `cargo test --quiet`, which prints none,
+/// the names listed under the last `failures:` heading, one indented a line, when a `test
+/// result: FAILED` line says one failed; Python unittest's `FAIL: <test>` and `ERROR: <test>`
+/// headings; pytest's `FAILED <id>` lines, up to ` - `. Empty for output that names none.
+fn failed_tests(printed: &str) -> Vec<String> {
+    let lines: Vec<&str> = printed.lines().collect();
+    let mut names = Vec::new();
+    for line in &lines {
+        let line = line.trim();
+        if let Some(name) = line
+            .strip_prefix("test ")
+            .and_then(|rest| rest.strip_suffix(" ... FAILED"))
+        {
+            push_once(&mut names, name);
+        } else if let Some(name) = line
+            .strip_prefix("FAIL: ")
+            .or_else(|| line.strip_prefix("ERROR: "))
+        {
+            push_once(&mut names, name);
+        } else if let Some(id) = line.strip_prefix("FAILED ")
+            && !id.starts_with('(')
+        {
+            push_once(&mut names, id.split(" - ").next().unwrap_or(id));
+        }
+    }
+    if names.is_empty()
+        && lines
+            .iter()
+            .any(|line| line.trim_start().starts_with("test result: FAILED"))
+        && let Some(heading) = lines.iter().rposition(|line| line.trim() == "failures:")
+    {
+        for line in lines[heading + 1..]
+            .iter()
+            .take_while(|line| line.starts_with("    ") || line.trim().is_empty())
+        {
+            push_once(&mut names, line);
+        }
+    }
+    names
+}
+
+/// The runner's hint for running a failure again, from `to rerun` on, on the first line that
+/// says it: cargo's `error: test failed, to rerun pass `-p <crate> --lib``.
+fn rerun_hint(printed: &str) -> Option<String> {
+    printed
+        .lines()
+        .find_map(|line| line.find("to rerun").map(|at| line[at..].trim().to_owned()))
+}
+
+/// Where a `tests.run` summary lists the failed tests ([`TestsRun`]): after the last of these.
+const FAILED_MARK: &str = "; failed: ";
+
+/// The most characters a `tests.run` summary keeps of what the runner said, and the most its
+/// printed line shows after its `the test command exited` part ([`tests_line`]); a part cut to
+/// it ends in `…`.
+const SUMMARY_LIMIT: usize = 300;
+
+/// The fewest characters of what the runner said that a failing `tests.run` line shows before
+/// its rerun hint and failed tests ([`tests_line`]): room the two leave over goes to it as well.
+const SUMMARY_LEAST: usize = 100;
+
+/// The most characters of the rerun hint a `tests.run` summary keeps.
+const RERUN_LIMIT: usize = 200;
+
+/// The most failed tests a `tests.run` summary names, 64, and the most bytes of their list,
+/// 8 KiB: a set past either is cut and ends in `…`, and names no set ([`failures_in`]).
+const FAILED_NAMES: usize = 64;
+const FAILED_BYTES: usize = 8 << 10;
+
+/// The failed tests `failed` as a `tests.run` summary lists them, joined by `, `: the whole set
+/// within [`FAILED_NAMES`] and [`FAILED_BYTES`], or the names that fit and `…`.
+fn failed_list(failed: &[String]) -> String {
+    let mut list = String::new();
+    for (at, name) in failed.iter().enumerate() {
+        let sep = if at == 0 { "" } else { ", " };
+        if at == FAILED_NAMES || list.len() + sep.len() + name.len() > FAILED_BYTES {
+            list.push_str(sep);
+            list.push('…');
+            return list;
+        }
+        list.push_str(sep);
+        list.push_str(name);
+    }
+    list
+}
+
+/// The `tests.run` summary `summary` as the run prints it on its `effect:` line: its `the test
+/// command exited` part, then the rest within [`SUMMARY_LIMIT`] characters, what the runner said
+/// giving way to the rerun hint and the failed tests down to [`SUMMARY_LEAST`]. The summary the
+/// run records keeps the whole set ([`failures_in`]).
+#[must_use]
+pub fn tests_line(summary: &str) -> String {
+    let Some(at) = summary.find("; ") else {
+        return summary.to_owned();
+    };
+    let (exited, rest) = summary.split_at(at + 2);
+    let named_at = [rest.rfind("; to rerun"), rest.rfind(FAILED_MARK)]
+        .into_iter()
+        .flatten()
+        .min()
+        .unwrap_or(rest.len());
+    let (said, named) = rest.split_at(named_at);
+    let room = SUMMARY_LIMIT
+        .saturating_sub(named.chars().count())
+        .max(SUMMARY_LEAST);
+    let shown = bounded(&format!("{}{named}", bounded(said, room)), SUMMARY_LIMIT);
+    format!("{exited}{shown}")
+}
+
+/// What a failing `tests.run` summary names ([`TestsRun`] writes it, [`failures_in`] reads it):
+/// the failed tests, and the runner's hint for running them again.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Failures {
+    /// The failed tests in output order; empty when the summary names none, or its list was cut
+    /// short, so a set a reader compares is never a part of one.
+    pub tests: Vec<String>,
+    /// The runner's rerun hint (`to rerun pass ...`), when its output had one.
+    pub rerun: Option<String>,
+}
+
+/// What the `tests.run` summary `summary` names as failed: the list after its last `; failed: `
+/// and the hint after its `; to rerun`, as [`TestsRun`] writes them.
+#[must_use]
+pub fn failures_in(summary: &str) -> Failures {
+    let (head, list) = match summary.rfind(FAILED_MARK) {
+        Some(at) => (&summary[..at], Some(&summary[at + FAILED_MARK.len()..])),
+        None => (summary, None),
+    };
+    let tests = match list {
+        Some(list) if !list.ends_with('…') => list
+            .split(", ")
+            .filter(|name| !name.is_empty())
+            .map(str::to_owned)
+            .collect(),
+        _ => Vec::new(),
+    };
+    let rerun = head.rfind("; to rerun").map(|at| head[at + 2..].to_owned());
+    Failures { tests, rerun }
 }
 
 /// `text` within `limit` characters: the whole of it, or its first `limit - 1` characters and
@@ -1046,12 +1306,27 @@ impl TestsRun {
             revision,
             self.name(),
         );
+        // What the runner said, bounded; then a failure's rerun hint and the failed tests by
+        // name, the names last ([`failures_in`] reads them back), within their own bounds: the
+        // printed line is cut apart ([`tests_line`]), so the set never depends on it.
+        let mut summary = format!(
+            "the test command exited {}: {result}; {}",
+            output.code.map_or("signal".to_owned(), |c| c.to_string()),
+            bounded(&tail, SUMMARY_LIMIT),
+        );
+        if !output.success() {
+            if let Some(hint) = rerun_hint(&printed) {
+                summary.push_str("; ");
+                summary.push_str(&bounded(&hint, RERUN_LIMIT));
+            }
+            let failed = failed_tests(&printed);
+            if !failed.is_empty() {
+                summary.push_str(FAILED_MARK);
+                summary.push_str(&failed_list(&failed));
+            }
+        }
         Ok(Observation {
-            summary: format!(
-                "the test command exited {}: {result}; {}",
-                output.code.map_or("signal".to_owned(), |c| c.to_string()),
-                bounded(&tail, 300)
-            ),
+            summary,
             records: vec![record],
             artifact: None,
         })
@@ -1069,6 +1344,14 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// The project file admits the commands and providers the gates bind. Every observation
 /// retains the bundle the library evaluated, `engineering-gate-evidence/1`, as
 /// `<record-id>.bundle.json`.
+///
+/// A false evaluation keeps, for each gate with a false assertion, what the commands that
+/// assertion names printed that names what failed ([`FailedCheck`], [`failing_lines`]), taken
+/// once with [`Validator::take_failed`]: the output the observation kept (`process.run`,
+/// `ess.run`), or, for `process.succeeded`, which keeps only whether the command exited 0, the
+/// command run again once, only when it failed, as the library ran it, after the evaluation,
+/// held to the project file's timeout and output bound and to `deadline`; a run again that
+/// passes keeps one line saying so ([`PASSED_AGAIN`]) and none of its output ([`printed_by`]).
 ///
 /// The gates document and the project file are read from the case's base revision, the tip of
 /// the branch in `branch.yaml`, never from the tree: the tree is the case's branch, which a
@@ -1098,6 +1381,8 @@ pub struct GateRun {
     /// providers, relative to the tree; `None` takes [`DEFAULT_PROJECT`] when the base
     /// revision has it.
     pub project: Option<PathBuf>,
+    /// The failed gates of the last observation ([`Validator::take_failed`]).
+    failed: RefCell<Vec<FailedCheck>>,
 }
 
 /// The directory under the case's that holds the base revision's gate inputs while the gate
@@ -1780,6 +2065,7 @@ impl GateRun {
         Self {
             gates: gates.into(),
             project: None,
+            failed: RefCell::new(Vec::new()),
         }
     }
 
@@ -1822,6 +2108,105 @@ impl Validator for GateRun {
         let observed = self.observe_by(tree, revision, seq, deadline);
         Ok((ended_by(deadline, self.action(), observed)?, false))
     }
+
+    fn take_failed(&self) -> Vec<FailedCheck> {
+        self.failed.take()
+    }
+}
+
+/// The admitted command bindings a failed assertion of a gate names: each request of the plan
+/// that runs one (`process.succeeded`, `process.run`, `ess.run`) whose `binding` the assertion's
+/// expression names as a quoted string, with the outcome observed for it.
+fn bound_requests<'b>(
+    bundle: &'b canon_engineering_assertions::Bundle,
+    expression: &str,
+) -> Vec<(&'b str, &'b str, Option<&'b canon_expr::Outcome>)> {
+    bundle
+        .plan
+        .requests
+        .iter()
+        .filter(|request| {
+            matches!(
+                request.operation.as_str(),
+                "process.succeeded" | "process.run" | "ess.run"
+            )
+        })
+        .filter_map(|request| match request.arguments.get("binding") {
+            Some(canon_expr::Value::String(binding))
+                if expression.contains(&format!("\"{binding}\"")) =>
+            {
+                let outcome = bundle
+                    .observations
+                    .iter()
+                    .find(|observation| observation.request_id == request.id)
+                    .map(|observation| &observation.outcome);
+                Some((request.operation.as_str(), binding.as_str(), outcome))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a failed `process.succeeded` command keeps when, run again once, it exits 0: the
+/// failure did not repeat (a flaky command), so what failed is not known.
+pub const PASSED_AGAIN: &str =
+    "the command passed when run again (flaky): what failed the first time is not known";
+
+/// An admitted command as the project file binds it, after the library resolved its executable.
+struct Bound {
+    executable: PathBuf,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+}
+
+/// What `binding`'s command printed, standard output then standard error: from the observation
+/// when it kept them (`process.run`, `ess.run`), or the reason it was not observed; for
+/// `process.succeeded`, which keeps only whether it exited 0, from running it again once, only
+/// on its failure, as the library ran it (no inherited environment, the binding's own, in
+/// `tree`), held to `limits`; when that run exits 0 its output names nothing that failed, so
+/// the one line [`PASSED_AGAIN`] stands for it. None for an outcome that failed nothing: a
+/// `process.succeeded` that is not false.
+fn printed_by(
+    operation: &str,
+    binding: &str,
+    outcome: Option<&canon_expr::Outcome>,
+    bound: &std::collections::BTreeMap<String, Bound>,
+    tree: &Path,
+    limits: Limits,
+) -> Option<String> {
+    fn field(fields: &std::collections::BTreeMap<String, canon_expr::Value>, name: &str) -> String {
+        match fields.get(name) {
+            Some(canon_expr::Value::String(text)) => text.clone(),
+            _ => String::new(),
+        }
+    }
+    match (operation, outcome) {
+        ("process.succeeded", Some(canon_expr::Outcome::Known(canon_expr::Value::Bool(false)))) => {
+        }
+        ("process.succeeded", _) => return None,
+        (_, Some(canon_expr::Outcome::Known(canon_expr::Value::Record(fields)))) => {
+            return Some(field(fields, "stdout") + &field(fields, "stderr"));
+        }
+        (_, Some(canon_expr::Outcome::Unavailable(why))) => return Some(why.clone()),
+        _ => return None,
+    }
+    let command = bound.get(binding)?;
+    if limits.timeout.is_zero() {
+        return None;
+    }
+    let mut run = crate::confinement::Command::new(&command.executable);
+    run.args(&command.args)
+        .env_clear()
+        .envs(&command.env)
+        .current_dir(tree);
+    Some(match crate::forge::run_child(&mut run, limits) {
+        Ok(output) if output.code == Some(0) => PASSED_AGAIN.to_owned(),
+        Ok(output) => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+                + &String::from_utf8_lossy(&output.stderr)
+        }
+        Err(error) => format!("(what it printed could not be read again: {error:#})"),
+    })
 }
 
 impl GateRun {
@@ -1834,6 +2219,7 @@ impl GateRun {
         seq: usize,
         deadline: Option<std::time::Instant>,
     ) -> Result<Observation> {
+        self.failed.take();
         let dir = current(tree)?;
         let unpinned = || {
             Ok(nothing_recorded(format!(
@@ -2024,20 +2410,86 @@ impl GateRun {
                     .admit_delegated(executable.as_os_str())
                     .with_context(|| format!("start the commands of {document}"))?;
             }
+            // What a failed gate's command printed is read again from these
+            // ([`printed_by`]), held as the library held them.
+            let bound: std::collections::BTreeMap<String, Bound> = prepared
+                .context
+                .commands
+                .iter()
+                .map(|(name, binding)| {
+                    let bound = Bound {
+                        executable: binding.executable.clone(),
+                        args: binding.args.clone(),
+                        env: binding.env.clone(),
+                    };
+                    (name.clone(), bound)
+                })
+                .collect();
+            let limits = Limits {
+                timeout: prepared.context.timeout,
+                output: prepared.context.max_output_bytes,
+            };
             // The provider starts the gate's commands in process groups of their own and waits
             // on them itself: no sweep on another thread may take one meanwhile.
             let held = crate::forge::hold_sweeps();
             let collected = canon_engineering_assertions::collect(prepared, now)
                 .with_context(|| format!("collect the observations of {document}"));
             drop(held);
-            collected
+            collected.map(|bundle| (bundle, bound, limits))
         })();
-        drop(home);
         let cleared = clear();
-        let bundle = collected?;
+        let (bundle, bound, limits) = collected?;
         cleared?;
         let report = canon_engineering_assertions::evaluate(&bundle, now, None, None)
             .with_context(|| format!("evaluate {document}"))?;
+        // Each gate with a false assertion keeps what the commands that assertion names printed
+        // that names what failed ([`failing_lines`]), within [`FAILED_LINES_TOTAL`] over all of
+        // them; the run keeps it on the record's evidence line and shows it to the next step.
+        let mut failed = Vec::new();
+        if report.truth == canon_expr::Truth::False {
+            let mut left = FAILED_LINES_TOTAL;
+            let mut evaluations = report.assertions.iter();
+            for gate in &bundle.document.gates {
+                let mut printed = String::new();
+                let mut seen = std::collections::BTreeSet::new();
+                for evaluation in evaluations.by_ref().take(gate.assertions.len()) {
+                    if evaluation.truth != canon_expr::Truth::False {
+                        continue;
+                    }
+                    for (operation, binding, outcome) in
+                        bound_requests(&bundle, &evaluation.expression)
+                    {
+                        if !seen.insert(binding) {
+                            continue;
+                        }
+                        let mut limits = limits;
+                        if let Some(deadline) = deadline {
+                            limits.timeout = limits
+                                .timeout
+                                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+                        }
+                        if let Some(text) =
+                            printed_by(operation, binding, outcome, &bound, tree, limits)
+                        {
+                            printed.push_str(&text);
+                            printed.push('\n');
+                        }
+                    }
+                }
+                if printed.trim().is_empty() {
+                    continue;
+                }
+                let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK.min(left));
+                left -= lines.iter().map(|line| line.len() + 1).sum::<usize>();
+                failed.push(FailedCheck {
+                    id: gate.id.clone(),
+                    lines,
+                    omitted,
+                });
+            }
+        }
+        drop(home);
+        *self.failed.borrow_mut() = failed;
         // The report holds the gates' assertions in declaration order; the gate that decided
         // is the first whose assertion shares the report's truth.
         let decided = bundle

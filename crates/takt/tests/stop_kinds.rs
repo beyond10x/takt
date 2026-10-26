@@ -53,6 +53,14 @@ stops! {
         Stop::DiskLow { path: "/srv/tree".into(), free_bytes: 64 << 20, min_bytes: 10 << 30 };
     Stop::ActiveTime { .. } => Some(STOP_KINDS[10]),
         Stop::ActiveTime { budget: 600, active: 612.5, waited: 1140.0 };
+    Stop::RedBase { .. } => Some(STOP_KINDS[11]),
+        Stop::RedBase {
+            revision: "0123456789abcdef".to_owned(),
+            tests: vec!["test_done_marks_one_item".to_owned()],
+            rerun: None,
+        };
+    Stop::RepeatedTestFailure { .. } => Some(STOP_KINDS[12]),
+        Stop::RepeatedTestFailure { tests: vec!["a::two".to_owned()], count: 3 };
 }
 
 /// A stop of every variant, one per row and each of its own row's variant; each display opens

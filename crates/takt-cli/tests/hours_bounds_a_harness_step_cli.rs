@@ -82,6 +82,7 @@ fn a_claude_that_sleeps_past_the_hour_budget_is_killed_and_the_run_exits_on_hour
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args([
             "run",
+            "--continue-past-red-base",
             "--repo",
             repo.to_str().expect("utf-8"),
             "--intent",

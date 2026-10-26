@@ -668,11 +668,24 @@ fn a_failing_gate_command_holds_the_gate_red_and_opens_no_pull_request() {
     assert_eq!(world.pull_requests(), 0, "stdout {out} stderr {err}");
     let mut ran = world.log("gate-log");
     ran.sort();
-    let mut expected: Vec<String> = gates.iter().flat_map(|_| gate_commands()).collect();
+    // A failed `process.succeeded` command keeps only that it failed, so the gate runs it once
+    // more to read what it printed: the failing clippy command runs twice a gate run.
+    let mut expected: Vec<String> = gates
+        .iter()
+        .flat_map(|_| {
+            let commands = gate_commands();
+            let failed: Vec<String> = commands
+                .iter()
+                .filter(|command| command.starts_with("cargo clippy"))
+                .cloned()
+                .collect();
+            commands.into_iter().chain(failed)
+        })
+        .collect();
     expected.sort();
     assert_eq!(
         ran, expected,
-        "each gate run ran its five commands: stdout {out}"
+        "each gate run ran its five commands, and its failing one once more: stdout {out}"
     );
     world.assert_no_planted_python();
     assert!(
