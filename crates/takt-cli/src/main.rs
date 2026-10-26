@@ -602,8 +602,70 @@ struct RunArgs {
     /// what the case keeps. Not read by any other case.
     #[arg(long)]
     install_root: Option<PathBuf>,
+    /// A TOML file of the run's configuration: `iterations`, `hours`, `harness`, `model`,
+    /// `endpoint_file` (a relative path read beside the file), `forge` and `test_cmd`, each the
+    /// flag's of that name. A flag given on the command line wins over the file, the file over
+    /// the flag's default. The file's `endpoint_file` is read only when the harness is `harness`.
+    /// Any other key is refused before the case opens, naming the file and the line, never a
+    /// value written there. A container takes its run from a mounted one.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
     #[command(flatten)]
     looping: LoopArgs,
+}
+
+impl RunArgs {
+    /// Fills each loop flag `matches` did not take from the command line with `--config`'s
+    /// value, when the file sets it; without `--config`, nothing changes.
+    fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
+        let Some(path) = &self.config else {
+            return Ok(());
+        };
+        let file = takt::run_config::RunConfig::read(path)?;
+        let unset = |id: &str| {
+            !matches!(
+                matches.value_source(id),
+                Some(clap::parser::ValueSource::CommandLine)
+            )
+        };
+        let looping = &mut self.looping;
+        if unset("iterations") && file.iterations.is_some() {
+            looping.iterations = file.iterations;
+        }
+        if unset("hours") && file.hours.is_some() {
+            looping.hours = file.hours;
+        }
+        if unset("model") && file.model.is_some() {
+            looping.model = file.model;
+        }
+        if unset("forge") && file.forge.is_some() {
+            looping.forge = file.forge;
+        }
+        if let Some(harness) = file.harness.filter(|_| unset("harness")) {
+            looping.harness = harness;
+        }
+        // The file's endpoint is b10x-harness's: under another harness, which a flag may have
+        // chosen over the file's, it is left out rather than refused as a flag nobody gave.
+        if unset("endpoint_file") && file.endpoint_file.is_some() && looping.harness == "harness" {
+            looping.endpoint.endpoint_file = file.endpoint_file;
+        }
+        if let Some(test_cmd) = file.test_cmd.filter(|_| unset("test_cmd")) {
+            looping.test_cmd = test_cmd;
+        }
+        Ok(())
+    }
+}
+
+/// The command line parsed, a `takt run --config` file applied under it.
+fn parsed() -> Result<Cli> {
+    use clap::{CommandFactory as _, FromArgMatches as _};
+    let matches = Cli::command().get_matches();
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if let (Commands::Run(args), Some(run)) = (&mut cli.command, matches.subcommand_matches("run"))
+    {
+        args.configured(run)?;
+    }
+    Ok(cli)
 }
 
 /// What a run's loop is given, a scenario run's as a plain run's.
@@ -779,7 +841,13 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match parsed() {
+        Ok(cli) => cli,
+        Err(error) => {
+            eprintln!("takt: {error:#}");
+            return ExitCode::from(EXIT_REFUSED);
+        }
+    };
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     match run(cli, &mut out) {
@@ -1002,6 +1070,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 case_id,
                 scenarios,
                 install_root,
+                config: _,
                 looping,
             } = *args;
             looping.check()?;
