@@ -6,8 +6,13 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- The image ships `b10x-gates` 0.1.23, `pkg-config` and the OpenSSL headers, so a run in it scans its edits and tests a repository that builds against OpenSSL.
+
 ### Changed
 
+- The image is built on Debian trixie with the Rust toolchain linked into `/usr/local/bin` where a gate finds it, and sets no `CARGO_HOME`, so cargo writes its caches under `$HOME/.cargo`.
 - takt's three protocols are engineering-protocols 0.10.0's built-ins, unchanged; `takt protocols` lists them as the registry names them, `story-delivery/1`.
 
 ## [0.12.0] - 2026-10-26
