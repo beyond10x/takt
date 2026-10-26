@@ -10,14 +10,15 @@ takt's releases.
 
 - `takt run --story <ID>` resumes or takes the named story instead of the frontier's next; one not listed or not ready is refused before any case opens, exit 1, naming why.
 - `takt run --config` reads YAML (`.yaml`, `.yml`) beside TOML, and a `loom.agent/1` document by its `takt` member: the file Loom mounts for a `LoomAgent` at `/config/agent.yaml`.
-- `--endpoint-token-env <NAME>` (or `[credential] env`, `openai-responses` wire only) stages a variable's key as a token file, removed at exit or on SIGTERM/SIGINT/SIGHUP; no child sees the variable.
+- `--endpoint-token-env <NAME>` (`[credential] env`, `openai-responses` only) stages a variable's key as a file, removed at exit or on SIGTERM, SIGINT, SIGHUP; no child sees it (substrate: README).
 - The image ships `b10x-gates` 0.1.23, `pkg-config` and the OpenSSL headers, so a run in it scans its edits and tests a repository that builds against OpenSSL.
 
 ### Changed
 
 - **Breaking:** the image's entrypoint reads `/config/agent.yaml`, not `/config/run.toml`; `--config` refuses a file whose extension is not `.toml`, `.yaml` or `.yml`.
-- The image is built on Debian trixie with the Rust toolchain linked into `/usr/local/bin` where a gate finds it, and sets no `CARGO_HOME`, so cargo writes its caches under `$HOME/.cargo`.
-- takt's three protocols are engineering-protocols 0.10.0's built-ins, unchanged; `takt protocols` lists them as the registry names them, `story-delivery/1`.
+- The image is built on Debian trixie with the Rust toolchain, unwritable by the run, linked into `/usr/local/bin` where a gate finds it; no `CARGO_HOME`, so cargo caches under `$HOME/.cargo`.
+- **Breaking:** `takt protocols` lists the three protocols as engineering-protocols 0.10.0, whose built-ins they now are, names them: `story-delivery/1`; either spelling is read.
+- `b10x-loom-sdk` moves from loom 0.41.0 to 0.43.0, with metaharness 0.19.0; the image ships b10x-harness 0.20.0, the version metaharness 0.19.0 pins.
 
 ## [0.12.0] - 2026-10-26
 

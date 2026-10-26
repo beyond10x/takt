@@ -20,13 +20,25 @@ struct LoomAgentDocument {
     takt: Option<RunConfig>,
 }
 
-/// The members of a `loom.agent/1` document Loom declares (Loom 0.42.0, `loom-sdk` `agent.rs`
+/// The members of a `loom.agent/1` document Loom declares (Loom 0.43.0, `loom-sdk` `agent.rs`
 /// `spec`). takt reads none of them; a member that is neither one of these nor `takt` is refused,
 /// so a run field written beside `format`, or `takt` misspelt, is not dropped.
 pub const LOOM_AGENT_MEMBERS: [&str; 13] = [
     "format", "agent", "model", "session", "loops", "states", "bindings", "channel", "writes",
     "policy", "expose", "runtime", "deploy",
 ];
+
+/// Whether every number in `value` is finite.
+fn finite(value: &serde_yaml_ng::Value) -> bool {
+    match value {
+        serde_yaml_ng::Value::Number(number) => number.as_f64().is_none_or(f64::is_finite),
+        serde_yaml_ng::Value::Sequence(items) => items.iter().all(finite),
+        serde_yaml_ng::Value::Mapping(mapping) => mapping
+            .iter()
+            .all(|(key, item)| finite(key) && finite(item)),
+        _ => true,
+    }
+}
 
 /// Whether `value` or anything in it carries a YAML tag, which neither takt nor Loom declares.
 fn tagged(value: &serde_yaml_ng::Value) -> bool {
@@ -42,8 +54,12 @@ fn tagged(value: &serde_yaml_ng::Value) -> bool {
 
 /// The run configuration `value` holds, its types as strict as TOML's: a number or a boolean
 /// where a string field is, or a fraction where `iterations` is, is refused. YAML reads any
-/// scalar as a string when a string is asked for; JSON's reader does not.
+/// scalar as a string when a string is asked for; JSON's reader does not. A number that is not
+/// finite (`.inf`, `.nan`) is refused: JSON has none, and the round trip would read it as unset.
 fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
+    if !finite(value) {
+        return Err(refused(path, None));
+    }
     serde_json::to_value(value)
         .ok()
         .and_then(|value| serde_json::from_value(value).ok())
