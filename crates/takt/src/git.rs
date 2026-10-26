@@ -128,23 +128,10 @@ pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<St
             said
         })
     });
-    let mut kept = Vec::new();
-    let mut over = false;
-    if let Some(stdout) = child.stdout.take() {
-        let read = stdout
-            .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
-            .read_to_end(&mut kept)
-            .with_context(|| format!("read git {}", args.join(" ")));
-        if let Err(error) = read {
-            let _ = child.kill();
-            let _ = child.wait();
-            if let Some(reader) = stderr {
-                let _ = reader.join();
-            }
-            return Err(error);
-        }
-        over = kept.len() > limit;
-    }
+    let (kept, over, stderr) = match child.stdout.take() {
+        Some(stdout) => read_bounded_stdout(stdout, &mut child, stderr, limit, args)?,
+        None => (Vec::new(), false, stderr),
+    };
     if over {
         let _ = child.kill();
     }
@@ -167,6 +154,77 @@ pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<St
         );
     }
     Ok(Some(String::from_utf8_lossy(&kept).into_owned()))
+}
+
+/// Reads a bounded stdout stream. On a read error, stop and reap the child and join its stderr
+/// reader before returning the original read error.
+fn read_bounded_stdout<R: std::io::Read>(
+    stdout: R,
+    child: &mut std::process::Child,
+    stderr: Option<std::thread::JoinHandle<Vec<u8>>>,
+    limit: usize,
+    args: &[&str],
+) -> Result<(Vec<u8>, bool, Option<std::thread::JoinHandle<Vec<u8>>>)> {
+    use std::io::Read as _;
+
+    let mut kept = Vec::new();
+    let read = stdout
+        .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
+        .read_to_end(&mut kept)
+        .with_context(|| format!("read git {}", args.join(" ")));
+    if let Err(error) = read {
+        let _ = child.kill();
+        let _ = child.wait();
+        if let Some(reader) = stderr {
+            let _ = reader.join();
+        }
+        return Err(error);
+    }
+    let over = kept.len() > limit;
+    Ok((kept, over, stderr))
+}
+
+#[cfg(all(test, unix))]
+mod bounded_stdout_tests {
+    use super::read_bounded_stdout;
+    use std::io::{self, Read as _};
+    use std::process::{Command, Stdio};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct BrokenReader;
+
+    impl io::Read for BrokenReader {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::Other, "injected stdout read failure"))
+        }
+    }
+
+    #[test]
+    fn stdout_read_error_reaps_child_and_joins_stderr_reader() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start child");
+        let joined = Arc::new(AtomicBool::new(false));
+        let reader_joined = Arc::clone(&joined);
+        let stderr = child.stderr.take().map(|mut stream| {
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                let _ = stream.read_to_end(&mut bytes);
+                reader_joined.store(true, Ordering::SeqCst);
+                bytes
+            })
+        });
+
+        let error = read_bounded_stdout(BrokenReader, &mut child, stderr, 16, &["test"])
+            .expect_err("the injected stdout error is returned");
+        assert!(format!("{error:#}").contains("injected stdout read failure"));
+        assert!(child.try_wait().expect("check child status").is_some());
+        assert!(joined.load(Ordering::SeqCst), "stderr reader was not joined");
+    }
 }
 
 /// One object [`read_objects`] read: its id, its type and its bytes as the repository holds
