@@ -6,6 +6,16 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-10-26
+
+0.13.0's release run failed on macOS, so 0.13.0 has no GitHub Release; 0.13.1 is the first release that ships its
+changes, with the macOS fix below.
+
+### Fixed
+
+- `--endpoint-token-env` stages its key on macOS: links in a candidate's ancestors are resolved first, so the temporary directory under `/var`, a link, passes; a candidate that is a link is refused.
+- Three `--endpoint-token-env` tests that read `/proc` or write outside the tree from the test command run on Linux only.
+
 ## [0.13.0] - 2026-10-26
 
 takt runs as a Loom agent: `--config` reads the `loom.agent/1` document, `--endpoint-token-env` takes the key from the
@@ -514,7 +524,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.13.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.13.1...HEAD
+[0.13.1]: https://github.com/beyond10x/takt/compare/0.13.0...0.13.1
 [0.13.0]: https://github.com/beyond10x/takt/compare/0.12.0...0.13.0
 [0.12.0]: https://github.com/beyond10x/takt/compare/0.11.1...0.12.0
 [0.11.1]: https://github.com/beyond10x/takt/compare/0.11.0...0.11.1

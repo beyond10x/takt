@@ -192,6 +192,8 @@ fn an_api_key_on_the_messages_wire_is_not_handed_as_a_subscription_oauth_token()
 /// variable's bytes stay in takt's initial environment block, which `/proc/<takt>/environ`
 /// reads back to any process of the same user, the test command takt starts among them. The
 /// probe walks from its parent up and reads each ancestor's `/proc/<pid>/environ`.
+/// Linux only: `/proc` and a test command allowed to write outside the tree.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_test_command_cannot_read_the_value_back_from_takts_proc_environ() {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -308,6 +310,8 @@ fn a_run_ended_by_sigterm_or_sigint_removes_the_staged_token() {
 /// reads takt's initial environment block back through `/proc/<takt>/environ`, where
 /// `remove_var` left the value. The double walks from its parent up, as the test command's
 /// probe above does (which a user namespace of its own keeps out).
+/// Linux only: `/proc`.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_harness_session_cannot_read_the_value_back_from_takts_proc_environ() {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
@@ -353,6 +357,8 @@ fn the_harness_session_cannot_read_the_value_back_from_takts_proc_environ() {
 /// The configuration route: a `loom.agent/1` document's `takt` member names the harness and an
 /// endpoint file whose `[credential]` is `env`; no flag names either. The variable is taken out
 /// before the test command starts, and the case records it by name.
+/// Linux only: the probe writes outside the tree, which the macOS test sandbox refuses.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_loom_agent_document_names_the_variable_through_its_endpoint_file() {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
