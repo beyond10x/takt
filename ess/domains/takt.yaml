@@ -374,25 +374,25 @@ types:
   # `token_pointer` are the token file's, the staged file's with no pointer for a variable, and
   # empty for a secret, and the secret's name as `api_key_secret`, both set from the one
   # configuration so they agree.
-  # read from: crates/takt/src/harness.rs:2689-2693
-  # read from: crates/takt/src/harness.rs:2698-2706
-  # read from: crates/takt/src/harness.rs:2790-2792
+  # read from: crates/takt/src/harness.rs:2702-2706
+  # read from: crates/takt/src/harness.rs:2711-2719
+  # read from: crates/takt/src/harness.rs:2803-2805
   # read from: crates/takt-cli/src/main.rs:1550-1557
   # read from: crates/takt-cli/src/main.rs:1561-1577
   # read from: crates/takt-cli/src/main.rs:1721-1723
   # read from: crates/takt/src/harness.rs:2050-2051
   # read from: crates/takt/src/harness.rs:2055-2058
-  # read from: crates/takt/src/harness.rs:2505-2511
-  # read from: crates/takt/src/harness.rs:2687-2689
-  # read from: crates/takt/src/harness.rs:2708-2724
+  # read from: crates/takt/src/harness.rs:2518-2524
+  # read from: crates/takt/src/harness.rs:2700-2702
+  # read from: crates/takt/src/harness.rs:2721-2737
   # read from: crates/takt/src/harness.rs:486-501
   # read from: crates/takt/src/harness.rs:209-211
-  # read from: crates/takt/src/harness.rs:2735-2744
-  # read from: crates/takt/src/harness.rs:2806-2808
-  # read from: crates/takt/src/harness.rs:2825-2829
-  # read from: crates/takt/src/harness.rs:2928-2935
-  # read from: crates/takt/src/harness.rs:2972-2980
-  # read from: crates/takt/src/harness.rs:3014-3025
+  # read from: crates/takt/src/harness.rs:2748-2757
+  # read from: crates/takt/src/harness.rs:2819-2821
+  # read from: crates/takt/src/harness.rs:2838-2842
+  # read from: crates/takt/src/harness.rs:2941-2948
+  # read from: crates/takt/src/harness.rs:2985-2993
+  # read from: crates/takt/src/harness.rs:3027-3038
   # read from: crates/takt/src/harness.rs:200-204
   # read from: crates/takt/src/harness.rs:297-303
   # read from: crates/takt/src/harness.rs:576-577
@@ -430,12 +430,12 @@ types:
   # A relative token file is made absolute against the current directory before it is checked,
   # handed to the session or recorded, since b10x-harness runs in a scratch copy of the tree.
   # read from: crates/takt/src/harness.rs:2051-2062
-  # read from: crates/takt/src/harness.rs:2803-2804
-  # read from: crates/takt/src/harness.rs:2860-2861
-  # read from: crates/takt/src/harness.rs:2886-2887
-  # read from: crates/takt/src/harness.rs:2894-2903
-  # read from: crates/takt/src/harness.rs:2825-2829
-  # read from: crates/takt/src/harness.rs:2916-2923
+  # read from: crates/takt/src/harness.rs:2816-2817
+  # read from: crates/takt/src/harness.rs:2873-2874
+  # read from: crates/takt/src/harness.rs:2899-2900
+  # read from: crates/takt/src/harness.rs:2907-2916
+  # read from: crates/takt/src/harness.rs:2838-2842
+  # read from: crates/takt/src/harness.rs:2929-2936
   # read from: Loom 0.39.1, crates/loom-session-executor/src/lib.rs:460-467
   # read from: Loom 0.39.1, crates/loom-session-executor/src/lib.rs:820-830
   - name: takt.work.EndpointCredential
@@ -459,7 +459,7 @@ types:
 
   # A secret's name, written `<namespace>/<name>`: each part non-empty, with no `/`, no white
   # space and no control character. A refusal does not repeat what was given.
-  # read from: crates/takt/src/harness.rs:2525-2530
+  # read from: crates/takt/src/harness.rs:2538-2543
   - name: takt.work.SecretName
     kind: struct
     fields:
@@ -490,9 +490,10 @@ types:
   # an unset or empty variable is refused, exit 1, naming it and printing no value; else the
   # value is written into a file of mode 0600, one link, in a new directory of mode 0700 under
   # the first of `$XDG_RUNTIME_DIR` (when set and absolute), `/dev/shm` and the system
-  # temporary directory whose every directory from `/` is no link, is owned by root or takt's
-  # user and is writable by nobody else unless it is root's and sticky, the rule b10x-harness's
-  # token-file reader applies; none passing is refused, exit 1, naming each candidate and why.
+  # temporary directory, links in its ancestors resolved (macOS's `/var`), whose every directory
+  # from `/` is no link, is owned by root or takt's user and is writable by nobody else unless it
+  # is root's and sticky, the rule b10x-harness's token-file reader applies; none passing is
+  # refused, exit 1, naming each candidate and why.
   # The session executor is handed the file as its endpoint's `token_file`, with no pointer and
   # no `api_key_secret`. The harness holds it, so the file and its directory are removed when
   # the run ends, on success or on an error. While it is staged, SIGTERM, SIGINT and SIGHUP
@@ -504,25 +505,26 @@ types:
   # `opened` line as `kind` `environment` with the `name` alone.
   # read from: crates/takt/src/harness.rs:2066
   # read from: crates/takt/src/harness.rs:2072-2076
-  # read from: crates/takt/src/harness.rs:2556-2559
+  # read from: crates/takt/src/harness.rs:2569-2572
   # read from: crates/takt/src/harness.rs:2342-2347
   # read from: crates/takt/src/harness.rs:2360-2367
-  # read from: crates/takt/src/harness.rs:2482-2499
-  # read from: crates/takt/src/harness.rs:2410
-  # read from: crates/takt/src/harness.rs:2427
-  # read from: crates/takt/src/harness.rs:2384
+  # read from: crates/takt/src/harness.rs:2495-2512
+  # read from: crates/takt/src/harness.rs:2411
+  # read from: crates/takt/src/harness.rs:2428
+  # read from: crates/takt/src/harness.rs:2385
   # read from: crates/takt/src/harness.rs:2177-2183
   # read from: crates/takt/src/harness.rs:308-313
   # read from: crates/takt/src/harness.rs:493-495
   # read from: crates/takt/src/harness.rs:2042
-  # read from: crates/takt/src/harness.rs:2840-2844
+  # read from: crates/takt/src/harness.rs:2853-2857
   # read from: crates/takt/src/harness.rs:2090-2098
   # read from: crates/takt/src/harness.rs:2126-2130
   # read from: crates/takt/src/harness.rs:2208
   # read from: crates/takt/src/harness.rs:2282
   # read from: crates/takt/src/harness.rs:2303-2327
   # read from: crates/takt/src/harness.rs:2270
-  # read from: crates/takt/src/harness.rs:2377
+  # read from: crates/takt/src/harness.rs:2378
+  # read from: crates/takt/src/harness.rs:2470-2474
   # read from: crates/takt-cli/src/main.rs:862-864
   # read from: crates/takt-cli/src/main.rs:1703
   # read from: crates/takt-cli/src/main.rs:1504-1512

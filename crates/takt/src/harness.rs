@@ -2370,8 +2370,9 @@ impl StagedToken {
         let euid = unsafe { libc::geteuid() };
         let mut refused = Vec::new();
         for candidate in candidates {
-            match protected_directory(candidate, euid)
-                .and_then(|()| Self::write_under(candidate, name, value, euid))
+            let resolved = resolved_parent(candidate);
+            match protected_directory(&resolved, euid)
+                .and_then(|()| Self::write_under(&resolved, name, value, euid))
             {
                 Ok(mut staged) => {
                     staged.slot = on_signal::register(&staged.file, &staged.dir);
@@ -2459,6 +2460,18 @@ impl StagedToken {
     #[must_use]
     pub fn file(&self) -> &Path {
         &self.file
+    }
+}
+
+/// `dir` with the links in its parent resolved, so a system temporary directory under a linked
+/// ancestor (macOS's `/var`, a link to `/private/var`) is checked, staged under and handed to
+/// b10x-harness as the path it is. `dir` itself is not resolved: a candidate that is a link is
+/// still refused. A parent that cannot be resolved leaves `dir` as given, to be refused by name.
+fn resolved_parent(dir: &Path) -> std::path::PathBuf {
+    match (dir.is_absolute(), dir.parent(), dir.file_name()) {
+        (true, Some(parent), Some(name)) => std::fs::canonicalize(parent)
+            .map_or_else(|_| dir.to_path_buf(), |parent| parent.join(name)),
+        _ => dir.to_path_buf(),
     }
 }
 
@@ -5479,7 +5492,8 @@ mod endpoint_tests {
         )
         .expect("staged under the third candidate");
         assert_eq!(staged.name(), "LLM_KEY");
-        assert_eq!(staged.dir().parent(), Some(good.as_path()));
+        let good_resolved = std::fs::canonicalize(&good).expect("the candidate resolves");
+        assert_eq!(staged.dir().parent(), Some(good_resolved.as_path()));
         assert_eq!(staged.file().parent(), Some(staged.dir()));
         let dir_meta = std::fs::symlink_metadata(staged.dir()).expect("the directory");
         assert!(dir_meta.is_dir());
@@ -5535,6 +5549,35 @@ mod endpoint_tests {
         assert!(message.contains("writable by group or others"), "{message}");
         assert!(message.contains("not absolute"), "{message}");
         assert_eq!(std::fs::read_dir(&open).expect("open").count(), 0);
+    }
+
+    /// A candidate under a linked ancestor (macOS's system temporary directory sits under `/var`,
+    /// a link to `/private/var`) is staged under the path it resolves to; a candidate that is
+    /// itself a link is still refused.
+    #[test]
+    fn staging_under_a_linked_ancestor_uses_the_resolved_path() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch("stage-ancestor");
+        let real = dir.0.join("real");
+        let alias = dir.0.join("alias");
+        std::fs::create_dir(&real).expect("the ancestor");
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o700)).expect("private");
+        std::os::unix::fs::symlink(&real, &alias).expect("a linked ancestor");
+        let good = real.join("good");
+        std::fs::create_dir(&good).expect("a candidate");
+        std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o700)).expect("private");
+        std::os::unix::fs::symlink(&good, real.join("link")).expect("a link");
+        let given = value(MARKER);
+        let message = format!(
+            "{:#}",
+            StagedToken::stage("LLM_KEY", Some(&given), &[alias.join("link")])
+                .expect_err("a candidate that is a link")
+        );
+        assert!(message.contains("is a symbolic link"), "{message}");
+        let staged = StagedToken::stage("LLM_KEY", Some(&given), &[alias.join("good")])
+            .expect("staged under the resolved candidate");
+        let resolved = std::fs::canonicalize(&good).expect("the candidate resolves");
+        assert_eq!(staged.dir().parent(), Some(resolved.as_path()));
     }
 
     /// The default candidates: `$XDG_RUNTIME_DIR` when it is absolute, `/dev/shm`, the system
