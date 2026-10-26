@@ -39,7 +39,7 @@ LABEL org.opencontainers.image.source="https://github.com/beyond10x/takt" \
       org.opencontainers.image.revision="${REVISION}" \
       org.opencontainers.image.licenses="Apache-2.0"
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates git gcc libc6-dev pkg-config libssl-dev python3 \
+ && apt-get install -y --no-install-recommends ca-certificates git gcc libc6-dev pkg-config libssl-dev python3 tini \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 10001 --user-group --create-home --home-dir /var/lib/takt takt \
  && mkdir -p /workspace /config \
@@ -51,4 +51,4 @@ COPY --from=build /src/target/release/takt /usr/local/bin/takt
 USER 10001:10001
 ENV HOME=/var/lib/takt
 WORKDIR /workspace
-ENTRYPOINT ["takt", "run", "--repo", "/workspace", "--config", "/config/agent.yaml"]
+ENTRYPOINT ["tini", "--", "takt", "run", "--repo", "/workspace", "--config", "/config/agent.yaml"]

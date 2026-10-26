@@ -2188,7 +2188,8 @@ impl Drop for StagedToken {
 /// staged a handler is installed for each of those signals whose disposition was not to
 /// ignore it; it unlinks every staged file and removes its directory with async-signal-safe
 /// calls on paths made before, then restores the default disposition and raises the signal
-/// again, so takt ends as the signal would have ended it. When the last token is dropped, the
+/// again, so takt ends as the signal would have ended it (as a PID 1, which ignores a signal it
+/// raises at itself, by `_exit(128 + signal)`). When the last token is dropped, the
 /// dispositions found are restored; a handler found (takt installs none of its own) is not
 /// called on the signal. SIGKILL cannot be caught: it leaves the token behind.
 mod on_signal {

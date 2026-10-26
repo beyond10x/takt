@@ -22,7 +22,7 @@ The name: takt time is the pace at which units of work are finished. One run is 
 |---|---|---|
 | Loom | the runtime takt runs on: Commission's runtime (`run_until_blocked`) drives a case step by step; the governor (`CanonGovernor`) decides it with Canon over the case's files; an `AgentExecutor` proposes and an `EffectPort` performs; the session executor runs a harness session over metaharness (`loom_sdk::session`, crate `b10x-loom-session-executor`); the `SubstrateRunner` confines a test command | `b10x-loom-sdk` 0.43.0 (`Cargo.toml`) |
 | Canon | `protocol/1`; `evaluate` is a pure function from protocol, case snapshot, evidence records, authority and instant to claims (TRUE, FALSE, UNKNOWN), obligations, admissible actions and legitimate outcomes, with an explanation; evidence is bound to the revision it was observed on. takt reaches it through Loom's governor and calls no `b10x_canon::eval` itself (`crates/takt/tests/no_own_evaluation.rs`) | `b10x-canon` 0.6.0 |
-| Engineering protocols | `software.change/1` and the other engineering protocols as Canon documents, validated by Canon; assertion providers and the gates command line | `b10x-canon-engineering` 0.9.0 |
+| Engineering protocols | `software.change/1` and the other engineering protocols as Canon documents, validated by Canon; assertion providers and the gates command line | `b10x-canon-engineering` 0.10.0 |
 | AEP | the planning store: stories, scope, waves derived from scope, evidence on a story | `aep` 0.74.0 |
 | metaharness | the harness sessions Loom's session executor starts: Claude Code, Codex or b10x-harness (`--harness claude\|codex\|harness`), each working in a scratch copy of the case tree and proposing its change | `metaharness` 0.19.0 (`Cargo.lock`) |
 
