@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-configuration-names-the-story-and-token-variable
 kind: story
-status: draft
+status: active
 title: The run configuration names the story and the endpoint's token variable
 summary: story and endpoint_token_env in the run configuration file, so a deployment needs no flags (second kind-cluster trial)
 tags:
@@ -10,7 +10,15 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 2
+scope:
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: cited
+  path: crates/takt/src/run_config.rs
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T20:53:20Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-26T20:53:55Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 

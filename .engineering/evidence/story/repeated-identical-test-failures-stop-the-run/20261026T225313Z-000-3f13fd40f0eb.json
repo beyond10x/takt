@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-26T22:53:13Z",
+  "actor": "human:timo",
+  "artifact": "story:repeated-identical-test-failures-stop-the-run",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked at 9f3ac91: 173 results, 1818 passed, 0 failed, 5 ignored, exit 0; b10x-takt-cli tests/test_failure_stops_cli.rs: test result: ok. 8 passed; 0 failed; 0 ignored; tests/test_failure_stops_cli_adv1.rs: test result: ok. 5 passed; 0 failed; 0 ignored; b10x-takt tests/test_failures_adv1.rs: test result: ok. 1 passed; 0 failed; tests/stop_kinds.rs: test result: ok. 2 passed; 0 failed",
+    "reference": "crates/takt-cli/tests/test_failure_stops_cli.rs"
+  }
+}

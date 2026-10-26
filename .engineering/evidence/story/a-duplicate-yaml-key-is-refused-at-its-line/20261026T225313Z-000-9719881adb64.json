@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-26T22:53:13Z",
+  "actor": "human:timo",
+  "artifact": "story:a-duplicate-yaml-key-is-refused-at-its-line",
+  "kind": "story",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked at 9f3ac91: 173 results, 1818 passed, 0 failed, 5 ignored, exit 0; b10x-takt tests/run_config_adv1.rs: test result: ok. 6 passed; 0 failed; 0 ignored (the case runs, pinned to line 1)",
+    "reference": "crates/takt/tests/run_config_adv1.rs"
+  }
+}

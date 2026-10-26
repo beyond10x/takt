@@ -241,6 +241,7 @@ fn run(tree: &Scratch, command: &str, act: fn(&Path)) -> Ran {
     let protocol = tree.root.join("protocol.yaml").display().to_string();
     let mut run = Run::open(tree, options(protocol), &harness, &validators).expect("opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     Ran {
         stop,

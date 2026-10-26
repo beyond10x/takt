@@ -6,6 +6,23 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-26
+
+A run whose tests are red stops instead of spending model calls: at a red base before the first
+model call, and after two test runs in a row at new revisions that fail the same tests.
+
+### Added
+
+- `takt run` and `takt scenario run` stop `RedBase` (exit 3) when a case's first test run fails before any step changed its base, with no model call, naming the failed tests and the rerun hint.
+- They stop `RepeatedTestFailure` (exit 3) when two test runs in a row, each at a new revision, fail the same tests; the stop names the tests.
+- A resume after either stop runs the tests again before any model call and stops again while they fail the same way.
+- `--continue-past-red-base` (`takt run`, `takt scenario run`; `continue_past_red_base` in `takt run --config`) goes on past a red base.
+
+### Changed
+
+- **Breaking:** a run whose base fails its tests stops `RedBase` by default; `--continue-past-red-base` goes on as before.
+- A failing `tests.run` summary names up to 64 failed tests (cargo, Python unittest, pytest) and cargo's rerun hint; its printed `effect:` line stays bounded.
+
 ## [0.13.1] - 2026-10-26
 
 0.13.0's release run failed on macOS, so 0.13.0 has no GitHub Release; 0.13.1 is the first release that ships its
@@ -524,7 +541,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.13.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.14.0...HEAD
+[0.14.0]: https://github.com/beyond10x/takt/compare/0.13.1...0.14.0
 [0.13.1]: https://github.com/beyond10x/takt/compare/0.13.0...0.13.1
 [0.13.0]: https://github.com/beyond10x/takt/compare/0.12.0...0.13.0
 [0.12.0]: https://github.com/beyond10x/takt/compare/0.11.1...0.12.0

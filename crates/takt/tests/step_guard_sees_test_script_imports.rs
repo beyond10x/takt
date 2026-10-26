@@ -261,6 +261,7 @@ fn run_writing(tree: &Scratch, command: &str, files: &[(&str, &str)]) -> Ran {
     let mut run =
         Run::open(tree, options(protocol), &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     Ran {
         stop,
@@ -917,6 +918,7 @@ fn the_test_and_gate_commands_run_in_a_fresh_home() {
     };
     let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out);
     assert_eq!(

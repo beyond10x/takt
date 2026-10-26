@@ -611,7 +611,8 @@ struct RunArgs {
     install_root: Option<PathBuf>,
     /// A file of the run's configuration, TOML (`.toml`) or YAML (`.yaml`, `.yml`):
     /// `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path read beside
-    /// the file), `forge` and `test_cmd`, each the flag's of that name. A YAML `loom.agent/1`
+    /// the file), `forge`, `test_cmd` and `continue_past_red_base` (a boolean), each the flag's
+    /// of that name. A YAML `loom.agent/1`
     /// document, as Loom mounts it at `/config/agent.yaml`, gives them in its `takt` member, and
     /// nothing without one. A flag given on the command line wins over the file, the file over
     /// the flag's default. The file's `endpoint_file` is read only when the harness is `harness`.
@@ -660,6 +661,12 @@ impl RunArgs {
         }
         if let Some(test_cmd) = file.test_cmd.filter(|_| unset("test_cmd")) {
             looping.test_cmd = test_cmd;
+        }
+        if let Some(go_on) = file
+            .continue_past_red_base
+            .filter(|_| unset("continue_past_red_base"))
+        {
+            looping.continue_past_red_base = go_on;
         }
         Ok(())
     }
@@ -767,6 +774,11 @@ struct LoopArgs {
     /// run does. The first line the run prints and its `opened` event name the adapter.
     #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
     confinement: String,
+    /// Go on past a red base: the case's first `tests.run` failing before any step changed the
+    /// tree does not stop the run (`RedBase`), nor does its check again on a resume, for a base
+    /// whose tests fail on purpose.
+    #[arg(long)]
+    continue_past_red_base: bool,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -808,7 +820,8 @@ impl Harness for NoHarness {
 const EXIT_DONE: u8 = 0;
 /// Exit 1: refused before the run, the reason on stderr (`main`).
 const EXIT_REFUSED: u8 = 1;
-/// Exit 3: the run stopped on a budget, or with nothing more it may do.
+/// Exit 3: the run stopped on a budget, with nothing more it may do, or on the tests: red at the
+/// base, or failing the same tests again.
 const EXIT_STOPPED: u8 = 3;
 /// Exit 4: the run stopped for an approval; `takt approve` is the next step.
 const EXIT_APPROVAL: u8 = 4;
@@ -829,7 +842,7 @@ const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused or NoProgress; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint) or RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
@@ -842,7 +855,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused or NoProgress; the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint) or RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
@@ -883,7 +896,7 @@ fn main() -> ExitCode {
 /// | 0 | `Completed`; the frontier had nothing ready; `approve` and `protocols` done |
 /// | 1 | refused before the run, the reason on stderr, no step run |
 /// | 2 | the arguments do not parse (clap) |
-/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress` |
+/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `RedBase`, `RepeatedTestFailure` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
 /// | 6 | `Waiting`: the run waited on the forge until its budget ended, or waits on something local and stopped at once; the next run resumes the case |
@@ -2065,6 +2078,9 @@ fn finish(
         run.cap_active_time(seconds);
     }
     run.stop_when_unperformable();
+    if looping.continue_past_red_base {
+        run.continue_past_red_base();
+    }
     run.stop_when_disk_below(
         looping.min_free_gib.saturating_mul(1 << 30),
         std::env::var_os("CARGO_TARGET_DIR")

@@ -60,7 +60,7 @@ One open-source binary, Apache-2.0. Site: <https://beyond10x.github.io/takt/>.
 
 ## Status
 
-0.13.1 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.14.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and `self.improvement/1`
 embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64). A harness step
 runs through a metaharness session with Claude Code, Codex or b10x-harness (`--harness`). Since 0.1.0 it
@@ -132,7 +132,7 @@ a takt that is not PID 1, as uid 10001, whose home is
 | path | what | mode |
 |---|---|---|
 | `/workspace` | a git checkout of the repository to work on, its planning store included | read-write, owned by uid 10001 |
-| `/config/agent.yaml` | the run's configuration: a `loom.agent/1` document whose `takt` member holds `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, each a `takt run` flag's (`takt run --help`, `--config`), or those fields alone as YAML | read-only |
+| `/config/agent.yaml` | the run's configuration: a `loom.agent/1` document whose `takt` member holds `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, `continue_past_red_base` (a boolean: the run goes on past a `RedBase`), each a `takt run` flag's (`takt run --help`, `--config`), or those fields alone as YAML | read-only |
 | `/config/endpoint.toml` | the endpoint file the configuration names as `endpoint_file: endpoint.toml`: `base_url`, `wire`, `model` and a `[credential]` table naming the credential, `secret = "<namespace>/<name>"`, `token_file` or `env = "<NAME>"`, never a token | read-only |
 
 A `LoomAgent` of the `Command` variant gets `/config/agent.yaml` from its `spec.agent`, written

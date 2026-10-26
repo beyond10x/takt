@@ -1157,6 +1157,7 @@ fn a_judgement_step_that_edits_the_planning_store_is_refused_and_put_back() {
     .expect("story:ready-one is taken");
     run.record_on(&store);
     let head = git(&repo, &["rev-parse", "HEAD"]);
+    run.continue_past_red_base();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8_lossy(&out).into_owned();
     let dir = run.case.dir.clone();
@@ -1228,6 +1229,7 @@ fn a_judgement_step_that_writes_the_commit_identity_is_refused_as_the_identity()
     .expect("story:ready-one is taken");
     run.record_on(&store);
     let head = git(&repo, &["rev-parse", "HEAD"]);
+    run.continue_past_red_base();
     let stop = run.run(&mut out).expect("the run stops without an error");
     let text = String::from_utf8_lossy(&out).into_owned();
     drop(run);

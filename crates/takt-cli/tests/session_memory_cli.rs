@@ -115,6 +115,7 @@ fn a_session_step_starts_with_auto_memory_off() {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args([
             "run",
+            "--continue-past-red-base",
             "--repo",
             repo.to_str().expect("utf-8"),
             "--intent",

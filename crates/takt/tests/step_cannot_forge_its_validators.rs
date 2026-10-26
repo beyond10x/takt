@@ -239,6 +239,7 @@ fn run(tree: &Scratch, command: &str, act: fn(&Path)) -> Ran {
     let mut run = Run::open(tree, options(tree.protocol(), 4), &harness, &validators)
         .expect("the case opens");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     Ran {
         stop,
@@ -879,6 +880,7 @@ fn tests_run_records_nothing_while_a_file_above_the_tree_differs() {
         .expect("the case opens");
     write(&tree, "../.cargo/config.toml", "x = 1\n");
     let mut out = Vec::new();
+    run.continue_past_red_base();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
     let Ok(Stop::StepRefused(why)) = &stop else {

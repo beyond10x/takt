@@ -1,5 +1,6 @@
 //! A run's configuration file, `takt run --config <FILE>`: the loop's budget, the harness, its
-//! model and endpoint file, the forge and the test command, read from one file so a run started
+//! model and endpoint file, the forge, the test command and whether the run goes on past a red
+//! base, read from one file so a run started
 //! in a container takes them from a mounted file. The file is TOML (`.toml`) or YAML (`.yaml`,
 //! `.yml`), the same fields in either; a YAML file whose `format` is `loom.agent/1` is the agent
 //! document Loom mounts for a `LoomAgent` at `/config/agent.yaml`, and its `takt` member is the
@@ -67,7 +68,8 @@ fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
 }
 
 /// The fields a run configuration file may set, each one a `takt run` flag's: `iterations`,
-/// `hours`, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`. None is required.
+/// `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd` and
+/// `continue_past_red_base`. None is required.
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfig {
@@ -85,9 +87,11 @@ pub struct RunConfig {
     pub forge: Option<String>,
     /// `--test-cmd`.
     pub test_cmd: Option<String>,
+    /// `--continue-past-red-base`.
+    pub continue_past_red_base: Option<bool>,
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, and `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, each optional";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, and `continue_past_red_base`, a boolean, each optional";
 
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
@@ -237,6 +241,26 @@ mod tests {
         );
         assert_eq!(config.forge.as_deref(), Some("none"));
         assert_eq!(config.test_cmd.as_deref(), Some("cargo test"));
+    }
+
+    #[test]
+    fn continue_past_red_base_is_a_boolean_in_either_format() {
+        let path = scratch("red-base", "continue_past_red_base = true\n");
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.continue_past_red_base, Some(true));
+        let path = scratch_named(
+            "red-base-loom",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  continue_past_red_base: false\n",
+        );
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.continue_past_red_base, Some(false));
+        let path = scratch("red-base-string", "continue_past_red_base = \"yes\"\n");
+        let error = format!("{:#}", RunConfig::read(&path).expect_err("refused"));
+        assert!(
+            error.contains("`continue_past_red_base`, a boolean"),
+            "{error}"
+        );
     }
 
     #[test]
