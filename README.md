@@ -120,22 +120,30 @@ takt --version
 ## Container
 
 `Dockerfile` builds an x86_64 image of takt from this source tree, with `aep`, `b10x-harness`,
-`ess`, git, Python 3 and the Rust toolchain beside it (`docker build -t takt:<version> .`).
-No image is published; a cluster loads a local build. The container runs
-`takt run --repo /workspace --config /config/run.toml` as uid 10001, and what it mounts is:
+`b10x-gates`, `ess`, git, Python 3, a C toolchain with `pkg-config` and the OpenSSL headers, and
+the Rust toolchain with clippy and rustfmt beside it (`docker build -t takt:<version> .`). The
+Rust programs are linked into `/usr/local/bin`, so a gate's system path finds them, and no
+`CARGO_HOME` is set: cargo keeps its caches in `$HOME/.cargo`. No image is published; a cluster
+loads a local build. The container runs
+`takt run --repo /workspace --config /config/agent.yaml` as uid 10001, whose home is
+`/var/lib/takt`, and what it mounts is:
 
 | path | what | mode |
 |---|---|---|
 | `/workspace` | a git checkout of the repository to work on, its planning store included | read-write, owned by uid 10001 |
-| `/config/run.toml` | the run's configuration: `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, each a `takt run` flag's (`takt run --help`, `--config`) | read-only |
-| `/config/endpoint.toml` | the endpoint file `run.toml` names as `endpoint_file = "endpoint.toml"`: `base_url`, `wire`, `model` and a `[credential]` table naming the credential, `secret = "<namespace>/<name>"` or `token_file`, never a token | read-only |
+| `/config/agent.yaml` | the run's configuration: a `loom.agent/1` document whose `takt` member holds `iterations` or `hours`, `harness`, `model`, `endpoint_file`, `forge`, `test_cmd`, each a `takt run` flag's (`takt run --help`, `--config`), or those fields alone as YAML | read-only |
+| `/config/endpoint.toml` | the endpoint file the configuration names as `endpoint_file: endpoint.toml`: `base_url`, `wire`, `model` and a `[credential]` table naming the credential, `secret = "<namespace>/<name>"`, `token_file` or `env = "<NAME>"`, never a token | read-only |
 
-Arguments after the image name are flags of `takt run` and win over `run.toml`. The run's
-outcome is in `/workspace/.engineering/cases` and the exit code (`takt run --help`); with
-`forge = "none"` the delivery stays a branch in `/workspace`.
+A `LoomAgent` of the `Command` variant gets `/config/agent.yaml` from its `spec.agent`, written
+verbatim. A Loom release that does not admit a `takt` member in `loom.agent/1` refuses the
+resource, so there the document carries no `takt` member and the run's settings are flags in
+`spec.command.args`. Arguments after the image name are flags of `takt run` and win over the
+file. The run's outcome is in `/workspace/.engineering/cases` and the exit code
+(`takt run --help`); with `forge: none` the delivery stays a branch in `/workspace`. A gates
+policy for `b10x-gates` comes from the deployment (`B10X_GATES_POLICY`), never the image.
 
-The image holds b10x-harness and no other harness, and no `b10x-gates`, `gh` or `glab`: set
-`harness = "harness"` (or `"none"`) and `forge = "none"`, since the defaults, `claude` and the
+The image holds b10x-harness and no other harness, and no `gh` or `glab`: set
+`harness: harness` (or `none`) and `forge: none`, since the defaults, `claude` and the
 forge `origin` names, are not there. The test command runs in a user and mount namespace of its
 own, which the container runtime's default seccomp and AppArmor profiles refuse: run the
 container with both unconfined (`docker run --security-opt seccomp=unconfined --security-opt
@@ -143,11 +151,15 @@ apparmor=unconfined`; in Kubernetes, `seccompProfile` and `appArmorProfile` of t
 `Unconfined`). A build from a clone, where `.git` is a directory, names its commit in
 `takt --version`; a build from a linked worktree says `unknown revision`.
 
-```toml
-iterations = 1
-harness = "harness"
-endpoint_file = "endpoint.toml"
-forge = "none"
+```yaml
+format: loom.agent/1
+agent: {id: takt, name: takt, brief: delivers the repository's stories}
+model: {routes: routes.yaml}
+takt:
+  iterations: 1
+  harness: harness
+  endpoint_file: endpoint.toml
+  forge: none
 ```
 
 ## Requirements
