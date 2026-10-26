@@ -829,6 +829,17 @@ fn git_output_past_the_limit_is_not_read() {
     );
 }
 
+/// A nonzero git exit is returned with git's diagnostic text.
+#[test]
+fn bounded_git_failure_returns_its_stderr() {
+    let tree = scratch("bounded-failure");
+    let error = takt::git::run_bounded(&tree, &["show", "not-a-revision"], 1024)
+        .expect_err("an unknown revision fails");
+    let message = format!("{error:#}");
+    assert!(message.contains("git show not-a-revision"), "{message}");
+    assert!(message.contains("not-a-revision"), "{message}");
+}
+
 /// The fixture stores, one directory each, relative to this crate.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
