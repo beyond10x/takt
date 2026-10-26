@@ -66,7 +66,11 @@ fn adv_every_listed_builtin_resolves_to_its_own_id() {
 /// `story.delivery/2` names a known protocol at an unknown major.
 #[test]
 fn adv_an_unknown_major_of_a_known_builtin_is_not_called_an_unknown_name() {
-    for spec in ["story.delivery/2", "self.improvement/2", "loop.improvement/2"] {
+    for spec in [
+        "story.delivery/2",
+        "self.improvement/2",
+        "loop.improvement/2",
+    ] {
         let error = format!(
             "{:#}",
             LoadedProtocol::builtin(spec).expect_err("no such major")
