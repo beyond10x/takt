@@ -64,8 +64,8 @@ jobs:
 
       - name: Install ess
         env:
-          ESS_VERSION: "0.69.0"
-          ESS_SHA256: c4078e4f26eec73019927c5fe4ddb5655bafeac4b823050714170206c110228d
+          ESS_VERSION: "0.69.2"
+          ESS_SHA256: 7203c9c577802b3a03bac21a9f2345bd0b380667817a39c7dfbf9c1921ac805c
         run: |
           set -euo pipefail
           asset="ess-$ESS_VERSION-aarch64-apple-darwin.tar.gz"
