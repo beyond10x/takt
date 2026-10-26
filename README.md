@@ -144,7 +144,11 @@ flags `--endpoint-base-url`, `--endpoint-wire openai-responses`, `--endpoint-mod
 after the image name are flags of `takt run` and win over the
 file. The run's outcome is in `/workspace/.engineering/cases` and the exit code
 (`takt run --help`); with `forge: none` the delivery stays a branch in `/workspace`. A gates
-policy for `b10x-gates` comes from the deployment (`B10X_GATES_POLICY`), never the image.
+policy for `b10x-gates` comes from the deployment (`B10X_GATES_POLICY`), never the image;
+`b10x-gates` reads it only when the file and its directory are owned by the run's uid (10001),
+the file has no group or other bits and the directory is not group- or other-writable.
+The Rust toolchain is fixed in the image under `/opt/rust`, without `rustup`, so a target
+repository's `rust-toolchain.toml` is ignored.
 
 The image holds b10x-harness and no other harness, and no `gh` or `glab`: set
 `harness: harness` (or `none`) and `forge: none`, since the defaults, `claude` and the
