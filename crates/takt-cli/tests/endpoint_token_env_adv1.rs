@@ -132,10 +132,10 @@ fn recording_double(out: &Path) -> String {
 
 /// The story's outcome is that the key "reaches b10x-harness". On the `anthropic-messages`
 /// wire, the default one, a file handed as `--oauth-token-file` is a subscription token to
-/// b10x-harness 0.18.0: `Source::file` presents it as `Presentation::Subscription`, which the
+/// b10x-harness 0.20.0 (as 0.18.0): `Source::file` presents it as `Presentation::Subscription`, which the
 /// Messages binding sends as `AuthKind::SubscriptionOauth` (an `Authorization: Bearer` with the
 /// OAuth beta header and the client preamble) and bills as `Subscription`, not as the
-/// `x-api-key` an API key is sent in (harness 0.18.0, `crates/harness-llm/src/lib.rs:385-393`).
+/// `x-api-key` an API key is sent in (harness 0.20.0, `crates/harness-llm/src/lib.rs:395-404`).
 /// An API key in an environment variable (a `LoomAgent`'s `spec.secretRef`) is an API key, so
 /// on this wire it must not be handed as a subscription token.
 ///
@@ -303,7 +303,6 @@ fn a_run_ended_by_sigterm_or_sigint_removes_the_staged_token() {
     );
 }
 
-/// The harness session is a process takt starts (acceptance 4), and the flag's help says no
 /// process takt starts sees the variable. b10x-harness runs in takt's own user namespace, so it
 /// reads takt's initial environment block back through `/proc/<takt>/environ`, where
 /// `remove_var` left the value. The double walks from its parent up, as the test command's

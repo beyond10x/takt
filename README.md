@@ -221,14 +221,14 @@ nothing sandboxes the harness session yet (`story:harness-child-confined`).
 ## Built on
 
 takt is an application on [Loom](https://github.com/beyond10x/loom)'s `b10x-loom-sdk`, pinned
-in `Cargo.toml` at the Loom tag 0.41.0 (ADR 0099, `epic:takt-on-loom-sdk`):
+in `Cargo.toml` at the Loom tag 0.43.0 (ADR 0099, `epic:takt-on-loom-sdk`):
 
 - Commission's runtime drives each step of a case (`run_until_blocked`).
 - Loom's governor decides the case with [Canon](https://github.com/beyond10x/canon) over the
   case's files, and takt's `CaseAuthority` answers it from `authority.yaml` when a step needs a
   grant.
-- Each harness step runs in a metaharness 0.15.0 session started by Loom's session executor, the
-  crate `b10x-loom-session-executor` 0.41.0 (`loom_sdk::session`). The harness proposes a change
+- Each harness step runs in a metaharness 0.19.0 session started by Loom's session executor, the
+  crate `b10x-loom-session-executor` 0.43.0 (`loom_sdk::session`). The harness proposes a change
   from a scratch copy, and takt's edit effect applies it under the step guard.
 
 takt keeps its validators and their evidence, git and the forge, the planning-store seam,
