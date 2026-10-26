@@ -558,6 +558,13 @@ struct RunArgs {
     /// The case to resume, by id, instead of opening one; not with --intent.
     #[arg(long)]
     case: Option<String>,
+    /// The story to deliver, by id, instead of the frontier's next ready one: its open case is
+    /// resumed, if it has one; else it is taken as the frontier takes a story, which it must be
+    /// ready for (`proposed`, nothing blocking it, every dependency done). A story the store
+    /// does not list, or one not ready, is refused before any case opens, naming why. Not with
+    /// --intent or --case.
+    #[arg(long, value_name = "ID", conflicts_with_all = ["intent", "case"])]
+    story: Option<String>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
     /// the planning store gives opens on `story.delivery/1`, an --intent on `software.change/1`,
     /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
@@ -1065,6 +1072,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 repo,
                 intent,
                 case,
+                story,
                 protocol,
                 inputs,
                 case_id,
@@ -1112,8 +1120,22 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // A turn opens a case whether or not an intent is given: with none, its finding's
             // title is the intent, and no case of the planning store is resumed for it.
             let opens_turn = case.is_none() && opens_on.id == takt::case::TURN_PROTOCOL;
-            let resuming =
-                case_to_resume(&repo, case.as_deref(), intent.is_some() || opens_turn, out)?;
+            if let Some(story) = &story
+                && opens_turn
+            {
+                return Err(anyhow!(
+                    "--story {story}: a {} turn opens on its finding (--input {}=<story id>), never on a named story; nothing was changed",
+                    takt::case::TURN_PROTOCOL,
+                    takt::case::TURN_FINDING
+                ));
+            }
+            let resuming = case_to_resume(
+                &repo,
+                case.as_deref(),
+                story.as_deref(),
+                intent.is_some() || opens_turn,
+                out,
+            )?;
             let given_for_resume = given.as_ref().zip(protocol.as_deref());
             let first_input = inputs.first().map(|(name, _)| name.clone());
             if let Some(resuming) = &resuming {
@@ -1351,12 +1373,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 // Nothing to resume, as found above: the next ready story is taken, and nothing
                 // is resumed whatever the store says by now, so no case runs that was not
-                // checked.
+                // checked. A story `--story` names is taken the same way, the frontier narrowed
+                // to it; one it does not offer is refused, no case opened.
                 (None, None, None) => {
+                    let named = story.as_deref().map(|story| Named {
+                        store: &store,
+                        story,
+                    });
+                    let frontier: &dyn takt::Frontier = match &named {
+                        Some(named) => named,
+                        None => &store,
+                    };
                     match Run::take_next_as(
                         &repo,
                         options,
-                        &store,
+                        frontier,
                         &commit_as,
                         harness,
                         &validators,
@@ -1364,6 +1395,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     )? {
                         Some(run) => run,
                         None => {
+                            if let Some(story) = &story {
+                                return Err(story_not_taken(&repo, &store, story)?);
+                            }
                             writeln!(out, "frontier: nothing ready")?;
                             return Ok(EXIT_DONE);
                         }
@@ -2381,6 +2415,95 @@ fn not_ready(story: &takt::frontier::Listed, all: &[takt::frontier::Listed]) -> 
     }
 }
 
+/// The store's frontier narrowed to the one story `takt run --story` names: its candidates and
+/// its active stories are the store's own, kept only when they are that story, and every other
+/// answer and write is the store's, so [`Run::take_next_as`] takes it exactly as it takes the
+/// frontier's next, or takes nothing when the frontier would not offer it.
+struct Named<'a> {
+    store: &'a Aep,
+    story: &'a str,
+}
+
+impl takt::Frontier for Named<'_> {
+    fn name(&self) -> &str {
+        self.store.name()
+    }
+
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        let mut candidates = self.store.candidates(repo)?;
+        candidates.retain(|id| id == self.story);
+        Ok(candidates)
+    }
+
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        let mut active = self.store.active(repo)?;
+        active.retain(|id| id == self.story);
+        Ok(active)
+    }
+
+    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
+        self.store.show(repo, id)
+    }
+
+    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
+        self.store.take(repo, id)
+    }
+
+    fn record_approval(
+        &self,
+        repo: &Path,
+        story: &str,
+        approval: &takt::case::Approval,
+    ) -> Result<()> {
+        self.store.record_approval(repo, story, approval)
+    }
+
+    fn record_test_result(
+        &self,
+        repo: &Path,
+        story: &str,
+        reference: &str,
+        at: &str,
+    ) -> Result<takt::frontier::Written> {
+        self.store.record_test_result(repo, story, reference, at)
+    }
+
+    fn implemented(&self, repo: &Path, story: &str) -> Result<takt::frontier::Written> {
+        self.store.implemented(repo, story)
+    }
+}
+
+/// The refusal of `takt run --story <story>` when the frontier narrowed to it took nothing and
+/// opened no case: why, read from the store as the take read it (on the base), by the frontier's
+/// own rule ([`takt::frontier::is_ready`], [`not_ready`]).
+fn story_not_taken(repo: &Path, store: &Aep, story: &str) -> Result<anyhow::Error> {
+    let all = store.list(repo)?;
+    let why = match all.iter().find(|listed| listed.id == story) {
+        None => format!("the store lists no {story}"),
+        Some(listed) if listed.kind != "story" => {
+            format!("{story} is a {}, not a story", listed.kind)
+        }
+        Some(listed) if listed.status == takt::frontier::TAKEN => format!(
+            "{story} is {}, and no open case of it is under the tree to resume",
+            takt::frontier::TAKEN
+        ),
+        Some(listed) if listed.status != takt::frontier::READY => format!(
+            "{story} is {}, not {}",
+            listed.status,
+            takt::frontier::READY
+        ),
+        Some(listed) if !takt::frontier::is_ready(listed, &all) => format!(
+            "{story} is {} but not ready ({})",
+            takt::frontier::READY,
+            not_ready(listed, &all)
+        ),
+        Some(_) => format!("{story} is ready but was not taken, as the line above says"),
+    };
+    Ok(anyhow!(
+        "--story {story}: {why}; the frontier would not take it, so no case was opened"
+    ))
+}
+
 /// The first eight characters of a commit id.
 fn short(revision: &str) -> &str {
     &revision[..8.min(revision.len())]
@@ -2480,20 +2603,28 @@ struct Resuming {
 /// The case a run will resume, read without resuming it: the one `--case` names, when its
 /// directory holds a case; for a run with neither `--case` nor `--intent`, the open case of a
 /// story being worked, as [`Run::next_to_resume`] names it, the one case such a run resumes, a
-/// decision that does not read said on `out`. `None` when the run opens a case, or when
-/// `--case` names none (`Run::resume` refuses that). Nothing is checked out and nothing
-/// written.
+/// decision that does not read said on `out`; for a run given `--story`, that story's open case
+/// alone, the first not finished in case order ([`takt::case::resumable`]), whatever other case
+/// is open. `None` when the run opens a case, or when `--case` names none (`Run::resume`
+/// refuses that). Nothing is checked out and nothing written.
 fn case_to_resume(
     repo: &Path,
     case: Option<&str>,
+    story: Option<&str>,
     intent: bool,
     out: &mut dyn Write,
 ) -> Result<Option<Resuming>> {
     let (id, story) = match (case, intent) {
         (Some(id), false) => (id.to_owned(), None),
-        (None, false) => match Run::next_to_resume(repo, &Aep::default(), out)? {
-            Some((id, story)) => (id, Some(story)),
-            None => return Ok(None),
+        (None, false) => match story {
+            Some(story) => match takt::case::resumable(repo, &[story.to_owned()], out)? {
+                Some((id, story)) => (id, Some(story)),
+                None => return Ok(None),
+            },
+            None => match Run::next_to_resume(repo, &Aep::default(), out)? {
+                Some((id, story)) => (id, Some(story)),
+                None => return Ok(None),
+            },
         },
         (_, true) => return Ok(None),
     };

@@ -15,7 +15,7 @@
 [![ESS citations resolved: 578 of 578](https://img.shields.io/badge/ESS%20citations%20resolved-578%20of%20578-brightgreen)](ess/domains)
 <!-- badges end -->
 
-Point `takt` at a repository and say "work on this". It takes an intent, or the next ready story
+Point `takt` at a repository and say "work on this". It takes an intent, a story you name, or the next ready story
 from the planning store, opens a case on a protocol, and lets a harness such as Claude Code take
 one admissible step at a time. Each step's result is checked by a program, not by the model that
 made it. [Canon](https://github.com/beyond10x/canon) decides what is permitted, what is owed and
@@ -90,6 +90,7 @@ their figures are in `docs/metrics/`.
 ```
 takt run --repo <path> --intent "make the failing test pass" --iterations 1
 takt run --repo <path> --hours 1
+takt run --repo <path> --story <id> --hours 1
 takt approve --repo <path> <case> repository.merge --by human:<id>
 takt scenario run --repo <path> <id> --hours 1
 takt protocols
