@@ -848,13 +848,20 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
 
 fn main() -> ExitCode {
-    let cli = match parsed() {
+    let mut cli = match parsed() {
         Ok(cli) => cli,
         Err(error) => {
             eprintln!("takt: {error:#}");
             return ExitCode::from(EXIT_REFUSED);
         }
     };
+    // The endpoint's credential variable leaves takt's environment here, on the one thread
+    // takt has, before it starts any process.
+    match &mut cli.command {
+        Commands::Run(args) => args.looping.take_variable(false),
+        Commands::Scenario(ScenarioCommands::Run(args)) => args.looping.take_variable(false),
+        _ => {}
+    }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     match run(cli, &mut out) {
@@ -1079,7 +1086,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 scenarios,
                 install_root,
                 config: _,
-                looping,
+                mut looping,
             } = *args;
             looping.check()?;
             let repo = repo
@@ -1445,12 +1452,13 @@ impl LoopArgs {
     /// Installs the adapter --confinement names for a run on `repo`, before anything of the
     /// run is done. For `substrate` outside a delegated cgroup, the same command is run again
     /// inside one and its exit code is this run's: `Some(code)`.
-    fn confine(&self, repo: &Path) -> Result<Option<u8>> {
+    fn confine(&mut self, repo: &Path) -> Result<Option<u8>> {
         if self.confinement != "substrate" {
             return Ok(None);
         }
         match takt::confinement::Substrate::open(repo) {
             Ok(substrate) => {
+                self.take_variable(true);
                 takt::confinement::install(std::sync::Arc::new(substrate));
                 Ok(None)
             }
@@ -1466,6 +1474,21 @@ impl LoopArgs {
                 repo.display()
             )),
         }
+    }
+
+    /// Under `--harness harness`, takes the variable the endpoint's credential names out of
+    /// takt's environment ([`EndpointArgs::take_variable`]). Under `--confinement substrate`
+    /// outside a delegated run it is left until `substrate` has opened in this run
+    /// (`substrate_open`), since a run delegated again under `systemd-run` reads it there.
+    fn take_variable(&mut self, substrate_open: bool) {
+        if self.harness != "harness"
+            || (self.confinement == "substrate"
+                && !substrate_open
+                && std::env::var_os(takt::confinement::DELEGATED).is_none())
+        {
+            return;
+        }
+        self.endpoint.take_variable();
     }
 
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
@@ -1517,7 +1540,18 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         "harness" => {
             let home = std::env::var_os("HOME").map(PathBuf::from);
             let mut session = session(Kind::B10x);
-            session.point_at(&looping.endpoint.config(home.as_deref())?);
+            let config = looping.endpoint.config(home.as_deref())?;
+            session.point_at(&config);
+            // A variable's value is staged now, before any case opens, and held by the harness,
+            // so the file goes when the run ends, on success or on an error.
+            if let takt::harness::Credential::Environment { name } = &config.credential {
+                use takt::harness::StagedToken;
+                session.hold_staged(StagedToken::stage(
+                    name,
+                    looping.endpoint.variable.as_ref(),
+                    &StagedToken::candidates(),
+                )?);
+            }
             session.home = home;
             Ok(Box::new(session))
         }
@@ -1563,11 +1597,30 @@ struct EndpointArgs {
     /// reads no secret and opens no store. Not with --endpoint-token-file.
     #[arg(long, value_name = "NAMESPACE/NAME")]
     endpoint_secret: Option<String>,
+    /// `--harness harness`: the name of the environment variable holding the API key, on the
+    /// openai-responses wire only (--endpoint-wire openai-responses) until the session
+    /// executor can pass an API-key file. takt takes it out of its own environment before it
+    /// starts anything, so no process it starts sees it, and on Linux with glibc overwrites
+    /// its value in takt's initial environment block, which /proc/<pid>/environ reads. It
+    /// stages the value as a token file of mode 0600 in a new directory of mode 0700 under the
+    /// first of `$XDG_RUNTIME_DIR`, `/dev/shm` and the temporary directory that b10x-harness's
+    /// token-file reader accepts, removed when the run ends, by SIGTERM, SIGINT or SIGHUP too
+    /// (SIGKILL leaves it). Under --confinement substrate outside a delegated cgroup, the
+    /// variable is passed to systemd-run and to the takt it re-runs, which takes it out; the
+    /// first takt keeps it in its environment while it waits. Not with --endpoint-token-file or
+    /// --endpoint-secret. A name that is no portable variable name, another wire, a variable
+    /// unset or empty, or no directory accepted, is refused before the case opens, exit 1.
+    #[arg(long, value_name = "NAME")]
+    endpoint_token_env: Option<String>,
     /// `--harness harness`: a TOML file of the same fields, each under a flag: `base_url`,
     /// `wire`, `model`, and a `[credential]` table of `token_file` with an optional
-    /// `token_pointer` (a relative path read beside the file), or of `secret`.
+    /// `token_pointer` (a relative path read beside the file), of `secret`, or of `env`.
     #[arg(long, value_name = "PATH")]
     endpoint_file: Option<PathBuf>,
+    /// The value of the variable the credential names, taken out of takt's environment
+    /// ([`Self::take_variable`]).
+    #[arg(skip)]
+    variable: Option<takt::harness::VariableValue>,
 }
 
 impl EndpointArgs {
@@ -1583,25 +1636,62 @@ impl EndpointArgs {
                 self.endpoint_token_pointer.is_some(),
             ),
             ("--endpoint-secret", self.endpoint_secret.is_some()),
+            ("--endpoint-token-env", self.endpoint_token_env.is_some()),
             ("--endpoint-file", self.endpoint_file.is_some()),
         ]
         .into_iter()
         .find_map(|(flag, given)| given.then_some(flag))
     }
 
-    /// The endpoint the session is pointed at: the flags over the file over the default under
-    /// `home`, a token file made absolute and checked to hold a token where its pointer points,
-    /// a secret's name checked by no read, before any case opens.
-    fn config(&self, home: Option<&Path>) -> Result<takt::harness::EndpointConfig> {
-        use takt::harness::{EndpointConfig, EndpointFields};
-        let flags = EndpointFields {
+    /// The fields the flags give.
+    fn fields(&self) -> takt::harness::EndpointFields {
+        takt::harness::EndpointFields {
             base_url: self.endpoint_base_url.clone(),
             wire: self.endpoint_wire.clone(),
             model: self.endpoint_model.clone(),
             token_file: self.endpoint_token_file.clone(),
             token_pointer: self.endpoint_token_pointer.clone(),
             secret: self.endpoint_secret.clone(),
+            env: self.endpoint_token_env.clone(),
+        }
+    }
+
+    /// Takes the variable the credential names, the flags' or else the endpoint file's, out of
+    /// takt's environment and keeps its value, so no process takt starts inherits it. A name
+    /// that is no portable variable name, or a file that does not read, takes nothing; the
+    /// endpoint's own reading refuses it before any case opens. Called only while takt runs one
+    /// thread.
+    fn take_variable(&mut self) {
+        use takt::harness::{
+            EndpointFields, VariableValue, portable_variable_name, take_environment_variable,
         };
+        let file = self
+            .endpoint_file
+            .as_deref()
+            .and_then(|path| EndpointFields::read(path).ok());
+        let flags = self.fields();
+        let Some(name) = EndpointFields::variable(&flags, file.as_ref())
+            .filter(|name| portable_variable_name(name))
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        // SAFETY: takt has started no thread yet (its callers run before any is started), so
+        // nothing reads the environment while it changes; the name is non-empty and holds no
+        // `=` or NUL.
+        let value: Option<VariableValue> = unsafe { take_environment_variable(&name) };
+        if self.variable.is_none() {
+            self.variable = value;
+        }
+    }
+
+    /// The endpoint the session is pointed at: the flags over the file over the default under
+    /// `home`, a token file made absolute and checked to hold a token where its pointer points,
+    /// a secret's name checked by no read, a variable's name checked to be one, before any case
+    /// opens.
+    fn config(&self, home: Option<&Path>) -> Result<takt::harness::EndpointConfig> {
+        use takt::harness::{EndpointConfig, EndpointFields};
+        let flags = self.fields();
         let file = self
             .endpoint_file
             .as_deref()
@@ -2215,7 +2305,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         repo,
         scenario,
         declared_on,
-        looping,
+        mut looping,
     } = args;
     looping.check()?;
     let repo = repo
