@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:staging-tests-pass-under-a-shared-temp-directory
 kind: story
-status: draft
+status: active
 title: The token staging tests pass under a temporary directory without the sticky bit
 summary: three endpoint_tests fail when /tmp is mode 2777, as a container volume is (second kind-cluster trial)
 tags:
@@ -10,7 +10,10 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T20:53:20Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-26T20:53:55Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 

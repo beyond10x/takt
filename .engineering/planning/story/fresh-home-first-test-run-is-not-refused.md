@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:fresh-home-first-test-run-is-not-refused
 kind: story
-status: draft
+status: active
 title: The first tests.run in a fresh HOME is not refused for the cargo cache
 summary: a run whose HOME has no .cargo yet stops StepRefused at its first tests.run (second kind-cluster trial, runs 1-5)
 tags:
@@ -10,7 +10,10 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T20:53:19Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-26T20:53:54Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 

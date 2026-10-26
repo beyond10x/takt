@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-harness-step-without-an-action-is-retried
 kind: story
-status: draft
+status: active
 title: A judgement step whose session names no action is retried before the run ends
 summary: seven runs ended exit 5 on a session without an action line, four of them at their first step (second kind-cluster trial)
 tags:
@@ -10,7 +10,10 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T20:53:20Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-26T20:53:55Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 

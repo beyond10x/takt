@@ -2,12 +2,16 @@
 format: aep.planning-md/3
 id: story:a-red-base-stops-at-open
 kind: story
-status: draft
+status: active
 title: A case whose base already fails its tests says so before the first model call
 relations:
 - decomposes: epic:composable-agentic-work
 - informed_by: review-result:variety-ops-a29d8c7
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T20:53:25Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-26T20:53:54Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

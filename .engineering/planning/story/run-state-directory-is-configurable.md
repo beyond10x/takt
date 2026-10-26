@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-state-directory-is-configurable
 kind: story
-status: draft
+status: active
 title: The run's state and transcript directory is configurable
 summary: transcripts under an unkept HOME were lost when the pod was replaced (second kind-cluster trial)
 tags:
@@ -10,7 +10,10 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T20:53:21Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-26T20:53:56Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 

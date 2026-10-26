@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:repeated-identical-test-failures-stop-the-run
 kind: story
-status: draft
+status: active
 title: Identical test failures across revisions stop the run
 summary: 18 tests.run failed on the same four tests while the model edited on, 13.8M tokens (second kind-cluster trial)
 tags:
@@ -10,7 +10,10 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T20:53:18Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-26T20:53:53Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
