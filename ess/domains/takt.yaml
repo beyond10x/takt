@@ -132,13 +132,26 @@ types:
   # `active` through its own verb, and that change is committed on the case's branch as
   # `takt: take <story>`. A story whose minted case id the case id rule refuses is skipped with
   # a line naming it, and the next ready story tried. The `story` variant is the design's
-  # `frontier(repo)`.
+  # `frontier(repo)`. `takt run --story <id>` names the story instead (not with `--intent` or
+  # `--case`, which the command line refuses): its open case, if it has one, is resumed; else
+  # it is taken exactly as a frontier take takes the next, the store read on the base, opened first on
+  # `story.delivery/1` unless `--protocol` names another, the store told, the take committed on
+  # the case's branch. A story the store does not list, or one the frontier would not take (no
+  # story, not `proposed`, blocked, a dependency not done, `active` with no open case, a case
+  # recorded for it already), is refused before any case opens, exit 1, naming the story and
+  # why; a `self.improvement/1` turn, which opens on its finding, refuses `--story`.
   # read from: docs/design/takt.md:44
   # read from: crates/takt/src/frontier.rs:173-181
   # read from: crates/takt/src/frontier.rs:189
   # read from: crates/takt/src/run.rs:8904-8916
   # read from: crates/takt/src/run.rs:8961-9060
   # read from: crates/takt/src/run.rs:7838-7839
+  # read from: crates/takt-cli/src/main.rs:561-567
+  # read from: crates/takt-cli/src/main.rs:1132-1138
+  # read from: crates/takt-cli/src/main.rs:2712-2714
+  # read from: crates/takt-cli/src/main.rs:1385-1409
+  # read from: crates/takt-cli/src/main.rs:2510-2514
+  # read from: crates/takt-cli/src/main.rs:2568-2596
   - name: takt.work.Unit
     kind: union
     tag: kind
