@@ -303,6 +303,7 @@ fn a_run_ended_by_sigterm_or_sigint_removes_the_staged_token() {
     );
 }
 
+/// The harness session is a process takt starts (acceptance 4), and the flag's help says no
 /// process takt starts sees the variable. b10x-harness runs in takt's own user namespace, so it
 /// reads takt's initial environment block back through `/proc/<takt>/environ`, where
 /// `remove_var` left the value. The double walks from its parent up, as the test command's

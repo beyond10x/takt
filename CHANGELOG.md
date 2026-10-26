@@ -17,8 +17,9 @@ takt's releases.
 
 - **Breaking:** the image's entrypoint reads `/config/agent.yaml`, not `/config/run.toml`; `--config` refuses a file whose extension is not `.toml`, `.yaml` or `.yml`.
 - The image is built on Debian trixie with the Rust toolchain, unwritable by the run, linked into `/usr/local/bin` where a gate finds it; no `CARGO_HOME`, so cargo caches under `$HOME/.cargo`.
+- The image runs takt under `tini`, so `docker stop` or a pod's stop ends it on SIGTERM rather than SIGKILL.
 - **Breaking:** `takt protocols` lists the three protocols as engineering-protocols 0.10.0, whose built-ins they now are, names them: `story-delivery/1`; either spelling is read.
-- `b10x-loom-sdk` moves from loom 0.41.0 to 0.43.0, with metaharness 0.19.0; the image ships b10x-harness 0.20.0, the version metaharness 0.19.0 pins.
+- **Breaking:** `b10x-loom-sdk` moves from loom 0.41.0 to 0.43.0 with metaharness 0.19.0, so `--harness harness` needs b10x-harness 0.20.0 on the `PATH`; the image ships it.
 
 ## [0.12.0] - 2026-10-26
 

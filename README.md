@@ -125,7 +125,8 @@ the Rust toolchain with clippy and rustfmt beside it (`docker build -t takt:<ver
 Rust programs are linked into `/usr/local/bin`, so a gate's system path finds them, and no
 `CARGO_HOME` is set: cargo keeps its caches in `$HOME/.cargo`. No image is published; a cluster
 loads a local build. The container runs
-`takt run --repo /workspace --config /config/agent.yaml` as uid 10001, whose home is
+`takt run --repo /workspace --config /config/agent.yaml` under `tini`, so a stop signal reaches
+a takt that is not PID 1, as uid 10001, whose home is
 `/var/lib/takt`, and what it mounts is:
 
 | path | what | mode |
