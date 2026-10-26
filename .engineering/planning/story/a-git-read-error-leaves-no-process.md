@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-git-read-error-leaves-no-process
 kind: story
-status: draft
+status: proposed
 title: A git call whose output cannot be read leaves no git process behind
 tags:
 - finding
@@ -11,7 +11,10 @@ refs:
   reference: a-git-read-error-leaves-no-process
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 2
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-26T13:03:31Z", actor: "human:timo", revision: 2}
 ---
 ## Outcome
 
