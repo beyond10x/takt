@@ -18,10 +18,7 @@ use takt::scorecard::{HeldOut, Row};
 use takt::validator::{ChangeRead, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 const GIB: u64 = 1 << 30;
 

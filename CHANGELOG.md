@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- takt's three protocols are engineering-protocols 0.10.0's built-ins, unchanged; `takt protocols` lists them as the registry names them, `story-delivery/1`.
+
 ## [0.12.0] - 2026-10-26
 
 `takt run --config` takes the run's configuration from a TOML file, and a `Dockerfile` builds a container image

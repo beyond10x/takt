@@ -8,12 +8,6 @@ use std::process::Command;
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
 
-/// The story-delivery protocol, relative to this crate.
-const DELIVERY_PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
-
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
                      text: The repository has its manifest.\n    assertions:\n      \
@@ -212,7 +206,9 @@ fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request()
         &["remote", "add", "origin", "git@github.com:owner/repo.git"],
     );
     let protocol = outer.0.join("push-gated.yaml");
-    let yaml = fs::read_to_string(DELIVERY_PROTOCOL).expect("the delivery protocol");
+    let yaml = canon_engineering::registry::get("story-delivery", 1)
+        .expect("the delivery protocol")
+        .yaml;
     let gated = yaml.replace("id: story.delivery", "id: story.push-gated").replace(
         "    may_produce:\n      - evidence: pull_request\n",
         "    requires:\n      - capability: repository.push\n    may_produce:\n      - evidence: pull_request\n",

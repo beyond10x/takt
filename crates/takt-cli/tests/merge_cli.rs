@@ -18,11 +18,8 @@ const GATE_PROTOCOL: &str = concat!(
     "/../takt/tests/fixtures/gate-only/1.yaml"
 );
 
-/// The story-delivery protocol, relative to this crate.
-const DELIVERY_PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The story-delivery protocol, the engineering protocols' built-in.
+const DELIVERY_PROTOCOL: &str = "story.delivery/1";
 
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \

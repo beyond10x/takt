@@ -1,4 +1,4 @@
-//! The merge under authority through the loop: two runs on `protocols/story-delivery/1.yaml`
+//! The merge under authority through the loop: two runs on the built-in `story-delivery@1`
 //! with the forge double of the forge story, its checks passing. The first run, whose case holds
 //! no grant, stops at the gate with the pull request open and nothing merged; the operator's
 //! grant is written into the case's `authority.yaml` and recorded on the story in the planning
@@ -25,11 +25,8 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrMerged, PrOpen, Validator};
 use takt::{Decision, LoadedProtocol, Run, RunOptions, Stop};
 
-/// The protocol under test, relative to this crate.
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The protocol under test, the engineering protocols' built-in.
+const PROTOCOL: &str = "story.delivery/1";
 
 /// The fixture stores, one directory each, relative to this crate.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
@@ -543,7 +540,7 @@ fn granted_by_authority(decision: &Decision) -> bool {
 #[test]
 fn the_grant_is_read_into_every_evaluation_of_the_case() {
     let tree = scratch("every");
-    let protocol = LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let mut case =
         CaseDir::open(&tree, protocol, "every", "deliver the story", &[]).expect("the case opens");
     let revision = case
@@ -590,7 +587,7 @@ fn the_grant_is_read_into_every_evaluation_of_the_case() {
 #[test]
 fn grant_refuses_a_capability_already_decided_and_a_case_that_does_not_exist() {
     let tree = scratch("twice");
-    let protocol = LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let mut case =
         CaseDir::open(&tree, protocol, "twice", "deliver the story", &[]).expect("the case opens");
     to_the_gate(&mut case, 1);
@@ -1097,7 +1094,7 @@ impl Frontier for Unasked {
 #[test]
 fn an_approval_on_a_case_opened_on_an_intent_writes_the_grant_only() {
     let tree = scratch("intent");
-    let protocol = LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let mut case =
         CaseDir::open(&tree, protocol, "intent", "deliver the story", &[]).expect("the case opens");
     assert_eq!(case.story().expect("reads"), None);
@@ -1407,7 +1404,7 @@ fn adv_a_commit_on_the_case_branch_between_runs_returns_the_claims_to_unknown() 
 #[test]
 fn adv_a_capability_the_case_protocol_does_not_require_is_refused() {
     let tree = scratch("adv-typo");
-    let protocol = LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let mut case = CaseDir::open(&tree, protocol, "adv-typo", "deliver the story", &[])
         .expect("the case opens");
     // At the gate, so the typo is refused for itself, not for the gate.
@@ -1495,7 +1492,7 @@ fn adv_a_case_recording_a_story_the_store_does_not_list_active_is_not_resumed() 
 #[test]
 fn adv_resume_puts_the_tree_on_the_case_branch() {
     let tree = scratch("adv-branch");
-    let protocol = LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let case = CaseDir::open(&tree, protocol, "adv-branch", "deliver the story", &[])
         .expect("the case opens");
     assert_eq!(case.branch, "takt/adv-branch");
@@ -2576,7 +2573,7 @@ impl Harness for Editing {
 #[test]
 fn a_run_holds_its_case_and_lets_go_at_every_stop() {
     let tree = scratch("held");
-    let protocol = LoadedProtocol::from_file(Path::new(PROTOCOL)).expect("the protocol loads");
+    let protocol = LoadedProtocol::builtin(PROTOCOL).expect("the protocol loads");
     let case =
         CaseDir::open(&tree, protocol, "held", "deliver the story", &[]).expect("the case opens");
     let lock = case.dir.join(LOCK_FILE);

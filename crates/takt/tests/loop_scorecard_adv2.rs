@@ -15,10 +15,7 @@ use takt::loop_scorecard::{
 use takt::validator::Validator;
 use takt::{CaseDir, LoadedProtocol};
 
-const LOOP_IMPROVEMENT: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/loop-improvement/1.yaml"
-);
+const LOOP_IMPROVEMENT: &str = "loop.improvement/1";
 
 /// Definitions with two targets: accepted share at least three quarters, finding to verified
 /// at most a day.
@@ -283,7 +280,7 @@ fn accepted(tree: &Path, id: &str, filed: &str, verified: &str) {
 
 /// Opens a loop case `id` on `tree`, the loop validators' producers declared independent.
 fn loop_case(tree: &Path, id: &str, baseline: &str, candidate: &str) -> CaseDir {
-    let protocol = LoadedProtocol::from_file(Path::new(LOOP_IMPROVEMENT)).expect("loads");
+    let protocol = LoadedProtocol::builtin(LOOP_IMPROVEMENT).expect("loads");
     let mut case =
         CaseDir::open(tree, protocol, id, "one turn on the loop", &[]).expect("the case opens");
     case.set_revision("loop_baseline", baseline)

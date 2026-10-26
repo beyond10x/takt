@@ -74,10 +74,12 @@ types:
     of: String
 
   # A protocol as the loaded protocol in memory names it, `<name>/<major>` (`software.change/1`):
-  # a built-in of the engineering protocols, one of this repository's `protocol/1` files the
-  # binary embeds (`story.delivery/1`), or a `protocol/1` file Canon validated and compiled.
-  # read from: crates/takt/src/protocol.rs:11-17
-  # read from: crates/takt/src/protocol.rs:33-44
+  # a built-in of the engineering protocols (`software.change/1`, `story.delivery/1`,
+  # `self.improvement/1`, `loop.improvement/1`), by its own id or the name the registry lists it
+  # under (`story-delivery/1`, `eval-gated-change/1` for `eval.gated_change/1`), or a
+  # `protocol/1` file Canon validated and compiled.
+  # read from: crates/takt/src/protocol.rs:10-16
+  # read from: crates/takt/src/protocol.rs:30-48
   - name: takt.work.ProtocolId
     kind: newtype
     of: String
@@ -85,7 +87,7 @@ types:
   # A protocol's name alone (`software.change`): what the snapshot's `protocol` key holds, and
   # what a `protocol` block names beside its `revision`. Carries canon.protocol.ProtocolId
   # (protocol.yaml:32).
-  # read from: crates/takt/src/protocol.rs:14-15
+  # read from: crates/takt/src/protocol.rs:13-14
   # read from: crates/takt/src/case.rs:2583
   - name: takt.work.ProtocolName
     kind: newtype
@@ -96,7 +98,7 @@ types:
   # `takt` runs in.
   # read from: crates/takt/src/run.rs:52
   # read from: crates/takt/src/run.rs:8547-8550
-  # read from: crates/takt/src/protocol.rs:69-74
+  # read from: crates/takt/src/protocol.rs:53-58
   - name: takt.work.ProtocolSource
     kind: union
     tag: kind
@@ -146,7 +148,7 @@ types:
 
   # An action the protocol declares, by id (`tests.run`, `implementation.edit`, `repository.merge`).
   # Carries canon.protocol.ActionId (protocol.yaml:57).
-  # read from: crates/takt/src/protocol.rs:26-27
+  # read from: crates/takt/src/protocol.rs:25-26
   - name: takt.work.ActionId
     kind: newtype
     of: String
@@ -179,7 +181,7 @@ types:
   # An artifact the protocol declares, by id (`intent`, `implementation`): what a case gives a
   # revision for and what an evidence record is about. Carries canon.protocol.ArtifactId
   # (protocol.yaml:37).
-  # read from: crates/takt/src/protocol.rs:22-23
+  # read from: crates/takt/src/protocol.rs:21-22
   # read from: crates/takt/src/validator.rs:69-70
   - name: takt.work.ArtifactId
     kind: newtype
@@ -309,7 +311,7 @@ types:
   # A case input the protocol declares, by id (`risk`, `change_kind`). Carries
   # canon.protocol.InputId (protocol.yaml:293); the value given is text, `true` and `false` written
   # into the snapshot as booleans.
-  # read from: crates/takt/src/protocol.rs:24-25
+  # read from: crates/takt/src/protocol.rs:23-24
   # read from: crates/takt/src/case.rs:2587-2607
   - name: takt.work.InputId
     kind: newtype
@@ -1200,7 +1202,7 @@ types:
   # `--input`, and the loaded protocol keeps name and major apart.
   # read from: docs/design/takt.md:77
   # read from: crates/takt/src/run.rs:51-57
-  # read from: crates/takt/src/protocol.rs:14-17
+  # read from: crates/takt/src/protocol.rs:13-16
   - name: takt.work.ProtocolBlock
     kind: struct
     fields:
@@ -1837,7 +1839,7 @@ types:
       # The outcome the turn's case completed through: accepted once promoted, declined when the
       # candidate still reproduces the finding, unreproducible when the baseline never did;
       # absent while the turn is open.
-      # read from: protocols/self-improvement/1.yaml:11-12
+      # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:11-12
       - name: verdict
         type: Optional<takt.work.OutcomeId>
       - name: promoted
@@ -1984,7 +1986,7 @@ types:
   # Fewer than three recorded turns, no snapshot of `loop_baseline`, or no definitions in it,
   # records nothing. The measurement retains the rows it read beside its figures, so a later
   # comparison stands on them.
-  # read from: protocols/loop-improvement/1.yaml:32-36
+  # read from: engineering-protocols 0.10.0, protocols/loop-improvement/1.yaml:32-36
   # read from: crates/takt/src/loop_scorecard.rs:1217-1225
   - name: takt.work.LoopMeasurementResult
     kind: enum
@@ -2045,7 +2047,7 @@ types:
   # refs, `commondir`, `gitdir`, `shallow`, `objects/info/alternates` and the commit-graph, and
   # no git takt runs reads a commit-graph, but the objects themselves are not guarded, and
   # confining the step's writes closes that (story:confinement-seam).
-  # read from: protocols/loop-improvement/1.yaml:37-41
+  # read from: engineering-protocols 0.10.0, protocols/loop-improvement/1.yaml:37-41
   # read from: crates/takt/src/loop_scorecard.rs:1324-1337
   # read from: crates/takt/src/loop_scorecard.rs:1351-1392
   # read from: crates/takt/src/loop_scorecard.rs:191-500
@@ -2066,7 +2068,7 @@ types:
   # metrics below their target there; `improved` when each is better after in its target's
   # direction, else `not_improved`; the targets are the baseline's as the case snapshotted them
   # when it opened. No measurement retained in the case, or no snapshot, records nothing.
-  # read from: protocols/loop-improvement/1.yaml:44-47
+  # read from: engineering-protocols 0.10.0, protocols/loop-improvement/1.yaml:44-47
   # read from: crates/takt/src/loop_scorecard.rs:1616-1626
   - name: takt.work.LoopComparisonResult
     kind: enum
@@ -2229,7 +2231,7 @@ types:
       blocker: String
 
   # What filing a finding came to, the result of a `finding_record` record.
-  # read from: protocols/self-improvement/1.yaml:41-44
+  # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:41-44
   # read from: scripts/file-finding:79
   # read from: scripts/file-finding:381
   - name: takt.work.FilingResult
@@ -2242,7 +2244,7 @@ types:
   # with the predicate's healthy exit; else `error`, a status the predicate does not name (a
   # crash, a flag rejected, a command not found) or the predicate's `exit` without its `output`,
   # which makes no claim true.
-  # read from: protocols/self-improvement/1.yaml:45-50
+  # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:45-50
   # read from: scripts/check-finding:875-893
   - name: takt.work.ScenarioResult
     kind: enum
@@ -2275,7 +2277,7 @@ types:
 
   # What comparing the installed binary's embedded revision with the merged candidate revision
   # came to, the result of a `promotion_record` record of `self.improvement/1`.
-  # read from: protocols/self-improvement/1.yaml:58-61
+  # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:58-61
   - name: takt.work.PromotionResult
     kind: enum
     variants: [promoted, mismatch]
@@ -2969,7 +2971,7 @@ entities:
       # read from: crates/takt/src/case.rs:671-688
       # read from: crates/takt/src/case.rs:1016-1029
       # read from: crates/takt/src/case.rs:1112
-      # read from: crates/takt/src/protocol.rs:146-223
+      # read from: crates/takt/src/protocol.rs:130-207
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:46-52
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
@@ -3011,7 +3013,7 @@ entities:
       # the candidate cannot be read: refused naming the forge and the read's error, to open
       # again once the tip can be read; a resumed turn reads no tip this way
       # (story:a-turn-does-not-open-when-the-mainline-tip-cannot-be-read).
-      # read from: protocols/self-improvement/1.yaml:28-32
+      # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:28-32
       # read from: .engineering/planning/story/self-improvement-protocol.md:64
       # read from: crates/takt/src/case.rs:3509-3532
       # read from: crates/takt/src/improvement.rs:1127-1136
@@ -3023,7 +3025,7 @@ entities:
       # the kernel only, when an improvement turn opens: every turn validator on
       # `different_agent_run`, since a validator is no agent run; absent for a case under any
       # other protocol (story:self-improvement-protocol).
-      # read from: protocols/self-improvement/1.yaml:24-26
+      # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:24-26
       # read from: crates/takt/src/case.rs:2954-3045
       # read from: crates/takt/src/improvement.rs:78-91
       - name: independence
@@ -3118,7 +3120,7 @@ entities:
       # case references exactly one finding, and a finding may have many cases (a retried or
       # re-opened turn); many-to-one, the case side references.
       # read from: .engineering/planning/story/self-improvement-protocol.md:62-64
-      # read from: protocols/self-improvement/1.yaml:28-32
+      # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:28-32
       - name: finding
         kind: references
         target: takt.work.Finding
@@ -5040,7 +5042,7 @@ entities:
   # of the guard's own (the list, the delegation record) or a path that is no regular file is
   # changed, else `non_judge`; a given `surface` that disagrees is refused, naming the first
   # such path (story:self-improvement-protocol S5, 2026-10-19).
-  # read from: protocols/self-improvement/1.yaml:18-22
+  # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:18-22
   # read from: crates/takt/src/improvement.rs:1233-1243
   # read from: .engineering/planning/design/recursive-self-improvement.md:112-113
   # read from: .engineering/planning/story/judge-guard.md:87

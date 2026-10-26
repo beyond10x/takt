@@ -179,8 +179,8 @@ const groups = computed(() => {
   <main>
     <h1>Protocols</h1>
     <p class="lede">
-      Every protocol takt runs under, read from the <code>protocol/1</code> files in the repository at build time.
-      The files are the source of truth; this page shows what they say.
+      Every protocol takt runs under, read from the engineering protocols' <code>protocol/1</code> documents takt pins, at build time.
+      The documents are the source of truth; this page shows what they say.
     </p>
     <nav class="tabs" aria-label="Protocols">
       <button v-for="(q, i) in protocols" :key="q.source" :class="{ on: i === current }" :aria-pressed="i === current" @click="pick(i)">

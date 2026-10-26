@@ -8,11 +8,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The loop-improvement protocol of this repository.
-const LOOP_PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/loop-improvement/1.yaml"
-);
+/// The loop-improvement protocol, the engineering protocols' built-in.
+const LOOP_PROTOCOL: &str = "loop.improvement/1";
 
 /// Definitions with one target: accepted share at least three quarters.
 const DEFINED: &str = "format: takt-loop-metrics/1

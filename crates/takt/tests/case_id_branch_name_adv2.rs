@@ -125,10 +125,7 @@ fn a_case_id_takt_mints_for_a_story_can_fail_check_id() {
     );
 }
 
-const PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+const PROTOCOL: &str = "story.delivery/1";
 
 fn options() -> RunOptions {
     RunOptions {

@@ -13,11 +13,8 @@ use takt::CaseDir;
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
 
-/// The story-delivery protocol of this repository, the one the binary embeds.
-const DELIVERY_PROTOCOL: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../protocols/story-delivery/1.yaml"
-);
+/// The story-delivery protocol, the engineering protocols' built-in.
+const DELIVERY_PROTOCOL: &str = "story.delivery/1";
 
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
@@ -324,7 +321,7 @@ fn an_intent_without_a_protocol_opens_on_software_change() {
 /// protocols named, and nothing in the tree or its git state changed.
 #[test]
 fn a_protocol_other_than_the_resumed_case_runs_is_refused_touching_nothing() {
-    let (_outer, repo) = repository(None, "case-mismatch");
+    let (outer, repo) = repository(None, "case-mismatch");
     let path = repo.to_str().expect("utf-8");
     let mut args = no_steps(path);
     args.extend(["--intent", "a change", "--case-id", "change"]);
@@ -332,7 +329,15 @@ fn a_protocol_other_than_the_resumed_case_runs_is_refused_touching_nothing() {
     assert_eq!(code, 3, "stdout {out} stderr {err}");
     assert!(out.contains("case change on software.change/1"), "{out}");
     let before = everything(&repo);
-    for given in ["story.delivery/1", DELIVERY_PROTOCOL] {
+    let file = outer.join("story-delivery.yaml");
+    fs::write(
+        &file,
+        canon_engineering::registry::get("story-delivery", 1)
+            .expect("the protocol")
+            .yaml,
+    )
+    .expect("the protocol file");
+    for given in [DELIVERY_PROTOCOL, file.to_str().expect("utf-8")] {
         let mut args = no_steps(path);
         args.extend(["--case", "change", "--protocol", given]);
         let (code, out, err) = takt(&args);
@@ -425,7 +430,9 @@ fn another_document_under_the_case_protocol_id_is_refused() {
     ]);
     let (code, out, err) = takt(&args);
     assert_eq!(code, 3, "stdout {out} stderr {err}");
-    let original = fs::read_to_string(DELIVERY_PROTOCOL).expect("the protocol");
+    let original = canon_engineering::registry::get("story-delivery", 1)
+        .expect("the protocol")
+        .yaml;
     assert_eq!(original.matches("        - claim: gate.green\n").count(), 1);
     let altered = outer.join("altered.yaml");
     fs::write(
@@ -843,31 +850,33 @@ fn without_a_gate_the_first_capability_gated_action_is_the_gate() {
     assert!(out.contains("stopped: ApprovalRequired"), "{out}");
 }
 
-/// `takt protocols` lists the embedded `self.improvement/1`, and `--protocol self.improvement/1`
-/// names it without a file: an improvement turn needs no protocol file in the repository.
+/// `takt protocols` lists the engineering protocols' `self-improvement/1`, and `--protocol
+/// self.improvement/1` names it without a file: an improvement turn needs no protocol file in the
+/// repository.
 #[test]
-fn protocols_lists_the_embedded_self_improvement() {
+fn protocols_lists_the_builtin_self_improvement() {
     let (code, out, err) = takt(&["protocols"]);
     assert_eq!(code, 0, "{err}");
     assert!(
-        out.lines().any(|line| line == "self.improvement/1"),
+        out.lines().any(|line| line == "self-improvement/1"),
         "{out}"
     );
-    let embedded = takt::LoadedProtocol::builtin("self.improvement/1").expect("embedded");
-    let file = fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../protocols/self-improvement/1.yaml"
-    ))
-    .expect("the protocol file");
-    assert_eq!(embedded.yaml, file);
+    let builtin = takt::LoadedProtocol::builtin("self.improvement/1").expect("a built-in");
+    let registry = canon_engineering::registry::get("self-improvement", 1).expect("the registry's");
+    assert_eq!(builtin.yaml, registry.yaml);
 }
 
-/// `takt protocols` lists the embedded `story.delivery/1` beside Canon's built-ins.
+/// `takt protocols` lists the engineering protocols' `story-delivery/1` beside their other
+/// built-ins.
 #[test]
-fn protocols_lists_the_embedded_story_delivery() {
+fn protocols_lists_the_builtin_story_delivery() {
     let (code, out, err) = takt(&["protocols"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.lines().any(|line| line == "story.delivery/1"), "{out}");
+    assert!(out.lines().any(|line| line == "story-delivery/1"), "{out}");
+    assert!(
+        out.lines().any(|line| line == "loop-improvement/1"),
+        "{out}"
+    );
     assert!(
         out.lines()
             .any(|line| line == "software-change/1" || line == "software.change/1"),

@@ -60,5 +60,5 @@ touches one is merged under the owner's grant, or under the grant of a role the 
 it to on record. The delegation is revocable, and a revoked one grants nothing ([Roles](./roles.md)).
 
 Sources: `AGENTS.md` § Rules, `crates/takt/tests/validator_confinement.rs`,
-`crates/takt/src/run.rs` (`CHOICE_PRODUCER`), `protocols/story-delivery/1.yaml`,
+`crates/takt/src/run.rs` (`CHOICE_PRODUCER`), engineering-protocols 0.10.0 `protocols/story-delivery/1.yaml`,
 `design:recursive-self-improvement` § The judge.

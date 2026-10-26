@@ -161,8 +161,8 @@ once at least three turns have been filed since the merge.
 
 How a finding enters the store (step 3 of the loop) and how its predicate is run. Both scripts
 print one word on standard output, the result the self-improvement protocol reads
-(`protocols/self-improvement/1.yaml`, `finding_record` and `scenario_result`); everything else
-goes to standard error.
+(`self.improvement/1`, a built-in of the engineering protocols: `finding_record` and
+`scenario_result`); everything else goes to standard error.
 
 1. **Key.** Lower-case words joined by `-`, naming the defect, not the run that saw it. The key is
    the finding's identity: the same defect seen again is the same key.
