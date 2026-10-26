@@ -9,6 +9,7 @@ takt's releases.
 ### Added
 
 - `takt run --story <ID>` resumes or takes the named story instead of the frontier's next; one not listed or not ready is refused before any case opens, exit 1, naming why.
+- `--endpoint-token-env <NAME>` (or `[credential] env`, `openai-responses` wire only) stages a variable's key as a token file, removed at exit or on SIGTERM/SIGINT/SIGHUP; no child sees the variable.
 - The image ships `b10x-gates` 0.1.23, `pkg-config` and the OpenSSL headers, so a run in it scans its edits and tests a repository that builds against OpenSSL.
 
 ### Changed

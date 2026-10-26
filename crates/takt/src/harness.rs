@@ -202,6 +202,10 @@ pub struct SessionHarness {
     /// opens the store by it, and the key never reaches takt, metaharness or the child's
     /// environment. None for a token file and for Claude Code and Codex.
     pub api_key_secret: Option<String>,
+    /// For `Kind::B10x` on an environment variable's key, the file its value is staged in,
+    /// which the endpoint's `token_file` names ([`Self::hold_staged`]); held as long as the
+    /// harness, so the file and its directory are removed when the run that holds it ends.
+    pub staged: Option<StagedToken>,
     /// The user's HOME, under which the endpoint's token file is recorded as `~/…`
     /// ([`EndpointConfig::recorded`]); the session is given the path whole. None records it whole.
     pub home: Option<std::path::PathBuf>,
@@ -269,6 +273,7 @@ impl SessionHarness {
             .to_owned(),
             endpoint: None,
             api_key_secret: None,
+            staged: None,
             home: None,
             runner: None,
             reported: std::cell::Cell::new(None),
@@ -295,6 +300,18 @@ impl SessionHarness {
     pub fn point_at(&mut self, config: &EndpointConfig) {
         self.endpoint = Some(config.session_endpoint());
         self.api_key_secret = config.api_key_secret();
+    }
+
+    /// Hands the session the file an environment variable's value is staged in, as its
+    /// endpoint's `token_file` with no pointer and no secret's name, and holds it until the
+    /// harness is dropped; the run records the credential by the variable's name alone.
+    pub fn hold_staged(&mut self, staged: StagedToken) {
+        if let Some(endpoint) = &mut self.endpoint {
+            endpoint.token_file = staged.file().to_path_buf();
+            endpoint.token_pointer = None;
+        }
+        self.api_key_secret = None;
+        self.staged = Some(staged);
     }
 
     /// `program` by path: as given when it names a directory, else the first executable file
@@ -468,10 +485,16 @@ impl Harness for SessionHarness {
 
     /// b10x-harness's endpoint as its sessions are pointed at it, `--model` over the
     /// endpoint's model as the session executor takes it, its token file under HOME as `~/…`
-    /// or its secret's name; Claude Code and Codex are pointed at none.
+    /// or its secret's name, or the variable a staged token was taken from by its name alone;
+    /// Claude Code and Codex are pointed at none.
     fn endpoint_reference(&self) -> Option<EndpointConfig> {
         let endpoint = self.endpoint.as_ref().filter(|_| self.kind == Kind::B10x)?;
         let mut reference = EndpointConfig::of_session(endpoint, self.api_key_secret.as_deref());
+        if let Some(staged) = &self.staged {
+            reference.credential = Credential::Environment {
+                name: staged.name().to_owned(),
+            };
+        }
         if let Some(model) = &self.model {
             reference.model.clone_from(model);
         }
@@ -2013,10 +2036,16 @@ pub fn is_test_path(path: &str) -> bool {
 /// The wires a `--harness harness` endpoint may speak, as b10x-harness names them.
 pub const ENDPOINT_WIRES: [&str; 2] = ["anthropic-messages", "openai-responses"];
 
+/// The one wire an environment credential is admitted on: the session executor hands the
+/// staged file to b10x-harness as `--oauth-token-file`, which on `anthropic-messages` would
+/// send an API key as a subscription OAuth token, until it can pass an API-key file.
+pub const ENVIRONMENT_WIRE: &str = "openai-responses";
+
 /// Where the credential of a `--harness harness` endpoint is, by reference only: takt reads a
 /// subscription token file only to check, before the first step, that a token is where its
 /// pointer points, and never reads a secret. Recorded as `kind` `subscription_file` with the
-/// `path` and, when given, the `pointer`, or `kind` `secret` with the `namespace` and `name`.
+/// `path` and, when given, the `pointer`, or `kind` `secret` with the `namespace` and `name`, or
+/// `kind` `environment` with the variable's `name`, never its value nor the staged file.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Credential {
@@ -2031,6 +2060,439 @@ pub enum Credential {
     /// An API key held in the owner's secrets store under a namespace and a name, written
     /// `<namespace>/<name>`; the harness resolves it, and takt opens no store.
     Secret { namespace: String, name: String },
+    /// A key in an environment variable of takt's own, by its name: takt takes the value out of
+    /// its environment before anything starts, stages it as a protected token file
+    /// ([`StagedToken`]) handed to the session, and records the name alone.
+    Environment { name: String },
+}
+
+/// Whether `name` is a portable environment variable's name: ASCII letters, digits and `_`,
+/// not empty and not starting with a digit.
+#[must_use]
+pub fn portable_variable_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// Takes the variable `name` out of takt's own environment and returns its value. On Linux with
+/// glibc, every `name=` entry the environment holds is first overwritten with NUL bytes where it
+/// lies: for the environment takt was started with, that is the block `/proc/<takt>/environ`
+/// reads back, so no process of takt's user reads the value there once this has run. Then the
+/// variable is removed, so no process takt starts inherits it. Before this runs, and on other
+/// systems (musl, macOS), the block holds the value as the kernel gave it.
+///
+/// # Safety
+///
+/// No other thread may read or write the environment while it runs: call it before takt
+/// starts any thread.
+pub unsafe fn take_environment_variable(name: &str) -> Option<VariableValue> {
+    let value = std::env::var_os(name).map(VariableValue::new);
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    // SAFETY: the caller guarantees no other thread touches the environment.
+    unsafe {
+        overwrite_environment_value(name.as_bytes());
+    }
+    // SAFETY: the caller guarantees no other thread touches the environment.
+    unsafe { std::env::remove_var(name) };
+    value
+}
+
+/// Overwrites with NUL bytes the value of every entry `name=` in libc's `environ`, in place.
+/// Each entry is writable memory: the block the kernel set up for the environment takt was
+/// started with, or the copy `setenv` made, the only way Rust's `set_var` adds one.
+///
+/// # Safety
+///
+/// No other thread may read or write the environment while it runs.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+unsafe fn overwrite_environment_value(name: &[u8]) {
+    // SAFETY: reading the pointer by value; no other thread changes it (the caller's promise).
+    let mut entry = unsafe { std::ptr::addr_of!(libc::environ).read() };
+    if entry.is_null() || name.is_empty() {
+        return;
+    }
+    loop {
+        // SAFETY: `environ` is a NULL-terminated array of NUL-terminated strings.
+        let at = unsafe { entry.read() };
+        if at.is_null() {
+            break;
+        }
+        // SAFETY: `at` is a NUL-terminated string.
+        let length = unsafe { libc::strlen(at) };
+        // SAFETY: `at` holds `length` readable bytes before its NUL.
+        let bytes = unsafe { std::slice::from_raw_parts(at.cast::<u8>().cast_const(), length) };
+        if bytes.len() > name.len() && bytes.starts_with(name) && bytes[name.len()] == b'=' {
+            for offset in name.len() + 1..length {
+                // SAFETY: inside the entry's bytes, which are writable (see above); volatile,
+                // so the overwrite is not elided.
+                unsafe { at.cast::<u8>().add(offset).write_volatile(0) };
+            }
+        }
+        // SAFETY: the array goes on to its NULL terminator, not reached yet.
+        entry = unsafe { entry.add(1) };
+    }
+}
+
+/// The value of the variable an [`Credential::Environment`] names, as takt took it out of its
+/// own environment; its `Debug` shows nothing of it.
+pub struct VariableValue(std::ffi::OsString);
+
+impl VariableValue {
+    /// The value `value`.
+    #[must_use]
+    pub fn new(value: std::ffi::OsString) -> Self {
+        Self(value)
+    }
+}
+
+impl std::fmt::Debug for VariableValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("VariableValue(..)")
+    }
+}
+
+/// An environment variable's value staged as a token file b10x-harness's credential reader
+/// accepts: a file of mode 0600, one link, in a new directory of mode 0700 under a candidate
+/// whose every directory from `/` is owned by root or takt's user and writable by nobody else
+/// (a root-owned sticky directory excepted). Dropped, it removes the file and its directory, so
+/// the run that holds it removes them when it ends, on success or on an error.
+pub struct StagedToken {
+    name: String,
+    dir: std::path::PathBuf,
+    file: std::path::PathBuf,
+    slot: Option<usize>,
+}
+
+impl std::fmt::Debug for StagedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StagedToken")
+            .field("name", &self.name)
+            .field("dir", &self.dir)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for StagedToken {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.file);
+        let _ = std::fs::remove_dir(&self.dir);
+        if let Some(slot) = self.slot.take() {
+            on_signal::release(slot);
+        }
+    }
+}
+
+/// The removal of staged tokens when SIGTERM, SIGINT or SIGHUP ends takt. While a token is
+/// staged a handler is installed for each of those signals whose disposition was not to
+/// ignore it; it unlinks every staged file and removes its directory with async-signal-safe
+/// calls on paths made before, then restores the default disposition and raises the signal
+/// again, so takt ends as the signal would have ended it. When the last token is dropped, the
+/// dispositions found are restored; a handler found (takt installs none of its own) is not
+/// called on the signal. SIGKILL cannot be caught: it leaves the token behind.
+mod on_signal {
+    use std::ffi::CString;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicPtr, Ordering};
+
+    /// A staged token's paths, NUL-terminated for `unlink` and `rmdir`. Once registered it is
+    /// never freed, since the handler may be reading it on another thread when it is released.
+    struct Paths {
+        file: CString,
+        dir: CString,
+    }
+
+    const SLOTS: usize = 8;
+    const SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
+
+    static STAGED: [AtomicPtr<Paths>; SLOTS] =
+        [const { AtomicPtr::new(std::ptr::null_mut()) }; SLOTS];
+
+    /// The tokens registered, and the dispositions found when the first was.
+    struct Installed {
+        held: usize,
+        previous: Vec<(libc::c_int, libc::sigaction)>,
+    }
+
+    static INSTALLED: Mutex<Installed> = Mutex::new(Installed {
+        held: 0,
+        previous: Vec::new(),
+    });
+
+    /// Registers the token at `file` in `dir` for removal on a signal, installing the handler
+    /// with the first; `None` when its paths hold a NUL or every slot is taken, in which case
+    /// only its drop removes it.
+    pub(super) fn register(file: &std::path::Path, dir: &std::path::Path) -> Option<usize> {
+        use std::os::unix::ffi::OsStrExt as _;
+        let paths = Box::new(Paths {
+            file: CString::new(file.as_os_str().as_bytes()).ok()?,
+            dir: CString::new(dir.as_os_str().as_bytes()).ok()?,
+        });
+        let mut installed = INSTALLED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let paths = Box::into_raw(paths);
+        let Some(slot) = STAGED.iter().position(|slot| {
+            slot.compare_exchange(
+                std::ptr::null_mut(),
+                paths,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        }) else {
+            // SAFETY: `paths` came from `Box::into_raw` and was published in no slot.
+            drop(unsafe { Box::from_raw(paths) });
+            return None;
+        };
+        if installed.held == 0 {
+            installed.previous = SIGNALS
+                .iter()
+                .filter_map(|&signal| install(signal).map(|previous| (signal, previous)))
+                .collect();
+        }
+        installed.held += 1;
+        Some(slot)
+    }
+
+    /// Releases `slot`, restoring the dispositions found when the last token goes.
+    pub(super) fn release(slot: usize) {
+        let mut installed = INSTALLED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        STAGED[slot].store(std::ptr::null_mut(), Ordering::SeqCst);
+        installed.held = installed.held.saturating_sub(1);
+        if installed.held == 0 {
+            for (signal, previous) in installed.previous.drain(..) {
+                // SAFETY: `previous` is the disposition `sigaction` reported for `signal`.
+                unsafe { libc::sigaction(signal, &raw const previous, std::ptr::null_mut()) };
+            }
+        }
+    }
+
+    /// Installs the handler for `signal` and returns the disposition it replaced; `None`, and
+    /// nothing installed, when the signal was ignored or `sigaction` fails.
+    fn install(signal: libc::c_int) -> Option<libc::sigaction> {
+        // SAFETY: an all-zero `sigaction` is a valid value of the C struct.
+        let mut previous: libc::sigaction = unsafe { std::mem::zeroed() };
+        // SAFETY: querying the disposition into a valid struct.
+        if unsafe { libc::sigaction(signal, std::ptr::null(), &raw mut previous) } != 0
+            || previous.sa_sigaction == libc::SIG_IGN
+        {
+            return None;
+        }
+        // SAFETY: as above.
+        let mut action: libc::sigaction = unsafe { std::mem::zeroed() };
+        action.sa_sigaction = handle as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        action.sa_flags = libc::SA_RESTART;
+        // SAFETY: `sa_mask` is a valid signal set to fill.
+        unsafe { libc::sigfillset(&raw mut action.sa_mask) };
+        // SAFETY: installing a handler that makes only async-signal-safe calls.
+        if unsafe { libc::sigaction(signal, &raw const action, std::ptr::null_mut()) } != 0 {
+            return None;
+        }
+        Some(previous)
+    }
+
+    /// Unlinks every staged file and removes its directory, then ends takt by `signal` with its
+    /// default disposition. Only async-signal-safe calls: atomic loads, `unlink`, `rmdir`,
+    /// `sigaction`, `raise`.
+    extern "C" fn handle(signal: libc::c_int) {
+        for slot in &STAGED {
+            let paths = slot.load(Ordering::SeqCst);
+            if paths.is_null() {
+                continue;
+            }
+            // SAFETY: a registered `Paths` is never freed (see `Paths`).
+            let paths = unsafe { &*paths };
+            // SAFETY: NUL-terminated paths; failures are ignored.
+            unsafe {
+                libc::unlink(paths.file.as_ptr());
+                libc::rmdir(paths.dir.as_ptr());
+            }
+        }
+        // SAFETY: an all-zero `sigaction` with `SIG_DFL` is the default disposition.
+        unsafe {
+            let mut default: libc::sigaction = std::mem::zeroed();
+            default.sa_sigaction = libc::SIG_DFL;
+            libc::sigaction(signal, &raw const default, std::ptr::null_mut());
+            libc::raise(signal);
+        }
+    }
+}
+
+impl StagedToken {
+    /// The directories a token is staged under, in order: `$XDG_RUNTIME_DIR` when it is set
+    /// and absolute, `/dev/shm`, the system temporary directory.
+    #[must_use]
+    pub fn candidates() -> Vec<std::path::PathBuf> {
+        Self::candidates_of(std::env::var_os("XDG_RUNTIME_DIR").as_deref())
+    }
+
+    /// [`Self::candidates`] with `runtime` as `$XDG_RUNTIME_DIR`.
+    #[must_use]
+    pub fn candidates_of(runtime: Option<&std::ffi::OsStr>) -> Vec<std::path::PathBuf> {
+        runtime
+            .map(std::path::PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .into_iter()
+            .chain([std::path::PathBuf::from("/dev/shm"), std::env::temp_dir()])
+            .collect()
+    }
+
+    /// Stages `value`, the variable `name`'s, under the first of `candidates` whose every
+    /// directory from `/` passes b10x-harness's token-file rule. Refused, naming the variable
+    /// and nothing of its value: the variable unset or empty; no candidate passing, each named
+    /// with why.
+    pub fn stage(
+        name: &str,
+        value: Option<&VariableValue>,
+        candidates: &[std::path::PathBuf],
+    ) -> Result<Self> {
+        let value = match value {
+            Some(value) if !value.0.is_empty() => value,
+            Some(_) => {
+                bail!("the endpoint's credential variable {name} is empty; nothing was started")
+            }
+            None => {
+                bail!("the endpoint's credential variable {name} is not set; nothing was started")
+            }
+        };
+        // SAFETY: geteuid has no precondition and cannot fail.
+        let euid = unsafe { libc::geteuid() };
+        let mut refused = Vec::new();
+        for candidate in candidates {
+            match protected_directory(candidate, euid)
+                .and_then(|()| Self::write_under(candidate, name, value, euid))
+            {
+                Ok(mut staged) => {
+                    staged.slot = on_signal::register(&staged.file, &staged.dir);
+                    return Ok(staged);
+                }
+                Err(why) => refused.push(format!("{}: {why}", candidate.display())),
+            }
+        }
+        bail!(
+            "the endpoint's credential variable {name} cannot be staged as a token file b10x-harness reads: no candidate directory is owned by root or takt's user and writable by nobody else on its whole path: {}; nothing was started",
+            refused.join("; ")
+        )
+    }
+
+    /// A new directory of mode 0700 under `parent` holding `value` in a file of mode 0600,
+    /// both checked after they are made; whatever was made is removed on a failure.
+    fn write_under(
+        parent: &Path,
+        name: &str,
+        value: &VariableValue,
+        euid: u32,
+    ) -> std::result::Result<Self, String> {
+        use std::io::Write as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _};
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+        let dir = parent.join(format!(
+            "takt-endpoint-{}-{nanos}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&dir)
+            .map_err(|error| format!("a directory cannot be made in it: {error}"))?;
+        let staged = Self {
+            name: name.to_owned(),
+            file: dir.join("token"),
+            dir,
+            slot: None,
+        };
+        let made = std::fs::symlink_metadata(&staged.dir)
+            .map_err(|error| format!("the directory made in it cannot be read: {error}"))?;
+        if !made.is_dir() || made.uid() != euid || made.mode() & 0o077 != 0 {
+            return Err("the directory made in it is not takt's alone".to_owned());
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(&staged.file)
+            .map_err(|error| format!("the token file cannot be made in it: {error}"))?;
+        file.write_all(value.0.as_bytes())
+            .and_then(|()| file.sync_all())
+            .map_err(|error| format!("the token file cannot be written in it: {error}"))?;
+        let written = std::fs::symlink_metadata(&staged.file)
+            .map_err(|error| format!("the token file made in it cannot be read: {error}"))?;
+        if !written.is_file()
+            || written.nlink() != 1
+            || written.uid() != euid
+            || written.mode() & 0o077 != 0
+        {
+            return Err("the token file made in it is not takt's alone".to_owned());
+        }
+        Ok(staged)
+    }
+
+    /// The variable's name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// The directory the file is in.
+    #[must_use]
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    /// The staged token file.
+    #[must_use]
+    pub fn file(&self) -> &Path {
+        &self.file
+    }
+}
+
+/// Whether every directory from `/` to `dir`, `dir` included, passes b10x-harness's token-file
+/// rule: a directory, not a link, owned by root or `euid`, with no group or other write bit
+/// unless it is root's and sticky. Refused with why, naming the directory that fails.
+fn protected_directory(dir: &Path, euid: u32) -> std::result::Result<(), String> {
+    use std::os::unix::fs::MetadataExt as _;
+    if !dir.is_absolute() {
+        return Err("not absolute".to_owned());
+    }
+    let mut at = std::path::PathBuf::new();
+    for component in dir.components() {
+        match component {
+            std::path::Component::RootDir | std::path::Component::Normal(_) => {
+                at.push(component);
+            }
+            std::path::Component::CurDir => continue,
+            _ => return Err("not a normal path: it holds `..`".to_owned()),
+        }
+        let meta = std::fs::symlink_metadata(&at)
+            .map_err(|error| format!("{} cannot be read: {error}", at.display()))?;
+        if meta.file_type().is_symlink() {
+            return Err(format!("{} is a symbolic link", at.display()));
+        }
+        if !meta.is_dir() {
+            return Err(format!("{} is no directory", at.display()));
+        }
+        if meta.uid() != 0 && meta.uid() != euid {
+            return Err(format!(
+                "{} is owned by uid {}, neither root nor takt's user",
+                at.display(),
+                meta.uid()
+            ));
+        }
+        let sticky_root = meta.uid() == 0 && meta.mode() & 0o1000 != 0;
+        if meta.mode() & 0o022 != 0 && !sticky_root {
+            return Err(format!("{} is writable by group or others", at.display()));
+        }
+    }
+    Ok(())
 }
 
 /// A token file's path as the record writes it: as it displays, so a path that is not UTF-8
@@ -2078,7 +2540,21 @@ impl Credential {
                 pointer: None,
             } => format!("subscription token file {}", path.display()),
             Self::Secret { namespace, name } => format!("secret {namespace}/{name}"),
+            Self::Environment { name } => format!("environment variable {name}"),
         }
+    }
+
+    /// The variable `given` names: a portable variable name ([`portable_variable_name`]). A
+    /// refusal does not repeat what was given, which may be a key typed in the wrong place.
+    pub fn environment(given: &str) -> Result<Self> {
+        if !portable_variable_name(given) {
+            bail!(
+                "the endpoint's credential variable is no environment variable's name: one is ASCII letters, digits and `_`, not empty and not starting with a digit"
+            );
+        }
+        Ok(Self::Environment {
+            name: given.to_owned(),
+        })
     }
 }
 
@@ -2092,12 +2568,16 @@ pub struct EndpointFields {
     pub token_file: Option<std::path::PathBuf>,
     pub token_pointer: Option<String>,
     pub secret: Option<String>,
+    /// The name of the environment variable holding the key (`--endpoint-token-env`, the
+    /// file's `env`).
+    pub env: Option<String>,
 }
 
 impl EndpointFields {
     /// The endpoint file at `path`: TOML holding `base_url`, `wire` and `model`, each a string,
-    /// and a `[credential]` table of `token_file` with an optional `token_pointer`, or of
-    /// `secret` (`<namespace>/<name>`); a relative `token_file` is read beside the file. Any
+    /// and a `[credential]` table of `token_file` with an optional `token_pointer`, of `secret`
+    /// (`<namespace>/<name>`) or of `env` (a variable's name); a relative `token_file` is read
+    /// beside the file. Any
     /// other key, or a table naming both kinds or neither, is refused naming the path and, for
     /// a parse, the line, never a value written there.
     pub fn read(path: &Path) -> Result<Self> {
@@ -2115,8 +2595,9 @@ impl EndpointFields {
             token_file: Option<std::path::PathBuf>,
             token_pointer: Option<String>,
             secret: Option<String>,
+            env: Option<String>,
         }
-        const SHAPE: &str = "an endpoint file holds `base_url`, `wire` and `model`, each a string, and a `[credential]` table of `token_file` with an optional `token_pointer`, or of `secret`";
+        const SHAPE: &str = "an endpoint file holds `base_url`, `wire` and `model`, each a string, and a `[credential]` table of `token_file` with an optional `token_pointer`, of `secret`, or of `env`";
         let text = std::fs::read_to_string(path)
             .with_context(|| format!("the endpoint file {}", path.display()))?;
         let file: File = toml::from_str(&text).map_err(|error| {
@@ -2137,12 +2618,20 @@ impl EndpointFields {
             token_file: None,
             token_pointer: None,
             secret: None,
+            env: None,
         });
-        match (&table.token_file, &table.token_pointer, &table.secret) {
-            (Some(_), _, None) | (None, None, Some(_)) => {}
-            (None, None, None) if !given => {}
+        match (
+            &table.token_file,
+            &table.token_pointer,
+            &table.secret,
+            &table.env,
+        ) {
+            (Some(_), _, None, None)
+            | (None, None, Some(_), None)
+            | (None, None, None, Some(_)) => {}
+            (None, None, None, None) if !given => {}
             _ => bail!(
-                "the endpoint file {} is refused: its `[credential]` names `token_file` with an optional `token_pointer`, or `secret`: one of them, not both and not a `token_pointer` alone",
+                "the endpoint file {} is refused: its `[credential]` names `token_file` with an optional `token_pointer`, `secret`, or `env`: one of them, not two and not a `token_pointer` alone",
                 path.display()
             ),
         }
@@ -2157,18 +2646,31 @@ impl EndpointFields {
             token_file: table.token_file.map(beside),
             token_pointer: table.token_pointer,
             secret: table.secret,
+            env: table.env,
         })
     }
 
     /// The credential these fields name, when they name one.
     fn credential(&self) -> Option<Result<Credential>> {
-        match (&self.token_file, &self.secret) {
-            (Some(path), _) => Some(Ok(Credential::SubscriptionFile {
+        match (&self.token_file, &self.secret, &self.env) {
+            (Some(path), _, _) => Some(Ok(Credential::SubscriptionFile {
                 path: path.clone(),
                 pointer: self.token_pointer.clone(),
             })),
-            (None, Some(secret)) => Some(Credential::secret(secret)),
-            (None, None) => None,
+            (None, Some(secret), _) => Some(Credential::secret(secret)),
+            (None, None, Some(name)) => Some(Credential::environment(name)),
+            (None, None, None) => None,
+        }
+    }
+
+    /// The variable these fields' credential names, when it names one: the flags', when they
+    /// name any credential, else the file's. Neither read nor checked here.
+    #[must_use]
+    pub fn variable<'a>(flags: &'a Self, file: Option<&'a Self>) -> Option<&'a str> {
+        if flags.token_file.is_some() || flags.secret.is_some() || flags.env.is_some() {
+            flags.env.as_deref()
+        } else {
+            file.and_then(|file| file.env.as_deref())
         }
     }
 }
@@ -2245,15 +2747,25 @@ impl EndpointConfig {
     /// and a secret both given by flag, a pointer flag without a token file flag, a wire
     /// b10x-harness does not speak, a base URL [`check_base_url`] refuses, an empty model, the
     /// default credential with no HOME or with a base URL other than the default, which would
-    /// send the user's claude.ai token to another host.
+    /// send the user's claude.ai token to another host, an environment credential on a wire
+    /// other than [`ENVIRONMENT_WIRE`].
     pub fn of(
         flags: &EndpointFields,
         file: Option<&EndpointFields>,
         home: Option<&Path>,
     ) -> Result<Self> {
-        if flags.token_file.is_some() && flags.secret.is_some() {
+        let named: Vec<&str> = [
+            ("--endpoint-token-file", flags.token_file.is_some()),
+            ("--endpoint-secret", flags.secret.is_some()),
+            ("--endpoint-token-env", flags.env.is_some()),
+        ]
+        .into_iter()
+        .filter_map(|(flag, given)| given.then_some(flag))
+        .collect();
+        if named.len() > 1 {
             bail!(
-                "--endpoint-token-file and --endpoint-secret each name the endpoint's credential; give one"
+                "{} each name the endpoint's credential; give one",
+                named.join(" and ")
             );
         }
         if flags.token_pointer.is_some() && flags.token_file.is_none() {
@@ -2286,14 +2798,14 @@ impl EndpointConfig {
             None => {
                 if base_url != Self::BASE_URL {
                     bail!(
-                        "the endpoint's base URL {base_url} is not the default {}, and no credential is given: the default credential, the claude.ai subscription token in ~/{}, is not sent to another host; give --endpoint-token-file or --endpoint-secret, or the endpoint file's `[credential]`",
+                        "the endpoint's base URL {base_url} is not the default {}, and no credential is given: the default credential, the claude.ai subscription token in ~/{}, is not sent to another host; give --endpoint-token-file, --endpoint-secret or --endpoint-token-env, or the endpoint file's `[credential]`",
                         Self::BASE_URL,
                         Self::TOKEN_FILE
                     );
                 }
                 let home = home.ok_or_else(|| {
                     anyhow!(
-                        "the endpoint's credential is by default the subscription token file $HOME/{}, and HOME is not set; give --endpoint-token-file or --endpoint-secret",
+                        "the endpoint's credential is by default the subscription token file $HOME/{}, and HOME is not set; give --endpoint-token-file, --endpoint-secret or --endpoint-token-env",
                         Self::TOKEN_FILE
                     )
                 })?;
@@ -2318,6 +2830,13 @@ impl EndpointConfig {
             }
             credential => credential,
         };
+        if let Credential::Environment { name } = &credential
+            && wire != ENVIRONMENT_WIRE
+        {
+            bail!(
+                "the endpoint's credential variable {name} is given on the wire `{wire}`: only {ENVIRONMENT_WIRE} is admitted for an environment credential until the session executor can pass an API-key file; nothing was started"
+            );
+        }
         Ok(Self {
             base_url,
             wire,
@@ -2368,12 +2887,15 @@ impl EndpointConfig {
     /// The endpoint the session is built with ([`SessionHarness::endpoint`]): a subscription
     /// token file maps onto the session executor's token file and pointer; a secret's name
     /// leaves both empty (`token_file` empty, no pointer), the key named by
-    /// [`Self::api_key_secret`] alone.
+    /// [`Self::api_key_secret`] alone; a variable leaves both empty until the harness holds the
+    /// file its value is staged in ([`SessionHarness::hold_staged`]).
     #[must_use]
     pub fn session_endpoint(&self) -> Endpoint {
         let (token_file, token_pointer) = match &self.credential {
             Credential::SubscriptionFile { path, pointer } => (path.clone(), pointer.clone()),
-            Credential::Secret { .. } => (std::path::PathBuf::new(), None),
+            Credential::Secret { .. } | Credential::Environment { .. } => {
+                (std::path::PathBuf::new(), None)
+            }
         };
         Endpoint {
             base_url: self.base_url.clone(),
@@ -2386,12 +2908,12 @@ impl EndpointConfig {
 
     /// The secret's name the session executor hands b10x-harness (`api_key_secret`),
     /// `<namespace>/<name>`, which the harness resolves; takt reads no secret and opens no
-    /// store. None for a subscription token file.
+    /// store. None for a subscription token file and for a variable.
     #[must_use]
     pub fn api_key_secret(&self) -> Option<String> {
         match &self.credential {
             Credential::Secret { namespace, name } => Some(format!("{namespace}/{name}")),
-            Credential::SubscriptionFile { .. } => None,
+            Credential::SubscriptionFile { .. } | Credential::Environment { .. } => None,
         }
     }
 }
@@ -4738,5 +5260,343 @@ mod endpoint_tests {
             Some(&absolute),
             "the session keeps the path whole"
         );
+    }
+
+    const MARKER: &str = "MARKER-77a0e2-not-a-real-key";
+
+    fn value(text: &str) -> VariableValue {
+        VariableValue::new(std::ffi::OsString::from(text))
+    }
+
+    /// story:endpoint-credential-from-environment, acceptance 1: the endpoint file's
+    /// `[credential] env` and the `env` flag name the variable, recorded as `environment` with
+    /// its name; the flag wins over the file's credential as a token file's flag does.
+    #[test]
+    fn endpoint_env_by_file_or_flag_names_the_variable() {
+        let dir = scratch("env-names");
+        let file = from_file(
+            &dir.0,
+            "base_url = \"https://endpoint.invalid/v1\"\nwire = \"openai-responses\"\n\n[credential]\nenv = \"LLM_KEY\"\n",
+        );
+        assert_eq!(file.env.as_deref(), Some("LLM_KEY"));
+        let config = resolved(&EndpointFields::default(), Some(&file));
+        assert_eq!(
+            config.credential,
+            Credential::Environment {
+                name: "LLM_KEY".to_owned()
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&config.credential).expect("serializes"),
+            serde_json::json!({"kind": "environment", "name": "LLM_KEY"})
+        );
+        assert_eq!(config.api_key_secret(), None, "no secret named");
+        config
+            .check_token()
+            .expect("a variable is checked when staged");
+        let flag = EndpointFields {
+            base_url: Some("https://endpoint.invalid/v1".to_owned()),
+            env: Some("FROM_FLAG".to_owned()),
+            wire: Some("openai-responses".to_owned()),
+            ..EndpointFields::default()
+        };
+        assert_eq!(
+            resolved(&flag, Some(&file)).credential,
+            Credential::Environment {
+                name: "FROM_FLAG".to_owned()
+            }
+        );
+    }
+
+    /// An environment credential on the `anthropic-messages` wire, by default or given, from
+    /// the flag or the file, is refused naming the variable and the wire; a misnamed variable is
+    /// still refused as misnamed first.
+    #[test]
+    fn endpoint_env_on_the_messages_wire_is_refused_naming_variable_and_wire() {
+        let dir = scratch("env-messages");
+        let file = from_file(
+            &dir.0,
+            "base_url = \"https://endpoint.invalid/v1\"\nwire = \"anthropic-messages\"\n\n[credential]\nenv = \"LLM_KEY\"\n",
+        );
+        for (flags, file) in [
+            (
+                EndpointFields {
+                    base_url: Some("https://endpoint.invalid/v1".to_owned()),
+                    env: Some("LLM_KEY".to_owned()),
+                    ..EndpointFields::default()
+                },
+                None,
+            ),
+            (EndpointFields::default(), Some(&file)),
+        ] {
+            let message = format!(
+                "{:#}",
+                EndpointConfig::of(&flags, file, Some(&home())).expect_err("the messages wire")
+            );
+            assert!(
+                message.contains("LLM_KEY")
+                    && message.contains("`anthropic-messages`")
+                    && message.contains("only openai-responses is admitted"),
+                "{message}"
+            );
+        }
+        let misnamed = EndpointFields {
+            env: Some("1KEY".to_owned()),
+            ..EndpointFields::default()
+        };
+        let message = format!(
+            "{:#}",
+            EndpointConfig::of(&misnamed, None, Some(&home())).expect_err("misnamed")
+        );
+        assert!(
+            message.contains("no environment variable's name"),
+            "{message}"
+        );
+    }
+
+    /// Acceptance 1: the `env` flag with the token file or the secret is refused naming both
+    /// flags; the file's `env` with another credential is refused; a name that is no portable
+    /// variable name is refused without repeating it.
+    #[test]
+    fn endpoint_env_given_with_another_credential_or_misnamed_is_refused() {
+        for (other, fields) in [
+            (
+                "--endpoint-token-file",
+                EndpointFields {
+                    token_file: Some(PathBuf::from("/t.json")),
+                    env: Some("KEY".to_owned()),
+                    ..EndpointFields::default()
+                },
+            ),
+            (
+                "--endpoint-secret",
+                EndpointFields {
+                    secret: Some("llm/key".to_owned()),
+                    env: Some("KEY".to_owned()),
+                    ..EndpointFields::default()
+                },
+            ),
+        ] {
+            let message = format!(
+                "{:#}",
+                EndpointConfig::of(&fields, None, Some(&home())).expect_err("two credentials")
+            );
+            assert!(
+                message.contains("--endpoint-token-env") && message.contains(other),
+                "{message}"
+            );
+        }
+        let dir = scratch("env-twice");
+        let path = dir.0.join("endpoint.toml");
+        for text in [
+            "[credential]\nenv = \"KEY\"\nsecret = \"llm/key\"\n",
+            "[credential]\nenv = \"KEY\"\ntoken_file = \"t.json\"\n",
+            "[credential]\nenv = \"KEY\"\ntoken_pointer = \"/a\"\n",
+        ] {
+            std::fs::write(&path, text).expect("an endpoint file");
+            let message = format!(
+                "{:#}",
+                EndpointFields::read(&path).expect_err("refused: {text}")
+            );
+            assert!(message.contains(&path.display().to_string()), "{message}");
+        }
+        for name in ["", "1KEY", "A-KEY", "A=B", "A B", MARKER] {
+            let fields = EndpointFields {
+                base_url: Some("https://endpoint.invalid/v1".to_owned()),
+                env: Some(name.to_owned()),
+                ..EndpointFields::default()
+            };
+            let outcome = EndpointConfig::of(&fields, None, Some(&home()));
+            if name == MARKER {
+                // A marker of letters, digits and `-` is no variable name either.
+                assert!(outcome.is_err(), "{name}");
+            }
+            let message = format!("{:#}", outcome.expect_err("misnamed"));
+            assert!(
+                message.contains("no environment variable's name"),
+                "{message}"
+            );
+            if !name.is_empty() {
+                assert!(
+                    !message.contains(name),
+                    "the name is not repeated: {message}"
+                );
+            }
+        }
+        assert!(portable_variable_name("_A1"));
+        assert!(portable_variable_name("LLM_KEY"));
+    }
+
+    /// Acceptance 2: an unset or an empty variable is refused naming it, staging nothing.
+    #[test]
+    fn staging_an_unset_or_empty_variable_is_refused_naming_it() {
+        let dir = scratch("stage-unset");
+        let candidates = vec![dir.0.clone()];
+        for given in [None, Some(value(""))] {
+            let message = format!(
+                "{:#}",
+                StagedToken::stage("LLM_KEY", given.as_ref(), &candidates)
+                    .expect_err("nothing to stage")
+            );
+            assert!(message.contains("LLM_KEY"), "{message}");
+        }
+        assert_eq!(
+            std::fs::read_dir(&dir.0).expect("the candidate").count(),
+            0,
+            "nothing was staged"
+        );
+    }
+
+    /// Acceptance 3: the value is written into a file of mode 0600 in a new directory of mode
+    /// 0700 under the first candidate that passes the reader's rule, a group-writable one and a
+    /// link passed over; the guard removes the file and its directory when dropped.
+    #[test]
+    fn staging_writes_a_protected_file_under_the_first_passing_candidate_and_drop_removes_it() {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        let dir = scratch("stage-first");
+        let open = dir.0.join("open");
+        let link = dir.0.join("link");
+        let good = dir.0.join("good");
+        for path in [&open, &good] {
+            std::fs::create_dir(path).expect("a candidate");
+        }
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o775))
+            .expect("group-writable");
+        std::fs::set_permissions(&good, std::fs::Permissions::from_mode(0o700)).expect("private");
+        std::os::unix::fs::symlink(&good, &link).expect("a link");
+        let given = value(MARKER);
+        let staged = StagedToken::stage(
+            "LLM_KEY",
+            Some(&given),
+            &[open.clone(), link.clone(), good.clone()],
+        )
+        .expect("staged under the third candidate");
+        assert_eq!(staged.name(), "LLM_KEY");
+        assert_eq!(staged.dir().parent(), Some(good.as_path()));
+        assert_eq!(staged.file().parent(), Some(staged.dir()));
+        let dir_meta = std::fs::symlink_metadata(staged.dir()).expect("the directory");
+        assert!(dir_meta.is_dir());
+        assert_eq!(dir_meta.mode() & 0o7777, 0o700);
+        let file_meta = std::fs::symlink_metadata(staged.file()).expect("the file");
+        assert!(file_meta.is_file());
+        assert_eq!(file_meta.mode() & 0o7777, 0o600);
+        assert_eq!(file_meta.nlink(), 1);
+        assert_eq!(
+            std::fs::read_to_string(staged.file()).expect("the token"),
+            MARKER
+        );
+        let debug = format!("{staged:?} {given:?}");
+        assert!(!debug.contains(MARKER), "{debug}");
+        assert_eq!(std::fs::read_dir(&open).expect("open").count(), 0);
+        let staged_dir = staged.dir().to_path_buf();
+        drop(staged);
+        assert!(!staged_dir.exists(), "the staged directory is gone");
+        assert_eq!(std::fs::read_dir(&good).expect("good").count(), 0);
+    }
+
+    /// Acceptance 3: no candidate passing is refused naming each candidate and why, and
+    /// nothing of the value.
+    #[test]
+    fn staging_with_no_passing_candidate_is_refused_naming_each_and_why() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = scratch("stage-none");
+        let open = dir.0.join("open");
+        std::fs::create_dir(&open).expect("a candidate");
+        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777))
+            .expect("world-writable");
+        let missing = dir.0.join("missing");
+        let relative = PathBuf::from("relative/dir");
+        let given = value(MARKER);
+        let message = format!(
+            "{:#}",
+            StagedToken::stage(
+                "LLM_KEY",
+                Some(&given),
+                &[open.clone(), missing.clone(), relative.clone()]
+            )
+            .expect_err("no candidate passes")
+        );
+        assert!(message.contains("LLM_KEY"), "{message}");
+        assert!(!message.contains(MARKER), "{message}");
+        for candidate in [&open, &missing, &relative] {
+            assert!(
+                message.contains(&candidate.display().to_string()),
+                "{}: {message}",
+                candidate.display()
+            );
+        }
+        assert!(message.contains("writable by group or others"), "{message}");
+        assert!(message.contains("not absolute"), "{message}");
+        assert_eq!(std::fs::read_dir(&open).expect("open").count(), 0);
+    }
+
+    /// The default candidates: `$XDG_RUNTIME_DIR` when it is absolute, `/dev/shm`, the system
+    /// temporary directory, in that order.
+    #[test]
+    fn staging_candidates_are_the_runtime_directory_then_shm_then_temp() {
+        let candidates = StagedToken::candidates_of(Some(std::ffi::OsStr::new("/run/user/7")));
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/run/user/7"),
+                PathBuf::from("/dev/shm"),
+                std::env::temp_dir()
+            ]
+        );
+        for unset in [
+            None,
+            Some(std::ffi::OsStr::new("relative")),
+            Some(std::ffi::OsStr::new("")),
+        ] {
+            assert_eq!(
+                StagedToken::candidates_of(unset),
+                vec![PathBuf::from("/dev/shm"), std::env::temp_dir()]
+            );
+        }
+    }
+
+    /// Acceptance 3 and 5: the harness holding a staged token hands the session its file as the
+    /// endpoint's `token_file`, no pointer, no secret's name, and records the credential as
+    /// `environment` with the variable's name; dropping the harness removes the staged file.
+    #[test]
+    fn a_staged_token_reaches_the_session_as_its_token_file_and_is_recorded_by_name() {
+        let dir = scratch("stage-session");
+        let config = resolved(
+            &EndpointFields {
+                base_url: Some("https://endpoint.invalid/v1".to_owned()),
+                wire: Some("openai-responses".to_owned()),
+                env: Some("LLM_KEY".to_owned()),
+                ..EndpointFields::default()
+            },
+            None,
+        );
+        let given = value(MARKER);
+        let staged = StagedToken::stage("LLM_KEY", Some(&given), std::slice::from_ref(&dir.0))
+            .expect("staged");
+        let file = staged.file().to_path_buf();
+        let staged_dir = staged.dir().to_path_buf();
+        let mut harness = SessionHarness::of(Kind::B10x);
+        harness.point_at(&config);
+        harness.hold_staged(staged);
+        let endpoint = harness.endpoint.clone().expect("an endpoint");
+        assert_eq!(endpoint.token_file, file);
+        assert_eq!(endpoint.token_pointer, None);
+        assert_eq!(harness.api_key_secret, None);
+        let reference = harness.endpoint_reference().expect("a reference");
+        assert_eq!(
+            reference.credential,
+            Credential::Environment {
+                name: "LLM_KEY".to_owned()
+            }
+        );
+        let recorded = serde_json::to_string(&reference).expect("serializes");
+        assert!(!recorded.contains(MARKER), "{recorded}");
+        assert!(
+            !recorded.contains(&file.display().to_string()),
+            "{recorded}"
+        );
+        assert!(!format!("{harness:?}").contains(MARKER));
+        drop(harness);
+        assert!(!staged_dir.exists(), "the staged directory is gone");
     }
 }
