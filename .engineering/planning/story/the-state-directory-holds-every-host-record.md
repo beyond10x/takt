@@ -19,7 +19,7 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:44:46Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-27T01:44:47Z", actor: "human:timo", revision: 4}
@@ -74,3 +74,10 @@ Each item is a named test, run by `task check`.
 ## Depends on
 
 story:run-state-directory-is-configurable (the `--state-dir` flag and key).
+
+## Measured
+
+Measured on the trial of 2026-10-27 (one case, two runs): the state directory held 5
+transcripts of 820,205 bytes for the case, from 32,234 to 511,991 bytes each, and no set-aside or replay files. The
+case directory in the tree was 134,529 bytes. Host state is therefore most of what a run writes, and losing it with
+an unkept `HOME` loses the larger part of the record.
