@@ -31,6 +31,7 @@ takt's releases.
 
 ### Fixed
 
+- A gate's command finds a bare program name on `/usr/local/bin:/usr/bin:/bin`, or on the `PATH` its `env` declares, never on the user's `PATH`; a name found nowhere refuses the gate.
 - The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.
 - A `tests.run` that writes an untracked `Cargo.lock` is refused with the remedy named: commit it, ignore it (`.gitignore`), or give `--test-cmd` a command that does not write it.
 - The endpoint token staging tests pass when the temporary directory is writable by others without the sticky bit.
