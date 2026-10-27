@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:cases-live-under-dot-takt
 kind: story
-status: active
+status: implemented
 title: A run keeps its cases under .takt/cases, ignored by git by default
 summary: new cases open under .takt/cases with a self-written .takt/.gitignore; legacy .engineering/cases cases resume where they are
 tags:
@@ -31,10 +31,11 @@ scope:
   path: crates/takt/src/scorecard.rs
 - confidence: cited
   path: crates/takt/tests
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:44:46Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-27T01:44:46Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-27T11:33:40Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: cases-live-under-dot-takt
 

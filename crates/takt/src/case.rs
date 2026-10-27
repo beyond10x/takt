@@ -2446,8 +2446,9 @@ pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Resul
 
 /// Writes [`TAKT_GITIGNORE`] under `tree`'s [`TAKT_DIR`] when there is none, creating the
 /// directory as needed. A file already there, a link or a directory included, is left as it is,
-/// byte for byte. Called at open, on resume and after each observation, since a test command
-/// may remove it.
+/// byte for byte. Called at open, on resume and after each observation; an observation that
+/// changes or removes it is refused and undone first (`run.rs`, the observation path), so after
+/// one it is written only when it is absent.
 pub fn write_takt_gitignore(tree: &Path) -> Result<()> {
     let takt = tree.join(TAKT_DIR);
     let path = takt.join(TAKT_GITIGNORE);

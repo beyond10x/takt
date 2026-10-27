@@ -263,8 +263,13 @@ fn an_unusable_named_state_dir_is_refused_before_the_case_opens() {
             let output = world.run(&args);
             let said = text(&output);
             assert_eq!(output.status.code(), Some(1), "{args:?}\n{said}");
+            // story:the-state-directory-holds-every-host-record: the refusal names the directory
+            // as `takt::git::shown` writes it (control characters escaped, the home directory as `~`).
             assert!(
-                said.contains(&format!("the state directory {}", dir.display())),
+                said.contains(&format!(
+                    "the state directory {}",
+                    takt::git::shown(dir.as_os_str())
+                )),
                 "{args:?}\n{said}"
             );
             assert!(said.contains(why), "{why}: {args:?}\n{said}");

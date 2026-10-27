@@ -18,7 +18,9 @@ and `takt trace`, `takt scorecard` and `takt replay` read it. How to read one af
 ### Where cases live, and git
 
 When takt creates `.takt/` and finds no `.takt/.gitignore`, it writes one holding `*`, and
-writes it again when it is gone after an observation or at a resume, so `git status` shows none of a run's records. A `.takt/.gitignore` already there is left alone: a
+writes it again at a resume when it is gone, so `git status` shows none of a run's records. A
+test command or harness step that changes or removes `.takt/.gitignore`, or replaces `.takt`
+with a link, is refused and undone. A `.takt/.gitignore` already there is left alone: a
 repository that keeps its cases in version control commits its own, for example one holding
 `!cases/`, and takt never overwrites it. takt itself never commits a case.
 

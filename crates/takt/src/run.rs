@@ -1785,6 +1785,19 @@ fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
     snapshot_without(dir, None)
 }
 
+/// Whether `path`, relative to the tree and as git names it, is the directory that holds the cases
+/// root (`.takt`) or the ignore file that keeps it out of version control (`.takt/.gitignore`).
+/// An observation may not change either, whatever the judge surface: git ignores what they keep,
+/// so the surface does not show a change to them.
+fn takt_guard(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    path == crate::case::TAKT_DIR
+        || path
+            .strip_prefix(crate::case::TAKT_DIR)
+            .and_then(|rest| rest.strip_prefix('/'))
+            == Some(crate::case::TAKT_GITIGNORE)
+}
+
 /// [`snapshot`] of both cases roots under `tree` ([`CASE_ROOTS`]), each entry keyed by its path
 /// relative to `tree`: one map holds a case under either root, and [`restore`] puts it back from
 /// `tree`. A root that is absent contributes nothing.
@@ -10590,6 +10603,9 @@ impl<'a> Run<'a> {
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
         let failed = validator.take_failed();
         let returned = Instant::now();
+        // The way to the case's directory is read before anything is written under it: a test
+        // command that put a link on it (`.takt`, a cases root) is refused and undone below.
+        let way = self.case.check_way().err();
         // What the observation left running is killed before anything is looked at;
         // one that could not be killed is named with the rest of what it left.
         let swept = crate::forge::sweep_left();
@@ -10669,7 +10685,10 @@ impl<'a> Run<'a> {
                     .iter()
                     .chain(&change.ignored_changed)
                     .chain(&change.ignored_removed)
-                    .filter(|path| surface.contains(&path.to_string_lossy()))
+                    .filter(|path| {
+                        let text = path.to_string_lossy();
+                        surface.contains(&text) || takt_guard(&text)
+                    })
                     .map(|path| crate::git::shown(path)),
             )
         {
@@ -10678,6 +10697,9 @@ impl<'a> Run<'a> {
             }
         }
         outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
+        if let Some(way) = &way {
+            outside.push(format!("{way:#}"));
+        }
         if !foreign.is_empty() || !outside.is_empty() {
             let lock_remedy = untracked_cargo_lock(&self.tree, &change.paths);
             let left = undo_step(&self.tree, &kept_all)?.left;
@@ -10737,9 +10759,10 @@ impl<'a> Run<'a> {
             writeln!(out, "  {why}")?;
             return Ok(Taken::Stop(Stop::Hours(h)));
         }
-        // A test command may have removed `.takt/.gitignore`, which keeps the case out of `git
-        // status`: it is written again after each observation that stands, and an observation
-        // that failed is written again before its error ends the run.
+        // A test command that changed or removed `.takt/.gitignore` or `.takt` was refused and
+        // undone above, so this writes the ignore file only when it is absent, as at open, which
+        // keeps the case out of `git status`; an observation that failed is written the same way
+        // before its error ends the run.
         let ignore = if self
             .case
             .dir
