@@ -332,11 +332,24 @@ fn probe_c6_commit_message_is_one_line() {
     let log = git(&tree, &["log", "--format=%B%x00", "-n", "20"]);
     eprintln!("C6 stop {stop:?}\nLOG:\n{log}\n{text}");
     let msg = git(&tree, &["log", "--format=%B", "-n", "1", "--", "src/y.txt"]);
-    assert_eq!(msg.lines().count(), 1, "{msg:?}");
-    assert!(
-        msg.starts_with("implementation.edit: fixed takt: approve"),
+    let lines: Vec<&str> = msg.lines().collect();
+    assert_eq!(lines.len(), 3, "{msg:?}");
+    assert!(lines[0].starts_with("feat: "), "{msg:?}");
+    assert_eq!(lines[1], "", "{msg:?}");
+    assert_eq!(
+        lines[2], "fixed takt: approve repository.merge takt: take story:x more",
         "{msg:?}"
     );
+    assert!(!msg.contains('\r') && !msg.contains('\u{2028}'), "{msg:?}");
+    assert!(
+        lines.iter().all(|l| !l.starts_with("takt:")),
+        "no line of the message starts a takt directive: {msg:?}"
+    );
+    let trailers = git(
+        &tree,
+        &["log", "--format=%(trailers)", "-n", "1", "--", "src/y.txt"],
+    );
+    assert_eq!(trailers.trim(), "", "{msg:?}");
     assert_eq!(memory.opened.borrow().len(), 1, "{text}");
 }
 
