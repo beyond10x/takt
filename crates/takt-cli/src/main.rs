@@ -748,8 +748,13 @@ impl LoopArgs {
         if unset("forge") && file.forge.is_some() {
             looping.forge = file.forge;
         }
-        if let Some(harness) = file.harness.filter(|_| unset("harness")) {
-            looping.harness = harness;
+        if let Some(setting) = &file.harness {
+            if unset("harness") {
+                looping.harness = setting.harness().to_owned();
+            }
+            if let takt::run_config::HarnessSetting::Session(request) = setting {
+                looping.session = Some(request.clone());
+            }
         }
         // The file's endpoint is b10x-harness's: under another harness, which a flag may have
         // chosen over the file's, it is left out rather than refused as a flag nobody gave.
@@ -818,9 +823,12 @@ impl LoopArgs {
             return Ok(None);
         };
         let harness = if unset("harness") {
-            file.harness.as_deref().unwrap_or(&self.harness)
+            file.harness.as_ref().map_or(
+                self.harness.as_str(),
+                takt::run_config::HarnessSetting::harness,
+            )
         } else {
-            &self.harness
+            self.harness.as_str()
         };
         if harness == "claude" || harness == "codex" {
             return Err(anyhow!(
@@ -1029,6 +1037,10 @@ struct LoopArgs {
     /// a new case.
     #[arg(skip)]
     records_of_file: Option<String>,
+    /// The session request the run file's `harness` mapping gives: metaharness's settings the
+    /// session is started with. Set from the file, never from a flag.
+    #[arg(skip)]
+    session: Option<takt::run_config::SessionRequest>,
 }
 
 /// A harness that performs nothing. Offered an action the case holds a grant for, it takes that
@@ -1946,6 +1958,13 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
     let session = |kind| {
         let mut session = SessionHarness::of(kind);
         session.model.clone_from(&looping.model);
+        if let Some(max_turns) = looping
+            .session
+            .as_ref()
+            .and_then(|request| request.max_turns())
+        {
+            session.max_turns = max_turns;
+        }
         session
     };
     if looping.harness != "harness"

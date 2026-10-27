@@ -42,7 +42,13 @@ fn strings(value: &Value) -> Vec<String> {
 fn assert_run(config: &RunConfig) {
     assert_eq!(config.iterations, None);
     assert_eq!(config.hours, Some(1.0));
-    assert_eq!(config.harness.as_deref(), Some("harness"));
+    assert_eq!(
+        config
+            .harness
+            .as_ref()
+            .map(takt::run_config::HarnessSetting::harness),
+        Some("harness")
+    );
     assert_eq!(config.model, None);
     assert_eq!(config.forge.as_deref(), Some("none"));
     assert_eq!(
@@ -89,7 +95,13 @@ fn assert_loom_run(config: &RunConfig) {
     assert_eq!(config.story.as_deref(), Some("story:add-sub"));
     assert_eq!(config.iterations, None);
     assert_eq!(config.hours, Some(1.0));
-    assert_eq!(config.harness.as_deref(), Some("harness"));
+    assert_eq!(
+        config
+            .harness
+            .as_ref()
+            .map(takt::run_config::HarnessSetting::harness),
+        Some("harness")
+    );
     assert_eq!(config.model.as_deref(), Some("agent"));
     assert_eq!(config.forge.as_deref(), Some("none"));
     assert_eq!(

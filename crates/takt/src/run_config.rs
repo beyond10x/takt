@@ -106,8 +106,14 @@ pub struct RunConfig {
     pub iterations: Option<u64>,
     /// `--hours`.
     pub hours: Option<f64>,
-    /// `--harness`.
-    pub harness: Option<String>,
+    /// `--harness`, or the `harness` mapping: metaharness's session request. Set by
+    /// [`RunConfig::read`] from the member, never read from the file.
+    #[serde(skip)]
+    pub harness: Option<HarnessSetting>,
+    /// The `harness` member as written, a name or a mapping, which [`RunConfig::read`] parses
+    /// into [`RunConfig::harness`].
+    #[serde(rename = "harness")]
+    harness_member: Option<serde_yaml_ng::Value>,
     /// `--model`.
     pub model: Option<String>,
     /// `--endpoint-file`; a relative path is read beside the configuration file.
@@ -148,6 +154,239 @@ where
     D: serde::Deserializer<'de>,
 {
     <serde_yaml_ng::Value as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+/// The `harness` member of a run file: `--harness`'s name as a string, or a mapping, metaharness's
+/// session request, whose `kind` names the harness.
+#[derive(Debug, Clone, PartialEq)]
+pub enum HarnessSetting {
+    /// The name `--harness` takes.
+    Name(String),
+    /// The session request a mapping gives.
+    Session(SessionRequest),
+}
+
+impl HarnessSetting {
+    /// The harness the setting names: the name, or the mapping's `kind` as takt names it.
+    #[must_use]
+    pub fn harness(&self) -> &str {
+        match self {
+            Self::Name(name) => name,
+            Self::Session(request) => request.harness(),
+        }
+    }
+}
+
+/// metaharness's session request as a `harness` mapping gives it: its admitted keys as written,
+/// under metaharness's names, `kind` one of its three and `max-turns` a whole number.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionRequest {
+    harness: &'static str,
+    settings: serde_json::Map<String, serde_json::Value>,
+}
+
+impl SessionRequest {
+    /// The harness the request runs: `claude`, `codex`, or `harness` for b10x-harness.
+    #[must_use]
+    pub fn harness(&self) -> &str {
+        self.harness
+    }
+
+    /// The most turns the session may take, when the mapping gives `max-turns`.
+    #[must_use]
+    pub fn max_turns(&self) -> Option<u32> {
+        self.settings
+            .get("max-turns")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|turns| u32::try_from(turns).ok())
+    }
+}
+
+/// The keys a `harness` mapping admits: metaharness's `run` settings, under their own names.
+const HARNESS_KEYS: &[&str] = &[
+    "kind",
+    "effort",
+    "max-turns",
+    "max-budget-usd",
+    "strict-version",
+    "context",
+];
+
+/// The keys a `harness` mapping admits but that takt's launch cannot carry yet: loom's partial
+/// RunSpec and metaharness's session request are not released with them. Refused, not dropped.
+const HARNESS_KEYS_NOT_CARRIED: &[&str] =
+    &["effort", "max-budget-usd", "strict-version", "context"];
+
+/// takt's own keys, its confinement, which a `harness` mapping refuses as takt's.
+const TAKT_KEYS: &[&str] = &[
+    "cwd",
+    "scratch-cwd",
+    "frame",
+    "decisions",
+    "hermetic",
+    "driver",
+    "hooks",
+    "tool-surface",
+    "catalogue",
+    "substrate",
+    "substrate-embedded",
+    "cgroup-root",
+    "write-scope",
+    "process-write-subtree",
+    "allow-program",
+    "plugin",
+    "plugin-dir",
+    "spec",
+];
+
+/// The endpoint keys, which a `harness` mapping refuses as the run's `model` and `llm` section's;
+/// every `subscription-token-` key is one too.
+const ENDPOINT_KEYS: &[&str] = &[
+    "model",
+    "model-endpoint",
+    "model-wire",
+    "credentials",
+    "api-key-secret",
+];
+
+/// Whose a refused `harness` key is (`takt.work.HarnessSettingOwner`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HarnessSettingOwner {
+    Takt,
+    Run,
+}
+
+/// A `harness` mapping key refused before any case opens: the key and whose it is
+/// (`takt.work.HarnessSettingRefused`). A key the mapping does not admit is takt's to refuse.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HarnessSettingRefused {
+    key: String,
+    owner: HarnessSettingOwner,
+}
+
+impl HarnessSettingRefused {
+    fn of(key: &str) -> Self {
+        let owner = if ENDPOINT_KEYS.contains(&key) || key.starts_with("subscription-token-") {
+            HarnessSettingOwner::Run
+        } else {
+            HarnessSettingOwner::Takt
+        };
+        Self {
+            key: key.to_owned(),
+            owner,
+        }
+    }
+
+    fn message(&self) -> String {
+        let key = &self.key;
+        match self.owner {
+            HarnessSettingOwner::Run => format!(
+                "`{key}` belongs to the run's model and llm section, not to the `harness` mapping"
+            ),
+            HarnessSettingOwner::Takt if TAKT_KEYS.contains(&key.as_str()) => format!(
+                "`{key}` is takt's own, its confinement, which the `harness` mapping does not take"
+            ),
+            HarnessSettingOwner::Takt => format!(
+                "`{key}` is not admitted in the `harness` mapping, which admits {}",
+                HARNESS_KEYS.join(", ")
+            ),
+        }
+    }
+}
+
+/// The refusal of the `harness` member of the file at `path`, detailed as `detail` says; it
+/// repeats no value written in the file.
+fn harness_refused(path: &Path, detail: &str) -> anyhow::Error {
+    anyhow!(
+        "the run configuration file {} is refused: {detail}",
+        path.display()
+    )
+}
+
+/// The `harness` member `member` holds: a string, the name `--harness` takes, or a mapping, the
+/// session request; any other value is refused.
+fn harness_setting(path: &Path, member: &serde_yaml_ng::Value) -> Result<HarnessSetting> {
+    match member {
+        serde_yaml_ng::Value::String(name) => Ok(HarnessSetting::Name(name.clone())),
+        serde_yaml_ng::Value::Mapping(mapping) => {
+            session_request(path, mapping).map(HarnessSetting::Session)
+        }
+        _ => Err(harness_refused(
+            path,
+            "its `harness` is a name, a string, or a mapping of metaharness's session request",
+        )),
+    }
+}
+
+/// The session request `mapping` holds: each key admitted or refused by name, in order, then
+/// `kind` and `max-turns` checked. No value is repeated.
+fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<SessionRequest> {
+    let mut settings = serde_json::Map::new();
+    for (key, value) in mapping {
+        let Some(key) = key.as_str() else {
+            return Err(harness_refused(
+                path,
+                "its `harness` mapping holds a key that is not a name",
+            ));
+        };
+        if !HARNESS_KEYS.contains(&key) {
+            return Err(harness_refused(
+                path,
+                &HarnessSettingRefused::of(key).message(),
+            ));
+        }
+        let value = serde_json::to_value(value).map_err(|_| {
+            harness_refused(
+                path,
+                "its `harness` mapping holds a value that has no JSON form",
+            )
+        })?;
+        settings.insert(key.to_owned(), value);
+    }
+    let harness = match settings.get("kind") {
+        None => {
+            return Err(harness_refused(
+                path,
+                "its `harness` mapping names no `kind`: claude, codex or b10x",
+            ));
+        }
+        Some(kind) => match kind.as_str() {
+            Some("claude") => "claude",
+            Some("codex") => "codex",
+            Some("b10x") => "harness",
+            _ => {
+                return Err(harness_refused(
+                    path,
+                    "the `kind` of its `harness` mapping is claude, codex or b10x, no other value",
+                ));
+            }
+        },
+    };
+    if let Some(key) = HARNESS_KEYS_NOT_CARRIED
+        .iter()
+        .find(|key| settings.contains_key(**key))
+    {
+        return Err(harness_refused(
+            path,
+            &format!(
+                "`{key}` in its `harness` mapping is admitted but takt's launch does not carry it yet, so the run is refused rather than run without it"
+            ),
+        ));
+    }
+    if harness == "codex" && settings.contains_key("max-turns") {
+        return Err(harness_refused(
+            path,
+            "`max-turns` under `kind: codex` in its `harness` mapping is refused: takt's Codex launch takes no turn ceiling, so the value would be dropped",
+        ));
+    }
+    let request = SessionRequest { harness, settings };
+    if request.settings.contains_key("max-turns") && request.max_turns().is_none() {
+        return Err(harness_refused(
+            path,
+            "`max-turns` in its `harness` mapping is a whole number, no other value",
+        ));
+    }
+    Ok(request)
 }
 
 const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`";
@@ -361,6 +600,9 @@ impl RunConfig {
                 path.display()
             ));
         }
+        if let Some(member) = config.harness_member.take() {
+            config.harness = Some(harness_setting(path, &member)?);
+        }
         if let Some(llm) = &config.llm {
             let routes = llm_document(path, llm)?;
             config.llm_digest = Some(routes.digest().to_owned());
@@ -440,7 +682,10 @@ mod tests {
         let config = RunConfig::read(&path).expect("read");
         assert_eq!(config.iterations, Some(2));
         assert_eq!(config.hours, Some(1.5));
-        assert_eq!(config.harness.as_deref(), Some("harness"));
+        assert_eq!(
+            config.harness.as_ref().map(HarnessSetting::harness),
+            Some("harness")
+        );
         assert_eq!(config.model.as_deref(), Some("m"));
         assert_eq!(
             config.endpoint_file,
@@ -555,7 +800,10 @@ mod tests {
         let config = RunConfig::read(&path).expect("read");
         assert_eq!(config.iterations, Some(2));
         assert_eq!(config.hours, Some(1.5));
-        assert_eq!(config.harness.as_deref(), Some("harness"));
+        assert_eq!(
+            config.harness.as_ref().map(HarnessSetting::harness),
+            Some("harness")
+        );
         assert_eq!(config.model.as_deref(), Some("m"));
         assert_eq!(
             config.endpoint_file,
