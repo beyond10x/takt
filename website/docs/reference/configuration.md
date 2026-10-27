@@ -398,6 +398,13 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | `--harness <HARNESS>` | `claude`, `codex`, `harness` (b10x-harness) or `none` (validators only); default `claude` |
 | `--model <MODEL>` | the harness's model, when it takes one; under `--harness harness` a route of the `llm` section, when the run has one |
 | `--llm-config <FILE>` | an `llm.routes/1` document (`.toml`, `.yaml` or `.yml`) that replaces the run file's `llm` section; with or without `--config` |
+| `--effort <LEVEL>` | the reasoning effort, as `metaharness run --effort`; refused until takt's launch carries it |
+| `--max-turns <N>` | a ceiling on the session's turns, as `metaharness run --max-turns`; refused under `--harness codex`, whose launch takes no turn ceiling |
+| `--max-budget-usd <USD>` | a ceiling in US dollars on the session's spend, as `metaharness run --max-budget-usd`; refused until takt's launch carries it |
+| `--strict-version` | refuse before the run when the vendor version is outside metaharness's pin; refused until takt's launch carries it |
+| `--context <FILE>` | a file whose text the prompt carries, repeatable, as `metaharness run --context`; refused until takt's launch carries it |
+
+The five flags above take the run file's `harness` mapping's keys under the same names, and a flag wins over the same key in the file.
 | `--endpoint-file <PATH>` | the endpoint file |
 | `--model-endpoint <URL>` | the endpoint's base URL |
 | `--model-wire <WIRE>` | `anthropic-messages` or `openai-responses` |
