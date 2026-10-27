@@ -147,8 +147,8 @@ time and tokens went: [Read a run report](./read-a-run-report.md).
 
 :::caution[On a cluster]
 
-Under Loom, `HOME` is an emptyDir, so the transcripts go when the pod goes. Copy them out before
-the pod is replaced. A run-state directory you can name is planned
-([Known limitations](../known-limitations.md#takt)).
+Under Loom, `HOME` is an emptyDir, so the transcripts go when the pod goes. At 0.14.0, copy them
+out before the pod is replaced; after it, name a directory on a kept volume with `--state-dir` or
+the configuration file's `state_dir`, and the transcripts stay under its `transcripts`.
 
 :::

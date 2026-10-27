@@ -84,12 +84,15 @@ takt starts other programs and finds them on the `PATH`. Which ones depends on t
 |---|---|
 | every run | `git`, and the test command's toolchain (`cargo` by default) |
 | `--harness claude`, the default | `claude` (Claude Code), logged in |
-| `--harness codex` | `codex`, and `b10x-gates` with `B10X_GATES_POLICY` set (required: [the gates scan](../reference/configuration.md#the-gates-scan)) |
-| `--harness harness` | `b10x-harness` 0.20.0, an LLM endpoint, and `b10x-gates` with `B10X_GATES_POLICY` set |
+| `--harness codex` | `codex`, and a [scan adapter](../reference/configuration.md#the-scan): `b10x-gates` with `B10X_GATES_POLICY` set for the default `gates`, or `scan: none` declared in the run's file |
+| `--harness harness` | `b10x-harness` 0.20.0, an LLM endpoint, and a scan adapter, as for `codex` |
 | a story | `aep` and a planning store; a gates document for the gate |
-| `--forge bot` (github.com only) | `b10x-gates` acting as the b10x-gates GitHub App, and `gh` |
+| `--forge bot` (beyond10x's route, github.com only) | `b10x-gates` acting as the bot's GitHub App, and `gh` |
 | `--forge gitlab` | `glab`, with `glab auth status --hostname <host>` exiting 0 |
 | `takt promote` | `bwrap` on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
+
+A gate's commands are the exception: they find a program by name on `/usr/local/bin:/usr/bin:/bin`,
+or on the `PATH` their `env` sets, as the [run-a-story guide](./run-a-story.md) states.
 
 The neighbours, each with its own docs:
 [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))

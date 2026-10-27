@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T02:50:52Z",
+  "actor": "human:timo",
+  "artifact": "story:scan-and-forge-are-adapters",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked --no-fail-fast at 09923fc4: 180 results, 1835 passed, 3 failed, 5 ignored; the 3 failures are self_improvement_cli cases whose forge-line filter matches the word forge in this tree's own path, and fail the same way at the base in it; ess validate, check-citations (1197 resolved), release-notes, fmt and clippy -D warnings pass"
+  }
+}

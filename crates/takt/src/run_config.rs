@@ -1,12 +1,13 @@
 //! A run's configuration file, `takt run --config <FILE>` and `takt scenario run --config
 //! <FILE>`: the story, the loop's budget, the harness, its model, endpoint file and token
-//! variable, the forge, the test command, the state directory and whether the run goes on past
-//! a red base, read from one file so a run started in a container takes them from a mounted
-//! file. The file is TOML (`.toml`) or YAML (`.yaml`,
-//! `.yml`), the same fields in either; a YAML file whose `format` is `loom.agent/1` is the agent
-//! document Loom mounts for a `LoomAgent` at `/config/agent.yaml`, and its `takt` member is the
-//! run configuration. A flag given on the command line wins over the file, and the file over the
-//! flag's default; the run applies them (`crates/takt-cli/src/main.rs`).
+//! variable, the forge, the test command, the state directory, whether the run goes on past
+//! a red base and its scan adapter (`scan`, `gates` or `none`, set nowhere else), read from
+//! one file so a run started in a container takes them from a mounted file. The file is TOML
+//! (`.toml`) or YAML (`.yaml`, `.yml`), the same fields in either; a YAML file whose `format`
+//! is `loom.agent/1` is the agent document Loom mounts for a `LoomAgent` at
+//! `/config/agent.yaml`, and its `takt` member is the run configuration. A flag given on the
+//! command line wins over the file, and the file over the flag's default; the run applies
+//! them (`crates/takt-cli/src/main.rs`).
 
 use std::path::{Path, PathBuf};
 
@@ -70,7 +71,8 @@ fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
 
 /// The fields a run configuration file may set, each one a `takt run` flag's: `story`,
 /// `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`,
-/// `test_cmd`, `state_dir`, `continue_past_red_base` and `records`. None is required.
+/// `test_cmd`, `state_dir`, `continue_past_red_base` and `records`, and `scan`, which no flag
+/// has. None is required.
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfig {
@@ -99,9 +101,12 @@ pub struct RunConfig {
     pub continue_past_red_base: Option<bool>,
     /// `--records`: `default` or `trial`, checked when the file is read.
     pub records: Option<String>,
+    /// The run's scan adapter, `gates` or `none` ([`crate::scan::Scan`]): the one field no
+    /// flag sets, so a run is unscanned only where its file says so. Not set, it is `gates`.
+    pub scan: Option<crate::scan::ScanName>,
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, and `continue_past_red_base`, a boolean, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional; `records` is `default` or `trial`";
 
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
@@ -425,6 +430,49 @@ mod tests {
             let path = scratch_named(name, file, text);
             let error = format!("{:#}", RunConfig::read(&path).expect_err(name));
             assert!(error.contains(&path.display().to_string()), "{error}");
+            assert!(!error.contains("MARKER"), "{error}");
+        }
+    }
+
+    /// story:scan-and-forge-are-adapters: `scan` names the run's scan adapter, `gates` or
+    /// `none`, in either format; any other value is refused naming the file and the line, never
+    /// the value.
+    #[test]
+    fn scan_names_gates_or_none_and_any_other_value_is_refused_at_its_line() {
+        use crate::scan::ScanName;
+        let path = scratch("scan-none", "iterations = 1\nscan = \"none\"\n");
+        assert_eq!(
+            RunConfig::read(&path).expect("read").scan,
+            Some(ScanName::None)
+        );
+        let path = scratch_named(
+            "scan-loom",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  scan: gates\n",
+        );
+        assert_eq!(
+            RunConfig::read(&path).expect("read").scan,
+            Some(ScanName::Gates)
+        );
+        for (name, file, text, line) in [
+            (
+                "scan-toml",
+                "run.toml",
+                "iterations = 1\nscan = \"MARKER-scan\"\n",
+                2,
+            ),
+            (
+                "scan-yaml",
+                "run.yaml",
+                "iterations: 1\nhours: 1\nscan: MARKER-scan\n",
+                3,
+            ),
+        ] {
+            let path = scratch_named(name, file, text);
+            let error = format!("{:#}", RunConfig::read(&path).expect_err(name));
+            assert!(error.contains(&path.display().to_string()), "{error}");
+            assert!(error.contains(&format!("line {line}")), "{error}");
+            assert!(error.contains("`scan`, `gates` or `none`"), "{error}");
             assert!(!error.contains("MARKER"), "{error}");
         }
     }

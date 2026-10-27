@@ -25,7 +25,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::case::Decision;
 use crate::harness::{ChangeSoFar, ClaudeCode, Harness, StepContext};
 use crate::protocol::LoadedProtocol;
-use crate::run::ChangeScan;
+use crate::scan::gates::ChangeScan;
 
 /// The format of a replay's record, `replay.json`.
 pub const FORMAT: &str = "takt-replay/1";

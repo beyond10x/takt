@@ -86,6 +86,10 @@ pub enum Event {
     /// ([`crate::case::Records`]), as the case keeps them: a scenario run and an improvement
     /// case keep every decision, so their line says `trial` whatever was asked. Absent on a
     /// line written before it, which a reader reads as every decision kept.
+    ///
+    /// The scan: the name of the run's scan adapter ([`crate::scan::Scan::name`]), `gates` or
+    /// `none`, the one every proposal and the change so far pass; absent on a line written
+    /// before it, which a reader reads as "scan not recorded".
     Opened {
         case: String,
         protocol: String,
@@ -104,6 +108,8 @@ pub enum Event {
         endpoint: Option<crate::harness::EndpointConfig>,
         #[serde(skip_serializing_if = "Option::is_none")]
         records: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scan: Option<String>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.

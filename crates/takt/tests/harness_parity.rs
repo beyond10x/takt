@@ -17,7 +17,9 @@ use loom_sdk::session::metaharness::{
 };
 use loom_sdk::session::{CredentialSource, Endpoint, Kind};
 use takt::harness::{Harness, SessionHarness};
-use takt::run::{CREDENTIAL_SHAPES, ChangeScan, PROPOSAL_NOT_RECORDED, credential_shape};
+use takt::run::{CREDENTIAL_SHAPES, PROPOSAL_NOT_RECORDED, credential_shape};
+use takt::scan::Scan;
+use takt::scan::gates::ChangeScan;
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -374,6 +376,24 @@ fn run_scanned(
     // story:a-run-keeps-every-decision-only-on-a-trial: the parity compares every decision the
     // case holds, so the run keeps every one, as a `--records trial` run does.
     run.keep_records(takt::case::Records::Trial);
+    let mut out = Vec::new();
+    run.continue_past_red_base();
+    let stop = run.run(&mut out);
+    (stop, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// [`run`] under the scan adapter `none`, declared in a file beside `tree`.
+fn run_declared_none(
+    tree: &Path,
+    id: &str,
+    iterations: u64,
+    harness: &dyn Harness,
+) -> (anyhow::Result<Stop>, String) {
+    let validators = validators();
+    let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
+    run.scan_with(Scan::None {
+        declared_in: tree.with_file_name("run.toml"),
+    });
     let mut out = Vec::new();
     run.continue_past_red_base();
     let stop = run.run(&mut out);
@@ -1180,6 +1200,82 @@ fn a_clean_proposal_passes_the_scan_under_every_kind() {
         let steps = harness_steps(&tree, id);
         let recorded = steps[0]["summary"].as_str().expect("a summary");
         assert!(recorded.starts_with("made add add"), "{name}: {recorded}");
+    }
+}
+
+/// story:scan-and-forge-are-adapters, Acceptance 2: under a declared `scan: none`
+/// ([`Scan::None`]) a Codex or b10x-harness proposal is not refused as unscanned: a clean one is
+/// applied and the `opened` line records `"scan":"none"`. One holding the shape of a
+/// credential, in a file or in the summary, is still refused before the edit effect, the tree
+/// and `HEAD` as they were, the summary not recorded and the credential nowhere in what the run
+/// printed, its refusal or its record.
+#[test]
+fn under_a_declared_scan_none_a_credential_is_still_refused() {
+    for kind in [Kind::Codex, Kind::B10x] {
+        let name = format!("none-clean-{}", kind.as_str());
+        let scratch = repository(&name);
+        let tree = scratch.tree();
+        let script = Script {
+            summary: "made add add",
+            ..Script::fixing()
+        };
+        let (clean, _) = harness(kind, &script);
+        let id = "parity-none-clean";
+        let (stop, said) = run_declared_none(&tree, id, 2, &clean);
+        assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
+        assert_eq!(
+            fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
+            FIXED,
+            "{name}: applied unscanned\n{said}"
+        );
+        let opened: Vec<_> = events(&tree, id)
+            .into_iter()
+            .filter(|line| line["event"] == "opened")
+            .collect();
+        assert_eq!(opened[0]["scan"], "none", "{name}: {}", opened[0]);
+
+        for (login, text, secret) in planted() {
+            for place in ["file", "summary"] {
+                let name = format!("none-planted-{}-{login}-{place}", kind.as_str());
+                let scratch = repository(&name);
+                let tree = scratch.tree();
+                let before = work(&tree);
+                let head = git(&tree, &["rev-parse", "HEAD"]);
+                let summary = format!("copied the login: {}", text.replace('\n', " "));
+                let in_file = [("src/lib.rs", FIXED), ("config/login.txt", text.as_str())];
+                let script = match place {
+                    "file" => Script {
+                        writes: &in_file,
+                        ..Script::fixing()
+                    },
+                    _ => Script {
+                        summary: &summary,
+                        ..Script::fixing()
+                    },
+                };
+                let (harness, _) = harness(kind, &script);
+                let id = "parity-none-planted";
+                let (stop, said) = run_declared_none(&tree, id, 2, &harness);
+                let Ok(Stop::StepRefused(why)) = &stop else {
+                    panic!("{name}: refused, not {stop:?}\n{said}");
+                };
+                assert!(said.contains("before the edit effect"), "{name}: {why}");
+                assert!(why.contains("shape of a credential"), "{name}: {why}");
+                assert_eq!(work(&tree), before, "{name}: the tree is unchanged");
+                assert_eq!(git(&tree, &["rev-parse", "HEAD"]), head, "{name}: HEAD");
+                let record = fs::read_to_string(case_dir(&tree, id).join("events.jsonl"))
+                    .expect("events.jsonl");
+                for (what, text) in [("output", &said), ("refusal", why), ("record", &record)] {
+                    assert!(
+                        !text.contains(&secret),
+                        "{name}: the credential is in the run's {what}"
+                    );
+                }
+                let steps = harness_steps(&tree, id);
+                assert_eq!(steps.len(), 1, "{name}");
+                assert_eq!(steps[0]["summary"], PROPOSAL_NOT_RECORDED, "{name}");
+            }
+        }
     }
 }
 

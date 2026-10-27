@@ -1,19 +1,22 @@
 //! The forge of a repository on a GitLab host, through `glab`: the case's commit pushed over
 //! HTTPS under `glab`'s credential helper, the merge request opened, read and merged through
-//! `glab api`, and, before anything leaves the machine, the same `b10x-gates scan-text` over the
-//! same text as the bot route's. takt holds no token: the only credential is `glab`'s own login
-//! for the host, which `glab auth status` must confirm before a run opens its case.
+//! `glab api`, and, before anything leaves the machine, the run's scan adapter
+//! ([`crate::scan::Scan`]) over the same text as the bot route scans: under `gates`, the gates
+//! scan under `--repository <project>`; under a declared `none`, no scan. takt holds no token:
+//! the only credential is `glab`'s own login for the host, which `glab auth status` must confirm
+//! before a run opens its case.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
+use crate::scan::Scan;
+
 use super::{
-    BotRoute, Checks, Exit, Failed, Forge, Head, IdentityScan, Outgoing, POLICY_VAR, Process,
-    PullRequest, PullRequestState, PullRequestView, Runner, Scanner, exact_ref, fresh,
-    head_is_a_commit, held_by, is_object_id, push_over_https, reading_of, succeed,
-    without_userinfo,
+    BotRoute, Checks, Exit, Failed, Forge, Head, IdentityScan, Outgoing, Process, PullRequest,
+    PullRequestState, PullRequestView, Runner, Scanner, exact_ref, fresh, head_is_a_commit,
+    held_by, is_object_id, push_over_https, reading_of, succeed, without_userinfo,
 };
 
 /// The host and the full project path (`group/sub/repo`) an `origin` URL names, in the forms git
@@ -134,15 +137,17 @@ fn failure_of(exit: &Exit) -> String {
 /// The adapter over `glab` for a repository on a GitLab host. The push goes to the project's
 /// HTTPS URL with `glab auth git-credential` as git's one credential helper; every API read and
 /// write is `glab api --hostname <host>` on the project named by its full path, never a remote
-/// of the tree, which a step may change; the scan before a push and a merge request is the bot
-/// route's `b10x-gates scan-text`, under `--repository <project>`.
+/// of the tree, which a step may change; the scan before a push and a merge request is the
+/// run's scan adapter's ([`Self::scan`]): under `gates` the one the bot route runs, under
+/// `--repository <project>`; under a declared `none`, none.
 pub struct Glab {
     /// The GitLab host, from the `origin` URL.
     pub host: String,
     /// The project's full path on the host, `group/sub/repo`.
     pub project: String,
-    /// The `b10x-gates` policy file; none leaves it to the program's environment.
-    pub policy: Option<PathBuf>,
+    /// The run's scan adapter: under `gates`, its policy file, none leaving it to the scan
+    /// program's environment; under `none`, nothing is scanned.
+    pub scan: Scan,
     /// The remote whose tracking ref of the case's base says which commits it holds already.
     pub remote: String,
     /// The most bytes of commit messages and files one scan before a push is given; more is
@@ -156,7 +161,7 @@ impl fmt::Debug for Glab {
         f.debug_struct("Glab")
             .field("host", &self.host)
             .field("project", &self.project)
-            .field("policy", &self.policy)
+            .field("scan", &self.scan)
             .field("remote", &self.remote)
             .field("scan_limit", &self.scan_limit)
             .finish_non_exhaustive()
@@ -181,18 +186,19 @@ impl Glab {
     /// helpers git's configuration names: `glab`'s login for the host is the one credential.
     pub const CREDENTIAL_HELPER: &str = "credential.helper=!glab auth git-credential";
 
-    /// Over `project` on `host` with `policy`, running every line through `runner`.
+    /// Over `project` on `host` under the scan adapter `scan`, running every line through
+    /// `runner`.
     #[must_use]
     pub fn new(
         host: impl Into<String>,
         project: impl Into<String>,
-        policy: Option<PathBuf>,
+        scan: Scan,
         runner: Box<dyn Runner>,
     ) -> Self {
         Self {
             host: host.into(),
             project: project.into(),
-            policy,
+            scan,
             remote: "origin".to_owned(),
             scan_limit: BotRoute::SCAN_LIMIT,
             runner,
@@ -200,14 +206,14 @@ impl Glab {
     }
 
     /// For `tree`: the host and the project from its `origin` URL, which must not be on
-    /// [`BotRoute::HOST`], the policy from the environment, every line run as a process; then
-    /// [`Self::logged_in`]. A refusal names the URL without its userinfo.
-    pub fn for_tree(tree: &Path) -> Result<Self> {
-        Self::for_tree_through(tree, Box::new(Process::default()))
+    /// [`BotRoute::HOST`], under the run's scan adapter `scan`, every line run as a process;
+    /// then [`Self::logged_in`]. A refusal names the URL without its userinfo.
+    pub fn for_tree(tree: &Path, scan: &Scan) -> Result<Self> {
+        Self::for_tree_through(tree, scan, Box::new(Process::default()))
     }
 
     /// [`Self::for_tree`], every line, the login check first, run through `runner`.
-    pub fn for_tree_through(tree: &Path, runner: Box<dyn Runner>) -> Result<Self> {
+    pub fn for_tree_through(tree: &Path, scan: &Scan, runner: Box<dyn Runner>) -> Result<Self> {
         let url = crate::git::remote_url(tree, "origin")
             .context("the forge `gitlab` needs an origin remote")?;
         let shown = without_userinfo(&url);
@@ -221,8 +227,7 @@ impl Glab {
                 "the origin remote {shown} is on {host}, which the bot route serves: give --forge bot, not gitlab"
             );
         }
-        let policy = std::env::var_os(POLICY_VAR).map(PathBuf::from);
-        let glab = Self::new(host, project, policy, runner);
+        let glab = Self::new(host, project, scan.clone(), runner);
         glab.logged_in(tree)?;
         Ok(glab)
     }
@@ -383,20 +388,25 @@ impl Glab {
         )
     }
 
-    /// The scan before a push and a merge request, under `--repository <project>`.
-    fn scanner(&self) -> Scanner<'_> {
-        Scanner {
-            runner: &*self.runner,
-            repository: &self.project,
-            policy: self.policy.as_deref(),
+    /// The scan before a push and a merge request, the run's scan adapter's: under `gates`, the
+    /// gates scan under `--repository <project>`; none under a declared `none`.
+    fn scanner(&self) -> Option<Scanner<'_>> {
+        match &self.scan {
+            Scan::Gates { policy } => Some(Scanner {
+                runner: &*self.runner,
+                repository: &self.project,
+                policy: policy.as_deref(),
+            }),
+            Scan::None { .. } => None,
         }
     }
 
     /// The line that scans the merge request before it is opened: the JSON `request` and, last,
-    /// the `published` title and description.
+    /// the `published` title and description; none under a declared `none`, which scans nothing.
     #[must_use]
-    pub fn scan_request_argv(&self, request: &Path, published: &Path) -> Vec<String> {
-        self.scanner().argv(&[request, published])
+    pub fn scan_request_argv(&self, request: &Path, published: &Path) -> Option<Vec<String>> {
+        self.scanner()
+            .map(|scanner| scanner.argv(&[request, published]))
     }
 
     /// The commit the project's branch `base` is at, read through `glab api`; `None` when the
@@ -518,14 +528,19 @@ impl Forge for Glab {
         )
     }
 
-    /// The bot route's scan over the same text: the merge request, when one is opened, and the
-    /// objects the push sends that the project does not hold, its `base` read through `glab api`.
+    /// The run's scan adapter over the text the bot route scans: the merge request, when one
+    /// is opened, and the objects the push sends that the project does not hold, its `base` read
+    /// through `glab api`. A head that is not a commit is refused first, under any adapter;
+    /// under a declared `none` nothing else is read and no scan runs.
     fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
         head_is_a_commit(tree, outgoing.branch, outgoing.head)?;
+        let Some(scanner) = self.scanner() else {
+            return Ok(());
+        };
         let held = held_by(tree, &self.remote, outgoing.base, || {
             self.base_tip(tree, outgoing.base)
         })?;
-        self.scanner().outgoing(
+        scanner.outgoing(
             tree,
             dir,
             outgoing,
@@ -536,32 +551,36 @@ impl Forge for Glab {
         )
     }
 
+    /// The commit identity under the run's scan adapter, as the scan before a push reads it;
+    /// under a declared `none`, [`IdentityScan::NotScanned`] naming the declaration
+    /// ([`Scan::not_scanned`]), no line run.
     fn scan_identity(
         &self,
         tree: &Path,
         dir: &Path,
         identity: &crate::git::CommitIdentity,
     ) -> Result<IdentityScan> {
-        self.scanner()
-            .identity(tree, dir, identity, "the forge gitlab")
+        match self.scanner() {
+            Some(scanner) => scanner.identity(tree, dir, identity, "the forge gitlab"),
+            None => Ok(IdentityScan::NotScanned(
+                self.scan.not_scanned().unwrap_or_default(),
+            )),
+        }
     }
 
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let output = fresh(dir.join(Self::RESPONSE))?;
         let (input, published) = Self::write_request(dir, request)?;
-        succeed(
-            &*self.runner,
-            tree,
-            &self.scan_request_argv(&input, &published),
-        )
-        .with_context(|| {
-            format!(
-                "the merge request for {branch} did not pass scan-text over {} and was not opened; its title and description stayed on this machine, but the branch {branch} was pushed before this scan",
-                published.display(),
-                branch = request.branch
-            )
-        })?;
+        if let Some(scan) = self.scan_request_argv(&input, &published) {
+            succeed(&*self.runner, tree, &scan).with_context(|| {
+                format!(
+                    "the merge request for {branch} did not pass scan-text over {} and was not opened; its title and description stayed on this machine, but the branch {branch} was pushed before this scan",
+                    published.display(),
+                    branch = request.branch
+                )
+            })?;
+        }
         let argv = self.open_argv(&input);
         let exit = self.runner.run(tree, &argv)?;
         std::fs::write(&output, &exit.stdout)

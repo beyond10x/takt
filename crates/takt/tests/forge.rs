@@ -25,6 +25,7 @@ use takt::harness::{Harness, StepContext, StepReport};
 use takt::run::{
     GITLAB_CI, GITLAB_DIR, GITLAB_TOKEN_PREFIXES, JUDGE_SURFACE, JudgeSurface, credential_shape,
 };
+use takt::scan::Scan;
 use takt::validator::{CiRead, PrOpen, Validator};
 use takt::{Decision, Run, RunOptions, Stop};
 
@@ -2455,6 +2456,19 @@ impl Runner for GlabLines {
 /// The adapter over `group/sub/repo` on `gitlab.example` with the policy `policy.yaml`, every
 /// line answered by `answer`; the lines it ran are read from the second.
 fn glab_over(answer: impl Fn(&str) -> anyhow::Result<Exit> + 'static) -> (Glab, Rc<GlabLines>) {
+    glab_under(
+        Scan::Gates {
+            policy: Some(PathBuf::from("policy.yaml")),
+        },
+        answer,
+    )
+}
+
+/// [`glab_over`] under the scan adapter `scan`.
+fn glab_under(
+    scan: Scan,
+    answer: impl Fn(&str) -> anyhow::Result<Exit> + 'static,
+) -> (Glab, Rc<GlabLines>) {
     struct Shared(Rc<GlabLines>);
     impl Runner for Shared {
         fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
@@ -2476,7 +2490,7 @@ fn glab_over(answer: impl Fn(&str) -> anyhow::Result<Exit> + 'static) -> (Glab, 
     let glab = Glab::new(
         "gitlab.example",
         "group/sub/repo",
-        Some(PathBuf::from("policy.yaml")),
+        scan,
         Box::new(Shared(lines.clone())),
     );
     (glab, lines)
@@ -2654,6 +2668,127 @@ fn the_gitlab_adapter_runs_these_argument_lines() {
     let messages = fs::read_to_string(dir.join("push.messages.txt")).expect("the messages");
     assert!(messages.contains(&format!("commit {c1}")), "{messages}");
     assert!(!messages.contains(&format!("commit {main}")), "{messages}");
+}
+
+/// story:scan-and-forge-are-adapters, Acceptance 5: the gitlab adapter scans what it publishes
+/// through the run's scan adapter. Under `gates` the push and the merge request pass the same
+/// two `b10x-gates scan-text` lines under the project and the policy as before, and the commit
+/// identity a third; under a declared `none` no `b10x-gates` line runs and no text is written
+/// for a scan, the push, the merge request and its merge go through `glab` as under `gates`,
+/// and the commit identity is not scanned, naming the declaration.
+#[test]
+fn the_gitlab_adapter_scans_through_the_runs_scan_adapter() {
+    let declared = PathBuf::from("/config/agent.yaml");
+    for scan in [
+        Scan::Gates {
+            policy: Some(PathBuf::from("policy.yaml")),
+        },
+        Scan::None {
+            declared_in: declared.clone(),
+        },
+    ] {
+        let name = scan.name();
+        let tree = scratch(&format!("glab-scan-{name}"));
+        let dir = tree.join("out");
+        let main = git(&tree, &["rev-parse", "main"]);
+        git(&tree, &["update-ref", "refs/remotes/origin/main", &main]);
+        git(&tree, &["checkout", "-q", "-b", "takt/c1"]);
+        fs::write(tree.join("work.txt"), "the work\n").expect("a file");
+        git(&tree, &["add", "work.txt"]);
+        git(&tree, &["commit", "-q", "-m", "the work"]);
+        let c1 = git(&tree, &["rev-parse", "HEAD"]);
+        let merge_request = format!(
+            r#"{{"iid":7,"state":"opened","source_branch":"takt/c1","target_branch":"main","sha":"{c1}","head_pipeline":{{"sha":"{c1}","status":"success"}}}}"#
+        );
+        let branch = format!(r#"{{"name":"main","commit":{{"id":"{main}"}}}}"#);
+        let (forge, lines) = glab_under(scan.clone(), move |line| {
+            Ok(if line.contains("--method POST") {
+                exit(0, r#"{"iid": 7, "id": 1234}"#, "")
+            } else if line.contains("--method PUT") {
+                exit(0, r#"{"iid": 7, "state": "merged"}"#, "")
+            } else if line.ends_with("/repository/branches/main") {
+                exit(0, &branch, "")
+            } else if line.ends_with("/merge_requests/7") {
+                exit(0, &merge_request, "")
+            } else {
+                exit(0, "", "")
+            })
+        });
+        let request = PullRequest {
+            branch: "takt/c1".to_owned(),
+            base: "main".to_owned(),
+            title: "deliver the story".to_owned(),
+            body: "the body".to_owned(),
+        };
+        forge
+            .scan_outgoing(
+                &tree,
+                &dir,
+                &Outgoing {
+                    branch: "takt/c1",
+                    base: "main",
+                    head: &c1,
+                    request: Some(&request),
+                },
+            )
+            .expect("scans");
+        forge.push(&tree, "takt/c1").expect("pushes");
+        let number = forge
+            .open_pull_request(&tree, &dir, &request)
+            .expect("opens");
+        assert_eq!(number, 7, "{name}");
+        forge.merge(&tree, &dir, number, &c1).expect("merges");
+        let identity = takt::git::CommitIdentity::takt();
+        let scanned = forge
+            .scan_identity(&tree, &dir.join("identity"), &identity)
+            .expect("an answer");
+        let ran: Vec<String> = lines
+            .lines
+            .borrow()
+            .iter()
+            .map(|(line, _)| line.clone())
+            .collect();
+        let gates: Vec<&String> = ran
+            .iter()
+            .filter(|line| line.starts_with("b10x-gates"))
+            .collect();
+        let glab = |what: &str| ran.iter().filter(|line| line.contains(what)).count();
+        assert_eq!(glab(" push https://gitlab.example/"), 1, "{name}: {ran:?}");
+        assert_eq!(glab("--method POST"), 1, "{name}: {ran:?}");
+        assert_eq!(glab("--method PUT"), 1, "{name}: {ran:?}");
+        match &scan {
+            Scan::Gates { .. } => {
+                let scope = "b10x-gates scan-text --repository group/sub/repo --policy policy.yaml";
+                assert_eq!(gates.len(), 3, "{name}: {ran:?}");
+                assert!(
+                    gates.iter().all(|line| line.starts_with(scope)),
+                    "{name}: {gates:?}"
+                );
+                assert!(
+                    gates[0].ends_with("push.files.txt") && gates[1].ends_with(Glab::PUBLISHED),
+                    "{name}: {gates:?}"
+                );
+                assert_eq!(scanned, takt::forge::IdentityScan::Passed, "{name}");
+                assert!(dir.join("push.files.txt").exists(), "{name}");
+            }
+            Scan::None { .. } => {
+                assert!(gates.is_empty(), "{name}: no gates line: {gates:?}");
+                assert!(
+                    !ran.iter().any(|line| line.contains("scan-text")),
+                    "{name}: {ran:?}"
+                );
+                assert!(!dir.join("push.files.txt").exists(), "{name}");
+                assert!(!dir.join("push.messages.txt").exists(), "{name}");
+                let takt::forge::IdentityScan::NotScanned(why) = &scanned else {
+                    panic!("{name}: not scanned, not {scanned:?}");
+                };
+                assert!(
+                    why.contains("scan: none") && why.contains(&declared.display().to_string()),
+                    "{name}: {why}"
+                );
+            }
+        }
+    }
 }
 
 /// A merge request with `state` and `head_pipeline` as given, its head at `sha`.
@@ -2838,7 +2973,7 @@ fn the_project_is_read_from_the_origin_url() {
     let glab = Glab::new(
         host,
         project,
-        None,
+        Scan::Gates { policy: None },
         Box::new(GlabLines {
             lines: RefCell::new(Vec::new()),
             answer: Box::new(|_| Ok(exit(0, "", ""))),
@@ -2900,7 +3035,8 @@ fn an_https_origin_keeps_its_port() {
             self.0.run_env(tree, argv, env)
         }
     }
-    let glab = Glab::for_tree_through(&tree, Box::new(Shared(lines.clone()))).expect("logged in");
+    let glab = Glab::for_tree_through(&tree, &Scan::from_env(), Box::new(Shared(lines.clone())))
+        .expect("logged in");
     assert_eq!(glab.host, "gitlab.example:8443");
     assert_eq!(
         glab.push_url(),
@@ -2939,7 +3075,7 @@ fn an_https_origin_keeps_its_port() {
     let asked = lines.lines.borrow().len();
     let error = format!(
         "{:#}",
-        Glab::for_tree_through(&tree, Box::new(Shared(lines.clone())))
+        Glab::for_tree_through(&tree, &Scan::from_env(), Box::new(Shared(lines.clone())))
             .expect_err("github.com is the bot route's")
     );
     assert!(error.contains("--forge bot"), "{error}");
@@ -3003,7 +3139,7 @@ fn the_gitlab_adapter_needs_glab_logged_in_to_the_host() {
     );
     let error = format!(
         "{:#}",
-        Glab::for_tree(&tree).expect_err("github.com is the bot route's")
+        Glab::for_tree(&tree, &Scan::from_env()).expect_err("github.com is the bot route's")
     );
     assert!(
         error.contains("bot route") && error.contains("--forge bot"),

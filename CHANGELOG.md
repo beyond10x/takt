@@ -15,25 +15,35 @@ takt's releases.
 - That output has terminal escape codes stripped and credentials withheld, and passes the secret scan when a policy is set.
 - `takt run --config` takes `story`, `endpoint_token_env` and `state_dir`; `--state-dir` puts transcripts under `<state_dir>/transcripts`.
 - `takt scenario run` takes `--config`.
+- `scan` in the `takt run --config` file, the run's scan adapter: `gates`, the default, scans proposals with `b10x-gates` under `B10X_GATES_POLICY`; `none` scans nothing.
+- `scan = "none"` is accepted only in that file, never as a flag; the run says so before its first step, and the case's `opened` event records the adapter as `scan`.
 
 ### Changed
 
+- **Breaking:** `--harness codex` or `--harness harness` with neither `B10X_GATES_POLICY` nor `scan: none` is refused before the case opens, exit 1, naming the scan adapter; a resumed case too.
+- `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
+- `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
+- `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
-- `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration); `--records trial` keeps every one, and scenario runs and improvement cases always keep every one.
-
-### Changed
-
-- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer, and the pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
+- `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
+- `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
+- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
+- The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 
 ### Fixed
 
+- A gate's command finds a bare program name on `/usr/local/bin:/usr/bin:/bin`, or on the `PATH` its `env` declares, never on the user's `PATH`; a name found nowhere refuses the gate.
 - The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.
 - A `tests.run` that writes an untracked `Cargo.lock` is refused with the remedy named: commit it, ignore it (`.gitignore`), or give `--test-cmd` a command that does not write it.
 - The endpoint token staging tests pass when the temporary directory is writable by others without the sticky bit.
 - A judgement step whose session ends without its action line is tried again, 3 times at most; each try counts against `--iterations`.
 - Each such try is charged the tokens its session reported; the run ends exit 5 after the third, or exit 3 if a try spent the budget.
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
-- The site says what runs under Seatbelt on macOS since 0.10.0, that the gates scan is required for every harness but Claude Code, and that `bot` is github.com.
+- The site says what runs under Seatbelt on macOS since 0.10.0, which scan and forge adapters a run can have, and that `bot` is beyond10x's github.com route.
+
+### Security
+
+- A proposal is refused when a path it names holds text of the shape of a credential, as its content and summary already were, before any refusal that would name the path.
 
 ## [0.14.0] - 2026-10-26
 
