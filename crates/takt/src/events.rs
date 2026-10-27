@@ -77,6 +77,10 @@ pub enum Event {
     /// The confinement: the name of the adapter every child of the run starts through
     /// (`crate::confinement::Confinement::name`), `none` or `substrate`; absent on a line
     /// written before it, which a reader reads as "confinement not recorded".
+    /// The Substrate adapter that confinement opened ([`crate::confinement::AdapterRecord`]):
+    /// its name, the inner adapter it wraps, the families and facts it served, and for `none`
+    /// the reason it was declared insecure (`declared_insecure`); absent on a line written
+    /// before it, which a reader reads as "adapter not recorded".
     /// The endpoint: the model endpoint the harness is pointed at
     /// ([`crate::harness::Harness::endpoint_reference`]), by reference only: its base URL (no
     /// userinfo, query or fragment), wire and model, the token file's path (`~/…` under HOME)
@@ -104,6 +108,8 @@ pub enum Event {
         layers: Option<BTreeMap<String, String>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         confinement: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        substrate: Option<crate::confinement::AdapterRecord>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<crate::harness::EndpointConfig>,
         #[serde(skip_serializing_if = "Option::is_none")]

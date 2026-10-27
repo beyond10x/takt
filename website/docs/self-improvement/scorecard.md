@@ -44,9 +44,11 @@ Decided on 2026-10-18:
 
 `takt promote` checks the candidate's saved scorecard against the promoted baseline's under the
 scorecard's rule. When no scenario is worse it builds a fresh clone of that revision confined
-(`cargo build --locked --offline`, the environment cleared, no network): inside bubblewrap on
-Linux, with only the clone, rustup's default toolchain and the registry cache visible; under
-`sandbox-exec` on macOS, writing only its own directories. It installs the binary, records the promotion
+(`cargo build --locked --offline`, the environment cleared, no network) through the first
+Substrate adapter of the host that serves the build (`systemd` around `linux`, `linux`, `macos`),
+with only the clone, the toolchain takt resolves and the registry cache visible, and the fresh
+install root the one host root it may write (on `macos`, which serves none, takt copies the
+binary there). It installs the binary, records the promotion
 under `~/.local/state/takt/promotions/`, where the latest record is the next baseline, and moves
 the binary into place. Promotions run one at a time under the store's lock. `--install-root`
 names where the binary goes; without it, `CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`.

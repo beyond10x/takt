@@ -74,30 +74,28 @@ github.com: `b10x-gates bot` pushes and opens the pull request as a GitHub App, 
 `none` opens nothing and leaves the delivery as a candidate commit. Without `--forge`, takt picks
 one from `origin` ([Configuration](./reference/configuration.md#the-forge)).
 
-:::note[macOS]
+:::note[Confinement]
 
-Since 0.10.0, takt confines on macOS with Seatbelt, `/usr/bin/sandbox-exec`, where Linux uses
-namespaces and bubblewrap:
+takt confines through Substrate's confinement contract on Linux and macOS alike, and has no
+sandbox of its own:
 
-- The test command runs under a profile that writes only to the tree, its git directories (not
-  their hooks or configuration), a fresh home that holds its `TMPDIR`, and the cargo caches. It
-  reads no registry login, keychain, runtime directory or bus socket, and connects to no bus or
-  launchd socket.
-- A promotion's build, and its binary's `--version`, run under a profile with no network that
-  writes only to the directories the build owns. `takt promote` runs on macOS as on Linux.
-- With no `sandbox-exec`, both are refused by name and never run unconfined.
+- `--confinement substrate` runs the test command through the first Substrate adapter of the host
+  that serves its profile: `systemd` around `linux` (a scope from the user's systemd manager, which
+  bounds processes, memory and CPU), then `linux` (bubblewrap through Substrate's host driver,
+  bounded only in a cgroup root given with `--confinement-cgroup-root`), then `macos` (a Seatbelt
+  profile Substrate renders). The profile: the tree as the workspace, its `target/` written, the
+  toolchain and the cargo caches read-only, no network. What no adapter serves, a family or fact
+  `--confinement-needs` names among them, is refused by name and never run unconfined. The first
+  line and the `opened` event name the adapter and the facts it proved.
+- `--confinement none`, the default, starts the test command through Substrate's `local` adapter,
+  declared insecure with its reason, which the first line and the `opened` event carry. It runs on
+  the host as this user, with an environment cleared of logins, a scratch home and `TMPDIR`, the
+  timeout and a bounded output, and can read whatever this user can.
+- `takt promote` builds a candidate through the same selection: the fresh install root beside the
+  real one is the one host root declared writable to the adapter.
 
-What differs from Linux:
-
-- A promotion's build sees the clone, its target and the fresh root at their host paths, and may
-  read every file outside the user's home.
-- The test command's denials are by path: a hard link to a denied file elsewhere, and the keychain
-  daemons reached over Mach, are not denied.
-- A process that clears `TAKT_CHILD` from its environment and leaves takt's process group outlives
-  the run; on Linux takt adopts and kills it. A harness session's program runs in takt's process
-  group, not a session of its own.
-- `--confinement substrate` runs on Linux only: loom-sdk's `SubstrateRunner` needs a delegated
-  cgroup v2 scope, which takt gets from `systemd-run --user --scope -p Delegate=yes`.
+On macOS, whose adapter serves no writable root, a promotion's build installs into the workspace
+and takt copies the binary into the fresh install root.
 
 :::
 

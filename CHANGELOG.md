@@ -17,6 +17,9 @@ takt's releases.
 - `takt scenario run` takes `--config`.
 - `scan` in the `takt run --config` file, the run's scan adapter: `gates`, the default, scans proposals with `b10x-gates` under `B10X_GATES_POLICY`; `none` scans nothing.
 - `scan = "none"` is accepted only in that file, never as a flag; the run says so before its first step, and the case's `opened` event records the adapter as `scan`.
+- `--confinement-needs <NAME>`: a Substrate family or fact the test command needs; an adapter that lacks it is not chosen, and with none left the run is refused before it starts.
+- `--confinement-cgroup-root <DIR>`: a delegated cgroup v2 root in which Substrate's `linux` adapter bounds each run without `systemd`.
+- The `opened` event records the Substrate adapter as `substrate`: its name, the one it wraps, its families, its proved facts and any declared-insecure reason.
 
 ### Changed
 
@@ -32,6 +35,16 @@ takt's releases.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 - A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
 - `--harness none` takes a granted action, changing no file, not `stopped: error:` (exit 5); with `--forge none` the run then stops `NoProgress` (exit 3) (story:harness-none-takes-a-granted-action).
+- **Breaking:** takt confines through Substrate's confinement contract, `b10x-substrate-host` 0.12.0, on Linux and macOS (story:confinement-through-substrate-on-linux-and-macos).
+- `--confinement substrate` runs the test command through the first of Substrate's `systemd` around `linux`, `linux` and `macos` adapters that serves it, or refuses it by name.
+- `takt promote` builds a candidate through the same selection; a host none of whose adapters serves the build exits 5 naming each, where a missing bubblewrap exited 1.
+- **Breaking:** `--confinement none` runs the test command through Substrate's `local` adapter, declared insecure; the first line and the `opened` event give the reason.
+- It keeps the cleared environment, the scratch home and `TMPDIR`, the timeout and the bounded output, and runs in no namespace of takt's own.
+- The checks run `ess` 0.70.0.
+
+### Removed
+
+- takt's own confinement: its Seatbelt profiles, the bubblewrap build of a promotion, the namespace that hid logins under `none` and the `systemd-run` re-run.
 
 ### Fixed
 
@@ -48,6 +61,7 @@ takt's releases.
 ### Security
 
 - A proposal is refused when a path it names holds text of the shape of a credential, as its content and summary already were, before any refusal that would name the path.
+- A `--confinement none` test command can read what its user can, the home, runtime sockets and `$CARGO_HOME/credentials.toml` included; use `substrate` for untrusted code.
 
 ## [0.14.0] - 2026-10-26
 

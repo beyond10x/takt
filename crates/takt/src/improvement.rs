@@ -59,7 +59,7 @@ pub const SCORECARDS: &str = "takt/scorecards";
 /// L8).
 pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 2] = [
     // The script of story:check-finding-run-step-confined and the stories after it, up to the
-    // one that builds and runs under Seatbelt (`sandbox-exec`) on macOS, whose predicate there
+    // one that builds and runs under Seatbelt on macOS, whose predicate there
     // has the binary, clone and home by their real paths.
     "6c39e63b3b41c63774093511b1cbd7b1b1ff9ef0277ae4091b9222d1f4ef0e7f",
     // The same script whose build and predicate on macOS start no program outside their

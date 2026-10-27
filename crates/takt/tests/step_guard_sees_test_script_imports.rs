@@ -845,16 +845,14 @@ fn the_dot_path_run() {
     assert_refused_and_put_back(&tree, &ran, "python3");
 }
 
-/// A script that exits 0 only in a home made for the run: `HOME` set, an empty directory, not
-/// the caller's `caller`; Python's user site off; `CARGO_HOME` and `RUSTUP_HOME` set. On macOS
-/// the home may hold one entry, the command's own temporary directory: `TMPDIR` is that entry
-/// and a directory (`forge::without_login` makes it there); on Linux it holds none.
+/// A script that exits 0 only in a home made for the run: `HOME` set, a directory, not the
+/// caller's `caller`, empty but for the command's own temporary directory when it has one
+/// (`TMPDIR` that entry and a directory; under `none` Substrate's `local` adapter runs the test
+/// command with its `TMPDIR` there, on every platform since
+/// story:confinement-through-substrate-on-linux-and-macos); Python's user site off;
+/// `CARGO_HOME` and `RUSTUP_HOME` set.
 fn fresh_home_check(caller: &str) -> String {
-    let empty = if cfg!(target_os = "macos") {
-        "entries=\"$(ls -A \"$HOME\")\"\n[ -z \"$entries\" ] || { [ \"$TMPDIR\" = \"$HOME/$entries\" ] && [ -d \"$TMPDIR\" ]; } || exit 5\n"
-    } else {
-        "[ -z \"$(ls -A \"$HOME\")\" ] || exit 5\n"
-    };
+    let empty = "entries=\"$(ls -A \"$HOME\")\"\n[ -z \"$entries\" ] || { [ \"$TMPDIR\" = \"$HOME/$entries\" ] && [ -d \"$TMPDIR\" ]; } || exit 5\n";
     format!(
         "#!/bin/sh\n[ -n \"$HOME\" ] || exit 2\n[ \"$HOME\" != '{caller}' ] || exit 3\n[ -d \"$HOME\" ] || exit 4\n{empty}[ \"$PYTHONNOUSERSITE\" = 1 ] || exit 6\n[ -n \"$CARGO_HOME\" ] || exit 7\n[ -n \"$RUSTUP_HOME\" ] || exit 8\n"
     )
@@ -892,7 +890,7 @@ fn the_test_and_gate_commands_run_in_a_fresh_home() {
     assert_eq!(
         tests.records.first().map(|record| record.result.clone()),
         Some(Some("pass".to_owned())),
-        "{}",
+        "story:confinement-through-substrate-on-linux-and-macos: the test command runs in a fresh home, its TMPDIR the one entry: {}",
         tests.summary
     );
     let options = RunOptions {

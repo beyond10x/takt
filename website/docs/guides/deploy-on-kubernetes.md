@@ -225,10 +225,11 @@ emptyDir of mode 0700, as is `/tmp`, and the root file system is read-only. Tran
 
 Loom renders every agent pod with `seccompProfile: RuntimeDefault`. The CRD has no field to change
 that, and a Job's pod template cannot be patched once the Job exists. Under the default
-`--confinement none`, takt's test command runs in a user and mount namespace of its own
-(`--confinement substrate`, which needs a delegated cgroup, was not tried there), and a container
-runtime's default
-profile refuses that. With `docker run` both the default seccomp and the default AppArmor profile
+`--confinement none` of takt 0.14.0, takt's test command ran in a user and mount namespace of its
+own (`--confinement substrate` was not tried there), and a container runtime's default
+profile refuses that. Since then `none` starts it through Substrate's `local` adapter, in no
+namespace of takt's own, which has not been tried under Loom. With `docker run` both the default
+seccomp and the default AppArmor profile
 refused it ([Run in a container](./run-in-a-container.md#4-run-it)). So under Loom 0.44.0 the
 first `tests.run` ends the run on an error, exit 5, before any model call. That is inferred from
 the rendered pod and the docker runs, not observed on a cluster.

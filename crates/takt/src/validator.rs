@@ -818,7 +818,10 @@ impl FreshHome {
     /// absolute path and else the home this user's passwd entry names ([`passwd_home`]). A
     /// relative one is never taken, so neither resolves from the command's directory, the tree;
     /// with no home at all they stay unset.
-    fn vars(&self, inherited: impl Fn(&str) -> bool) -> Vec<(&'static str, std::ffi::OsString)> {
+    pub(crate) fn vars(
+        &self,
+        inherited: impl Fn(&str) -> bool,
+    ) -> Vec<(&'static str, std::ffi::OsString)> {
         let caller_home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .filter(|home| home.is_absolute())
@@ -1008,7 +1011,9 @@ fn nothing_recorded(summary: String) -> Observation {
 /// `tests.run`: runs the test command without a shell; exit 0 is `pass`, anything else `fail`.
 /// The command is code from the tree: it gets no credential, no standard input, a timeout past
 /// which it is killed with what it started, and only a bounded summary of its output is kept
-/// ([`summarise_tests`]), and no login of the user's ([`crate::forge::without_login`]).
+/// ([`summarise_tests`]); under `none` its environment names no login of the user's
+/// ([`crate::confinement::unconfined`]), and under `substrate` it runs confined
+/// ([`crate::confinement::Substrate`]).
 /// What decides it besides the code under test is on the run's judge surface, which no step
 /// changes: the cargo configuration, the toolchain, build scripts and the command's own script
 /// ([`crate::run::JudgeSurface`]). In a case, nothing is run and no record written while the

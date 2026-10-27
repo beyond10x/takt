@@ -1,18 +1,13 @@
-//! story:test-command-reaches-no-forge-login, the refusal: the test command starts in a user and
-//! a mount namespace of its own, and on a host that refuses it one the error names that cause,
-//! where the error was a bare `Operation not permitted`. Any other failure to start keeps its
-//! text.
-//!
-//! The refusal is provoked without root: the case runs itself again as a child test process
-//! started in a user namespace of its own with no user mapped into it, and the kernel refuses a
-//! user namespace to a process whose user is not mapped in its parent's (`EPERM`). On a host that
-//! refuses user namespaces outright, that first step fails, the child starts as it is, and the
-//! test command's own namespace is refused all the same.
+//! story:test-command-reaches-no-forge-login, the refusal: the test command once started in a
+//! user and a mount namespace of its own, and on a host that refused it one the error named
+//! that cause. Since story:confinement-through-substrate-on-linux-and-macos takt makes no
+//! namespace: a `none` run's test command starts through Substrate's `local` adapter in takt's
+//! own namespaces, so there is no such refusal to name, and a failure to start keeps its text
+//! with no namespace hint.
 #![cfg(target_os = "linux")]
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -81,52 +76,42 @@ fn refusal(tree: &Path, command: &str) -> String {
     format!("{error:#}")
 }
 
-/// Where the host refuses the test command its user namespace, the error names the namespaces
-/// and the two settings that refuse them, beside the command.
+/// Since story:confinement-through-substrate-on-linux-and-macos a `none` run's test command is
+/// started by Substrate's `local` adapter, in no namespace takt makes: it runs in takt's own
+/// user namespace, so no host setting that refuses unprivileged user namespaces can refuse it,
+/// and there is no namespace refusal left to name.
 #[test]
-fn a_refused_namespace_is_named_with_the_settings_that_refuse_it() {
-    if let Some(tree) = std::env::var_os("TAKT_NAMESPACE_CHILD") {
-        let text = refusal(Path::new(&tree), "true");
-        for needle in [
-            "run true",
-            "user and a mount namespace of its own",
-            "refuses unprivileged user namespaces",
-            "kernel.apparmor_restrict_unprivileged_userns",
-            "kernel.unprivileged_userns_clone",
-        ] {
-            assert!(text.contains(needle), "{needle:?} in: {text}");
-        }
-        return;
-    }
-    let scratch = repository("refused");
-    let mut command = Command::new(std::env::current_exe().expect("the test binary"));
-    command
-        .args([
-            "a_refused_namespace_is_named_with_the_settings_that_refuse_it",
-            "--exact",
-            "--test-threads",
-            "1",
-        ])
-        .env("TAKT_NAMESPACE_CHILD", scratch.join("repo"))
-        .env("TMPDIR", scratch.join("tmp"));
-    // SAFETY: `unshare` takes an integer; its result is ignored, see the module's comment.
-    unsafe {
-        command.pre_exec(|| {
-            libc::unshare(libc::CLONE_NEWUSER);
-            Ok(())
-        });
-    }
-    let output = command.output().expect("the child test runs");
-    assert!(
-        output.status.success(),
-        "the child test failed:\n{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
+fn a_none_test_command_starts_in_no_namespace_of_takt_s_own() {
+    let scratch = repository("own-namespace");
+    let tree = scratch.join("repo");
+    fs::write(
+        tree.join("ns.sh"),
+        "#!/bin/sh\nreadlink /proc/self/ns/user > ns.txt\nreadlink /proc/self/ns/mnt >> ns.txt\n",
+    )
+    .expect("a script");
+    fs::set_permissions(tree.join("ns.sh"), fs::Permissions::from_mode(0o755)).expect("executable");
+    let observed = TestsRun::new("./ns.sh")
+        .expect("a command")
+        .observe(&tree, "r0", 1)
+        .expect("the test command starts and is observed");
+    let seen = fs::read_to_string(tree.join("ns.txt")).unwrap_or_else(|error| {
+        panic!(
+            "the test command wrote its namespaces ({error}): {}",
+            observed.summary
+        )
+    });
+    let own = format!(
+        "{}\n{}\n",
+        fs::read_link("/proc/self/ns/user")
+            .expect("this process's user namespace")
+            .display(),
+        fs::read_link("/proc/self/ns/mnt")
+            .expect("this process's mount namespace")
+            .display()
     );
-    assert!(
-        String::from_utf8_lossy(&output.stdout).contains("1 passed"),
-        "the child test ran: {}",
-        String::from_utf8_lossy(&output.stdout)
+    assert_eq!(
+        seen, own,
+        "story:confinement-through-substrate-on-linux-and-macos: a none test command shares takt's user and mount namespaces"
     );
 }
 

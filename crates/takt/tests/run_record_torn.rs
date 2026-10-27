@@ -203,6 +203,7 @@ fn the_scorecard_reads_a_record_cut_inside_a_character() {
         binary: None,
         layers: None,
         confinement: None,
+        substrate: None,
         endpoint: None,
         records: None,
         scan: None,

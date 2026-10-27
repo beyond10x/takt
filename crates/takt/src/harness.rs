@@ -5254,6 +5254,7 @@ mod endpoint_tests {
             binary: None,
             layers: None,
             confinement: None,
+            substrate: None,
             endpoint,
             records: None,
             scan: None,

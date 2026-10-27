@@ -1114,7 +1114,7 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
             Started::AtOnceInOwnPidNamespaces => Command::new(env!("CARGO_BIN_EXE_takt")),
             #[cfg(not(target_os = "macos"))]
             Started::AtOnceInOwnPidNamespaces => {
-                let mut bwrap = Command::new("bwrap");
+                let mut bwrap = Command::new("/usr/bin/bwrap");
                 bwrap.args([
                     "--dev-bind",
                     "/",

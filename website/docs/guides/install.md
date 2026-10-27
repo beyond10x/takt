@@ -103,8 +103,12 @@ is the agent that talks to an LLM endpoint, and
 is the layer every harness runs through. metaharness is a library inside takt, not a program to
 install.
 
-On Linux, under the default `--confinement none`, the test command runs in a user and mount
-namespace of its own. `--confinement substrate` runs it through loom-sdk's `SubstrateRunner`
-instead, which needs a delegated cgroup v2 scope. Under the default, a host or container that
-refuses unprivileged user namespaces ends the first test run on an error, exit 5. In a container, that means running it with seccomp and
-AppArmor unconfined ([Run in a container](./run-in-a-container.md)).
+On Linux and macOS the test command runs through Substrate's confinement contract. Under the
+default `--confinement none` it starts through Substrate's `local` adapter, declared insecure: on
+the host as this user, in no namespace of takt's own. `--confinement substrate` runs it through the
+first of Substrate's `systemd` around `linux`, `linux` and `macos` adapters that serves it, and
+refuses it by name where none does ([Getting started](../getting-started.md)). Up to 0.14.0, `none`
+ran it in a user and mount namespace of its own, which a host or container that refuses
+unprivileged user namespaces ended on an error, exit 5; in a container that meant running it with
+seccomp and AppArmor unconfined ([Run in a container](./run-in-a-container.md)), which has not been
+measured again since.

@@ -64,7 +64,7 @@ Each part of the loop and what performs it now:
 | observation | the session's `AgentSession` record, observed into `observations.json` through the governor | `crates/takt/src/run.rs`, `crates/takt/src/case.rs` |
 | validator | a validator (`TestsRun`, `GateRun`, `PrOpen`, `CiRead`, `PrMerged`, `ChangeRead`) turns an observation into a `canon-evidence/1` record, which reaches the case through the evidence port | `crates/takt/src/validator.rs` |
 | forge | the pull request, CI read and merge: through the repository's bot route (`BotRoute`) for an `origin` on github.com, or through `glab` (`Glab`) for one on a GitLab host, where the pull request is a merge request and its head pipeline is what `ci.read` reads | `crates/takt/src/forge.rs`, `crates/takt/src/forge/gitlab.rs` |
-| child process | a confinement adapter: `Unconfined`, or `Substrate`, which runs the test command in loom-sdk's `SubstrateRunner` | `crates/takt/src/confinement.rs` |
+| child process | a confinement adapter on Substrate's contract (`substrate_host::confinement`): `Unconfined`, the test command through Substrate's `local` adapter declared insecure, or `Substrate`, through the first of its `systemd` around `linux`, `linux` and `macos` adapters that serves it | `crates/takt/src/confinement.rs` |
 
 The hard rule: the model never produces evidence. A validator, a program, turns an observation
 (a test run's exit status, a commit, a merged pull request) into a `canon-evidence/1` record bound

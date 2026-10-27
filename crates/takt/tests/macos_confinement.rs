@@ -3,15 +3,16 @@
 //! - A process a child started in a session of its own, still carrying the mark
 //!   (`TAKT_CHILD`), is killed by `forge::sweep_left` and by the end of `forge::run_child`; on
 //!   Linux through takt's adoption of it as subreaper, on macOS by its mark. Run on both.
-//! - On macOS, a test command takt runs (`confinement::unconfined`) writes inside its tree, and
-//!   a write outside the tree and the fresh home, which holds its temporary directory, is
-//!   denied by the sandbox, the file not there afterwards.
+//! - On macOS, a confined test command writes inside its tree, and a write outside it is denied,
+//!   the file not there afterwards. Since story:confinement-through-substrate-on-linux-and-macos
+//!   the confinement is Substrate's `macos` adapter, not a Seatbelt profile of takt's.
 //!
 //! story:wave-35-review-fixes, acceptance 1 to 4: on macOS a confined build and a test command
 //! start no launchd job, the test command connects to no launchd socket, neither writes the
 //! user's temporary or cache directory, and the test command writes no hook nor configuration
-//! of the common git directory; on every platform, the git directories a test command writes
-//! leave those out, and the release publishes only after the macOS tests of its commit.
+//! of the common git directory; on every platform, a confined test command in a linked worktree
+//! writes nothing of the common git directory, and the release publishes only after the macOS
+//! tests of its commit.
 //!
 //! The leftover is this test binary started again: `stage` with [`STAGE`] `1` starts itself
 //! with [`STAGE`] `2` in a session of its own and exits; stage 2 writes its pid to
@@ -237,61 +238,118 @@ fn linked_worktree(dir: &Path) -> (PathBuf, PathBuf) {
     (main, linked)
 }
 
-/// `paths` as Seatbelt matches them, sorted.
-fn real_all(paths: &[PathBuf]) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = paths.iter().map(|p| takt::seatbelt::real(p)).collect();
-    found.sort();
-    found
+/// `script` with `/bin/sh` in `tree`, through the Substrate adapter `--confinement substrate`
+/// chooses on this host ([`takt::confinement::Confined`]), on `PATH` `/usr/bin:/bin` with a home
+/// in the tree, and on macOS the system directories its programs run from; held to 30 seconds.
+/// `None`, said on stderr, when no adapter of this host serves the run.
+fn confined(tree: &Path, script: &str) -> Option<takt::confinement::Ran> {
+    let confined =
+        match takt::confinement::Confined::open(tree, None, &takt::confinement::Options::default())
+        {
+            Ok(confined) => confined,
+            Err(error) => {
+                eprintln!("skipped: missing prerequisite: a Substrate adapter ({error:#})");
+                return None;
+            }
+        };
+    let home = tree.join("home");
+    fs::create_dir_all(&home).expect("a home");
+    let mut env = std::collections::BTreeMap::from([
+        ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+        (
+            "HOME".to_owned(),
+            confined.sees(&home, "/workspace/home").expect("UTF-8"),
+        ),
+    ]);
+    if confined.serves_writable_roots()
+        || !confined
+            .record()
+            .facts
+            .iter()
+            .any(|fact| fact == "private_tmpdir")
+    {
+        let tmp = home.join("tmp");
+        fs::create_dir_all(&tmp).expect("a temporary directory");
+        env.insert(
+            "TMPDIR".to_owned(),
+            confined.sees(&tmp, "/workspace/home/tmp").expect("UTF-8"),
+        );
+    }
+    let spec = takt::confinement::RunSpec {
+        argv: vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()],
+        env,
+        exec: vec!["/bin".to_owned(), "/usr/bin".to_owned()],
+        timeout: Duration::from_secs(30),
+        ..takt::confinement::RunSpec::default()
+    };
+    Some(
+        confined
+            .run(tree, &spec)
+            .expect("the confined run starts and ends"),
+    )
 }
 
-/// story:wave-35-review-fixes, M5, on every platform: a test command in a linked worktree
-/// writes its git directory and the common one, but never the common one's hooks or
-/// configuration, its own `commondir` or `config.worktree`, nor the tree's `.git`; in a main
-/// worktree, whose `.git` lies in its tree, the same of that `.git`.
+/// story:wave-35-review-fixes, M5, on every platform, since
+/// story:confinement-through-substrate-on-linux-and-macos through Substrate: a test command in a
+/// linked worktree writes nothing of the common git directory, neither its hooks, its
+/// configuration, nor the worktree's own `commondir` or `config.worktree`: the tree alone is the
+/// adapter's workspace, and takt declares no git directory writable.
 #[test]
 fn the_git_dirs_a_test_command_writes_leave_out_hooks_and_configuration() {
     let dir = scratch("git-dirs");
     let (main, linked) = linked_worktree(&dir.0);
     let common = main.join(".git");
     let own = common.join("worktrees/linked");
-
-    let found = takt::seatbelt::git_dirs(&linked);
-    assert_eq!(
-        real_all(&found.writable),
-        real_all(&[own.clone(), common.clone()])
+    let kept = [
+        common.join("config"),
+        own.join("commondir"),
+        own.join("gitdir"),
+    ];
+    let before: Vec<Option<Vec<u8>>> = kept.iter().map(|path| fs::read(path).ok()).collect();
+    for (index, target) in [
+        common.join("hooks/probe"),
+        common.join("config"),
+        common.join("takt-probe"),
+        own.join("commondir"),
+        own.join("config.worktree"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let marker = format!("ran-{index}");
+        let Some(ran) = confined(
+            &linked,
+            &format!(
+                "echo ran > {marker} && echo planted >> '{}'",
+                target.display()
+            ),
+        ) else {
+            return;
+        };
+        assert!(
+            linked.join(&marker).exists() && ran.code.is_some(),
+            "story:confinement-through-substrate-on-linux-and-macos: the command ran in the tree and exited ({}): {}",
+            ran.ending(),
+            String::from_utf8_lossy(&ran.stderr)
+        );
+        assert!(
+            !ran.success(),
+            "story:confinement-through-substrate-on-linux-and-macos: {} is not written: {}",
+            target.display(),
+            String::from_utf8_lossy(&ran.stderr)
+        );
+    }
+    assert!(
+        !common.join("hooks/probe").exists()
+            && !common.join("takt-probe").exists()
+            && !own.join("config.worktree").exists(),
+        "story:confinement-through-substrate-on-linux-and-macos: nothing planted in the common git directory"
     );
+    let after: Vec<Option<Vec<u8>>> = kept.iter().map(|path| fs::read(path).ok()).collect();
     assert_eq!(
-        real_all(&found.sealed_dirs),
-        real_all(&[common.join("hooks")])
+        after, before,
+        "story:confinement-through-substrate-on-linux-and-macos: the configuration and the worktree's links are as they were"
     );
-    assert_eq!(
-        real_all(&found.sealed_files),
-        real_all(&[
-            linked.join(".git"),
-            common.join("config"),
-            common.join("config.worktree"),
-            own.join("config.worktree"),
-            own.join("commondir"),
-        ])
-    );
-
-    let found = takt::seatbelt::git_dirs(&main);
-    assert!(found.writable.is_empty(), "{found:?}");
-    assert_eq!(
-        real_all(&found.sealed_dirs),
-        real_all(&[common.join("hooks")])
-    );
-    assert_eq!(
-        real_all(&found.sealed_files),
-        real_all(&[
-            common.clone(),
-            common.join("config"),
-            common.join("config.worktree"),
-        ])
-    );
-
-    let found = takt::seatbelt::git_dirs(&dir.0);
-    assert_eq!(found, takt::seatbelt::GitDirs::default(), "no git there");
 }
 
 /// The workflow at `.github/workflows/<name>` of this repository, parsed.
@@ -353,20 +411,25 @@ fn the_release_publishes_only_after_the_macos_tests_of_the_tagged_commit() {
     );
 }
 
+/// On macOS, since story:confinement-through-substrate-on-linux-and-macos: takt has no Seatbelt
+/// profile of its own; a test command under `--confinement substrate` and a promotion's build
+/// both run through Substrate's `macos` adapter ([`confined`]), whose profile denies by
+/// default, and these cases hold of it.
 #[cfg(target_os = "macos")]
 mod seatbelt {
     use super::*;
-    use takt::confinement::{TestRun, unconfined};
 
-    fn limits() -> Limits {
-        Limits {
-            timeout: Duration::from_secs(30),
-            output: 4096,
-        }
+    /// `script` run as a confined test command or build is: through Substrate's `macos` adapter,
+    /// which a macOS host must serve.
+    fn test_command(tree: &Path, script: &str) -> takt::confinement::Ran {
+        confined(tree, script).expect(
+            "story:confinement-through-substrate-on-linux-and-macos: Substrate's macos adapter serves a run here",
+        )
     }
 
-    fn sh(script: &str) -> Vec<String> {
-        vec!["/bin/sh".to_owned(), "-c".to_owned(), script.to_owned()]
+    /// A promotion's build goes through the same adapter as a test command.
+    fn confined_build(writable: &Path, script: &str) -> takt::confinement::Ran {
+        test_command(writable, script)
     }
 
     #[test]
@@ -376,13 +439,7 @@ mod seatbelt {
         fs::create_dir_all(&tree).expect("the tree");
         let outside = dir.0.join("outside.txt");
 
-        let argv = sh("echo in > inside.txt");
-        let finished = unconfined(&TestRun {
-            argv: &argv,
-            tree: &tree,
-            limits: limits(),
-        })
-        .expect("the test command runs");
+        let finished = test_command(&tree, "echo in > inside.txt");
         assert_eq!(
             finished.code,
             Some(0),
@@ -394,31 +451,14 @@ mod seatbelt {
             "in\n"
         );
 
-        let argv = sh(&format!("echo out > '{}'", outside.display()));
-        let finished = unconfined(&TestRun {
-            argv: &argv,
-            tree: &tree,
-            limits: limits(),
-        })
-        .expect("the test command runs");
+        let finished = test_command(&tree, &format!("echo out > '{}'", outside.display()));
         let stderr = String::from_utf8_lossy(&finished.stderr);
         assert_ne!(finished.code, Some(0), "the write outside fails: {stderr}");
         assert!(
             stderr.contains("Operation not permitted"),
-            "the sandbox denies it: {stderr}"
+            "story:confinement-through-substrate-on-linux-and-macos: Substrate's profile denies it: {stderr}"
         );
         assert!(!outside.exists(), "no file outside the tree");
-    }
-
-    /// The test command `script` in `tree`, run as takt runs it.
-    fn test_command(tree: &Path, script: &str) -> takt::forge::Finished {
-        let argv = sh(script);
-        unconfined(&TestRun {
-            argv: &argv,
-            tree,
-            limits: limits(),
-        })
-        .expect("the test command runs")
     }
 
     /// `command` as every program this module starts itself is run: through
@@ -438,20 +478,6 @@ mod seatbelt {
     /// `script` with `/bin/sh`, unconfined, held to [`bounded`]'s bound of `seconds`.
     fn shell(script: &str, seconds: u64) -> anyhow::Result<takt::forge::Finished> {
         bounded(Command::new("/bin/sh").args(["-c", script]), seconds)
-    }
-
-    /// `script` under the profile a promotion's build runs under ([`takt::seatbelt::build`]),
-    /// writing only `writable`, the user's home hidden but for it; held to [`limits`].
-    fn confined_build(writable: &Path, script: &str) -> takt::forge::Finished {
-        let home = PathBuf::from(std::env::var_os("HOME").expect("a home"));
-        let profile = takt::seatbelt::build(&[writable.to_path_buf()], &[], &[home]);
-        let mut command = Command::new(takt::seatbelt::SANDBOX_EXEC);
-        command
-            .args(profile.args())
-            .args(["/bin/sh", "-c", script])
-            .current_dir(writable)
-            .env("TMPDIR", writable);
-        bounded(&mut command, limits().timeout.as_secs()).expect("sandbox-exec runs and ends")
     }
 
     /// Whether `path` exists within `seconds`.
@@ -508,7 +534,7 @@ mod seatbelt {
         remove_job(&label);
         assert!(
             !escaped_build,
-            "a confined build submits no job: {}",
+            "story:confinement-through-substrate-on-linux-and-macos: a confined build submits no job: {}",
             String::from_utf8_lossy(&output.stderr)
         );
 
@@ -519,7 +545,7 @@ mod seatbelt {
         remove_job(&label);
         assert!(
             !escaped_test,
-            "a test command submits no job: {}",
+            "story:confinement-through-substrate-on-linux-and-macos: a test command submits no job: {}",
             String::from_utf8_lossy(&finished.stderr)
         );
     }
@@ -529,7 +555,7 @@ mod seatbelt {
     /// connection unconfined is taken. The listener never answers nor closes, and macOS's `nc`
     /// may stay connected after its standard input ends, so each `nc` gives up after a second
     /// idle (`-w 1`) and each run is bounded besides: unconfined by [`bounded`], whose bound
-    /// reached is no failure, as the connection is what is asked; confined by [`limits`].
+    /// reached is no failure, as the connection is what is asked; confined by its timeout.
     #[test]
     fn a_test_command_connects_to_no_launchd_socket() {
         use std::os::unix::net::UnixListener;
@@ -562,14 +588,15 @@ mod seatbelt {
         );
         assert!(
             listener.accept().is_err(),
-            "the socket took no connection from the test command"
+            "story:confinement-through-substrate-on-linux-and-macos: the socket took no connection from the test command"
         );
     }
 
     /// story:wave-35-review-fixes, acceptance 3 (M4): neither a confined build nor a test
     /// command writes the user's temporary or cache directory, which the system's tools read
     /// for every program of the user; the test command's `TMPDIR` is a directory of its own,
-    /// which it writes.
+    /// which it writes: Substrate's private one where the adapter proves `private_tmpdir`,
+    /// removed once the run ended.
     #[test]
     fn a_confined_step_writes_no_user_directory_of_the_system() {
         let dir = scratch("user-dirs");
@@ -589,7 +616,7 @@ mod seatbelt {
             let _ = fs::remove_file(&planted);
             assert!(
                 output.code != Some(0) && !after_build,
-                "a confined build does not write {name}: {}",
+                "story:confinement-through-substrate-on-linux-and-macos: a confined build does not write {name}: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
 
@@ -598,14 +625,14 @@ mod seatbelt {
             let _ = fs::remove_file(&planted);
             assert!(
                 finished.code != Some(0) && !after_test,
-                "a test command does not write {name}: {}",
+                "story:confinement-through-substrate-on-linux-and-macos: a test command does not write {name}: {}",
                 String::from_utf8_lossy(&finished.stderr)
             );
         }
 
         let finished = test_command(
             &tree,
-            "echo tmp > \"$TMPDIR/own\" && cat \"$TMPDIR/own\" && printf '%s\\n' \"$TMPDIR\" \"$HOME\"",
+            "echo tmp > \"$TMPDIR/own\" && cat \"$TMPDIR/own\" && printf '%s\\n' \"$TMPDIR\"",
         );
         let stdout = String::from_utf8_lossy(&finished.stdout).into_owned();
         assert_eq!(
@@ -616,15 +643,18 @@ mod seatbelt {
         );
         let lines: Vec<&str> = stdout.lines().collect();
         assert_eq!(lines.first(), Some(&"tmp"), "{stdout}");
-        let (tmp, home) = (Path::new(lines[1]), Path::new(lines[2]));
+        let tmp = Path::new(lines[1]);
+        let user_tmp = getconf("DARWIN_USER_TEMP_DIR");
         assert!(
-            tmp.starts_with(home) && tmp != home,
-            "TMPDIR {tmp:?} is the test command's own, in its home {home:?}"
+            tmp != user_tmp && (tmp.starts_with(&tree) || !tmp.exists()),
+            "story:confinement-through-substrate-on-linux-and-macos: TMPDIR {tmp:?} is the test command's own: in its tree, or Substrate's private one, gone once the run ended"
         );
     }
 
     /// story:wave-35-review-fixes, acceptance 3 (M5): a test command in a linked worktree
-    /// writes the common git directory, but neither its hooks nor its configuration.
+    /// writes neither the hooks nor the configuration of the common git directory. Since
+    /// story:confinement-through-substrate-on-linux-and-macos it writes nothing of that
+    /// directory: only its tree is the adapter's workspace.
     #[test]
     fn a_test_command_writes_no_hook_nor_configuration_of_the_common_git_dir() {
         let dir = scratch("git-hooks");
@@ -635,10 +665,10 @@ mod seatbelt {
             &linked,
             &format!("echo ok > '{}'", common.join("takt-probe").display()),
         );
-        assert_eq!(
+        assert_ne!(
             finished.code,
             Some(0),
-            "the common git directory is written: {}",
+            "story:confinement-through-substrate-on-linux-and-macos: the common git directory is not written: {}",
             String::from_utf8_lossy(&finished.stderr)
         );
 

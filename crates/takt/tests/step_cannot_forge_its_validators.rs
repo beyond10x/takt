@@ -1460,14 +1460,15 @@ fn a_writer_a_step_leaves_running_is_killed_with_its_group() {
     );
 }
 
-/// Set in the delegated child of a case ([`delegated`]): it runs the case.
+/// Set in the child process of a case ([`delegated`]): it runs the case.
 const DELEGATED_CASE: &str = "TAKT_CONFINEMENT_TEST_DELEGATED";
-/// The file the delegated child writes what it decided into.
+/// The file the child writes what it decided into.
 const REPORT: &str = "TAKT_CONFINEMENT_TEST_REPORT";
 
-/// Runs `case` again in this test binary under `systemd-run --user --scope -p Delegate=yes`,
-/// where Substrate can open, as `crates/takt/tests/confinement.rs` does; or skips naming what
-/// is missing (bubblewrap, a user systemd manager, the Substrate driver).
+/// Runs `case` again in this test binary, alone in a process of its own, so the `PATH` it sets
+/// is that process's alone; or skips naming what is missing (a Substrate adapter on this host
+/// that serves a test command). Since story:confinement-through-substrate-on-linux-and-macos
+/// takt opens Substrate's adapters where it runs and asks no delegated scope of `systemd-run`.
 fn delegated(name: &str, case: impl FnOnce()) {
     if std::env::var_os(DELEGATED_CASE).is_some() {
         let report = PathBuf::from(std::env::var_os(REPORT).expect("the report path is given"));
@@ -1476,19 +1477,20 @@ fn delegated(name: &str, case: impl FnOnce()) {
             .join(format!("step-forge-{}-probe", std::process::id()))
             .join("workspace");
         fs::create_dir_all(&probe).expect("a workspace");
-        match takt::confinement::Substrate::open(&probe) {
-            Ok(_) => {
+        // The probe goes before the case: one `systemd` around `linux` is open in a process at a
+        // time, and the case opens its own.
+        let probed =
+            takt::confinement::Substrate::open(&probe, &takt::confinement::Options::default())
+                .map(drop);
+        match probed {
+            Ok(()) => {
                 fs::write(&report, "ran").expect("the report");
                 case();
             }
             Err(error) => {
-                fs::write(&report, format!("the Substrate driver ({error})")).expect("the report");
+                fs::write(&report, format!("a Substrate adapter ({error:#})")).expect("the report");
             }
         }
-        return;
-    }
-    if !Path::new("/usr/bin/bwrap").is_file() {
-        eprintln!("skipped: missing prerequisite: executable /usr/bin/bwrap");
         return;
     }
     let state = Path::new(env!("CARGO_TARGET_TMPDIR"))
@@ -1496,44 +1498,30 @@ fn delegated(name: &str, case: impl FnOnce()) {
     let _ = fs::remove_dir_all(&state);
     fs::create_dir_all(&state).expect("a directory");
     let report = state.join("report");
-    let started = Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "-p", "Delegate=yes", "--"])
-        .arg(std::env::current_exe().expect("this binary"))
+    let output = Command::new(std::env::current_exe().expect("this binary"))
         .args(["--exact", name, "--nocapture", "--test-threads=1"])
         .env(DELEGATED_CASE, "1")
         .env(REPORT, &report)
-        .env(takt::confinement::DELEGATED, "1")
-        .output();
-    let output = match started {
-        Ok(output) => output,
-        Err(error) => {
-            eprintln!("skipped: missing prerequisite: systemd-run ({error})");
-            return;
-        }
-    };
+        .output()
+        .expect("this test binary runs again");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     match fs::read_to_string(&report).ok().as_deref() {
-        None => eprintln!(
-            "skipped: missing prerequisite: a user systemd manager that starts a delegated scope (systemd-run {}: {})",
-            output.status,
-            stderr.trim()
-        ),
-        Some("started") => panic!(
-            "the delegated case stopped before it decided its prerequisites: {}\n{stdout}{stderr}",
+        None | Some("started") => panic!(
+            "the child case stopped before it decided its prerequisites: {}\n{stdout}{stderr}",
             output.status
         ),
         Some("ran") => {
             assert!(
                 output.status.success(),
-                "the delegated case failed: {}\n{stdout}{stderr}",
+                "the child case failed: {}\n{stdout}{stderr}",
                 output.status
             );
             assert!(
                 stdout.contains("1 passed"),
-                "the delegated binary ran the case: {stdout}{stderr}"
+                "the child binary ran the case: {stdout}{stderr}"
             );
-            eprintln!("ran delegated: {name}");
+            eprintln!("ran in a process of its own: {name}");
         }
         Some(missing) => eprintln!("skipped: missing prerequisite: {missing}"),
     }
@@ -1566,8 +1554,11 @@ fn touch(tree: &Path) {
     );
 }
 
-/// A crate whose only test fails, its lock file committed.
-fn failing_crate(name: &str) -> Scratch {
+/// A crate whose only test fails, its lock file committed: for a run under `none` the one the
+/// cargo running these tests generates, which sees the configuration above the crate as the
+/// test command's cargo on the host does; for a `confined` run the one a cargo that sees none
+/// writes, as the confined cargo does (a `[patch]` there would be dropped from it).
+fn failing_crate(name: &str, confined: bool) -> Scratch {
     let tree = repository(
         name,
         &[
@@ -1583,12 +1574,20 @@ fn failing_crate(name: &str) -> Scratch {
             ),
         ],
     );
-    let locked = Command::new(std::env::var("CARGO").expect("cargo runs the tests"))
-        .args(["generate-lockfile", "--offline", "--quiet"])
-        .current_dir(&*tree)
-        .status()
-        .expect("cargo runs");
-    assert!(locked.success(), "the lock file is generated");
+    if confined {
+        fs::write(
+            tree.join("Cargo.lock"),
+            "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"m\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("the lock file");
+    } else {
+        let locked = Command::new(std::env::var("CARGO").expect("cargo runs the tests"))
+            .args(["generate-lockfile", "--offline", "--quiet"])
+            .current_dir(&*tree)
+            .status()
+            .expect("cargo runs");
+        assert!(locked.success(), "the lock file is generated");
+    }
     git(&tree, &["add", "Cargo.lock"]);
     git(&tree, &["commit", "-q", "--amend", "-m", "start"]);
     tree
@@ -1600,7 +1599,9 @@ fn under(substrate_on: Option<&Path>, case: impl FnOnce() -> Ran) -> Ran {
     let Some(tree) = substrate_on else {
         return case();
     };
-    let substrate = takt::confinement::Substrate::open(tree).expect("Substrate opens");
+    let substrate =
+        takt::confinement::Substrate::open(tree, &takt::confinement::Options::default())
+            .expect("Substrate opens");
     let before = takt::confinement::install(std::sync::Arc::new(substrate));
     let ran = case();
     takt::confinement::install(before);
@@ -1613,8 +1614,8 @@ fn under(substrate_on: Option<&Path>, case: impl FnOnce() -> Ran) -> Ran {
 /// takt never writes back, so the wrapper stays; the next run's test command, plain `cargo
 /// test` on a crate whose only test fails, earns a pass under `none`. Under `substrate` it
 /// earns none: the test command runs on Substrate's fixed `PATH` of read-only toolchain roots,
-/// the wrapper is not on it, and the test fails. In a delegated scope ([`delegated`]), so the
-/// `PATH` this case sets is the delegated child's alone.
+/// the wrapper is not on it, and the test fails. In a process of its own ([`delegated`]), so the
+/// `PATH` this case sets is that process's alone.
 #[test]
 fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
     delegated(
@@ -1628,13 +1629,13 @@ fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
                 &std::env::var_os("PATH").unwrap_or_default(),
             ));
             let path = std::env::join_paths(dirs).expect("a PATH");
-            // SAFETY: the delegated child runs this one case on one thread
+            // SAFETY: the child process runs this one case on one thread
             // (`--test-threads=1`), and nothing else reads the environment meanwhile.
             unsafe { std::env::set_var("PATH", path) };
             let plain = "cargo test --quiet --offline";
 
             // The step that writes the wrapper is refused, and the wrapper stays.
-            let planted = failing_crate("path-wrapper-planted");
+            let planted = failing_crate("path-wrapper-planted", false);
             let ran = run(&planted, plain, |tree| {
                 cargo_wrapper(&writable_path_dir().join("cargo"));
                 touch(tree);
@@ -1652,7 +1653,7 @@ fn a_cargo_wrapper_on_the_path_outside_the_tree_earns_no_pass() {
             );
 
             for confined in [false, true] {
-                let tree = failing_crate(&format!("path-wrapper-takt-{confined}"));
+                let tree = failing_crate(&format!("path-wrapper-takt-{confined}"), confined);
                 let ran = under(confined.then_some(&*tree), || run(&tree, plain, touch));
                 if confined {
                     assert!(ran.passes().is_empty(), "{:?}\n{}", ran.records, ran.text);

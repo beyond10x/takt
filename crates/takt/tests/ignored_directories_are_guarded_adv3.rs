@@ -694,7 +694,7 @@ fn across_file_systems() {
         }
         #[cfg(not(target_os = "macos"))]
         {
-            let output = Command::new("bwrap")
+            let output = Command::new("/usr/bin/bwrap")
                 .args(["--dev-bind", "/", "/", "--tmpfs"])
                 .arg(&mount)
                 .arg("--")

@@ -35,11 +35,12 @@ The tools are downloaded by release URL and checked against a SHA256 in the Dock
 |---|---|
 | [aep](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) | 0.77.1 |
 | [b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness)) | 0.20.0 |
-| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.69.2 |
+| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.70.0 |
 | b10x-gates | 0.1.23 |
 
 `b10x-harness` 0.20.0 is the harness takt 0.14.0's Loom 0.43.0 and metaharness 0.19.0 need. Checked
-in a local build of this Dockerfile (0.13.1; the Dockerfile has not changed since):
+in a local build of this Dockerfile (0.13.1, with ess 0.69.2; only the ess pin has changed since,
+and that is not rebuilt here):
 
 ```console
 $ docker run --rm --entrypoint sh takt:0.13.1 -c 'takt --version; aep --version; b10x-harness --version; ess --version; b10x-gates --version; rustc --version'
@@ -121,9 +122,11 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
   `harness: harness` (or `none`). The default, `claude`, is not there.
 - **No forge client.** No `gh` and no `glab`. Set `forge: none`. The default follows `origin`, and
   `bot` and `gitlab` need those programs. The delivery stays a branch in `/workspace`.
-- **Unconfined seccomp and AppArmor.** Under the default `--confinement none` the test command runs in a user and mount namespace of
-  its own, which a container runtime's default seccomp and AppArmor profiles refuse. Under the
-  default profile the first test run fails with a refusal, exit 5. The one that ran:
+- **Unconfined seccomp and AppArmor.** Under the default `--confinement none` of 0.13.1 the test
+  command ran in a user and mount namespace of its own, which a container runtime's default seccomp
+  and AppArmor profiles refuse. Under the default profile the first test run failed with a
+  refusal, exit 5. Since then `none` starts it through Substrate's `local` adapter, in no
+  namespace of takt's own, which has not been run in a container yet. The one that ran:
 
   ```console
   $ docker run --rm --user 1000:1000 -e HOME=/tmp -v ~/demo:/workspace -v ./agent.yaml:/config/agent.yaml:ro takt:0.13.1 --intent "add a README line"

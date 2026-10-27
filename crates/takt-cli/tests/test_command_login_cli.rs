@@ -1,8 +1,10 @@
 //! story:test-command-reaches-no-forge-login through the binary: the test command `takt run
-//! --harness none` runs, and every child of it, gets a scratch `HOME`, no `XDG_RUNTIME_DIR`, no
-//! `DBUS_SESSION_BUS_ADDRESS` and no session bus socket, so `gh`, a git credential helper or a
-//! keyring client in it finds no login of the operator's, while the same `gh` in the operator's
-//! own environment still finds one.
+//! --harness none` runs, and every child of it, gets a scratch `HOME`, no `XDG_RUNTIME_DIR` and
+//! no `DBUS_SESSION_BUS_ADDRESS`, so `gh`, a git credential helper or a keyring client in it
+//! finds no login of the operator's through its environment, while the same `gh` in the
+//! operator's own environment still finds one. Since
+//! story:confinement-through-substrate-on-linux-and-macos the test command runs through
+//! Substrate's `local` adapter, declared insecure, and a path this user can read is not hidden.
 //!
 //! The operator here is a scratch one: a home holding a `gh` login and a crates.io token, a
 //! runtime directory holding a listening `bus` socket, and a second socket the bus address names
@@ -87,10 +89,12 @@ fn operator_env(command: &mut Command, outer: &Path) {
         .env("TMPDIR", outer.join("tmp"));
 }
 
-/// The test command run by `takt run --harness none` finds no login, no bus address and no bus
-/// socket, cannot unmount what hides them, and its scratch home is gone after the run; the
-/// stand-in `gh` in the operator's environment finds the login. On macOS the sandbox denies the
-/// reads of the runtime directory, the named socket and the registry login.
+/// The test command run by `takt run --harness none` finds no login through its environment: no
+/// configuration of the operator's, no bus address and no runtime directory, and its scratch
+/// home is gone after the run; the stand-in `gh` in the operator's environment finds the login.
+/// Since story:confinement-through-substrate-on-linux-and-macos nothing hides a path this user
+/// can read (no namespace, no Seatbelt profile under `none`): the run's first line declares the
+/// test command unconfined.
 #[test]
 fn the_test_command_reaches_no_login_of_the_operator() {
     let outer =
@@ -191,30 +195,29 @@ fn the_test_command_reaches_no_login_of_the_operator() {
         lines.get(at + 1).copied().unwrap_or_default()
     };
 
+    // Since story:confinement-through-substrate-on-linux-and-macos a `none` run's test command
+    // runs through Substrate's `local` adapter, declared insecure: its environment still names
+    // none of the operator's logins, but nothing hides what this user can read by its path (the
+    // runtime directory's sockets, a registry login under the CARGO_HOME it is given), and the
+    // run says so on its first line.
     assert!(
-        seen.contains("You are not logged into any GitHub hosts") && !seen.contains("Logged in"),
-        "gh finds no login:\n{seen}"
+        out.lines().next().is_some_and(
+            |first| first.contains("; confinement none: Substrate local, declared insecure: ")
+        ),
+        "story:confinement-through-substrate-on-linux-and-macos: the first line declares the test command unconfined: {out}"
     );
-    assert_eq!(after("-- bus"), "", "an empty bus address:\n{seen}");
     assert!(
-        after("-- socket").contains("No such file or directory"),
-        "no session bus socket under /run/user:\n{seen}"
+        !seen.contains("hosts.yml"),
+        "story:confinement-through-substrate-on-linux-and-macos: gh finds no login through its configuration:\n{seen}"
+    );
+    assert_eq!(
+        after("-- bus"),
+        "",
+        "story:confinement-through-substrate-on-linux-and-macos: an empty bus address:\n{seen}"
     );
     assert!(
         lines.contains(&"-- runtime "),
-        "no XDG_RUNTIME_DIR:\n{seen}"
-    );
-    for reachable in [
-        "runtime bus reachable",
-        "named bus reachable",
-        "runtime bus reachable after umount",
-        "named bus reachable after umount",
-    ] {
-        assert!(!lines.contains(&reachable), "{reachable}:\n{seen}");
-    }
-    assert!(
-        !seen.contains("operator-registry-token"),
-        "no registry token:\n{seen}"
+        "story:confinement-through-substrate-on-linux-and-macos: no XDG_RUNTIME_DIR:\n{seen}"
     );
     assert!(
         lines.contains(&"-- end"),
@@ -242,11 +245,11 @@ fn id(flag: &str) -> String {
 
 /// One `takt run --harness none` whose test command reports what it sees of the registry login
 /// (`${CARGO_HOME:-$HOME/.cargo}/credentials.toml`), with `HOME` as `home` gives it (unset
-/// when none), run under bubblewrap with `passwd` as `/etc/passwd`, so the home this user's
-/// passwd entry names is the scratch one and the operator's own is never looked at. On macOS a
-/// user's home comes from its directory service, which no file replaces: takt runs as it is,
-/// `passwd` unused, and the probe writes what it sees into the repository's git directory,
-/// which a test command there may write (`seatbelt::test_command`); takt's `TMPDIR` it may not.
+/// when none), with `passwd` as `/etc/passwd` (on Linux through bubblewrap, a fixture of this
+/// test alone), so the home this user's passwd entry names is the scratch one and the
+/// operator's own is never looked at. On macOS a user's home comes from its directory service,
+/// which no file replaces: takt runs as it is, `passwd` unused, and the probe writes what it
+/// sees into the repository's git directory.
 fn registry_probe(
     outer: &Path,
     passwd: &Path,
@@ -263,7 +266,7 @@ fn registry_probe(
     };
     #[cfg(not(target_os = "macos"))]
     let (seen, mut takt) = {
-        let mut takt = Command::new("bwrap");
+        let mut takt = Command::new("/usr/bin/bwrap");
         takt.args(["--dev-bind", "/", "/", "--ro-bind"])
             .arg(passwd)
             .arg("/etc/passwd")
@@ -295,7 +298,7 @@ fn registry_probe(
     }
     let output = takt
         .output()
-        .expect("takt runs (on Linux under bwrap, which CI installs)");
+        .expect("takt runs (on Linux under /usr/bin/bwrap, which CI installs)");
     let printed = format!(
         "exit {:?}\nstdout {}\nstderr {}",
         output.status.code(),
@@ -318,15 +321,14 @@ fn directory_service_home() -> PathBuf {
     PathBuf::from(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Whatever `HOME` takt starts with (unset, relative or set), the test command finds no registry
-/// login as a file it can read: the registry login under whichever `CARGO_HOME` the command
-/// sees is covered. With no absolute `HOME` the command's `CARGO_HOME` is the passwd home's
-/// `.cargo`, here a scratch one holding a stand-in token. On macOS, where no file replaces the
-/// directory service's home, that home is the user's own, and a covered login is one the
-/// command cannot even see: it asserts every case's `CARGO_HOME` and that the login there,
-/// the stand-in when `HOME` is set, looks absent.
+/// Whatever `HOME` takt starts with (unset, relative or set), the test command's `CARGO_HOME`
+/// is the toolchain's, never one resolved inside the tree: with no absolute `HOME` the passwd
+/// home's `.cargo`, here a scratch one holding a stand-in token; on macOS, where no file
+/// replaces the directory service's home, the user's own. The registry login there was covered
+/// until story:confinement-through-substrate-on-linux-and-macos; a `none` run now declares its
+/// test command unconfined, on its first line, instead.
 #[test]
-fn a_test_command_finds_no_registry_login_whatever_home_takt_has() {
+fn a_test_command_s_cargo_home_is_the_toolchain_s_whatever_home_takt_has() {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("login-cli-registry-{}", std::process::id()));
     let _ = fs::remove_dir_all(&outer);
@@ -385,14 +387,18 @@ fn a_test_command_finds_no_registry_login_whatever_home_takt_has() {
             .unwrap_or("none reported")
             .to_owned();
         eprintln!("HOME {case}: {kind}; CARGO_HOME {cargo}");
-        if !seen.contains("-- end") || seen.contains("-- kind regular file") {
+        if !seen.contains("-- end") {
+            failed.push(format!("HOME {case}: the probe did not end:\n{seen}"));
+        }
+        // Since story:confinement-through-substrate-on-linux-and-macos nothing covers the login:
+        // the run declares its test command unconfined instead.
+        if !seen.contains("; confinement none: Substrate local, declared insecure: ") {
             failed.push(format!(
-                "HOME {case}: the registry login is a regular file the test command can read, or the probe did not end:\n{seen}"
+                "story:confinement-through-substrate-on-linux-and-macos: HOME {case}: the run does not declare its test command unconfined:\n{seen}"
             ));
         }
-        // On macOS the login is covered by the profile refusing to read it, its metadata
-        // included, so it looks absent whether a file is there or not: the stand-in when HOME
-        // is set, the user's own when it is not, whose home is the directory service's.
+        // On macOS the command's CARGO_HOME is the stand-in when HOME is set, else the user's
+        // own, whose home is the directory service's.
         #[cfg(target_os = "macos")]
         {
             let expected = if case == "set" {
@@ -406,26 +412,16 @@ fn a_test_command_finds_no_registry_login_whatever_home_takt_has() {
                     expected.display()
                 ));
             }
-            if kind != "absent" {
-                failed.push(format!(
-                    "HOME {case}: the registry login is not refused ({kind}):\n{seen}"
-                ));
-            }
         }
         // With no absolute HOME, the command's toolchain home is the passwd home's `.cargo`, the
-        // stand-in here, never one resolved inside the tree, and its login is covered.
+        // stand-in here, never one resolved inside the tree.
         #[cfg(not(target_os = "macos"))]
-        if case != "set" {
-            if !seen.contains(&format!("-- cargo {}", outer.join("home/.cargo").display())) {
-                failed.push(format!(
-                    "HOME {case}: the command's CARGO_HOME is not the passwd home's:\n{seen}"
-                ));
-            }
-            if kind != "character special file" {
-                failed.push(format!(
-                    "HOME {case}: the stand-in registry login is not covered ({kind}):\n{seen}"
-                ));
-            }
+        if case != "set"
+            && !seen.contains(&format!("-- cargo {}", outer.join("home/.cargo").display()))
+        {
+            failed.push(format!(
+                "HOME {case}: the command's CARGO_HOME is not the passwd home's:\n{seen}"
+            ));
         }
     }
     assert!(failed.is_empty(), "{}", failed.join("\n"));
