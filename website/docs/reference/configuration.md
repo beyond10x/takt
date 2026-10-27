@@ -43,15 +43,15 @@ for `_`; `scan` has no flag.
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
-| `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--endpoint-*`, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
+| `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
 
 `takt scenario run --config <FILE>` reads the same file, without `story`.
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--protocol`, `--input`,
 `--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
-`--commit-identity`, `--confinement`, `--endpoint-base-url`, `--endpoint-wire`,
-`--endpoint-model`, `--endpoint-token-file`, `--endpoint-token-pointer` and `--endpoint-secret`.
-A key for one of them is refused.
+`--commit-identity`, `--confinement`, `--llm-config`, `--model-endpoint`, `--model-wire`,
+`--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
+`--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
 
 ### A minimal TOML file
 
@@ -372,17 +372,25 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | flag | meaning |
 |---|---|
 | `--harness <HARNESS>` | `claude`, `codex`, `harness` (b10x-harness) or `none` (validators only); default `claude` |
-| `--model <MODEL>` | the harness's model, when it takes one |
+| `--model <MODEL>` | the harness's model, when it takes one; under `--harness harness` a route of the `llm` section, when the run has one |
+| `--llm-config <FILE>` | an `llm.routes/1` document (`.toml`, `.yaml` or `.yml`) that replaces the run file's `llm` section; with or without `--config` |
 | `--endpoint-file <PATH>` | the endpoint file |
-| `--endpoint-base-url <URL>` | the endpoint's base URL |
-| `--endpoint-wire <WIRE>` | `anthropic-messages` or `openai-responses` |
-| `--endpoint-model <MODEL>` | the model the endpoint serves |
-| `--endpoint-token-file <PATH>` | a token file; not with `--endpoint-secret` |
-| `--endpoint-token-pointer <POINTER>` | a JSON pointer into the token file |
-| `--endpoint-secret <NS/NAME>` | a secret's name; takt reads no secret |
+| `--model-endpoint <URL>` | the endpoint's base URL |
+| `--model-wire <WIRE>` | `anthropic-messages` or `openai-responses` |
+| `--subscription-token-file <PATH>` | a token file; not with `--api-key-secret` |
+| `--subscription-token-pointer <POINTER>` | a JSON pointer into the token file |
+| `--api-key-secret <NS/NAME>` | a secret's name; takt reads no secret |
 | `--endpoint-token-env <NAME>` | a variable holding the key; `openai-responses` only |
 
-All `--endpoint-*` flags need `--harness harness`.
+The names above are metaharness's and llm's; the old names `--endpoint-base-url`,
+`--endpoint-wire`, `--endpoint-model` (the same flag as `--model`), `--endpoint-token-file`,
+`--endpoint-token-pointer` and `--endpoint-secret` keep working for one minor release. Each
+prints one line on standard error naming the new name, and a flag given under both names is
+refused. `--endpoint-token-env` and `--endpoint-file` keep their names.
+
+The endpoint flags (`--model-endpoint`, `--model-wire`, `--subscription-token-file`,
+`--subscription-token-pointer`, `--api-key-secret` and their old names, but not `--endpoint-model`,
+which is `--model`) need `--harness harness`, and an `llm` section may not sit beside them.
 
 ### Forge and gates
 

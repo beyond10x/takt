@@ -542,8 +542,11 @@ impl ScenarioRunArgs {
     /// value ([`LoopArgs::configured`]); a file that names a `story`, or declares `scan: none`,
     /// is refused.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
+        self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return Ok(());
+            return self
+                .looping
+                .configured(takt::run_config::RunConfig::default(), matches);
         };
         let file = takt::run_config::RunConfig::read(path)?;
         if file.story.is_some() {
@@ -696,8 +699,11 @@ impl RunArgs {
     /// it came from, so a refusal names that file; a run that opens no story (a
     /// `self.improvement/1` turn) leaves it out.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
+        self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return Ok(());
+            return self
+                .looping
+                .configured(takt::run_config::RunConfig::default(), matches);
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
         if let Some(story) = file.story.take()
@@ -719,9 +725,12 @@ impl LoopArgs {
     /// when it sets it, for `takt run` and `takt scenario run` alike.
     fn configured(
         &mut self,
-        file: takt::run_config::RunConfig,
+        mut file: takt::run_config::RunConfig,
         matches: &clap::ArgMatches,
     ) -> Result<()> {
+        if let Some(path) = &self.llm_config {
+            file.set_llm_file(path)?;
+        }
         let unset = |id: &str| unset(matches, id);
         let llm = self.llm_section(&file, &unset)?;
         let looping = self;
@@ -733,7 +742,7 @@ impl LoopArgs {
         if unset("hours") && file.hours.is_some() {
             looping.hours = file.hours;
         }
-        if unset("model") && file.model.is_some() {
+        if unset("model") && unset("endpoint_model") && file.model.is_some() {
             looping.model = file.model;
         }
         if unset("forge") && file.forge.is_some() {
@@ -905,9 +914,20 @@ struct LoopArgs {
     /// `harness` (b10x-harness), or `none` (only validators run).
     #[arg(long, default_value = "claude")]
     harness: String,
-    /// The harness's model, when it takes one.
-    #[arg(long)]
+    /// The harness's model, when it takes one. Under `--harness harness` it names a route of the
+    /// `llm` section, when the run has one.
+    #[arg(long, conflicts_with = "endpoint_model")]
     model: Option<String>,
+    /// The old name of `--model`, kept for one minor release: the same flag, with one line on
+    /// standard error naming `--model`.
+    #[arg(long, value_name = "MODEL", conflicts_with = "model")]
+    endpoint_model: Option<String>,
+    /// The `llm.routes/1` document, a `.toml`, `.yaml` or `.yml` file, as llm's `--config` names
+    /// it. It replaces the run file's `llm` section, with its routes, its digest and its refusals;
+    /// `--model` names one of its routes under `--harness harness`, and the `opened` line records
+    /// its digest as `llm_digest`. Given with or without `--config`.
+    #[arg(long, value_name = "FILE")]
+    llm_config: Option<PathBuf>,
     #[command(flatten)]
     endpoint: EndpointArgs,
     /// The approval gate the harness may request to end the run. Not given, the case's
@@ -1750,6 +1770,40 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
 }
 
 impl LoopArgs {
+    /// Takes the flags given under the names they had for one minor release: each prints one line
+    /// on standard error naming the new name, and `--endpoint-model`, the old name of `--model`, is
+    /// the model it names. Called before anything else reads the loop's flags.
+    fn renamed(&mut self, matches: &clap::ArgMatches) {
+        const RENAMED: [(&str, &str, &str); 6] = [
+            (
+                "endpoint_base_url",
+                "--endpoint-base-url",
+                "--model-endpoint",
+            ),
+            ("endpoint_wire", "--endpoint-wire", "--model-wire"),
+            ("endpoint_model", "--endpoint-model", "--model"),
+            (
+                "endpoint_token_file",
+                "--endpoint-token-file",
+                "--subscription-token-file",
+            ),
+            (
+                "endpoint_token_pointer",
+                "--endpoint-token-pointer",
+                "--subscription-token-pointer",
+            ),
+            ("endpoint_secret", "--endpoint-secret", "--api-key-secret"),
+        ];
+        for (id, old, new) in RENAMED {
+            if !unset(matches, id) {
+                eprintln!("takt: {old} is renamed {new}; the old name works for one minor release");
+            }
+        }
+        if let Some(model) = self.endpoint_model.take() {
+            self.model = Some(model);
+        }
+    }
+
     /// Refuses, before anything of the run is done, an hour budget that is not a finite
     /// positive number: `--hours inf` would never end a wait, `--hours NaN` never compare, and
     /// zero or less would be spent before the first step.
@@ -1965,30 +2019,54 @@ struct EndpointArgs {
     /// `--endpoint-file`'s `base_url`, else `https://api.anthropic.com/v1`. `https://`, or
     /// `http://` to a loopback host; no userinfo, query or fragment. Another base URL takes a
     /// credential by flag or file: the default token is sent to the default one alone.
+    #[arg(long, value_name = "URL", conflicts_with = "endpoint_base_url")]
+    model_endpoint: Option<String>,
+    /// The old name of `--model-endpoint`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "URL")]
     endpoint_base_url: Option<String>,
     /// `--harness harness`: the model API the endpoint speaks, `anthropic-messages` or
     /// `openai-responses`. Not given, `--endpoint-file`'s `wire`, else `anthropic-messages`.
+    #[arg(long, value_name = "WIRE", conflicts_with = "endpoint_wire")]
+    model_wire: Option<String>,
+    /// The old name of `--model-wire`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "WIRE")]
     endpoint_wire: Option<String>,
-    /// `--harness harness`: the model the endpoint serves; `--model` wins over it. Not given,
-    /// `--endpoint-file`'s `model`, else `claude-opus-5`.
-    #[arg(long, value_name = "MODEL")]
-    endpoint_model: Option<String>,
     /// `--harness harness`: the file holding a subscription token, which b10x-harness reads;
-    /// not with --endpoint-secret. Not given, `--endpoint-file`'s credential, else
+    /// not with --api-key-secret. Not given, `--endpoint-file`'s credential, else
     /// `~/.claude/.credentials.json` at `/claudeAiOauth/accessToken`. A relative path is read
     /// against the current directory. A file that is missing, or whose pointer resolves to no
     /// token, is refused before the case opens, exit 1.
+    #[arg(long, value_name = "PATH", conflicts_with = "endpoint_token_file")]
+    subscription_token_file: Option<PathBuf>,
+    /// The old name of `--subscription-token-file`, kept for one minor release, with one line on
+    /// standard error naming the new name.
     #[arg(long, value_name = "PATH")]
     endpoint_token_file: Option<PathBuf>,
-    /// `--harness harness`: the JSON pointer to the token inside --endpoint-token-file, given
+    /// `--harness harness`: the JSON pointer to the token inside --subscription-token-file, given
     /// only with it; not given, the whole file is the token.
+    #[arg(
+        long,
+        value_name = "JSON POINTER",
+        conflicts_with = "endpoint_token_pointer"
+    )]
+    subscription_token_pointer: Option<String>,
+    /// The old name of `--subscription-token-pointer`, kept for one minor release, with one line
+    /// on standard error naming the new name.
     #[arg(long, value_name = "JSON POINTER")]
     endpoint_token_pointer: Option<String>,
     /// `--harness harness`: the API key as a secret's name in the owner's secrets store,
     /// `<namespace>/<name>`, handed to b10x-harness by name, which the harness resolves; takt
-    /// reads no secret and opens no store. Not with --endpoint-token-file.
+    /// reads no secret and opens no store. Not with --subscription-token-file.
+    #[arg(
+        long,
+        value_name = "NAMESPACE/NAME",
+        conflicts_with = "endpoint_secret"
+    )]
+    api_key_secret: Option<String>,
+    /// The old name of `--api-key-secret`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "NAMESPACE/NAME")]
     endpoint_secret: Option<String>,
     /// `--harness harness`: the name of the environment variable holding the API key, on the
@@ -2023,17 +2101,28 @@ impl EndpointArgs {
         self.all_given().into_iter().next()
     }
 
-    /// Every `--endpoint-*` flag given, by its name, in the order the flags are listed.
+    /// Every endpoint flag given, under the name it was given by, in the order the flags are
+    /// listed. `--endpoint-model` is `--model` and is not among them.
     fn all_given(&self) -> Vec<&'static str> {
         [
+            ("--model-endpoint", self.model_endpoint.is_some()),
             ("--endpoint-base-url", self.endpoint_base_url.is_some()),
+            ("--model-wire", self.model_wire.is_some()),
             ("--endpoint-wire", self.endpoint_wire.is_some()),
-            ("--endpoint-model", self.endpoint_model.is_some()),
+            (
+                "--subscription-token-file",
+                self.subscription_token_file.is_some(),
+            ),
             ("--endpoint-token-file", self.endpoint_token_file.is_some()),
+            (
+                "--subscription-token-pointer",
+                self.subscription_token_pointer.is_some(),
+            ),
             (
                 "--endpoint-token-pointer",
                 self.endpoint_token_pointer.is_some(),
             ),
+            ("--api-key-secret", self.api_key_secret.is_some()),
             ("--endpoint-secret", self.endpoint_secret.is_some()),
             ("--endpoint-token-env", self.endpoint_token_env.is_some()),
             ("--endpoint-file", self.endpoint_file.is_some()),
@@ -2043,15 +2132,31 @@ impl EndpointArgs {
         .collect()
     }
 
-    /// The fields the flags give.
+    /// The fields the flags give: each new name's value, else its old name's. The model is not
+    /// among them: `--model` names it, and the file's `model` is the endpoint's.
     fn fields(&self) -> takt::harness::EndpointFields {
         takt::harness::EndpointFields {
-            base_url: self.endpoint_base_url.clone(),
-            wire: self.endpoint_wire.clone(),
-            model: self.endpoint_model.clone(),
-            token_file: self.endpoint_token_file.clone(),
-            token_pointer: self.endpoint_token_pointer.clone(),
-            secret: self.endpoint_secret.clone(),
+            base_url: self
+                .model_endpoint
+                .clone()
+                .or_else(|| self.endpoint_base_url.clone()),
+            wire: self
+                .model_wire
+                .clone()
+                .or_else(|| self.endpoint_wire.clone()),
+            model: None,
+            token_file: self
+                .subscription_token_file
+                .clone()
+                .or_else(|| self.endpoint_token_file.clone()),
+            token_pointer: self
+                .subscription_token_pointer
+                .clone()
+                .or_else(|| self.endpoint_token_pointer.clone()),
+            secret: self
+                .api_key_secret
+                .clone()
+                .or_else(|| self.endpoint_secret.clone()),
             env: self.endpoint_token_env.clone(),
         }
     }

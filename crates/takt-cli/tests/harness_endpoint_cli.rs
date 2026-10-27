@@ -182,11 +182,16 @@ fn run_help_names_every_endpoint_flag() {
 #[test]
 fn an_endpoint_flag_with_another_harness_is_refused_before_any_case() {
     let world = World::new("other-harness");
-    let output = world.run(&["--harness", "none", "--endpoint-model", "m"]);
+    let output = world.run(&[
+        "--harness",
+        "none",
+        "--model-endpoint",
+        "http://127.0.0.1:9/v1",
+    ]);
     let (stdout, stderr) = text(&output);
     assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
     assert!(
-        stderr.contains("--endpoint-model") && stderr.contains("--harness none"),
+        stderr.contains("--model-endpoint") && stderr.contains("--harness none"),
         "{stderr}"
     );
     assert_eq!(stderr.trim().lines().count(), 1, "one line: {stderr}");
