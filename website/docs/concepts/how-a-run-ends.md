@@ -126,7 +126,9 @@ for the approval gate. `takt approve` records the grant, and the next run resume
 
 `stopped: error: <what>`: the run ended on an error once its case was open, such as a forge that
 refused, a validator or a harness that failed. Whatever the failed step changed is discarded, the
-error is recorded as an `error` line, and the case stays open. With `--harness none`, a run past
+error is recorded as an `error` line, and the case stays open. A judgement step whose session
+ends without the line naming its action is tried again first, 3 tries at most, each try a step
+that `--iterations` counts; a try that spent the budget stops the run on the budget, exit 3. With `--harness none`, a run past
 a red base ends here as soon as a judgement step is the only way on:
 
 ```console

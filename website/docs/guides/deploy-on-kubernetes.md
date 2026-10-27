@@ -249,5 +249,5 @@ runtime's own default profile admits unprivileged user namespaces.
 | stage the key as a file by hand | gone: `--endpoint-token-env` or `env` in the endpoint file (takt 0.13.0) |
 | move the story to active by hand | gone: `--story` (takt 0.13.0) |
 | add packages, toolchain links, b10x-harness 0.20.0 and `b10x-gates` to the image | gone: the image ships them (takt 0.13.0) |
-| `mkdir -p "$HOME/.cargo/bin"` before takt | still needed, in `command.entrypoint` |
+| `mkdir -p "$HOME/.cargo/bin"` before takt | still needed at 0.14.0, in `command.entrypoint`; not after it: the first test run in a fresh `HOME` is no longer refused |
 | patch the pod to seccomp and AppArmor `Unconfined` | not possible at Loom 0.44.0 |
