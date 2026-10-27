@@ -39,6 +39,7 @@ for `_`; `scan` has no flag.
 | `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
+| `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest` |
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--story`, `--protocol`,
 `--input`, `--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
@@ -116,7 +117,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
