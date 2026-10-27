@@ -14,10 +14,12 @@
 
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::Value;
+
+use crate::confinement::Command;
 
 /// The purpose prefix of every tree the seam creates: `takt:<case id>`.
 pub const PURPOSE_PREFIX: &str = "takt:";
