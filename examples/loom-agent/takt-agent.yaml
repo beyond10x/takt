@@ -1,0 +1,57 @@
+apiVersion: loom.beyond10x.dev/v1alpha1
+kind: LoomAgent
+metadata:
+  name: takt-demo
+  namespace: agents
+spec:
+  image: {repository: registry.example/takt, tag: "0.14.0"}
+  command:
+    entrypoint:
+      - tini
+      - --
+      - /bin/sh
+      - -c
+      - mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace --config /config/takt.yaml "$@"
+      - takt
+    args: [--story, story:add-sub]
+  secretRef: {name: takt-demo-env}
+  secretFiles: {name: takt-demo-files, mountPath: /var/run/secrets/takt}
+  env:
+    - {name: B10X_GATES_POLICY, value: /var/run/secrets/takt/policy.json}
+  workspace: {mountPath: /workspace, claimName: takt-demo-workspace}
+  configFiles:
+    - name: takt.yaml
+      content: |
+        hours: 1
+        harness: harness
+        endpoint_file: endpoint.toml
+        forge: none
+        test_cmd: cargo test --quiet --locked
+    - name: endpoint.toml
+      content: |
+        base_url = "https://llm.example.com/v1"
+        wire = "openai-responses"
+        model = "example-model"
+
+        [credential]
+        env = "LLM_API_KEY"
+  agent:
+    format: loom.agent/1
+    agent:
+      id: takt-demo
+      name: takt-demo
+      brief: Delivers the ready stories of the repository mounted at /workspace.
+    model:
+      routes: routes.yaml
+      roles:
+        - {role: agent, model: example-model}
+    deploy:
+      kubernetes:
+        namespace: agents
+        service_account: takt-demo
+        resources: {cpu: "4", memory: 8Gi}
+        egress:
+          - {name: llm, host: llm.example.com, port: 443}
+          - {name: crates-index, host: index.crates.io, port: 443}
+          - {name: crates-static, host: static.crates.io, port: 443}
+  routes: {}

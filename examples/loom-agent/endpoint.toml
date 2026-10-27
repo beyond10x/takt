@@ -1,0 +1,6 @@
+base_url = "https://llm.example.com/v1"
+wire = "openai-responses"
+model = "example-model"
+
+[credential]
+env = "LLM_API_KEY"

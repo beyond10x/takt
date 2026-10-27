@@ -6,6 +6,12 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- `examples/loom-agent/`: placeholder manifests that run takt as a Loom 0.44.0 `LoomAgent` on a kind cluster, read by a test through takt's own configuration reader.
+- Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
+- Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
+
 ## [0.14.0] - 2026-10-26
 
 A run whose tests are red stops instead of spending model calls: at a red base before the first

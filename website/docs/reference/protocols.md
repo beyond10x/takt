@@ -1,5 +1,6 @@
 ---
 title: Protocols
+sidebar_position: 8
 description: The protocols takt runs and the ones it holds for its own improvement, with the viewer that draws them.
 ---
 
@@ -22,7 +23,10 @@ graph of how they connect. It is built on every site build from the documents of
 | `loop.improvement/1` (listed as `loop-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one turn on the improvement loop itself |
 | `eval-gated-change/1`, `incident-response/1`, `ml-experiment/1`, `support-triage/1` | `b10x-canon-engineering` | see [Engineering protocols](https://beyond10x.github.io/engineering-protocols/) |
 
-`--protocol` also takes a `protocol/1` file, read from the directory `takt` runs in.
+`--protocol` takes either spelling, `story.delivery/1` or `story-delivery/1`: the registry names
+a protocol by its directory, and a protocol's own id has a dot (and for `eval-gated-change`, an
+underscore: `eval.gated_change`). `--protocol` also takes the path of a `protocol/1` file, which
+wins over a built-in of the same name; a path is read against the directory `takt` runs in.
 
 ## For takt's own improvement
 

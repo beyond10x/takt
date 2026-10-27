@@ -67,10 +67,10 @@ const config: Config = {
       title: 'takt',
       items: [
         {to: '/docs/', label: 'Docs', position: 'left', activeBasePath: '/docs'},
-        {to: '/docs/concepts/protocol-and-case', label: 'Concepts', position: 'left', activeBasePath: '/docs/concepts'},
-        {to: '/docs/guides/run-a-story', label: 'Guides', position: 'left', activeBasePath: '/docs/guides'},
+        {to: '/docs/concepts/architecture', label: 'Concepts', position: 'left', activeBasePath: '/docs/concepts'},
+        {to: '/docs/guides/install', label: 'Guides', position: 'left', activeBasePath: '/docs/guides'},
         {to: '/docs/self-improvement/the-loop', label: 'Self-improvement', position: 'left', activeBasePath: '/docs/self-improvement'},
-        {to: '/docs/reference/cli', label: 'Reference', position: 'left', activeBasePath: '/docs/reference'},
+        {to: '/docs/reference/configuration', label: 'Reference', position: 'left', activeBasePath: '/docs/reference'},
         {to: '/docs/status', label: 'Status', position: 'left'},
         {href: 'pathname:///takt/protocols/', label: 'Protocols', position: 'left'},
         {href: 'https://github.com/beyond10x/takt', label: 'GitHub', position: 'right'},
@@ -83,7 +83,9 @@ const config: Config = {
           items: [
             {label: 'Overview', to: '/docs/'},
             {label: 'Getting started', to: '/docs/getting-started'},
+            {label: 'Deploy on Kubernetes', to: '/docs/guides/deploy-on-kubernetes'},
             {label: 'Status', to: '/docs/status'},
+            {label: 'Known limitations', to: '/docs/known-limitations'},
           ],
         },
         {
@@ -97,6 +99,7 @@ const config: Config = {
         {
           title: 'Reference',
           items: [
+            {label: 'Configuration', to: '/docs/reference/configuration'},
             {label: 'CLI', to: '/docs/reference/cli'},
             {label: 'Exit codes', to: '/docs/reference/exit-codes'},
             {label: 'Protocol viewer', href: 'pathname:///takt/protocols/'},

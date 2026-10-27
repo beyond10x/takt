@@ -1,75 +1,190 @@
 ---
 title: Run a story
-description: Let takt take the next ready story from the planning store, deliver it through a pull request, and merge it under a grant.
+sidebar_position: 3
+description: Prepare a repository for story delivery, let takt take the next ready story or the one you name, follow its steps to a pull request, and grant the merge.
+lede: takt delivers one story of the planning store per case, through tests and gates it runs itself, and the merge waits for your grant.
+source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; docs/design/takt.md § 4
 ---
 
 # Run a story
 
-```sh
-takt run --repo <path> --hours 1
+A story run takes a story from the repository's
+[AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
+planning store and delivers it on the protocol `story.delivery/1`. takt does not write or rank
+stories; AEP keeps them, and `aep` is the tool you use to add one.
+
+## 1. Prepare the repository
+
+| file | what it is for |
+|---|---|
+| `.engineering/project.yaml` and `.engineering/planning/` | the planning store, made with `aep` |
+| `.engineering/gates.yaml` | the gates document the gate step runs |
+| `.engineering/assertions-project.yaml` | the commands the gates may start |
+| `.engineering/commit-identity.conf` | the author of takt's commits |
+| `Cargo.lock`, committed | so a test run writes no file |
+
+Without a gates document, a story cannot get past the gate: the run stops `Unperformable` on
+`gate.green`, exit 7. A gate's commands run with the environment cleared and no `PATH` lookup,
+so name the executable by its absolute path and give it a `PATH` yourself. This one checks the
+formatting:
+
+```yaml
+format: engineering-gates/1
+language: canon-expr/1
+gates:
+  - id: format
+    text: The crate is formatted.
+    assertions:
+      - 'process.succeeded("format")'
 ```
 
-With no `--intent` and no `--case`, takt resumes the open case of a story being worked, or takes
-the next ready story from the repository's planning store and opens its case on
-`story.delivery/1`. A story is ready when it is `proposed`, nothing blocks it and its dependencies
-are done.
+```yaml
+format: engineering-assertions-project/1
+timeout_seconds: 300
+commands:
+  format:
+    executable: /usr/bin/env
+    args:
+      - PATH=/usr/local/bin:/usr/bin:/bin
+      - cargo
+      - fmt
+      - --check
+```
 
-## Before the first run
+The commit identity is git-config format:
 
-- What [Getting started](../getting-started.md#what-it-needs) lists for story runs and pull
-  requests.
-- The tree is clean.
-- The tests are `--test-cmd` (default `cargo test --quiet`, split at white space, run without a
-  shell). `.engineering/gates.yaml`, when the repository has one, adds the gate.
+```ini
+[identity]
+	name = Demo Bot
+	email = demo-bot@example.com
+```
 
-## What happens
+Then add a story and make it ready. A story is ready when it is `proposed`, nothing blocks it and
+its dependencies are done:
 
-1. takt opens the case on a branch of its own and records `opened` in `events.jsonl`.
-2. The harness writes the tests and the implementation, one admissible action per step; each step
-   that changes files is committed.
-3. The tests and the gate run as validators on the implementation revision.
-4. Once both are green, `pr.open` pushes the branch and opens the pull request through the bot
-   route; `ci.read` reads its checks, waiting while they are pending.
-5. With CI green, `repository.merge` needs a grant. The run stops on `ApprovalRequired`, exit 4
-   ([Approve and resume](#approve-and-resume)).
-6. After the grant, the next run commits the evidence and the move to `implemented` on the case's
-   branch, then merges, so both reach the base with the merge; it stops on `Completed`, exit 0.
+```sh
+aep plan artifact new story add-sub --title "Add a subtraction" --summary "sub(left, right) subtracts right from left"
+aep plan artifact body story:add-sub --from story-body.md
+aep plan artifact move story:add-sub --to proposed
+git add -A
+git commit -m "my-repo: a crate, its gates and its first story"
+```
+
+The tree must be clean when the run starts.
+
+## 2. Run it
+
+```sh
+takt run --repo . --harness codex --forge none --hours 1
+```
+
+With no `--intent` and no `--case`, takt resumes the open case of a story already being worked,
+or else takes the next ready story. To pick the story yourself:
+
+```sh
+takt run --repo . --story story:add-sub --harness codex --forge none --hours 1
+```
+
+A story the store does not list, or one that is not ready, is refused before any case opens, and
+the tree stays on the branch it was on:
+
+```console
+$ takt run --repo . --story story:nope --harness none --forge none
+takt: --story story:nope: the store lists no story:nope; the frontier would not take it, so no case was opened
+```
+
+## 3. Follow the steps
+
+The run on `~/my-repo`, with the `frontier:` lines left out:
+
+```console
+frontier: took story:add-sub: Add a subtraction
+case story-add-sub-20261026T231852Z on story.delivery/1 in ~/my-repo; inputs none; confinement none
+step 1: tests.run {}
+  effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
+  evidence: test_result pass
+step 2: gate.run {}
+  effect: the gates document .engineering/gates.yaml from main at e4f3d09f, pinned at open: pass; every gate true: format; retained as gate-result-2.bundle.json
+  artifact: .engineering/cases/story-add-sub-20261026T231852Z/artifacts/gate-result-2.bundle.json
+  evidence: gate_result pass
+step 3: implementation.edit (codex)
+  said: Added public sub(left, right) and a unit test in src/lib.rs asserting sub(5, 2) returns 3; tests left to takt. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
+  effect: committed 1 path(s); implementation is now b09390e9
+step 4: tests.run {}
+  effect: the test command exited 0: pass; 2 passed, 0 failed, 0 ignored over 2 result lines
+  evidence: test_result pass
+step 5: gate.run {}
+  effect: the gates document .engineering/gates.yaml from main at e4f3d09f, pinned at open: pass; every gate true: format; retained as gate-result-5.bundle.json
+  artifact: .engineering/cases/story-add-sub-20261026T231852Z/artifacts/gate-result-5.bundle.json
+  evidence: gate_result pass
+step 6: change.handover (codex)
+  said: The public sub function and unit test satisfy the story; no further edits are needed. Hand over for pull request creation and CI. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
+  effect: no file changed
+  evidence: handover -
+step 7: change.read {}
+  effect: merging b09390e9 into main at e4f3d09f, its tip now, changes its tree outside .engineering/: ahead
+  evidence: change_record ahead
+candidate: d3f99cd08b31da20bbc26741779be713237909d2
+stopped: Unperformable (pr.opened; nothing performs it without the forge); steps 7, tokens 75939, case ~/my-repo/.engineering/cases/story-add-sub-20261026T231852Z
+```
+
+1. The frontier took the story and committed the take on the case's branch,
+   `takt/<case>`. The store now lists the story `active`.
+2. The tests and the gate ran on the base, as validators. Only a validator writes evidence.
+3. The model edited the code, one action per step. takt committed the change.
+4. The tests and the gate ran again on the new revision.
+5. The model handed the change over, and `change.read` found it ahead of `main`.
+6. The next claim is `pr.opened`. With `--forge none` nothing opens a pull request, so the run
+   stopped `Unperformable`, exit 7. Before it stopped, it printed the candidate: the code commits
+   replayed on `main`'s tip under the commit identity, kept at `refs/takt/candidates/<case>`.
+   Merge or push it yourself, or run again with a forge.
+
+## 4. With a forge
+
+With `--forge bot` or `--forge gitlab`, the steps go on from `change.read`:
+
+1. `pr.open` pushes the case's branch and opens the pull request.
+2. `ci.read` reads its checks, waiting while they run. A run whose budget ends while it waits
+   stops `Waiting`, exit 6, and the next run reads them again.
+3. With CI green, `repository.merge` needs a grant: the run stops `ApprovalRequired`, exit 4.
+4. After the grant, the next run commits the evidence and the story's move to `implemented` on
+   the case's branch, then merges, so both reach the base with the merge. It stops `Completed`,
+   exit 0.
 
 ## Approve and resume
 
 ```sh
-takt approve --repo <path> <case> repository.merge --by <who>
-takt run --repo <path>
+takt approve --repo . <case> repository.merge --by human:<you>
+takt run --repo .
 ```
 
-`takt approve` writes the grant into the case's `authority.yaml` and records the approval on the
-case's story in the planning store; that record is committed on the case's branch, so the tree
-must be on that branch and clean. `--by` names who grants. The next `takt run` resumes the case
-and merges under the grant.
+`takt approve` writes the grant into the case's `authority.yaml` and records it on the story in
+the planning store. That record is committed on the case's branch, so the tree must be on that
+branch and clean. The next `takt run` resumes the case and merges under the grant.
 
-A grant binds to the revision of the artifact its action is about, so a commit after the grant
-needs a new one. Above the granted revision, only takt's records for the story may ride to the
-base: one approval per grant, one `test_result` and the move to `implemented`.
+A grant binds to the revision it was given at, so a commit after the grant needs a new one.
+Above that revision only takt's own records may ride to the base: one approval per grant, one
+`test_result` and the move to `implemented`. A case that is not yet stopped for the grant is
+refused ([Approve a capability](./approve-a-capability.md)).
 
 ## Bounds and resuming after a stop
 
-`--iterations` (steps), `--hours` and `--tokens` bound the run.
+`--iterations` (steps), `--hours`, `--tokens` and `--active-seconds` bound the run.
 
-| stop | exit | what the next run does |
+| stop | exit | the next run |
 |---|---|---|
-| `ApprovalRequired` | 4 | merges under the grant once one is recorded |
-| `Waiting` on the forge until the budget ended | 6 | reads the forge again |
-| an error once the case was open | 5 | resumes the open case |
-| a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `RedBase`, `RepeatedTestFailure` | 3 | resumes the open case of the story; after `RedBase` or `RepeatedTestFailure` it runs the tests again first and stops again while they fail the same way |
+| `ApprovalRequired` | 4 | merges once a grant is recorded |
+| `Waiting` | 6 | reads the forge again |
+| an error once the case was open | 5 | resumes the case |
+| `Unperformable` | 7 | resumes the case; give it what was missing (a forge, a gates document) |
+| a budget, `StepRefused`, `NoProgress`, `NothingAdmissible` | 3 | resumes the case |
+| `RedBase`, `RepeatedTestFailure` | 3 | runs the tests again first and stops again while they fail the same way |
 
-`--case <id>` resumes a named case instead.
+`--case <id>` resumes a named case instead. Every stop is explained in
+[How a run ends](../concepts/how-a-run-ends.md).
 
 ## What is not proven yet
 
-No recorded run has yet taken a story from ready to merged with the grant as the only manual
-step. Scenario 1 reached `accepted` on 2026-10-18, but with 4 invocations where 2 were required
-(`docs/design/takt.md` § 4).
-
-Sources: `takt run --help`, `takt approve --help`, `crates/takt/src/case.rs` (`approvals_only`),
-`crates/takt/src/frontier.rs`, `docs/design/takt.md` § 4, the stories `authority-hardening`,
-`grant-binds-to-action-subject` and `approval-riders-are-grants`.
+The design's proof for a story, one ready story merged with no manual step but the merge grant,
+has not been recorded. The one recorded merge of a scenario, on 2026-10-18, took 4 invocations
+where 2 were the target.

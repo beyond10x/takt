@@ -15,7 +15,7 @@
       {"label": "Measured results", "href": "/docs/self-improvement/runs"},
       {"label": "What exists today", "href": "/docs/status"}
     ],
-    "meta": "One Rust binary\u00a0·\u00a0Canon protocols\u00a0·\u00a0Claude Code harness\u00a0·\u00a0Apache-2.0",
+    "meta": "One Rust binary\u00a0·\u00a0on loom-sdk\u00a0·\u00a0Claude Code, Codex or b10x-harness\u00a0·\u00a0Apache-2.0",
     "kpis": [
       {"count": "shipped", "label": "stories implemented"},
       {"count": "decided", "label": "stories in an open wave"}
@@ -64,11 +64,18 @@
           "href": "/docs/self-improvement/the-loop"
         },
         {
-          "title": "An operating-system sandbox for every child process",
-          "description": "The harness, the tests and the forge run as plain child processes today. The confinement seam is planned.",
-          "status": "planned",
+          "title": "Runs where you deploy it",
+          "description": "A release binary on Linux or macOS, a container image, or a Loom LoomAgent that runs once as a Kubernetes Job and reports its exit code. What a cluster run still lacks is on the known-limitations page.",
+          "status": "shipped",
           "icon": "action",
-          "href": "/docs/status"
+          "href": "/docs/guides/deploy-on-kubernetes"
+        },
+        {
+          "title": "Tests confined",
+          "description": "The test command runs in a user and mount namespace of its own, or with --confinement substrate on read-only toolchain roots with no network. The harness and the forge still run as plain child processes.",
+          "status": "shipped",
+          "icon": "evidence",
+          "href": "/docs/reference/configuration"
         }
       ]
     },
@@ -101,6 +108,11 @@
         {"id": "canon", "relation": "used-by", "via": "protocol/1"},
         {"id": "els", "relation": "used-by", "via": "software.change/1"},
         {"id": "ess", "relation": "specifies", "via": "ess/domains"},
+        {
+          "name": "Loom",
+          "description": "takt is an application on loom-sdk: Loom's runtime drives the case, its governor decides, its session executor runs each harness step, and its operator deploys takt as a LoomAgent.",
+          "href": "https://beyond10x.github.io/loom/"
+        },
         {
           "name": "AEP",
           "description": "The planning store takt takes its next ready story from, and where a run records its evidence and moves the story.",
