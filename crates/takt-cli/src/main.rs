@@ -559,7 +559,7 @@ impl ScenarioRunArgs {
                 takt::scan::gates::POLICY_VAR
             ));
         }
-        self.looping.configured(file, matches);
+        self.looping.configured(file, matches)?;
         Ok(())
     }
 }
@@ -669,7 +669,9 @@ struct RunArgs {
     /// a value written there. A container takes its run from a mounted one. `takt scenario run
     /// --config` reads the same file, and refuses one that declares `scan: none`. `llm`, the
     /// model routes, an `llm.routes/1` document or `{path: <file>}` naming one beside the file,
-    /// which no flag gives; llm validates it, and a refused section opens no case.
+    /// which no flag gives; llm validates it, and a refused section opens no case. With `--harness
+    /// harness`, `model` names a route or alias of the section, and that route is the endpoint:
+    /// no `--endpoint-*` flag, `endpoint_file` or `endpoint_token_env` may sit beside it.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
     /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
@@ -707,7 +709,7 @@ impl RunArgs {
             self.story_from = Some(path.clone());
         }
         self.declared_scan = file.scan;
-        self.looping.configured(file, matches);
+        self.looping.configured(file, matches)?;
         Ok(())
     }
 }
@@ -715,9 +717,15 @@ impl RunArgs {
 impl LoopArgs {
     /// Fills each loop flag `matches` did not take from the command line with `file`'s value,
     /// when it sets it, for `takt run` and `takt scenario run` alike.
-    fn configured(&mut self, file: takt::run_config::RunConfig, matches: &clap::ArgMatches) {
+    fn configured(
+        &mut self,
+        file: takt::run_config::RunConfig,
+        matches: &clap::ArgMatches,
+    ) -> Result<()> {
         let unset = |id: &str| unset(matches, id);
+        let llm = self.llm_section(&file, &unset)?;
         let looping = self;
+        looping.llm = llm;
         looping.llm_digest = file.llm_digest;
         if unset("iterations") && file.iterations.is_some() {
             looping.iterations = file.iterations;
@@ -783,6 +791,53 @@ impl LoopArgs {
             looping.continue_past_red_base = go_on;
         }
         looping.records_of_file = file.records.filter(|_| unset("records"));
+        Ok(())
+    }
+
+    /// The `llm` section `file` holds, when the run may use it, refused before any case opens
+    /// otherwise: under `--harness claude` or `codex`, which takt points at no endpoint (a `none`
+    /// run takes no endpoint, and the section is left unused); beside another endpoint source, a
+    /// flag, `--endpoint-file` or `--endpoint-token-env` alike, or the file's own `endpoint_file`
+    /// or `endpoint_token_env`, naming both; and under `--harness harness` with no `model` to name
+    /// its route. Its route is resolved later, by [`LoopArgs::take_variable`].
+    fn llm_section(
+        &self,
+        file: &takt::run_config::RunConfig,
+        unset: &dyn Fn(&str) -> bool,
+    ) -> Result<Option<takt::run_config::LlmRoutes>> {
+        let Some(llm) = &file.llm_routes else {
+            return Ok(None);
+        };
+        let harness = if unset("harness") {
+            file.harness.as_deref().unwrap_or(&self.harness)
+        } else {
+            &self.harness
+        };
+        if harness == "claude" || harness == "codex" {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section is refused with --harness {harness}: takt points an endpoint at b10x-harness only, so give --harness harness, or leave the `llm` section out; nothing was started"
+            ));
+        }
+        let mut sources: Vec<&str> = self.endpoint.all_given();
+        if file.endpoint_file.is_some() {
+            sources.push("the run file's `endpoint_file`");
+        }
+        if file.endpoint_token_env.is_some() {
+            sources.push("the run file's `endpoint_token_env`");
+        }
+        if !sources.is_empty() {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section and {} both give the run's endpoint: an `llm` section routes `--model` through llm, and an endpoint source gives the endpoint directly; give one of them, not both; nothing was started",
+                sources.join(" and ")
+            ));
+        }
+        let model_given = self.model.is_some() || file.model.is_some();
+        if harness == "harness" && !model_given {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section names its route by `model`, and neither --model nor the file's `model` gives one; nothing was started"
+            ));
+        }
+        Ok(Some(llm.clone()))
     }
 
     /// The records profile given: `--records`, else, for a new case only, the configuration
@@ -934,6 +989,14 @@ struct LoopArgs {
     /// line; set from the file, never from a flag.
     #[arg(skip)]
     llm_digest: Option<String>,
+    /// The `llm.routes/1` document `--config` gave, parsed by llm; set from the file, never from a
+    /// flag. Given with `--harness harness`, `--model` names one of its routes.
+    #[arg(skip)]
+    llm: Option<takt::run_config::LlmRoutes>,
+    /// The route `--model` names in `llm`, resolved by llm before any case opens
+    /// ([`LoopArgs::take_variable`]): the endpoint the session is pointed at and the key it takes.
+    #[arg(skip)]
+    route: Option<takt::harness::RouteEndpoint>,
     /// The records profile the case keeps its decisions under: `default` keeps the latest
     /// `decisions/NNNN.json` alone and goes on numbering from it, `trial` keeps every one. A
     /// scenario run and an improvement case (`self.improvement/1`, `loop.improvement/1`) keep
@@ -1045,10 +1108,14 @@ fn main() -> ExitCode {
     };
     // The endpoint's credential variable leaves takt's environment here, on the one thread
     // takt has, before it starts any process.
-    match &mut cli.command {
+    let taken = match &mut cli.command {
         Commands::Run(args) => args.looping.take_variable(false),
         Commands::Scenario(ScenarioCommands::Run(args)) => args.looping.take_variable(false),
-        _ => {}
+        _ => Ok(()),
+    };
+    if let Err(error) = taken {
+        eprintln!("takt: {error:#}");
+        return ExitCode::from(EXIT_REFUSED);
     }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -1732,7 +1799,7 @@ impl LoopArgs {
         }
         match takt::confinement::Substrate::open(repo) {
             Ok(substrate) => {
-                self.take_variable(true);
+                self.take_variable(true)?;
                 takt::confinement::install(std::sync::Arc::new(substrate));
                 Ok(None)
             }
@@ -1751,18 +1818,37 @@ impl LoopArgs {
     }
 
     /// Under `--harness harness`, takes the variable the endpoint's credential names out of
-    /// takt's environment ([`EndpointArgs::take_variable`]). Under `--confinement substrate`
-    /// outside a delegated run it is left until `substrate` has opened in this run
-    /// (`substrate_open`), since a run delegated again under `systemd-run` reads it there.
-    fn take_variable(&mut self, substrate_open: bool) {
+    /// takt's environment ([`EndpointArgs::take_variable`]). With an `llm` section, resolves the
+    /// route `--model` names, before any case opens, and takes out of takt's environment the
+    /// variables holding the key llm resolved for it ([`takt::harness::take_environment_holding`]).
+    /// Under `--confinement substrate` outside a delegated run it is left until `substrate` has
+    /// opened in this run (`substrate_open`), since a run delegated again under `systemd-run` reads
+    /// it there. Resolved once: a second call keeps the first route.
+    fn take_variable(&mut self, substrate_open: bool) -> Result<()> {
         if self.harness != "harness"
             || (self.confinement == "substrate"
                 && !substrate_open
                 && std::env::var_os(takt::confinement::DELEGATED).is_none())
         {
-            return;
+            return Ok(());
+        }
+        if let Some(llm) = &self.llm {
+            if self.route.is_none() {
+                let model = self.model.as_deref().unwrap_or_default();
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let route =
+                    takt::harness::RouteEndpoint::resolve(llm.routes(), model, home.as_deref())?;
+                if let Some(secret) = &route.secret {
+                    // SAFETY: takt has started no thread yet (its callers run before any is
+                    // started), so nothing reads the environment while it changes.
+                    unsafe { takt::harness::take_environment_holding(secret) };
+                }
+                self.route = Some(route);
+            }
+            return Ok(());
         }
         self.endpoint.take_variable();
+        Ok(())
     }
 
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
@@ -1812,19 +1898,45 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         "claude" => Ok(Box::new(session(Kind::Claude))),
         "codex" => Ok(Box::new(session(Kind::Codex))),
         "harness" => {
+            use takt::harness::{Credential, StagedToken};
             let home = std::env::var_os("HOME").map(PathBuf::from);
             let mut session = session(Kind::B10x);
-            let config = looping.endpoint.config(home.as_deref())?;
+            let config = match &looping.route {
+                Some(route) => {
+                    session.model = Some(route.config.model.clone());
+                    route.config.clone()
+                }
+                None if looping.llm.is_some() => {
+                    return Err(anyhow!(
+                        "the run's route was not resolved before its case opens; nothing was started"
+                    ));
+                }
+                None => looping.endpoint.config(home.as_deref())?,
+            };
             session.point_at(&config);
-            // A variable's value is staged now, before any case opens, and held by the harness,
-            // so the file goes when the run ends, on success or on an error.
-            if let takt::harness::Credential::Environment { name } = &config.credential {
-                use takt::harness::StagedToken;
-                session.hold_staged(StagedToken::stage(
-                    name,
-                    looping.endpoint.variable.as_ref(),
-                    &StagedToken::candidates(),
-                )?);
+            // A key is staged now, before any case opens, and held by the harness, so the file
+            // goes when the run ends, on success or on an error: a variable's value, or a route's
+            // key as llm resolved it.
+            match &config.credential {
+                Credential::Environment { name } => {
+                    session.hold_staged(StagedToken::stage(
+                        name,
+                        looping.endpoint.variable.as_ref(),
+                        &StagedToken::candidates(),
+                    )?);
+                }
+                Credential::Route { endpoint, .. } => {
+                    let key = looping
+                        .route
+                        .as_ref()
+                        .and_then(|route| route.secret.as_ref());
+                    session.hold_staged(StagedToken::stage(
+                        endpoint,
+                        key,
+                        &StagedToken::candidates(),
+                    )?);
+                }
+                Credential::SubscriptionFile { .. } | Credential::Secret { .. } => {}
             }
             session.home = home;
             Ok(Box::new(session))
@@ -1900,6 +2012,11 @@ struct EndpointArgs {
 impl EndpointArgs {
     /// The first `--endpoint-*` flag given, by its name.
     fn given(&self) -> Option<&'static str> {
+        self.all_given().into_iter().next()
+    }
+
+    /// Every `--endpoint-*` flag given, by its name, in the order the flags are listed.
+    fn all_given(&self) -> Vec<&'static str> {
         [
             ("--endpoint-base-url", self.endpoint_base_url.is_some()),
             ("--endpoint-wire", self.endpoint_wire.is_some()),
@@ -1914,7 +2031,8 @@ impl EndpointArgs {
             ("--endpoint-file", self.endpoint_file.is_some()),
         ]
         .into_iter()
-        .find_map(|(flag, given)| given.then_some(flag))
+        .filter_map(|(flag, given)| given.then_some(flag))
+        .collect()
     }
 
     /// The fields the flags give.
