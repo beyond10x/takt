@@ -164,30 +164,81 @@ With `--forge bot` or `--forge gitlab`, the steps go on from `change.read`:
 
 ### A trial on a GitHub repository
 
-A trial that should end `Completed`, exit 0, with a merged pull request needs two things a plain
-`--forge none` run does not give it:
+A trial is one delivery of a known story on
+[todo-app-example](https://github.com/beyond10x/todo-app-example), the scratch repository takt's
+live trials run against, ending `Completed`, exit 0, with its pull request merged. Each trial is
+one `takt scenario run` of scenario 1 (`story:remove-a-todo`, seed `865eaa8`, as
+`.engineering/scenarios.conf` on its `main` declares): the run cuts a fresh base branch
+`trial/<n>` from the seed, opens the case `scenario-1-trial-<n>` on `story.delivery/1`, and its
+pull request targets `trial/<n>` ([Scenario run](./scenario-run.md)). A second trial is another
+`takt scenario run`, which takes the next `<n>`.
 
-- **The forge.** A repository on github.com takes `--forge bot`. Under `--forge none` the run
-  stops `Unperformable (pr.opened)`, exit 7, however good the change is.
+What a trial needs that a plain run does not:
+
+- **The forge.** `--forge bot`. Under `--forge none` the run stops `Unperformable (pr.opened)`,
+  exit 7, however good the change is. The bot route needs `b10x-gates` on `PATH`, acting as the
+  bot's GitHub App, `B10X_GATES_POLICY` naming its policy file, and `gh` logged in to read the
+  pull request.
+- **A commit identity.** The repository has no `.engineering/commit-identity.conf`, and the bot
+  route refuses takt's default identity before the case opens: give `--commit-identity`.
+- **The test command.** The repository's tests are `./check.sh`, not `cargo test`: give
+  `--test-cmd ./check.sh`.
 - **A qualified Claude Code binary.** The metaharness takt builds on qualifies Claude Code
-  2.1.304, 2.1.305 and 2.1.309. A newer `claude` on `PATH` has no memory canary, so a hermetic
-  run holds its first proposal after the session has been paid for. Name a qualified binary with
-  `--harness-program <absolute path>`; `opened` records the path, its sha256 and its
-  `--version` line.
+  2.1.304, 2.1.305 and 2.1.309. Before the first session takt asks metaharness about the binary
+  it would start; one that does not qualify stops the run `HarnessUnqualified`, exit 1, naming
+  the versions that do. Name a qualified binary with `--harness-program <absolute path>`;
+  `opened` records the path, its sha256 and its `--version` line.
 
   Claude Code's updater keeps its versions under `~/.local/share/claude/versions/` and prunes old
   ones, so do not point a trial there. Copy the qualified version once to a stable path of your
-  own, outside the updater's directory, and note its sha256:
+  own, outside the updater's directory, and note its sha256.
+
+The steps, in a fresh clone, so the tree is clean and `origin` is the repository on github.com:
 
 ```sh
 install -D -m 755 ~/.local/share/claude/versions/2.1.309 ~/.local/opt/claude-2.1.309/claude
 sha256sum ~/.local/opt/claude-2.1.309/claude
-takt run --repo . --story story:add-sub --harness claude \
-  --harness-program ~/.local/opt/claude-2.1.309/claude --forge bot --hours 1
+git clone https://github.com/beyond10x/todo-app-example trial && cd trial
+export B10X_GATES_POLICY=<the bot route's policy file>
+takt scenario run --repo . 1 --harness claude \
+  --harness-program ~/.local/opt/claude-2.1.309/claude --forge bot \
+  --commit-identity 'takt-trial <takt-trial@example.com>' --test-cmd ./check.sh --hours 1
 ```
 
-After the run, compare the sha256 the case's `opened` record names with the one you noted: a
-different value means the run did not start the binary you qualified.
+The first line names the case, `scenario-1-trial-<n>`. The run goes on until it needs something:
+
+| stop | exit | what to do |
+|---|---|---|
+| `Waiting` | 6 | the pull request's checks are still running: run the resume command below again |
+| `ApprovalRequired (repository.merge)` | 4 | grant the merge, then resume |
+| `HarnessUnqualified` | 1 | the binary is not a qualified version: name one and run again |
+| `Completed` | 0 | the pull request is merged into `trial/<n>`: the trial is done |
+
+Grant and resume in the same clone. `takt approve` commits the grant on the case's branch,
+`takt/scenario-1-trial-<n>`, so the tree must be on that branch and clean:
+
+```sh
+takt approve --repo . scenario-1-trial-<n> repository.merge --by agent:<role>
+takt run --repo . --case scenario-1-trial-<n> --harness claude \
+  --harness-program ~/.local/opt/claude-2.1.309/claude --forge bot --test-cmd ./check.sh --hours 1
+```
+
+`--by` names who grants: `human:<name>` for a person, `agent:<role>` for the agent that runs the
+trial. The case keeps the commit identity it was opened with, so the resume does not give it.
+
+The record is the clone's `.takt/cases/scenario-1-trial-<n>/` ([Case files](../reference/case-files.md)):
+`events.jsonl` holds the `opened` line, with `harness_program` and `preflight`, every step, and the
+last line's stop; each harness step's transcript is under `~/.local/state/takt/transcripts`. Copy
+the case directory out of the clone before deleting it.
+
+A trial counts when both hold:
+
+- the last `takt run` printed `stopped: Completed` and exited 0;
+- `gh pr list -R beyond10x/todo-app-example --base trial/<n> --state merged` lists the case's
+  pull request.
+
+Compare the sha256 that `opened`'s `harness_program` names with the one you noted: a different
+value means the run did not start the binary you qualified, and the trial does not count.
 
 ## Approve and resume
 
