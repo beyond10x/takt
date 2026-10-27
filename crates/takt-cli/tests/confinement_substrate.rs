@@ -320,9 +320,20 @@ fn confinement_test_command_confined_linux() {
             run.opened
         );
     }
+    // Where `/usr/bin/cc` links through `/etc/alternatives`, the run's own `linker` directory
+    // comes first, holding the `cc` cargo links with.
+    let path = run
+        .probe
+        .get("path")
+        .map(String::as_str)
+        .unwrap_or_default();
+    let rest = path
+        .strip_prefix("/workspace/target/")
+        .and_then(|rest| rest.split_once("/linker:"))
+        .filter(|(scratch, _)| scratch.starts_with("takt-run-") && !scratch.contains('/'))
+        .map_or(path, |(_, rest)| rest);
     assert_eq!(
-        run.probe.get("path").map(String::as_str),
-        Some("/toolchain/rust/bin:/usr/bin:/bin"),
+        rest, "/toolchain/rust/bin:/usr/bin:/bin",
         "story:confinement-through-substrate-on-linux-and-macos: the toolchain is a read-only root: {:?}",
         run.probe
     );

@@ -1601,6 +1601,12 @@ fn under_substrate_the_test_command_writes_the_record_it_writes_under_none() {
             let seen = fs::read_to_string(confined.join("target/seen-path"))
                 .expect("the confined test wrote where it was told");
             if cfg!(target_os = "linux") {
+                // Where `/usr/bin/cc` links through `/etc/alternatives`, the run's own `linker`
+                // directory under `target` comes first.
+                let seen = seen
+                    .split_once("/linker:")
+                    .filter(|(dir, _)| dir.starts_with("/workspace/target/takt-run-"))
+                    .map_or(seen.as_str(), |(_, rest)| rest);
                 assert_eq!(
                     seen, "/toolchain/rust/bin:/usr/bin:/bin",
                     "story:confinement-through-substrate-on-linux-and-macos: the test ran on the fixed PATH of the toolchain's read-only root"
