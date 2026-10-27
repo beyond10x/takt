@@ -374,6 +374,48 @@ impl RunConfig {
         config.state_dir = config.state_dir.take().map(beside);
         Ok(config)
     }
+
+    /// Sets the document `--llm-config` names, a `.toml`, `.yaml` or `.yml` file of at most the bound
+    /// a run file's `llm` path takes, parsed by llm: it replaces the document the run file's `llm`
+    /// member holds, and its digest is the run's `llm_digest`. The file is read as it stands, beside
+    /// nothing: the flag names it from the working directory.
+    pub fn set_llm_file(&mut self, path: &Path) -> Result<()> {
+        let toml = match path.extension().and_then(|extension| extension.to_str()) {
+            Some("toml") => true,
+            Some("yaml" | "yml") => false,
+            _ => {
+                return Err(anyhow!(
+                    "the llm document {} is refused: its name ends in neither .toml, .yaml nor .yml",
+                    path.display()
+                ));
+            }
+        };
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("the llm document {}", path.display()))?;
+        if !metadata.is_file() {
+            return Err(anyhow!(
+                "the llm document {} is refused: it is not a regular file",
+                path.display()
+            ));
+        }
+        if metadata.len() > LLM_DOCUMENT_BOUND {
+            return Err(anyhow!(
+                "the llm document {} is refused: it is larger than the 2 MiB bound (2097152 bytes)",
+                path.display()
+            ));
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("the llm document {}", path.display()))?;
+        let parsed = if toml {
+            Routes::parse_toml(&text)
+        } else {
+            Routes::parse(&text)
+        };
+        let routes = parsed.with_context(|| format!("the llm document {}", path.display()))?;
+        self.llm_digest = Some(routes.digest().to_owned());
+        self.llm_routes = Some(LlmRoutes(Arc::new(routes)));
+        Ok(())
+    }
 }
 
 #[cfg(test)]
