@@ -42,18 +42,57 @@ impl PartialEq for LlmRoutes {
 pub const LOOM_AGENT_FORMAT: &str = "loom.agent/1";
 
 /// A `loom.agent/1` document as takt reads it for the lines of its refusals: its `takt` member
-/// and its `runtime` member, the members checked against [`LOOM_AGENT_MEMBERS`] beforehand.
+/// and its `runtime` member as a value, which [`loom_runtime_state_dir`] reads.
 #[derive(serde::Deserialize)]
 struct LoomAgentDocument {
     takt: Option<RunConfig>,
-    runtime: Option<LoomRuntime>,
+    runtime: Option<serde_yaml_ng::Value>,
 }
 
-/// The `runtime` member of a `loom.agent/1` document as takt reads it: its `state_dir`, the
-/// default state directory. Loom's other members of it are not takt's and are not refused.
+/// The `runtime` member of a `loom.agent/1` document, the members Loom declares for it
+/// (`loom-sdk` `agent.rs`): `state_dir`, the default state directory takt reads, and
+/// `connectors` and `confinement`, which takt does not read. A member Loom does not declare is
+/// refused.
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct LoomRuntime {
-    state_dir: Option<PathBuf>,
+    state_dir: Option<serde_yaml_ng::Value>,
+    #[allow(dead_code)]
+    connectors: Option<serde_yaml_ng::Value>,
+    #[allow(dead_code)]
+    confinement: Option<serde_yaml_ng::Value>,
+}
+
+/// The refusal of a `loom.agent/1` document's `runtime` member, naming `runtime.state_dir` when
+/// it is that member, never a value written in the file.
+fn runtime_refused(path: &Path, what: &str) -> anyhow::Error {
+    anyhow!(
+        "the run configuration file {} is refused: {what}",
+        path.display()
+    )
+}
+
+/// The `runtime.state_dir` of a `loom.agent/1` document: nothing when it has none, else a
+/// non-blank string. A number, a boolean, a mapping, an empty or blank string is refused; so is a
+/// `runtime` that is not a mapping of Loom's declared members.
+fn loom_runtime_state_dir(path: &Path, runtime: serde_yaml_ng::Value) -> Result<Option<PathBuf>> {
+    let runtime: LoomRuntime = serde_yaml_ng::from_value(runtime).map_err(|_| {
+        runtime_refused(
+            path,
+            "the `runtime` member of a loom.agent/1 document is not a mapping of only the members \
+             Loom declares, `state_dir`, `connectors` and `confinement`",
+        )
+    })?;
+    match runtime.state_dir {
+        None => Ok(None),
+        Some(serde_yaml_ng::Value::String(dir)) if !dir.trim().is_empty() => {
+            Ok(Some(PathBuf::from(dir)))
+        }
+        Some(_) => Err(runtime_refused(
+            path,
+            "`runtime.state_dir` is a non-blank string naming a directory, and no other value",
+        )),
+    }
 }
 
 /// The members of a `loom.agent/1` document Loom declares (Loom 0.43.0, `loom-sdk` `agent.rs`
@@ -669,9 +708,11 @@ fn from_yaml(path: &Path, text: &str) -> Result<RunConfig> {
                 _ => RunConfig::default(),
             };
             // The document's `runtime.state_dir` is the default: `takt.state_dir` names one first.
-            config.state_dir = config
-                .state_dir
-                .or(agent.runtime.and_then(|runtime| runtime.state_dir));
+            let runtime = match agent.runtime {
+                Some(runtime) => loom_runtime_state_dir(path, runtime)?,
+                None => None,
+            };
+            config.state_dir = config.state_dir.or(runtime);
             Ok(config)
         }
         Some(_) => Err(anyhow!(

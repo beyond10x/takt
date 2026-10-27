@@ -1904,14 +1904,15 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<OsString,
         let path = OsString::from(path);
         let content = Content::of(&at(tree, &path))?;
         // A directory that holds a cases root is kept as what is in it, never as a whole: the
-        // step's own files below it are put back or removed, the cases root is not. A link in
-        // its place is kept as the link, which `below` would otherwise follow.
+        // step's own files below it are put back or removed, the cases root is not. The files
+        // directly in it are kept as their bytes, since git names none of them when the
+        // directory is ignored as a whole, so each can be put back or set aside as it was.
         if content == Content::Dir && holds_cases_root(&path.to_string_lossy()) {
-            below(tree, &path, &mut found)?;
+            below(tree, &path, true, &mut found)?;
             continue;
         }
         if content == Content::Dir {
-            below(tree, &path, &mut found)?;
+            below(tree, &path, false, &mut found)?;
         }
         // A directory that cannot be listed was recorded as such by [`below`].
         found.entry(path).or_insert(content);
@@ -1949,8 +1950,15 @@ pub fn shown(path: &OsStr) -> String {
 /// cases directory, into `found`: a directory as itself, its path ending in `/`, and what is in
 /// it in turn; a link as the link, never followed; anything else by its kind and [`Stamp`],
 /// never opened, so that a large `target/` costs one `lstat` a path and nothing of it is kept to
-/// put back. A directory that cannot be listed is compared by its stamp alone.
-fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> Result<()> {
+/// put back. With `kept`, the regular files directly in `dir` are kept as their bytes instead,
+/// as a directory that holds a cases root (`.takt`) keeps its own files. A directory that cannot
+/// be listed is compared by its stamp alone.
+fn below(
+    tree: &Path,
+    dir: &OsStr,
+    kept: bool,
+    found: &mut BTreeMap<OsString, Content>,
+) -> Result<()> {
     let full = at(tree, dir);
     let listed = match std::fs::read_dir(&full) {
         Ok(listed) => listed,
@@ -1993,12 +2001,14 @@ fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> R
         let kind = meta.file_type();
         if kind.is_dir() {
             path.push("/");
-            below(tree, &path, found)?;
+            below(tree, &path, false, found)?;
             found.entry(path).or_insert(Content::Dir);
         } else if kind.is_symlink() {
             let target = std::fs::read_link(entry.path())
                 .with_context(|| format!("read {}", entry.path().display()))?;
             found.insert(path, Content::Link(target));
+        } else if kept && kind.is_file() {
+            found.insert(path, Content::of(&entry.path())?);
         } else {
             let what = if kind.is_file() {
                 "a file in an ignored directory"

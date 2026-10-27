@@ -120,9 +120,10 @@ and never a value written in it:
 
 Loom's members, as takt reads them from Loom 0.43.0, are `format`, `agent`, `model`, `session`,
 `loops`, `states`, `bindings`, `channel`, `writes`, `policy`, `expose`, `runtime` and `deploy`.
-takt reads one value of them, `runtime.state_dir`, and none of the rest: the other `runtime`
-members are Loom's and are not refused. A `runtime.state_dir` that is not a path string is
-refused, without its value.
+takt reads one value of them, `runtime.state_dir`, and none of the rest. Inside `runtime` it
+accepts the members Loom declares, `state_dir`, `connectors` and `confinement`, and refuses any
+other. A `runtime.state_dir` that is not a path string, or is empty or blank, is refused,
+without its value.
 
 An unknown key in a TOML file, run for real:
 
