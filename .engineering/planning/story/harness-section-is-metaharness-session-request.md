@@ -29,7 +29,7 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":6}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":6}}}
@@ -107,3 +107,20 @@ that writes the argv it was started with to a file.
 - `crates/takt/src/run_config.rs`, `crates/takt/src/harness.rs` (`SessionExecutor` construction, `harness.rs:527-640`),
   `crates/takt-cli/src/main.rs` (`harness_of`), `Cargo.toml`, `Cargo.lock`, `ess/domains/takt.yaml`,
   `ess/ess-inputs.yaml`, `website/docs/reference/configuration.md`.
+
+## Status
+
+Partial unit under D84 (approval-record:cfgproxy-d84-unit-5-partial-and-fix-round), built at f403e81b and merged at
+a7fe4f7d on integration/takt. The story stays active: acceptance items 1, 4 and 5 wait on upstream stories.
+
+- 2 max-turns-replaces-default: built, `max_turns_replaces_the_default` (claude receives `--max-turns 60`, not 40).
+- 3 unadmitted-key-refused: built, `an_unadmitted_key_is_refused_naming_the_key`.
+- 6 takt-owned-key-refused: built, `a_takt_owned_key_is_refused_as_takts`.
+- 7 string-form-unchanged: built, `the_string_form_starts_the_argv_of_the_flag`.
+- 1 codex-effort-passed: unbuilt. takt's loom 0.45.0 SessionExecutor has no effort field; waits on the metaharness session-request and Loom partial RunSpec stories.
+- 4 bad-value-refused-by-metaharness: unbuilt; metaharness's own check waits on the metaharness session-request story.
+- 5 kind-check-refused: unbuilt for metaharness's refusal text, which waits on the metaharness session-request story. takt's own refusal of `max-turns` under `kind: codex` is built, `codex_max_turns_is_refused_not_dropped`.
+
+Deviation from the Decision, taken in the unit: effort, max-budget-usd, strict-version and context are admitted by name, but takt refuses them until its launch carries each one (`a_key_not_carried_yet_is_refused_not_dropped`). An accepted cost cap that never reaches the session would look enforced when it is not. Lift each refusal when the launch carries the key.
+
+Not done: website/docs/reference/configuration.md is not updated for the mapping; ess/ess-inputs.yaml names no harness-section scenarios; takt.work.HarnessSetting is declared as an opaque value, since an ESS union needs a tag.
