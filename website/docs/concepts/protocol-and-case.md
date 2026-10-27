@@ -99,7 +99,6 @@ intent.md
 observations.json
 protocol.ir.json
 protocol.yaml
-python-modules.json
 ```
 
 | file | holds |

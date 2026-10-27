@@ -470,7 +470,7 @@ fn the_opened_line_records_the_binary_revision_the_caller_gives() {
 
 /// The first check: the store's history holds one `test_result` record on the story whose
 /// instant is the case's record's `observed_at`, whose source names takt and whose reference
-/// is the record's path in the repository.
+/// is the record's path, sha256 and fields.
 #[test]
 fn the_story_holds_one_test_result_at_the_records_own_instant_from_takt() {
     let repo = repository("check-one");
@@ -486,6 +486,15 @@ fn the_story_holds_one_test_result_at_the_records_own_instant_from_takt() {
         serde_json::from_str(&fs::read_to_string(repo.join(&path)).expect("the record"))
             .expect("json");
     let observed_at = record["observed_at"].as_str().expect("an instant");
+    let bytes = fs::read(repo.join(&path)).expect("the record");
+    let digest = <sha2::Sha256 as sha2::Digest>::digest(&bytes);
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    let reference = format!(
+        "{path}#sha256={hex}&result={}&revision={}&producer={}",
+        record["result"].as_str().expect("a result"),
+        record["subject_revision"].as_str().expect("a revision"),
+        record["producer"].as_str().expect("a producer"),
+    );
 
     let recorded = store_evidence(&repo, STORY, "test_result");
     assert_eq!(recorded.len(), 1, "{recorded:#?}\n{text}");
@@ -497,12 +506,20 @@ fn the_story_holds_one_test_result_at_the_records_own_instant_from_takt() {
         "{}",
         recorded[0]
     );
-    assert_eq!(recorded[0]["change"]["reference"], path.as_str());
+    assert_eq!(
+        recorded[0]["change"]["reference"],
+        reference.as_str(),
+        "story:the-pull-request-and-the-store-carry-the-evidence: the store's reference names the record's bytes and fields"
+    );
     assert_eq!(recorded[0]["actor"], "agent:takt", "{}", recorded[0]);
     let written = of(&lines, "store_evidence");
     assert_eq!(written.len(), 1, "{lines:#?}");
     assert_eq!(written[0]["observed_at"], observed_at);
-    assert_eq!(written[0]["reference"], path.as_str());
+    assert_eq!(
+        written[0]["reference"],
+        reference.as_str(),
+        "story:the-pull-request-and-the-store-carry-the-evidence: the run's StoreEvidence names the same reference"
+    );
     assert!(
         text.contains("store: test_result recorded on story:ready-one"),
         "{text}"
