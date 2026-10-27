@@ -13,6 +13,7 @@ use takt::forge::gitlab::Glab;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness, Kind, SessionHarness};
+use takt::scan::Scan;
 use takt::validator::{
     ChangeRead, CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator,
 };
@@ -612,14 +613,23 @@ struct RunArgs {
     /// A file of the run's configuration, TOML (`.toml`) or YAML (`.yaml`, `.yml`):
     /// `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path read beside
     /// the file), `forge`, `test_cmd` and `continue_past_red_base` (a boolean), each the flag's
-    /// of that name. A YAML `loom.agent/1`
-    /// document, as Loom mounts it at `/config/agent.yaml`, gives them in its `takt` member, and
-    /// nothing without one. A flag given on the command line wins over the file, the file over
-    /// the flag's default. The file's `endpoint_file` is read only when the harness is `harness`.
-    /// Any other key is refused before the case opens, naming the file and the line, never a
-    /// value written there. A container takes its run from a mounted one.
+    /// of that name, and `scan`, which no flag sets: the scan adapter what a session proposes
+    /// passes, `gates` (the default: `b10x-gates scan-text` under the policy
+    /// `B10X_GATES_POLICY` names) or `none` (nothing is scanned, each proposal checked only for
+    /// the shape of a credential, said in one line before the first step; refused while
+    /// `B10X_GATES_POLICY` is set). Under `gates` with no policy, `--harness codex` and
+    /// `--harness harness`, whose sessions may read outside their copy, are refused before the
+    /// case opens. A YAML `loom.agent/1` document, as Loom mounts it at `/config/agent.yaml`,
+    /// gives them in its `takt` member, and nothing without one. A flag given on the command
+    /// line wins over the file, the file over the flag's default. The file's `endpoint_file` is
+    /// read only when the harness is `harness`. Any other key, or a `scan` that is neither
+    /// `gates` nor `none`, is refused before the case opens, naming the file and the line, never
+    /// a value written there. A container takes its run from a mounted one.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
+    /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
+    #[arg(skip)]
+    declared_scan: Option<takt::scan::ScanName>,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -668,6 +678,7 @@ impl RunArgs {
         {
             looping.continue_past_red_base = go_on;
         }
+        self.declared_scan = file.scan;
         Ok(())
     }
 }
@@ -734,8 +745,10 @@ struct LoopArgs {
     /// opens its pull request and merges it, `gh` reads the pull request's state and checks),
     /// `gitlab` (a repository on a GitLab host: git pushes the case's branch over HTTPS under
     /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
-    /// pipeline and merges it; refused before any case opens unless `glab auth status
-    /// --hostname <host>` exits 0) or `none` (no pull request is opened; when `pr.open`,
+    /// pipeline and merges it; what it publishes passes the run's scan adapter first, under
+    /// `gates` `b10x-gates scan-text`, under a declared `scan: none` no scan; refused before
+    /// any case opens unless `glab auth status --hostname <host>` exits 0) or `none` (no pull
+    /// request is opened; when `pr.open`,
     /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
     /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
     /// `bot` when the repository's `origin` is a repository on github.com, the host the bot
@@ -813,6 +826,12 @@ impl Harness for NoHarness {
             "no harness: a judgement step among {} is left",
             context.offered.join(", ")
         ))
+    }
+
+    /// No session runs, so nothing it read is proposed: a run without a harness is never
+    /// refused for want of a scan.
+    fn reads_outside_its_copy(&self) -> bool {
+        false
     }
 }
 
@@ -1100,10 +1119,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 case_id,
                 scenarios,
                 install_root,
-                config: _,
+                config,
+                declared_scan,
                 mut looping,
             } = *args;
             looping.check()?;
+            // The run's scan adapter, `gates` unless the configuration file declares `none`:
+            // `none` with a gates policy set too is refused before anything is read or opened.
+            let scan = Scan::of_run(declared_scan.zip(config.as_deref()))?;
             let repo = repo
                 .canonicalize()
                 .with_context(|| format!("the repository {}", repo.display()))?;
@@ -1201,7 +1224,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 };
             // The forge, read before the turn, whose mainline it reads: the forge's `main`, or the
             // local `main` with none.
-            let forge = forge_of(&repo, looping.forge.as_deref())?;
+            let forge = forge_of(&repo, looping.forge.as_deref(), &scan)?;
             // A resumed turn reads the mainline through the forge it recorded when it opened,
             // as `takt approve` does: a run through another is refused before anything is
             // written.
@@ -1336,6 +1359,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let options = looping.options(opening, inputs, case_id);
             let harness = harness_of(&looping)?;
             let harness = harness.as_ref();
+            // A session that may read outside its copy proposes what a scan must pass: under
+            // `gates` with no policy nothing would scan it, so the run is refused before its
+            // case opens or resumes, naming the policy and `scan: none` in `--config`.
+            if harness.reads_outside_its_copy()
+                && let Some(why) = scan.refused_at_open(&looping.harness, true)
+            {
+                return Err(anyhow!(why));
+            }
             let mut validators = validators_of(&repo, &looping, scenarios)?;
             forge.register(&mut validators);
             // An improvement turn's merge validators read the mainline, with a forge or without.
@@ -1355,7 +1386,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     resuming.as_ref().map(|resuming| resuming.id.as_str()),
                 )?
             {
-                scan_identity_at_open(forge.as_ref(), &repo, &identity, &source, out)?;
+                scan_identity_at_open(forge.as_ref(), &scan, &repo, &identity, &source, out)?;
             }
             let forge_line = forge.line;
             let store = Aep::default();
@@ -1458,7 +1489,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
             run.record_on(&store);
-            finish(&mut run, forge_line.as_deref(), &looping, out)
+            finish(&mut run, forge_line.as_deref(), scan, &looping, out)
         }
     }
 }
@@ -1803,10 +1834,10 @@ struct Forged {
 /// another bot-route line keeps whatever transport it uses. It is held to
 /// [`Self::FETCH_TIMEOUT`], and its child can wait on no prompt ([`takt::forge::NO_PROMPT`]).
 struct TrialRoute {
-    /// The remote the bot route pushes to; its remote-tracking refs take the fetched branches.
-    remote: String,
-    /// The remote's HTTPS URL, `https://github.com/<owner>/<repo>.git`, the fetch's source.
-    url: String,
+    /// The bot route the two lines are built by ([`BotRoute::trial_fetch_argv`],
+    /// [`BotRoute::trial_push_argv`]): its remote, whose remote-tracking refs take the fetched
+    /// branches and which the push goes to, and its HTTPS URL, the fetch's source.
+    route: BotRoute,
     /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
     fetcher: Process,
     runner: Box<dyn Runner>,
@@ -1823,9 +1854,14 @@ impl TrialRoute {
     /// The trial route of `bot`: its remote, the HTTPS URL of its repository, the fetch held to
     /// [`Self::FETCH_TIMEOUT`] and the push to the forge's limits.
     fn of(bot: &BotRoute) -> Self {
+        let mut route = BotRoute::new(
+            bot.repository.clone(),
+            bot.policy.clone(),
+            Box::new(Process::default()),
+        );
+        route.remote.clone_from(&bot.remote);
         Self {
-            remote: bot.remote.clone(),
-            url: format!("https://{}/{}.git", BotRoute::HOST, bot.repository),
+            route,
             fetcher: Process {
                 limits: takt::forge::Limits {
                     timeout: Self::FETCH_TIMEOUT,
@@ -1839,29 +1875,13 @@ impl TrialRoute {
     /// The line that fetches the remote's trial branches, from its HTTPS URL, into its
     /// remote-tracking refs.
     fn fetch_argv(&self) -> Vec<String> {
-        let refspec = format!("+refs/heads/trial/*:refs/remotes/{}/trial/*", self.remote);
-        ["b10x-gates", "bot", "--", "fetch", &self.url, &refspec]
-            .map(str::to_owned)
-            .to_vec()
+        self.route.trial_fetch_argv()
     }
 
     /// The line that creates the remote's `trial` from the local one, reporting each ref on
     /// stdout; the lease refuses it when the remote has the branch.
     fn push_argv(&self, trial: &str) -> Vec<String> {
-        let lease = format!("--force-with-lease=refs/heads/{trial}:");
-        let refspec = format!("refs/heads/{trial}:refs/heads/{trial}");
-        [
-            "b10x-gates",
-            "bot",
-            "--",
-            "push",
-            "--porcelain",
-            &lease,
-            &self.remote,
-            &refspec,
-        ]
-        .map(str::to_owned)
-        .to_vec()
+        self.route.trial_push_argv(trial)
     }
 
     /// `exit`, how `argv` ended; a program that did not exit 0 is an error naming the line and
@@ -1951,9 +1971,10 @@ impl Forged {
 /// github.com, the host the bot route serves; `glab` when asked for, or by default when `origin`
 /// is on another host and `glab` is logged in to it. `--forge bot` elsewhere, `--forge gitlab` on
 /// github.com or without a login are refused in one line before any case is opened; by default
-/// another host without a login gets no forge, said in one line once the case is open.
-fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
-    forge_through(repo, forge, &Glab::for_tree)
+/// another host without a login gets no forge, said in one line once the case is open. `glab`
+/// scans through the run's scan adapter `scan`; the bot route scans as it always does.
+fn forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Forged> {
+    forge_through(repo, forge, &|tree| Glab::for_tree(tree, scan))
 }
 
 /// [`forge_of`], the `glab` adapter of a tree, and its login check, made by `glab_of`.
@@ -2023,7 +2044,7 @@ fn forge_through(
 /// `trial/<n>` is created on the remote only through the bot route ([`TrialRoute`]), so
 /// `--forge gitlab` is refused before anything is fetched, cut or opened, and by default an
 /// `origin` on a host other than github.com gets no forge, said in one line, `glab` never asked.
-fn scenario_forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
+fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Forged> {
     match forge {
         Some("gitlab") => Err(anyhow!(
             "--forge gitlab is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, and glab opens a merge request against a base it cannot create; give --forge bot or --forge none; nothing was changed"
@@ -2042,9 +2063,9 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
                 )),
                 trials: None,
             }),
-            _ => forge_of(repo, None),
+            _ => forge_of(repo, None, scan),
         },
-        Some(_) => forge_of(repo, forge),
+        Some(_) => forge_of(repo, forge, scan),
     }
 }
 
@@ -2054,16 +2075,23 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
 /// stdout, its own code. Every run the CLI makes stops `Unperformable` when no step can move
 /// its case ([`Run::stop_when_unperformable`], off in the library until a caller turns it on),
 /// and `DiskLow` before a step when the tree's or `CARGO_TARGET_DIR`'s file system has less
-/// free than `--min-free-gib` ([`Run::stop_when_disk_below`]).
+/// free than `--min-free-gib` ([`Run::stop_when_disk_below`]). The run goes under `scan`
+/// ([`Run::scan_with`]); a declared `none` is said in one line after the forge's, before the
+/// run's first line.
 fn finish(
     run: &mut Run<'_>,
     forge_line: Option<&str>,
+    scan: Scan,
     looping: &LoopArgs,
     out: &mut dyn Write,
 ) -> Result<u8> {
     if let Some(line) = forge_line {
         writeln!(out, "{line}")?;
     }
+    if let Some(line) = scan.declared_line(&looping.harness) {
+        writeln!(out, "{line}")?;
+    }
+    run.scan_with(scan);
     run.binary = Some(REVISION.to_owned());
     // The transcripts directory is made now, before any step; one that cannot be (a read-only
     // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
@@ -2354,6 +2382,14 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;
     let harness = harness_of(&looping)?;
     let harness = harness.as_ref();
+    // A scenario run takes no run configuration file, so its scan adapter is `gates`: a session
+    // that may read outside its copy is refused without a policy before anything is cut.
+    let scan = Scan::from_env();
+    if harness.reads_outside_its_copy()
+        && let Some(why) = scan.refused_at_open(&looping.harness, false)
+    {
+        return Err(anyhow!("scenario {}: {why}", scenario.id));
+    }
     // A tree with uncommitted work is refused, never discarded: a checkout would carry it onto
     // the trial branch, and a store file a stopped run left changed would be read there.
     let uncommitted = takt::git::uncommitted(&repo)?;
@@ -2382,7 +2418,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             repo.display()
         )
     })?;
-    let forge = scenario_forge_of(&repo, looping.forge.as_deref())?;
+    let forge = scenario_forge_of(&repo, looping.forge.as_deref(), &scan)?;
     // The identity the trial's commits carry: the one given, else the one `--declared-on`
     // configures (the pinned seed predates any such file); none through the bot route, which
     // pushes them, is refused before anything is fetched, cut or pushed.
@@ -2475,8 +2511,15 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         // Through the bot route the identity is scanned, as the push would scan it, before the
         // trial base is pushed or any step is taken.
         if let (Some(forge), Some(identity)) = (&forge.forge, &scanned_identity) {
-            scan_identity_at_open(forge.as_ref(), &repo, identity, &identity_source, out)
-                .with_context(|| format!("scenario {}", scenario.id))?;
+            scan_identity_at_open(
+                forge.as_ref(),
+                &scan,
+                &repo,
+                identity,
+                &identity_source,
+                out,
+            )
+            .with_context(|| format!("scenario {}", scenario.id))?;
         }
         if let Some(trials) = &forge.trials {
             trials.create(&repo, &trial).with_context(|| {
@@ -2507,7 +2550,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch.
     run.record_on(&store);
-    finish(&mut run, forge.line.as_deref(), &looping, out)
+    finish(&mut run, forge.line.as_deref(), scan, &looping, out)
 }
 
 /// Why `story`, `proposed`, is not ready among `all`, as [`takt::frontier::is_ready`] reads it:
@@ -2931,9 +2974,11 @@ fn identity_at_open(
 /// scan `forge` runs before a push ([`Forge::scan_identity`]), when the run opens: before step
 /// 1, before its case opens or its trial base is cut. The text scanned is kept under the state
 /// directory while the scan runs, never in `repo`. A refusal ends the run, naming the scan's;
-/// a scan that cannot run (no policy) says "not scanned" on `out`, and the run opens.
+/// a scan that cannot run (no policy), or none under the run's declared `scan: none` (`scan`),
+/// says "not scanned" on `out`, and the run opens.
 fn scan_identity_at_open(
     forge: &dyn Forge,
+    scan: &Scan,
     repo: &Path,
     identity: &takt::git::CommitIdentity,
     source: &str,
@@ -2951,9 +2996,16 @@ fn scan_identity_at_open(
         )
     })?;
     if let takt::forge::IdentityScan::NotScanned(why) = scanned {
+        // Under a declared `none` a forge that scans through the run's adapter scans nothing
+        // before the push either; the bot route scans whatever is declared.
+        let after = if scan.not_scanned().as_ref() == Some(&why) {
+            "nothing is scanned before the push either"
+        } else {
+            "the scan before the push still applies"
+        };
         writeln!(
             out,
-            "commit identity: {identity} from {source} not scanned ({why}); the scan before the push still applies"
+            "commit identity: {identity} from {source} not scanned ({why}); {after}"
         )?;
     }
     Ok(())
@@ -3552,7 +3604,11 @@ mod tests {
         );
         let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let glab_of = |tree: &Path| {
-            takt::forge::gitlab::Glab::for_tree_through(tree, Box::new(NotLoggedIn(asked.clone())))
+            takt::forge::gitlab::Glab::for_tree_through(
+                tree,
+                &takt::scan::Scan::from_env(),
+                Box::new(NotLoggedIn(asked.clone())),
+            )
         };
         let forged = super::forge_through(&repo, None, &glab_of).expect("no forge is no error");
         assert!(forged.forge.is_none() && forged.trials.is_none());

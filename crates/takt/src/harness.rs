@@ -115,12 +115,12 @@ pub trait Harness {
         None
     }
     /// Whether the session behind a proposal may have read outside its scratch copy, so that what
-    /// it proposes may hold what it read there: its proposal is then refused unless a gates
-    /// policy scanned it (`B10X_GATES_POLICY`; not scanned is never passed). Every proposal is
-    /// checked for the shape of a credential, and scanned under a policy when one is set,
-    /// whatever this says ([`crate::run::credential_shape`]). True by default; false only for a
-    /// session whose every read is decided inside its copy (Claude Code's, file tools on paths
-    /// in it).
+    /// it proposes may hold what it read there: its proposal is then refused unless the run's
+    /// scan adapter scanned it (not scanned is never passed), or the run declared the adapter
+    /// `none` ([`crate::scan::Scan::None`]). Every proposal is checked for the shape of a
+    /// credential, and scanned when the adapter has a scan, whatever this says
+    /// ([`crate::run::credential_shape`]). True by default; false only for a session whose every
+    /// read is decided inside its copy (Claude Code's, file tools on paths in it).
     fn reads_outside_its_copy(&self) -> bool {
         true
     }
@@ -514,7 +514,7 @@ impl Harness for SessionHarness {
         *self.call.borrow_mut() = None;
         *self.proposal.borrow_mut() = None;
         let started_at = crate::events::instant();
-        let scan = crate::run::ChangeScan::from_env();
+        let scan = crate::scan::gates::ChangeScan::from_env();
         let rule = ClaudeCode::rule_of(self.kind);
         // The step's prompt were it given `files` as context files, which its Codex prompt
         // names: the bound below measures the prompt so composed for each list tried, the line
@@ -815,9 +815,9 @@ pub const SCOPE_BYTES: u64 = 64 << 10;
 /// directory. At most [`SCOPE_FILES`] files and [`SCOPE_BYTES`] in all: a file past either is
 /// left out. A file whose bytes hold text of a credential's shape
 /// ([`crate::run::credential_shape`], read in process, so with or without a policy) is left
-/// out. Under `scan` (`B10X_GATES_POLICY`), only a file whose bytes the scan of the change so
-/// far passes ([`crate::run::scan_change`]); a file it refuses or cannot scan is left out. A git
-/// read that fails attaches nothing.
+/// out. Under `scan` (the `gates` adapter's, [`crate::scan::gates`]), only a file whose bytes
+/// the scan of the change so far passes ([`crate::run::scan_change`]); a file it refuses or
+/// cannot scan is left out. A git read that fails attaches nothing.
 ///
 /// At a revision `at` (a replay rebuilding a recorded step's prompt in the repository the case's
 /// commits are in), the files are read as that revision's tree holds them in place of `HEAD`
@@ -829,7 +829,7 @@ pub fn scope_files(
     at: Option<&str>,
     intent: &str,
     change: &ChangeSoFar,
-    scan: Option<&crate::run::ChangeScan>,
+    scan: Option<&crate::scan::gates::ChangeScan>,
 ) -> Vec<String> {
     kept_files(
         tree,
@@ -871,7 +871,7 @@ pub fn context_files(
     tree: &Path,
     intent: &str,
     change: &ChangeSoFar,
-    scan: Option<&crate::run::ChangeScan>,
+    scan: Option<&crate::scan::gates::ChangeScan>,
     argument: &dyn Fn(&[DeclaredContextFile]) -> String,
 ) -> Vec<DeclaredContextFile> {
     let mut named = vec!["AGENTS.md"];
@@ -916,7 +916,7 @@ fn kept_files(
     at: Option<&str>,
     candidates: Vec<&str>,
     change: &ChangeSoFar,
-    scan: Option<&crate::run::ChangeScan>,
+    scan: Option<&crate::scan::gates::ChangeScan>,
     given: Given,
     admits: &mut dyn FnMut(&str, &[u8]) -> bool,
 ) -> Vec<String> {
@@ -1241,12 +1241,12 @@ impl ClaudeCode {
     ];
 
     /// The step's prompt for Claude Code, its scope files scanned under the scan the environment
-    /// names ([`crate::run::ChangeScan::from_env`]), as the change so far is.
+    /// names ([`crate::scan::gates::ChangeScan::from_env`]), as the change so far is.
     fn prompt(context: &StepContext<'_>) -> String {
         Self::prompt_with(
             context,
             Self::CLAUDE_RULE,
-            crate::run::ChangeScan::from_env().as_ref(),
+            crate::scan::gates::ChangeScan::from_env().as_ref(),
             &[],
         )
     }
@@ -1308,7 +1308,7 @@ impl ClaudeCode {
     fn prompt_with(
         context: &StepContext<'_>,
         rule: Rule,
-        scan: Option<&crate::run::ChangeScan>,
+        scan: Option<&crate::scan::gates::ChangeScan>,
         given: &[String],
     ) -> String {
         let mut text = String::new();
@@ -3454,7 +3454,7 @@ mod tests {
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
             .expect("executable");
         let intent = scoped(&["config.py", "todo.py"]);
-        let scan = crate::run::ChangeScan {
+        let scan = crate::scan::gates::ChangeScan {
             program: program.clone(),
             policy: tools.0.join("policy.yaml"),
         };
@@ -3462,7 +3462,7 @@ mod tests {
             scope_files(&dir.0, None, &intent, &ChangeSoFar::NoneYet, Some(&scan)),
             ["todo.py"]
         );
-        let missing = crate::run::ChangeScan {
+        let missing = crate::scan::gates::ChangeScan {
             program: tools.0.join("no-such-gates"),
             policy: tools.0.join("policy.yaml"),
         };
@@ -4289,7 +4289,7 @@ mod tests {
         .expect("a fake scan");
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
             .expect("executable");
-        let passing = crate::run::ChangeScan {
+        let passing = crate::scan::gates::ChangeScan {
             program,
             policy: tools.0.join("policy.yaml"),
         };
@@ -4840,6 +4840,7 @@ mod endpoint_tests {
             layers: None,
             confinement: None,
             endpoint,
+            scan: None,
         })
         .expect("the opened line serializes")
     }
