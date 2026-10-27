@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-flags-spell-metaharness-and-llm
 kind: story
-status: draft
+status: active
 title: takt's endpoint and llm flags spell metaharness's and llm's names
 summary: --model-endpoint, --model-wire, --subscription-token-file/-pointer, --api-key-secret, --llm-config; --endpoint-* stay as aliases
 tags:
@@ -20,7 +20,10 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 6
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":3}}}
 ---
 # Story: run-flags-spell-metaharness-and-llm
 

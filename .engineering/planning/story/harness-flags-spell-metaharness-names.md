@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:harness-flags-spell-metaharness-names
 kind: story
-status: draft
+status: active
 title: takt's harness flags spell metaharness run's names
 summary: --effort, --max-turns, --max-budget-usd, --strict-version, --context, each filling the harness mapping
 tags:
@@ -20,7 +20,10 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: harness-flags-spell-metaharness-names
 

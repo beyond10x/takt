@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:one-run-file-for-host-and-loom-agent
 kind: story
-status: draft
+status: active
 title: One run file runs takt on the host and as a LoomAgent
 summary: loom 0.44.0 configFiles mount takt.yaml and llm.yaml verbatim; no takt member in loom.agent/1
 tags:
@@ -28,7 +28,10 @@ scope:
   path: examples/loom-agent
 - confidence: cited
   path: website/docs/guides/deploy-on-kubernetes.md
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":6}}}
+- {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":6}}}
 ---
 # Story: one-run-file-for-host-and-loom-agent
 
