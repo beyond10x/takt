@@ -241,6 +241,8 @@ impl World {
             self.repo.to_str().expect("utf-8"),
             "--test-cmd",
             "true",
+            "--protocol",
+            "story.delivery/1",
             "--forge",
             "none",
             "--iterations",

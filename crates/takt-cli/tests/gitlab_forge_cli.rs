@@ -334,6 +334,8 @@ fn a_gitlab_origin_delivers_through_glab_up_to_the_merge_grant() {
         "none",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
     ];
     let mut first = run.to_vec();
     first.extend(["--iterations", "0"]);

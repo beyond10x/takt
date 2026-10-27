@@ -64,6 +64,7 @@ const sidebars: SidebarsConfig = {
         'reference/takt-trace',
         'reference/container-image',
         'reference/protocols',
+        'reference/protocol-defaults',
         'reference/metrics-fields',
       ],
     },

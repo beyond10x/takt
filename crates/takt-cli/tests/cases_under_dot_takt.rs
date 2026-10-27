@@ -478,6 +478,8 @@ fn a_legacy_case_resumes_where_it_is() {
         "none",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
     ];
     let mut first = run.to_vec();
     first.extend(["--iterations", "0"]);

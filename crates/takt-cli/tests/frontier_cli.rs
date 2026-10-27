@@ -315,6 +315,8 @@ fn a_given_case_id_names_the_story_case_from_the_binary() {
         "1",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
         "--case-id",
         "given",
     ]);

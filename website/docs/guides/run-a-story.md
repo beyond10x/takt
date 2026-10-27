@@ -10,7 +10,7 @@ source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/front
 
 A story run takes a story from the repository's
 [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
-planning store and delivers it on the protocol `story.delivery/1`. takt does not write or rank
+planning store and delivers it on the protocol `story.delivery/2`. takt does not write or rank
 stories; AEP keeps them, and `aep` is the tool you use to add one.
 
 ## 1. Prepare the repository

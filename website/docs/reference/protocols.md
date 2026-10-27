@@ -6,7 +6,7 @@ description: The protocols takt runs and the ones it holds for its own improveme
 
 # Protocols
 
-The [protocol viewer](pathname:///takt/protocols/) shows all eight protocols `takt protocols`
+The [protocol viewer](pathname:///takt/protocols/) shows all nine protocols `takt protocols`
 lists, `software.change/1` first: their actions, evidence kinds, claims, obligations and outcomes
 as tables, and as one graph of how they connect. It is built on every site build from the documents of the
 `b10x-canon-engineering` release takt pins.
@@ -17,7 +17,8 @@ as tables, and as one graph of how they connect. It is built on every site build
 
 | id | from | a case is |
 |---|---|---|
-| `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story |
+| `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store story, the default; its inputs and [their defaults](protocol-defaults.md) |
+| `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story, no case input |
 | `self.improvement/1` (listed as `self-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |
 | `loop.improvement/1` (listed as `loop-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one turn on the improvement loop itself |
