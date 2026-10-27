@@ -45,6 +45,7 @@ takt's releases.
 - `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
 - New cases open under `.takt/cases`, with a `.takt/.gitignore` of `*` when absent; a case already under `.engineering/cases` resumes where it is, and every guard covers both roots.
+- A new `.takt/` also gets `.takt/.worktreekeep` (`cases/`), so `worktree` 0.19.0 cleanup keeps every case and its archive holds them; an existing file is left alone.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 - A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
