@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-27T18:13:59Z",
+  "actor": "human:timo",
+  "artifact": "story:the-workspace-seam-enters-and-leaves-managed-worktrees",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --no-fail-fast at integration/takt 26ffc41f: 2251 passed, 1 failed (confinement, fixed at bcf18d7d: confinement 16/0, workspace_seam 6/0); fmt, clippy -D warnings, citations and ess validate clean",
+    "reference": "https://github.com/beyond10x/takt/commit/bcf18d7d302d6303314d001dcc2bd4e8b3beeb4d"
+  }
+}

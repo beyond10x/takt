@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-command-forge-takes-a-request-number-only-from-the-request
 kind: story
-status: active
+status: implemented
 title: The command forge takes a request number only from the request path
 summary: no number from a URL that names no request
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:downstream-story-delivery
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T17:52:15Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-27T17:52:20Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-27T18:13:59Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-command-forge-takes-a-request-number-only-from-the-request
 
