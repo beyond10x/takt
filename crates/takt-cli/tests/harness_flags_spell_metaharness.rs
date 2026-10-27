@@ -227,8 +227,9 @@ fn max_turns_under_codex_is_refused_before_any_case_opens() {
     let config = world.file("run.yaml", &run_file(""));
     let output = world.run(&config, &["--harness", "codex", "--max-turns", "60"]);
     let said = world.assert_refused(&output);
-    assert!(said.contains("`max-turns`"), "{said}");
-    assert!(said.contains("`kind: codex`"), "{said}");
+    assert!(said.contains("the command line's --max-turns"), "{said}");
+    assert!(said.contains("codex"), "{said}");
+    assert!(!said.contains("in its `harness` mapping"), "{said}");
 }
 
 /// A session setting given under `--harness none` would start no session and be dropped, so it is
@@ -250,7 +251,8 @@ fn max_turns_flag_over_a_codex_file_is_refused_before_any_case_opens() {
     let config = world.file("run.yaml", &run_file("harness: {kind: codex}\n"));
     let output = world.run(&config, &["--max-turns", "60"]);
     let said = world.assert_refused(&output);
-    assert!(said.contains("`max-turns`"), "{said}");
+    assert!(said.contains("the command line's --max-turns"), "{said}");
+    assert!(!said.contains("in its `harness` mapping"), "{said}");
 }
 
 /// Each of the four flags takt's launch does not carry yet is refused as the file's key is, by

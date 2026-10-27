@@ -278,6 +278,44 @@ fn codex_max_turns_is_refused_not_dropped() {
 }
 
 /// The string form keeps its meaning: `harness: codex` starts the argv `--harness codex` starts.
+/// A session setting in the file's `harness` mapping under `--harness none`, which starts no session,
+/// is refused before any case opens, naming the setting, as a flag's is: it would be dropped.
+#[test]
+fn a_file_session_setting_under_harness_none_is_refused_before_any_case_opens() {
+    let world = World::new("none-file-setting");
+    world.fresh();
+    let config = world.file(
+        "run.yaml",
+        &run_file("harness: {kind: claude, max-turns: 60}\n"),
+    );
+    let output = world.run(&config, &["--harness", "none"]);
+    let said = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{said}");
+    assert!(!world.cases().exists(), "no case was opened: {said}");
+    assert!(said.contains("max-turns"), "{said}");
+    assert!(said.contains("--harness none"), "{said}");
+}
+
+/// `max-turns` is a whole number above zero: zero ends no session turn, so it is refused before any
+/// case opens, in the file's mapping and on the command line alike.
+#[test]
+fn max_turns_zero_is_refused_before_any_case_opens() {
+    let world = World::new("max-turns-zero");
+    let said = world.refused("harness: {kind: claude, max-turns: 0}\n");
+    assert!(said.contains("`max-turns`"), "{said}");
+    world.fresh();
+    let config = world.file("run.yaml", &run_file(""));
+    let output = world.run(&config, &["--max-turns", "0"]);
+    let said = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{said}");
+    assert!(!world.cases().exists(), "no case was opened: {said}");
+    assert!(said.contains("the command line's --max-turns"), "{said}");
+    assert!(
+        world.argv("claude").is_none() && world.argv("codex").is_none(),
+        "no harness was started: {said}"
+    );
+}
+
 #[test]
 fn the_string_form_starts_the_argv_of_the_flag() {
     let world = World::new("string-form");

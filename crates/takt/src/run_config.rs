@@ -22,20 +22,63 @@ pub use llm_models::routes::Routes;
 /// The `llm.routes/1` document a run file's `llm` member holds, parsed by llm and shared, so a run
 /// resolves its `model` against it. Two are equal when their digests are.
 #[derive(Debug, Clone)]
-pub struct LlmRoutes(Arc<Routes>);
+pub struct LlmRoutes {
+    routes: Arc<Routes>,
+    variables: Vec<String>,
+}
 
 impl LlmRoutes {
+    fn new(routes: Routes, variables: Vec<String>) -> Self {
+        Self {
+            routes: Arc::new(routes),
+            variables,
+        }
+    }
+
     /// The parsed document.
     #[must_use]
     pub fn routes(&self) -> &Routes {
-        &self.0
+        &self.routes
+    }
+
+    /// The variables the document's `env:` secret references name, in any endpoint, sorted and
+    /// without repeats: a child of takt must not inherit them.
+    #[must_use]
+    pub fn variables(&self) -> &[String] {
+        &self.variables
     }
 }
 
 impl PartialEq for LlmRoutes {
     fn eq(&self, other: &Self) -> bool {
-        self.0.digest() == other.0.digest()
+        self.routes.digest() == other.routes.digest()
     }
+}
+
+/// The variables the `env:` references in `document` name, in any place of it. llm keeps the
+/// names of the references it reads to itself, so takt reads them off the parsed document; only
+/// names that a variable may carry are kept.
+fn secret_variables(document: &serde_json::Value) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut pending = vec![document];
+    while let Some(value) = pending.pop() {
+        match value {
+            serde_json::Value::String(text) => {
+                if let Some(name) = text.strip_prefix("env:")
+                    && !name.is_empty()
+                    && !name.contains(['=', '\0'])
+                {
+                    names.push(name.to_owned());
+                }
+            }
+            serde_json::Value::Array(items) => pending.extend(items),
+            serde_json::Value::Object(map) => pending.extend(map.values()),
+            _ => {}
+        }
+    }
+    names.sort();
+    names.dedup();
+    names
 }
 
 /// The `format` of the agent document Loom writes to `/config/agent.yaml`.
@@ -254,19 +297,25 @@ impl SessionRequest {
     /// The request a run takes: `base`, the file's mapping, with each flag's setting written over
     /// its key, under `harness`, the harness the run takes and its `kind`. `None` when neither the
     /// file nor a flag gives a setting, and when `harness` is `none`, which starts no session. A
-    /// setting refused under `harness` is an error, named as the file's refusal names it.
+    /// setting refused under `harness` is an error, named as the file's refusal names it; under
+    /// `none` a setting the file or a flag gives is refused, since it would be dropped.
     pub fn with_flags(
         base: Option<&Self>,
         harness: &str,
         flags: SessionFlags<'_>,
     ) -> Result<Option<Self>> {
+        if flags.max_turns == Some(0) {
+            return Err(anyhow!(
+                "the command line's --max-turns is a whole number above zero, no other value; nothing was started"
+            ));
+        }
         let mut settings = base
             .map(|request| request.settings.clone())
             .unwrap_or_default();
         for (key, value) in flags.settings() {
             settings.insert(key.to_owned(), value);
         }
-        if let Some(detail) = refused_setting(&settings, harness) {
+        if let Some(detail) = refused_setting(&settings, harness, flags.max_turns.is_some()) {
             return Err(anyhow!(detail));
         }
         let (harness, kind) = match harness {
@@ -274,7 +323,11 @@ impl SessionRequest {
             "codex" => ("codex", "codex"),
             "harness" => ("harness", "b10x"),
             _ => {
-                let given: Vec<&str> = flags.settings().iter().map(|(key, _)| *key).collect();
+                let given: Vec<&str> = settings
+                    .keys()
+                    .map(String::as_str)
+                    .filter(|key| *key != "kind")
+                    .collect();
                 if given.is_empty() {
                     return Ok(None);
                 }
@@ -346,21 +399,32 @@ fn not_carried_yet(key: &str) -> Option<String> {
     })
 }
 
-/// The refusal of `max-turns` under `kind: codex`, the same for a file's key and a flag's.
+/// The refusal of `max-turns` in a file's `harness` mapping under `kind: codex`.
 const CODEX_MAX_TURNS_REFUSED: &str = "`max-turns` under `kind: codex` in its `harness` mapping is refused: takt's Codex launch takes no turn ceiling, so the value would be dropped";
 
-/// The refusal of the first setting `settings` holds that `harness` does not take, or `None`.
+/// The refusal of `--max-turns` on the command line under the codex harness, which names no mapping.
+const CODEX_FLAG_MAX_TURNS_REFUSED: &str = "the command line's --max-turns is refused under the codex harness: takt's Codex launch takes no turn ceiling, so the value would be dropped";
+
+/// The refusal of the first setting `settings` holds that `harness` does not take, or `None`;
+/// `turns_from_flag` says the `max-turns` it holds is the command line's.
 fn refused_setting(
     settings: &serde_json::Map<String, serde_json::Value>,
     harness: &str,
+    turns_from_flag: bool,
 ) -> Option<String> {
     HARNESS_KEYS_NOT_CARRIED
         .iter()
         .filter(|key| settings.contains_key(**key))
         .find_map(|key| not_carried_yet(key))
         .or_else(|| {
-            (harness == "codex" && settings.contains_key("max-turns"))
-                .then(|| CODEX_MAX_TURNS_REFUSED.to_owned())
+            (harness == "codex" && settings.contains_key("max-turns")).then(|| {
+                if turns_from_flag {
+                    CODEX_FLAG_MAX_TURNS_REFUSED
+                } else {
+                    CODEX_MAX_TURNS_REFUSED
+                }
+                .to_owned()
+            })
         })
 }
 
@@ -469,7 +533,15 @@ fn harness_refused(path: &Path, detail: &str) -> anyhow::Error {
 /// session request; any other value is refused.
 fn harness_setting(path: &Path, member: &serde_yaml_ng::Value) -> Result<HarnessSetting> {
     match member {
-        serde_yaml_ng::Value::String(name) => Ok(HarnessSetting::Name(name.clone())),
+        serde_yaml_ng::Value::String(name)
+            if matches!(name.as_str(), "claude" | "codex" | "harness" | "none") =>
+        {
+            Ok(HarnessSetting::Name(name.clone()))
+        }
+        serde_yaml_ng::Value::String(_) => Err(harness_refused(
+            path,
+            "its `harness` names no harness: claude, codex, harness or none, or it is a mapping of metaharness's session request",
+        )),
         serde_yaml_ng::Value::Mapping(mapping) => {
             session_request(path, mapping).map(HarnessSetting::Session)
         }
@@ -524,14 +596,16 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
             }
         },
     };
-    if let Some(detail) = refused_setting(&settings, harness) {
+    if let Some(detail) = refused_setting(&settings, harness, false) {
         return Err(harness_refused(path, &detail));
     }
     let request = SessionRequest { harness, settings };
-    if request.settings.contains_key("max-turns") && request.max_turns().is_none() {
+    if request.settings.contains_key("max-turns")
+        && request.max_turns().is_none_or(|turns| turns == 0)
+    {
         return Err(harness_refused(
             path,
-            "`max-turns` in its `harness` mapping is a whole number, no other value",
+            "`max-turns` in its `harness` mapping is a whole number above zero, no other value",
         ));
     }
     Ok(request)
@@ -541,6 +615,49 @@ const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, nu
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
+
+/// Why an llm document is not read: its file is not a regular file, or it holds more than the bound.
+enum Unread {
+    NotRegular,
+    Larger,
+}
+
+/// The text of the llm document at `path`, read through one open handle: the handle is checked to
+/// be a regular file of at most the bound, and no more than the bound plus one byte is read, so a
+/// file that grows after its metadata is read is refused too. Opened without blocking, so a named
+/// pipe is refused rather than waited on.
+fn read_llm_document(path: &Path) -> std::io::Result<std::result::Result<String, Unread>> {
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        return Ok(Err(Unread::NotRegular));
+    }
+    if metadata.len() > LLM_DOCUMENT_BOUND {
+        return Ok(Err(Unread::Larger));
+    }
+    Ok(read_bounded(file)?.ok_or(Unread::Larger))
+}
+
+/// The text `reader` yields when it holds at most [`LLM_DOCUMENT_BOUND`] bytes, or `None` once more
+/// has arrived: the reader is read through `take`, so no more than the bound plus one byte is ever
+/// read from it.
+fn read_bounded(reader: impl std::io::Read) -> std::io::Result<Option<String>> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    reader
+        .take(LLM_DOCUMENT_BOUND + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > LLM_DOCUMENT_BOUND {
+        return Ok(None);
+    }
+    String::from_utf8(bytes)
+        .map(Some)
+        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
 
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
@@ -556,12 +673,20 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
     }
 }
 
+/// `message` without the line and column llm appends to a YAML document's refusal: they locate the
+/// copy of an inline section that takt re-serialises, not the run file.
+fn without_position(message: &str) -> &str {
+    message
+        .split_once(" at line ")
+        .map_or(message, |(head, _)| head)
+}
+
 /// The `llm.routes/1` document `llm` holds, validated by llm. A mapping whose only
 /// key is `path` names a file beside the run file, parsed by `Routes::parse_toml` when it ends in
 /// `.toml` and by `Routes::parse` when it ends in `.yaml` or `.yml`; any other mapping is the
 /// whole document, re-serialised to YAML text and parsed by `Routes::parse`. llm's refusal is
 /// relayed as it stands, and nothing here repeats a value written in the file.
-fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<Routes> {
+fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<(Routes, Vec<String>)> {
     let shape = || {
         anyhow!(
             "the run configuration file {} is refused: its `llm` member is neither an \
@@ -569,7 +694,7 @@ fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<Routes> {
             path.display()
         )
     };
-    let routes = match llm
+    let (routes, variables) = match llm
         .as_mapping()
         .filter(|mapping| mapping.len() == 1)
         .and_then(|mapping| mapping.get("path"))
@@ -599,20 +724,6 @@ fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<Routes> {
                     ));
                 }
             };
-            let metadata = std::fs::metadata(&file)
-                .with_context(|| format!("the llm document {}", file.display()))?;
-            if !metadata.is_file() {
-                return Err(anyhow!(
-                    "the run configuration file {} is refused: its `llm` member names a file that is not a regular file",
-                    path.display()
-                ));
-            }
-            if metadata.len() > LLM_DOCUMENT_BOUND {
-                return Err(anyhow!(
-                    "the run configuration file {} is refused: its `llm` member names a file larger than the 2 MiB bound (2097152 bytes)",
-                    path.display()
-                ));
-            }
             let real = std::fs::canonicalize(&file)
                 .with_context(|| format!("the llm document {}", file.display()))?;
             let real_directory = std::fs::canonicalize(directory)
@@ -623,27 +734,54 @@ fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<Routes> {
                     path.display()
                 ));
             }
-            let text = std::fs::read_to_string(&real)
-                .with_context(|| format!("the llm document {}", file.display()))?;
+            let text = match read_llm_document(&real)
+                .with_context(|| format!("the llm document {}", file.display()))?
+            {
+                Ok(text) => text,
+                Err(Unread::NotRegular) => {
+                    return Err(anyhow!(
+                        "the run configuration file {} is refused: its `llm` member names a file that is not a regular file",
+                        path.display()
+                    ));
+                }
+                Err(Unread::Larger) => {
+                    return Err(anyhow!(
+                        "the run configuration file {} is refused: its `llm` member names a file larger than the 2 MiB bound (2097152 bytes)",
+                        path.display()
+                    ));
+                }
+            };
+            let document: serde_json::Value = if toml {
+                toml::from_str(&text)
+                    .with_context(|| format!("the llm document {}", file.display()))?
+            } else {
+                serde_yaml_ng::from_str(&text)
+                    .with_context(|| format!("the llm document {}", file.display()))?
+            };
             let parsed = if toml {
                 Routes::parse_toml(&text)
             } else {
                 Routes::parse(&text)
             };
-            parsed.with_context(|| format!("the llm document {}", file.display()))?
+            let routes = parsed.with_context(|| format!("the llm document {}", file.display()))?;
+            (routes, secret_variables(&document))
         }
         None if llm.as_mapping().is_some_and(|mapping| !mapping.is_empty()) => {
             let text = serde_yaml_ng::to_string(llm).map_err(|_| shape())?;
-            Routes::parse(&text).with_context(|| {
-                format!(
-                    "the run configuration file {}: its `llm` document",
-                    path.display()
+            let routes = Routes::parse(&text).map_err(|error| {
+                anyhow!(
+                    "the run configuration file {} is refused: its `llm` section is not valid: {:?}: {}",
+                    path.display(),
+                    error.code,
+                    without_position(&error.message)
                 )
-            })?
+            })?;
+            let document = serde_json::to_value(llm).map_err(|_| shape())?;
+            (routes, secret_variables(&document))
         }
         None => return Err(shape()),
     };
-    Ok(routes)
+    Ok((routes, variables))
 }
 
 /// The run configuration in `text`, TOML.
@@ -760,9 +898,9 @@ impl RunConfig {
             config.harness = Some(harness_setting(path, &member)?);
         }
         if let Some(llm) = &config.llm {
-            let routes = llm_document(path, llm)?;
+            let (routes, variables) = llm_document(path, llm)?;
             config.llm_digest = Some(routes.digest().to_owned());
-            config.llm_routes = Some(LlmRoutes(Arc::new(routes)));
+            config.llm_routes = Some(LlmRoutes::new(routes, variables));
         }
         let beside = |file: PathBuf| match path.parent() {
             Some(dir) if file.is_relative() => dir.join(file),
@@ -788,22 +926,29 @@ impl RunConfig {
                 ));
             }
         };
-        let metadata = std::fs::metadata(path)
-            .with_context(|| format!("the llm document {}", path.display()))?;
-        if !metadata.is_file() {
-            return Err(anyhow!(
-                "the llm document {} is refused: it is not a regular file",
-                path.display()
-            ));
-        }
-        if metadata.len() > LLM_DOCUMENT_BOUND {
-            return Err(anyhow!(
-                "the llm document {} is refused: it is larger than the 2 MiB bound (2097152 bytes)",
-                path.display()
-            ));
-        }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("the llm document {}", path.display()))?;
+        let text = match read_llm_document(path)
+            .with_context(|| format!("the llm document {}", path.display()))?
+        {
+            Ok(text) => text,
+            Err(Unread::NotRegular) => {
+                return Err(anyhow!(
+                    "the llm document {} is refused: it is not a regular file",
+                    path.display()
+                ));
+            }
+            Err(Unread::Larger) => {
+                return Err(anyhow!(
+                    "the llm document {} is refused: it is larger than the 2 MiB bound (2097152 bytes)",
+                    path.display()
+                ));
+            }
+        };
+        let document: serde_json::Value = if toml {
+            toml::from_str(&text).with_context(|| format!("the llm document {}", path.display()))?
+        } else {
+            serde_yaml_ng::from_str(&text)
+                .with_context(|| format!("the llm document {}", path.display()))?
+        };
         let parsed = if toml {
             Routes::parse_toml(&text)
         } else {
@@ -811,7 +956,7 @@ impl RunConfig {
         };
         let routes = parsed.with_context(|| format!("the llm document {}", path.display()))?;
         self.llm_digest = Some(routes.digest().to_owned());
-        self.llm_routes = Some(LlmRoutes(Arc::new(routes)));
+        self.llm_routes = Some(LlmRoutes::new(routes, secret_variables(&document)));
         Ok(())
     }
 }
@@ -827,6 +972,36 @@ mod tests {
         let path = dir.join("run.toml");
         std::fs::write(&path, text).expect("a configuration file");
         path
+    }
+
+    /// A `harness` string that names no harness is refused at read, without repeating it: the
+    /// string is a value written in the file.
+    #[test]
+    fn a_harness_name_that_is_no_harness_is_refused_without_repeating_it() {
+        let path = scratch("harness-name", "harness = \"MARKER-harness-name\"\n");
+        let error = RunConfig::read(&path).expect_err("refused");
+        let message = format!("{error:#}");
+        assert!(!message.contains("MARKER-harness-name"), "{message}");
+        assert!(
+            message.contains("claude, codex, harness or none"),
+            "{message}"
+        );
+    }
+
+    /// The bounded read takes at most the bound and no more: an endless reader, which holds more
+    /// than the bound, is refused, and a reader of exactly the bound is read whole.
+    #[test]
+    fn a_reader_past_the_bound_is_refused_without_being_read_to_its_end() {
+        assert_eq!(read_bounded(std::io::repeat(b'a')).expect("read"), None);
+        let exact = std::io::Read::take(std::io::repeat(b'a'), LLM_DOCUMENT_BOUND);
+        let text = read_bounded(exact)
+            .expect("read")
+            .expect("within the bound");
+        assert_eq!(text.len() as u64, LLM_DOCUMENT_BOUND);
+        assert_eq!(
+            read_bounded(&b"llm"[..]).expect("read"),
+            Some("llm".to_owned())
+        );
     }
 
     #[test]

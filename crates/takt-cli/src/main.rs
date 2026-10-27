@@ -1992,7 +1992,8 @@ impl LoopArgs {
     /// Under `--harness harness`, takes the variable the endpoint's credential names out of
     /// takt's environment ([`EndpointArgs::take_variable`]). With an `llm` section, resolves the
     /// route `--model` names, before any case opens, and takes out of takt's environment the
-    /// variables holding the key llm resolved for it ([`takt::harness::take_environment_holding`]).
+    /// variables holding the key llm resolved for it ([`takt::harness::take_environment_holding`])
+    /// and every variable the document's `env:` references name, in any endpoint.
     /// Under `--confinement substrate` outside a delegated run it is left until `substrate` has
     /// opened in this run (`substrate_open`), since a run delegated again under `systemd-run` reads
     /// it there. Resolved once: a second call keeps the first route.
@@ -2014,6 +2015,10 @@ impl LoopArgs {
                     // SAFETY: takt has started no thread yet (its callers run before any is
                     // started), so nothing reads the environment while it changes.
                     unsafe { takt::harness::take_environment_holding(secret) };
+                }
+                for variable in llm.variables() {
+                    // SAFETY: as above, no thread has started.
+                    unsafe { takt::harness::take_environment_variable(variable) };
                 }
                 self.route = Some(route);
             }

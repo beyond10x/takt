@@ -157,9 +157,10 @@ fn adversary_llm_item3_inline_yaml_unknown_key_names_field() {
     let output = world.run_fresh(&config);
     let all = text(&output);
     assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("`llm` section"), "{all}");
     assert!(
-        all.contains("line") && all.contains("column"),
-        "story:llm-section-is-an-llm-routes-document item 3: llm 0.16.0 names no field for a YAML document; change this assertion when llm does: {all}"
+        !all.contains(" at line "),
+        "an inline section cites no line or column of takt's copy of it: {all}"
     );
     assert!(!all.contains("`token`"), "{all}");
     assert!(!all.contains("MARKER-red-inline"), "{all}");

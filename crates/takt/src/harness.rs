@@ -2236,11 +2236,21 @@ pub fn portable_variable_name(name: &str) -> bool {
 /// No other thread may read or write the environment while it runs: call it before takt
 /// starts any thread.
 pub unsafe fn take_environment_variable(name: &str) -> Option<VariableValue> {
+    // SAFETY: the caller guarantees no other thread touches the environment.
+    unsafe { take_environment_named(std::ffi::OsStr::new(name)) }
+}
+
+/// [`take_environment_variable`] for a name that may not be UTF-8.
+///
+/// # Safety
+///
+/// As [`take_environment_variable`].
+unsafe fn take_environment_named(name: &std::ffi::OsStr) -> Option<VariableValue> {
     let value = std::env::var_os(name).map(VariableValue::new);
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     // SAFETY: the caller guarantees no other thread touches the environment.
     unsafe {
-        overwrite_environment_value(name.as_bytes());
+        overwrite_environment_value(std::os::unix::ffi::OsStrExt::as_bytes(name));
     }
     // SAFETY: the caller guarantees no other thread touches the environment.
     unsafe { std::env::remove_var(name) };
@@ -3134,7 +3144,7 @@ impl RouteEndpoint {
 
         let target = routes
             .target(model)
-            .map_err(|error| anyhow!("the run's model {model} is refused: {}", error.message))?;
+            .map_err(|error| anyhow!("the run's model is refused: {}", error.message))?;
         let route = target.serving_model.as_str();
         let wire = match target.protocol {
             Protocol::Messages => EndpointConfig::WIRE,
@@ -3206,6 +3216,11 @@ impl RouteEndpoint {
         })?;
         let text = String::from_utf8(resolved.secret.expose().to_vec())
             .map_err(|_| anyhow!("the route {route}: its key is not text; nothing was started"))?;
+        if text.is_empty() {
+            bail!(
+                "the route {route} takes its key from {kind_name}, which is empty; nothing was started"
+            );
+        }
         let config = EndpointConfig {
             base_url: base_url.to_owned(),
             wire: wire.to_owned(),
@@ -3236,13 +3251,13 @@ impl RouteEndpoint {
 /// No other thread may read or write the environment while it runs: call it before takt starts
 /// any thread.
 pub unsafe fn take_environment_holding(value: &VariableValue) {
-    let names: Vec<String> = std::env::vars_os()
+    let names: Vec<std::ffi::OsString> = std::env::vars_os()
         .filter(|(_, held)| *held == value.0)
-        .filter_map(|(name, _)| name.into_string().ok())
+        .map(|(name, _)| name)
         .collect();
     for name in names {
         // SAFETY: the caller guarantees no other thread touches the environment.
-        unsafe { take_environment_variable(&name) };
+        unsafe { take_environment_named(&name) };
     }
 }
 
@@ -5893,6 +5908,24 @@ mod endpoint_tests {
             std::fs::read_dir(&dir.0).expect("the candidate").count(),
             0,
             "nothing was staged"
+        );
+    }
+
+    /// The scrub of a route's key takes out a variable whose name is not UTF-8 as well: one
+    /// holding the key under a name that carries byte 0xFF is gone after the call. It writes the
+    /// environment, so it runs in this binary's one-thread form: the scrub overwrites the entries
+    /// it names outside std's lock, and this test names a variable no other test reads.
+    #[test]
+    fn a_non_utf8_name_holding_the_key_is_taken_too() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let name = std::ffi::OsStr::from_bytes(b"TAKT_SCRUB_PROBE_\xff");
+        // SAFETY: see the note above; no other test reads this name.
+        unsafe { std::env::set_var(name, MARKER) };
+        // SAFETY: see the note above.
+        unsafe { take_environment_holding(&value(MARKER)) };
+        assert!(
+            std::env::var_os(name).is_none(),
+            "a variable holding the key survives the scrub"
         );
     }
 
