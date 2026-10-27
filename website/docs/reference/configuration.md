@@ -525,6 +525,7 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | flag | meaning |
 |---|---|
 | `--harness <HARNESS>` | `claude`, `codex`, `harness` (b10x-harness) or `none` (validators only); default `claude` |
+| `--harness-program <PATH>` | an absolute path: the program every step starts, in place of the one found on `PATH`; `opened` records its path, its sha256 and its `--version` line; refused when it is not absolute, and with `--harness none`, which starts no session |
 | `--model <MODEL>` | the harness's model, when it takes one; under `--harness harness` a route of the `llm` section, when the run has one |
 | `--llm-config <FILE>` | an `llm.routes/1` document (`.toml`, `.yaml` or `.yml`) that replaces the run file's `llm` section; with or without `--config` |
 | `--effort <LEVEL>` | the reasoning effort, as `metaharness run --effort`; refused until takt's launch carries it |
