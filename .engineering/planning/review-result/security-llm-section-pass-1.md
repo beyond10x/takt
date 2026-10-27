@@ -6,6 +6,7 @@ status: active
 title: 'Security review pass 1 on the llm section unit: NEEDS-CHANGE, fixed at c50e8d1'
 relations:
 - decides: story:llm-section-is-an-llm-routes-document
+- reviews: story:llm-section-is-an-llm-routes-document
 revision: 1
 ---
 Opus security review on the llm section unit (unit 34a7a75, reviewed at e43b251; fix at c50e8d1).

@@ -6,6 +6,7 @@ status: active
 title: 'Adversary pass 2 on the llm section unit: APPROVE, fixes landed at c50e8d1'
 relations:
 - decides: story:llm-section-is-an-llm-routes-document
+- reviews: story:llm-section-is-an-llm-routes-document
 revision: 1
 ---
 Opus adversary on the llm section unit (unit 34a7a75, reviewed at e43b251; fix at c50e8d1).
