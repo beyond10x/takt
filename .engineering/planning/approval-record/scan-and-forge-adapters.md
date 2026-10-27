@@ -8,7 +8,7 @@ tags:
 - adapters
 relations:
 - decides: story:scan-and-forge-are-adapters
-revision: 2
+revision: 3
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-27T00:33:20Z", actor: "human:timo", revision: 2}
 ---
@@ -40,3 +40,20 @@ never passed silently. One story, one unit, an adversary pass, then release 0.15
 | the `gitlab` forge | scans what it publishes through the run's scan adapter | nothing outside `bot` references b10x-gates |
 | where the bot adapter lives | `crates/takt/src/forge/bot.rs`, the scenario run's trial lines included | a test can then hold the literal to two files |
 | version | 0.15.0, Breaking: a codex or b10x-harness run with no policy is refused at open | it opened its case before |
+
+## Amended
+
+The owner, 2026-10-27, relayed by the orchestrator, after the scope above: "We're now merging
+all changes from takt into the same integration branch, and this branch we push, and from that
+one we create PRs ... do not yet merge it, but push the stuff."
+
+The orchestrator, the same day: "once task check on the merged tree is green, merge into
+integration/takt and push now (fetch, merge origin/integration/takt, re-run affected suites,
+fast-forward push, never force). Do not wait for any remaining review. The 2 security findings
+and any adversary findings land on integration/takt as fix commits afterwards (or as stories),
+before any PR." Both reviews were in before the merge, so their fixes ride the unit itself.
+
+So the unit is merged with `integration/takt` and pushed there by fast-forward through the bot
+route. No pull request, no merge to `main`, no tag and no release are made under this record:
+release 0.15.0 is pending until the integration branch is merged. The CHANGELOG entries stay
+under `[Unreleased]` and the version stays 0.14.0.

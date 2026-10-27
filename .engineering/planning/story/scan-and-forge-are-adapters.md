@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scan-and-forge-are-adapters
 kind: story
-status: active
+status: implemented
 title: The scan and the forge are named adapters; b10x-gates is one of them
 summary: 'takt runs on any repository: scan gates|none in the run configuration, the bot forge owns every b10x-gates line'
 tags:
@@ -37,10 +37,11 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: inferred
   path: website/docs
-revision: 5
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T00:33:20Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-27T00:33:21Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-27T02:50:55Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 ## Outcome
 
@@ -106,3 +107,11 @@ every run needs.
    `B10X_GATES_POLICY` appears outside `forge/bot.rs` and `scan/gates.rs`, except in the CLI's
    `///` help text.
 7. `task check` passes.
+
+## Release
+
+Pending. The unit is merged into `integration/takt` and pushed there; it is not merged to `main`
+and not tagged, and the CHANGELOG entries stay under `[Unreleased]` with the version at 0.14.0.
+Release 0.15.0 (one Breaking change: a codex or b10x-harness run with no policy and no `scan:
+none` is refused before its case opens) waits for the merge of the integration branch
+(approval-record:scan-and-forge-adapters, § Amended).
