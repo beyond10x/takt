@@ -2,16 +2,17 @@
 format: aep.planning-md/3
 id: story:harness-none-takes-a-granted-action
 kind: story
-status: active
+status: implemented
 title: --harness none finishes a case after a grant
 summary: NoHarness takes an admissible granted action instead of ending on an error
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T02:32:06Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-27T02:32:06Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-27T07:37:24Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: harness-none-takes-a-granted-action
 

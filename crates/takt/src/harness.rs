@@ -29,6 +29,10 @@ pub struct StepContext<'a> {
     /// Of the offered actions, the ones that record a choice: taken with no file changed, takt
     /// records that the harness took it (`change.handover`).
     pub choices: &'a [String],
+    /// Of the offered actions, the ones the case holds a grant for at its current revision: each
+    /// needed an approval until it was granted, and is admissible now. Shown to no harness's
+    /// prompt; only the `none` harness of the CLI, which takes an action without a model, reads it.
+    pub granted: &'a [String],
     /// The current decision: claims, obligations, the frontier.
     pub decision: &'a Decision,
     /// The protocol the case runs under.
@@ -3956,6 +3960,7 @@ mod tests {
             offered: &offered,
             approvals: &[],
             choices: &[],
+            granted: &[],
             decision: &decision,
             protocol: &protocol,
             step: 1,

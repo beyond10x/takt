@@ -11291,6 +11291,14 @@ impl<'a> Run<'a> {
             .filter(|a| !shape.choices_of(a).is_empty())
             .cloned()
             .collect();
+        // The offered actions the case holds a grant for at its current revision: admissible now
+        // because they were granted, where each needed an approval before ([`CaseDir::grants`]).
+        let mut granted: Vec<String> = Vec::new();
+        for action in offered {
+            if self.case.grants(action)? {
+                granted.push(action.clone());
+            }
+        }
         let change = change_so_far(
             &self.tree,
             &self.case.dir,
@@ -11306,6 +11314,7 @@ impl<'a> Run<'a> {
             offered,
             approvals,
             choices: &choices,
+            granted: &granted,
             decision,
             protocol: &self.case.protocol,
             step: self.steps as usize,
