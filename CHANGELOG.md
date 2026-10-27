@@ -30,6 +30,7 @@ does not qualify it, so a trial on a GitHub repository can end with its pull req
 
 ### Added
 
+- `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
 - `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
 - `takt run` asks metaharness whether the harness binary qualifies before its first session, on open and on every resume: an unqualified binary stops `HarnessUnqualified`, exit 1, the case resumable.
 - `forge: command` with a `forge_commands` section in the `takt run --config` file: the forge actions `open`, `read`, `checks` and `merge` are the argument lists the file names, run without a shell.

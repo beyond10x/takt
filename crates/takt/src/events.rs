@@ -232,6 +232,21 @@ pub enum Event {
     Refusal { by: String, reason: String },
     /// The run pauses on the forge for `seconds`, then observes the actions `on` again.
     Waiting { on: Vec<String>, seconds: f64 },
+    /// A declared setup command ran when the case opened, before the red-base check: its name,
+    /// its argument list, the case's base commit it ran at, the code it ended with (none when a
+    /// signal ended it, it could not be started or its time ran out), its duration in
+    /// milliseconds, and where its output was kept, relative to the transcripts directory.
+    Setup {
+        name: String,
+        argv: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit: Option<i32>,
+        duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
     /// An error, as it was reported: the one a run ended on, or one met while recording an
     /// accepted case in the store, after which the run keeps its stop.
     Error { error: String },

@@ -181,6 +181,15 @@ pub enum Stop {
         /// The versions that qualify: the ones the adapter is pinned to.
         qualified: Vec<String>,
     },
+    /// A command of the run file's `setup` list did not end 0 when the case opened: before the
+    /// red-base check, before any model call, the case stays open. `exit` is the code it ended
+    /// with; none when a signal ended it, it could not be started or its time ran out.
+    SetupFailed {
+        /// The command's name in the `setup` list.
+        name: String,
+        /// The code it ended with.
+        exit: Option<i32>,
+    },
 }
 
 /// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
@@ -190,7 +199,7 @@ pub const REPEATED_FAILURES: u64 = 2;
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 14] = [
+pub const STOP_KINDS: [&str; 15] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -205,6 +214,7 @@ pub const STOP_KINDS: [&str; 14] = [
     "RedBase",
     "RepeatedTestFailure",
     "HarnessUnqualified",
+    "SetupFailed",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -300,6 +310,13 @@ impl std::fmt::Display for Stop {
                 rows.join("; "),
                 qualified.join(", ")
             ),
+            Stop::SetupFailed { name, exit } => match exit {
+                Some(exit) => write!(f, "SetupFailed ({name} exited {exit})"),
+                None => write!(
+                    f,
+                    "SetupFailed ({name} did not end: a signal, no start or its time ran out)"
+                ),
+            },
         }
     }
 }
@@ -8892,6 +8909,8 @@ pub struct Run<'a> {
     stops_unperformable: bool,
     /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
     stops_red_base: bool,
+    /// The run file's `setup` commands, run when the case opens ([`Run::declare_setup`]).
+    setup: Vec<crate::run_config::SetupCommand>,
     /// The records profile the case keeps its decisions under ([`Records`]): the profile the
     /// case was opened under on a resume ([`CaseDir::opened_profile`]), `trial` on a new run,
     /// until [`Run::keep_records`]; what the case keeps is [`Records::for_case`] of it. The CLI
@@ -9067,6 +9086,7 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            setup: Vec::new(),
             records: Records::Trial,
             min_free: 0,
             build_dir: None,
@@ -9366,6 +9386,7 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            setup: Vec::new(),
             records,
             min_free: 0,
             build_dir: None,
@@ -9746,6 +9767,161 @@ impl<'a> Run<'a> {
     /// without this call.
     pub fn continue_past_red_base(&mut self) {
         self.stops_red_base = false;
+    }
+
+    /// Runs `commands` when a case opens, each once and in order, before the red-base check and
+    /// before any model call ([`Run::run_setup`]): the run file's `setup`. A command is one
+    /// argument list started as a process, never read by a shell. Without this call a run has
+    /// no setup.
+    pub fn declare_setup(&mut self, commands: Vec<crate::run_config::SetupCommand>) {
+        self.setup = commands;
+    }
+
+    /// Whether the record already holds every declared setup command ended 0 at `base`, each
+    /// with the argument list now declared: the latest `setup` line of each name decides. A
+    /// resumed case on the base its setup ran at runs none again.
+    fn setup_is_current(&self, events: &Events, base: &str) -> bool {
+        let Ok(text) = std::fs::read_to_string(events.path()) else {
+            return false;
+        };
+        let mut latest: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if value["event"] == "setup"
+                && let Some(name) = value["name"].as_str()
+            {
+                latest.insert(name.to_owned(), value);
+            }
+        }
+        self.setup.iter().all(|command| {
+            latest.get(&command.name).is_some_and(|line| {
+                line["exit"] == 0
+                    && line["base"] == base
+                    && line["argv"] == serde_json::json!(command.argv)
+            })
+        })
+    }
+
+    /// The declared setup commands, run in the tree before the loop's first evaluation: under
+    /// the test command's environment and confinement ([`crate::confinement`]), held to the
+    /// test command's limits, each argument one argument. Each is recorded as a `setup` line
+    /// with its duration and exit, its output kept under the state directory beside the
+    /// transcripts; the first that does not end 0 is [`Stop::SetupFailed`]. A resumed case whose
+    /// base is the one every command last ended 0 at runs none ([`Run::setup_is_current`]).
+    fn run_setup(
+        &mut self,
+        events: &Events,
+        run_number: u64,
+        out: &mut dyn Write,
+    ) -> Result<Option<Stop>> {
+        if self.setup.is_empty() {
+            return Ok(None);
+        }
+        let base = crate::case::Branch::read(&self.case.dir)
+            .ok()
+            .and_then(|branch| branch.base_commit);
+        if let Some(base) = &base
+            && self.setup_is_current(events, base)
+        {
+            writeln!(
+                out,
+                "setup: not run again, every command ended 0 at the base {}",
+                short(base)
+            )?;
+            return Ok(None);
+        }
+        let commands = self.setup.clone();
+        for command in &commands {
+            let started = Instant::now();
+            let finished = crate::confinement::current().run_test(&crate::confinement::TestRun {
+                argv: &command.argv,
+                tree: &self.tree,
+                limits: crate::validator::TestsRun::LIMITS,
+            });
+            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let (exit, bytes) = match &finished {
+                Ok(finished) => {
+                    let mut bytes = finished.stdout.clone();
+                    if !finished.stderr.is_empty() {
+                        bytes.extend_from_slice(b"\n--- standard error ---\n");
+                        bytes.extend_from_slice(&finished.stderr);
+                    }
+                    (finished.code, bytes)
+                }
+                Err(error) => (None, format!("{error:#}\n").into_bytes()),
+            };
+            let mut made = Vec::new();
+            let kept = self.transcripts.as_ref().map(|(root, key)| {
+                crate::harness::keep_setup_output(
+                    root,
+                    key,
+                    &self.case.id,
+                    run_number,
+                    &command.name,
+                    &bytes,
+                    &mut made,
+                )
+                .map(|path| (root.clone(), path))
+            });
+            let outside_dirs = self.outside_dirs.clone();
+            self.outside.took(&made, &self.tree, &outside_dirs);
+            let output = match kept {
+                Some(Ok((root, path))) => Some(
+                    path.strip_prefix(&root)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                ),
+                Some(Err(error)) => {
+                    eprintln!("setup {}: its output was not kept: {error:#}", command.name);
+                    None
+                }
+                None => None,
+            };
+            events.emit(
+                self.steps,
+                &Event::Setup {
+                    name: command.name.clone(),
+                    argv: command.argv.clone(),
+                    base: base.clone(),
+                    exit,
+                    duration_ms,
+                    output: output.clone(),
+                },
+            )?;
+            writeln!(
+                out,
+                "setup {}: {} in {duration_ms} ms{}",
+                command.name,
+                match exit {
+                    Some(code) => format!("exited {code}"),
+                    None => "did not end".to_owned(),
+                },
+                output
+                    .as_deref()
+                    .map_or(String::new(), |path| format!("; output {path}"))
+            )?;
+            if exit != Some(0) {
+                if let Err(error) = &finished {
+                    writeln!(
+                        out,
+                        "setup {}: {}",
+                        command.name,
+                        crate::git::shown(std::ffi::OsStr::new(&format!("{error:#}")))
+                    )?;
+                }
+                return Ok(Some(Stop::SetupFailed {
+                    name: command.name.clone(),
+                    exit,
+                }));
+            }
+        }
+        // What setup wrote outside the tree is the operator's, declared: the run's baseline
+        // is taken after it, so no step is charged with it.
+        self.outside = Outside::read(&self.tree, &self.outside_dirs)?;
+        Ok(None)
     }
 
     /// Writes each step commit's message as `settings` say ([`crate::commit_style`]); without
@@ -11107,6 +11283,9 @@ impl<'a> Run<'a> {
                     qualified: preflight.qualified.clone(),
                 });
             }
+        }
+        if let Some(stop) = self.run_setup(events, run_number, out)? {
+            return Ok(stop);
         }
         // One sequence per case, continued across its runs: no decision file is overwritten,
         // so the latest by name is the latest written, and a record id, numbered by the same
