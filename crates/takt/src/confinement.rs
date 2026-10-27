@@ -929,8 +929,19 @@ fn select(
             _state: state,
         });
     }
+    let named: Vec<String> = needs
+        .families
+        .iter()
+        .map(name_of)
+        .chain(needs.facts.iter().map(name_of))
+        .collect();
+    let needed = if named.is_empty() {
+        String::new()
+    } else {
+        format!(" needing {}", named.join(", "))
+    };
     bail!(
-        "no Substrate adapter on this host serves a run in {}: {}",
+        "no Substrate adapter on this host serves a run in {}{needed}: {}",
         workspace.display(),
         refusals.join("; ")
     )
