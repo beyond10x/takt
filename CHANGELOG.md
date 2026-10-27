@@ -30,6 +30,7 @@ takt's releases.
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
+- `--harness none` takes a granted action, changing no file, not `stopped: error:` (exit 5); with `--forge none` the run then stops `NoProgress` (exit 3) (story:harness-none-takes-a-granted-action).
 
 ### Fixed
 
