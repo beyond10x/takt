@@ -462,6 +462,10 @@ struct ReportArgs {
     /// A `takt-trace/1` file `takt trace` wrote; repeatable.
     #[arg(long, value_name = "FILE")]
     trace: Vec<PathBuf>,
+    /// How to print: `text` (markdown), or `json`, one document with each run's outcome, stop
+    /// and repository obligations.
+    #[arg(long, value_enum, default_value = "text")]
+    format: ShowFormat,
 }
 
 #[derive(clap::Args)]
@@ -1445,7 +1449,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             }
             Ok(EXIT_DONE)
         }
-        Commands::Report(ReportArgs { case, steps, trace }) => {
+        Commands::Report(ReportArgs {
+            case,
+            steps,
+            trace,
+            format,
+        }) => {
             if steps.len() > case.len() {
                 return Err(anyhow!(
                     "--steps is given {} times for {} --case: give at most one per case, in the same order",
@@ -1464,7 +1473,10 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             for path in &trace {
                 traces.push(takt::trace::Trace::load(path)?);
             }
-            takt::report::print(&traces, out)?;
+            match format {
+                ShowFormat::Text => takt::report::print(&traces, out)?,
+                ShowFormat::Json => takt::report::print_json(&traces, out)?,
+            }
             Ok(EXIT_DONE)
         }
         Commands::View(ViewArgs { dir, output }) => {

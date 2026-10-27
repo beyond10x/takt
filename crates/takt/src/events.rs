@@ -206,6 +206,14 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
     },
+    /// The repository's obligations at a revision: each gate of the gates document at the case's
+    /// base with its text and its status ([`crate::obligations::Status`]), written after a gate
+    /// observation and when the run stops. The last line of the record is the table `takt
+    /// report` prints.
+    Obligations {
+        revision: String,
+        obligations: Vec<crate::obligations::Obligation>,
+    },
     /// A refusal: by the kernel ([`BY_TAKT`]: a step it discarded, a write it would not make)
     /// or by the planning store ([`BY_STORE`]), the reason verbatim.
     Refusal { by: String, reason: String },

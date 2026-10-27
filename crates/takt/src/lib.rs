@@ -19,6 +19,7 @@ pub mod improvement;
 pub mod loop_scorecard;
 #[cfg(target_os = "macos")]
 mod marked;
+pub mod obligations;
 pub mod promotion;
 pub mod protocol;
 pub mod replay;

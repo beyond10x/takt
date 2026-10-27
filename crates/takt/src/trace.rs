@@ -310,6 +310,11 @@ pub struct Header {
     /// `layers`, "layers not recorded".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<BTreeMap<String, String>>,
+    /// The repository's obligations as the run's last `obligations` line holds them: each gate of
+    /// the gates document at the case's base with its status ([`crate::obligations`]); empty when
+    /// the record holds none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub obligations: Vec<crate::obligations::Obligation>,
     /// The files the trace was read from, each relative to the case directory, or its file
     /// name alone when it lies elsewhere; never an absolute path.
     pub sources: Vec<String>,
@@ -593,6 +598,8 @@ struct Builder {
     versions: BTreeSet<String>,
     /// The number of the record line being read, when known.
     current_line: Option<usize>,
+    /// The last `obligations` line's rows.
+    obligations: Vec<crate::obligations::Obligation>,
 }
 
 impl Builder {
@@ -619,6 +626,7 @@ impl Builder {
             layers: None,
             versions: BTreeSet::new(),
             current_line: None,
+            obligations: Vec::new(),
         }
     }
 
@@ -824,6 +832,11 @@ impl Builder {
                 op.name = Self::text(line, "by");
                 op.outcome = Some("refused".to_owned());
                 op.evidence = Some(Evidence::Observed);
+            }
+            "obligations" => {
+                if let Ok(rows) = serde_json::from_value(line["obligations"].clone()) {
+                    self.obligations = rows;
+                }
             }
             "error" => {
                 self.run_errors += 1;
@@ -1173,6 +1186,7 @@ impl Builder {
             cost_usd,
             acceptance: None,
             layers,
+            obligations: self.obligations,
             sources,
             notes,
         };

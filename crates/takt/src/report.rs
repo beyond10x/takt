@@ -806,6 +806,11 @@ fn section(trace: &Trace, out: &mut dyn Write) -> std::io::Result<()> {
         )?;
     }
     writeln!(out)?;
+    if !header.obligations.is_empty() {
+        writeln!(out, "repository obligations:\n")?;
+        write!(out, "{}", crate::obligations::table(&header.obligations))?;
+        writeln!(out)?;
+    }
     layer_section(trace, out)?;
     writeln!(out)?;
     let defects = defects(trace);
@@ -885,6 +890,32 @@ pub fn print(traces: &[Trace], out: &mut dyn Write) -> std::io::Result<()> {
         section(trace, out)?;
     }
     total_section(traces, out)
+}
+
+/// The runs of `traces` as one JSON document, `{"runs": [...]}`: for each run its name, case,
+/// protocol, story, outcome and stop as the trace's header holds them, and its repository
+/// obligations (`id`, `text`, `status`; none recorded is an empty list), the same rows the
+/// markdown report prints.
+///
+/// # Errors
+/// A write that fails.
+pub fn print_json(traces: &[Trace], out: &mut dyn Write) -> std::io::Result<()> {
+    let runs: Vec<serde_json::Value> = traces
+        .iter()
+        .map(|trace| {
+            let header = &trace.header;
+            serde_json::json!({
+                "run": header.run,
+                "case": header.case,
+                "protocol": header.protocol,
+                "story": header.story,
+                "outcome": header.outcome,
+                "stop": header.stop,
+                "obligations": header.obligations,
+            })
+        })
+        .collect();
+    writeln!(out, "{}", serde_json::json!({ "runs": runs }))
 }
 
 #[cfg(test)]
