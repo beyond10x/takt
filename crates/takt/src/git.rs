@@ -2118,7 +2118,7 @@ pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
     if !dir.is_absolute() {
         bail!(
             "the set-aside directory {} is not an absolute path",
-            dir.display()
+            shown(dir.as_os_str())
         );
     }
     // The longest part of the way that exists, and the rest as it is.
@@ -2140,19 +2140,19 @@ pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
     if !std::fs::metadata(base).is_ok_and(|meta| meta.is_dir()) {
         bail!(
             "the set-aside directory {} cannot be made: {} is not a directory",
-            dir.display(),
-            base.display()
+            shown(dir.as_os_str()),
+            shown(base.as_os_str())
         );
     }
     let resolved = std::fs::canonicalize(base)
-        .with_context(|| format!("resolve {}", base.display()))?
+        .with_context(|| format!("resolve {}", shown(base.as_os_str())))?
         .join(rest);
     let tree_resolved = std::fs::canonicalize(tree).unwrap_or_else(|_| tree.to_path_buf());
     if resolved.starts_with(&tree_resolved) || dir.starts_with(tree) {
         bail!(
             "the set-aside directory {} is inside the tree {}, where a later restore would remove what was moved",
-            dir.display(),
-            tree.display()
+            shown(dir.as_os_str()),
+            shown(tree.as_os_str())
         );
     }
     Ok(resolved)

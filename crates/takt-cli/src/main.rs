@@ -1659,7 +1659,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     resuming.as_ref().map(|resuming| resuming.id.as_str()),
                 )?
             {
-                scan_identity_at_open(forge.as_ref(), &scan, &repo, &identity, &source, out)?;
+                scan_identity_at_open(
+                    forge.as_ref(),
+                    &scan,
+                    &repo,
+                    &identity,
+                    &source,
+                    looping.state_dir.as_deref(),
+                    out,
+                )?;
             }
             let forge_line = forge.line;
             let store = Aep::default();
@@ -1869,7 +1877,7 @@ impl LoopArgs {
         let refused = |why: anyhow::Error| {
             anyhow!(
                 "the state directory {} (--state-dir, or the run configuration's `state_dir`) cannot be used: {why:#}; nothing was opened",
-                dir.display()
+                takt::git::shown(dir.as_os_str())
             )
         };
         let root =
@@ -1910,7 +1918,7 @@ impl LoopArgs {
         takt::git::set_aside_root(&state_set_aside(dir), repo).map_err(|why| {
             anyhow!(
                 "the state directory {} (--state-dir, or the run configuration's `state_dir`) cannot be used: {why:#}; nothing was opened",
-                dir.display()
+                takt::git::shown(dir.as_os_str())
             )
         })?;
         Ok(())
@@ -3062,6 +3070,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
                 &repo,
                 identity,
                 &identity_source,
+                looping.state_dir.as_deref(),
                 out,
             )
             .with_context(|| format!("scenario {}", scenario.id))?;
@@ -3543,11 +3552,14 @@ fn scan_identity_at_open(
     repo: &Path,
     identity: &takt::git::CommitIdentity,
     source: &str,
+    state_dir: Option<&Path>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let dir = takt::promotion::store()?
-        .with_file_name("identity-scans")
-        .join(std::process::id().to_string());
+    let root = match state_dir {
+        Some(dir) => state_under(dir, "identity-scans"),
+        None => takt::promotion::store()?.with_file_name("identity-scans"),
+    };
+    let dir = root.join(std::process::id().to_string());
     let scanned = forge.scan_identity(repo, &dir, identity);
     let _ = std::fs::remove_dir_all(&dir);
     let scanned = scanned.with_context(|| {
