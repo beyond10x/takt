@@ -612,7 +612,8 @@ struct RunArgs {
     /// A file of the run's configuration, TOML (`.toml`) or YAML (`.yaml`, `.yml`):
     /// `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path read beside
     /// the file), `forge`, `test_cmd` and `continue_past_red_base` (a boolean), each the flag's
-    /// of that name. A YAML `loom.agent/1`
+    /// of that name; `llm`, the model routes, an `llm.routes/1` document or `{path: <file>}`
+    /// naming one beside the file, which no flag gives. A YAML `loom.agent/1`
     /// document, as Loom mounts it at `/config/agent.yaml`, gives them in its `takt` member, and
     /// nothing without one. A flag given on the command line wins over the file, the file over
     /// the flag's default. The file's `endpoint_file` is read only when the harness is `harness`.
@@ -639,6 +640,7 @@ impl RunArgs {
             )
         };
         let looping = &mut self.looping;
+        looping.llm_digest = file.llm_digest;
         if unset("iterations") && file.iterations.is_some() {
             looping.iterations = file.iterations;
         }
@@ -779,6 +781,10 @@ struct LoopArgs {
     /// whose tests fail on purpose.
     #[arg(long)]
     continue_past_red_base: bool,
+    /// The digest of the `llm.routes/1` document `--config` gave, recorded on the run's `opened`
+    /// line; set from the file, never from a flag.
+    #[arg(skip)]
+    llm_digest: Option<String>,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -2065,6 +2071,7 @@ fn finish(
         writeln!(out, "{line}")?;
     }
     run.binary = Some(REVISION.to_owned());
+    run.llm_digest = looping.llm_digest.clone();
     // The transcripts directory is made now, before any step; one that cannot be (a read-only
     // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
     // as a step whose transcript could not be kept does.

@@ -211,12 +211,15 @@ pub enum Event {
 }
 
 /// One line of the file: the instant, the step, the event.
+/// On a run's `opened` line, the digest of the `llm.routes/1` document the run ran under.
 #[derive(Serialize)]
 struct Line<'a> {
     at: String,
     step: u64,
     #[serde(flatten)]
     event: &'a Event,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    llm_digest: Option<&'a str>,
 }
 
 /// The run record of one case.
@@ -247,6 +250,19 @@ impl Events {
     /// the reader knows the torn one was skipped. A symbolic link at the path is refused, never
     /// written through ([`Events::open`]).
     pub fn emit(&self, step: u64, event: &Event) -> Result<()> {
+        self.append(step, event, None)
+    }
+
+    /// Appends the `opened` line of a run: `event` as [`Events::emit`] appends it, with the digest
+    /// of the `llm.routes/1` document the run ran under as its `llm_digest` member; no member when
+    /// the run had no such document.
+    pub fn emit_opened(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
+        self.append(step, event, llm_digest)
+    }
+
+    /// The write [`Events::emit`] and [`Events::emit_opened`] make: `event` at `step`, after the
+    /// torn line ends when there is one.
+    fn append(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
         let mut file = self
             .open(
                 std::fs::OpenOptions::new()
@@ -267,9 +283,10 @@ impl Events {
                     line,
                     reason: "the line was cut short, without its end, and is skipped".to_owned(),
                 },
+                None,
             )?);
         }
-        text.push_str(&Self::line(step, event)?);
+        text.push_str(&Self::line(step, event, llm_digest)?);
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", self.path.display()))
     }
@@ -293,11 +310,12 @@ impl Events {
     }
 
     /// `event` at `step`, the instant now, as one line with its end.
-    fn line(step: u64, event: &Event) -> Result<String> {
+    fn line(step: u64, event: &Event, llm_digest: Option<&str>) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
             at: instant(),
             step,
             event,
+            llm_digest,
         })
         .context("write an event")?;
         line.push('\n');
