@@ -6,7 +6,7 @@ status: open
 title: engineering gates cannot see the change since the base or be not applicable
 relations:
 - blocks: story:the-run-shows-each-repository-obligation
-revision: 1
+revision: 2
 ---
 # Dependency blocker: engineering-gates-see-the-change
 
@@ -19,5 +19,7 @@ engineering-protocols `story:a-gate-sees-the-change-and-may-not-apply` (engineer
 
 ## What clears it
 
-takt's `obligations::a_consumer_visible_story_without_a_note_is_not_ready` passes with an uncommitted `[patch]` path
-override to that working tree. engineering-protocols then releases, and takt takes it as a pin-only hop.
+Upstream state: that story's fixtures `git-changed` and `applies-when` and its `not_applicable_is_never_pass` test
+pass on its working tree, and takt's workspace builds against that tree through an uncommitted `[patch]` path
+override. takt's obligations scenarios are then the end-to-end check. engineering-protocols releases, and takt takes
+it as a pin-only hop.

@@ -220,3 +220,23 @@ fn a_story_in_the_file_is_refused_naming_the_file_and_the_key() {
     assert!(world.cases().is_empty(), "no case was opened");
     assert_eq!(world.branches(), branches, "no trial branch was cut");
 }
+
+/// story:scan-and-forge-are-adapters: a scenario run scans with `gates` only, so a file that
+/// declares `scan: none` is refused before anything is cut or opened, exit 1, naming the file and
+/// `scan: none`; `scan: gates` is read as any other field.
+#[test]
+fn a_declared_scan_none_is_refused_for_a_scenario_run() {
+    let world = World::new("scan-none");
+    let config = world.config(
+        "run.toml",
+        "iterations = 0\nharness = \"none\"\nforge = \"none\"\nscan = \"none\"\n",
+    );
+    let branches = world.branches();
+    let output = world.run(&config, &[]);
+    let said = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{said}");
+    assert!(said.contains(&config.display().to_string()), "{said}");
+    assert!(said.contains("`scan: none`"), "{said}");
+    assert!(world.cases().is_empty(), "no case was opened");
+    assert_eq!(world.branches(), branches, "no trial branch was cut");
+}

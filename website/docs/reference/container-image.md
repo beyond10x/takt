@@ -26,7 +26,7 @@ Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes
 | base | Debian trixie slim (`docker.io/library/debian:trixie-slim`) |
 | packages | `ca-certificates`, `git`, `gcc`, `libc6-dev`, `pkg-config`, `libssl-dev`, `python3`, `tini` |
 | takt | `/usr/local/bin/takt`, built `--release --locked` from the tree |
-| tools | `aep`, `b10x-harness`, `ess`, `b10x-gates` in `/usr/local/bin` |
+| tools | `aep`, `b10x-harness`, `ess`, `b10x-gates` (the `gates` scan adapter's program and the `bot` forge's) in `/usr/local/bin` |
 | Rust | the toolchain of `rust:1.99-slim-trixie` with `clippy` and `rustfmt`, in `/opt/rust`, linked into `/usr/local/bin` |
 
 The tools are downloaded by release URL and checked against a SHA256 in the Dockerfile:
@@ -93,7 +93,8 @@ build's `REVISION`. A build from a clone, where `.git` is a directory, names its
 
 The run's outcome is in `/workspace/.engineering/cases` and the exit code
 ([exit codes](./exit-codes.md)). With `forge: none` the delivery stays a branch in `/workspace`.
-A gates policy for `b10x-gates` comes from the deployment (`B10X_GATES_POLICY`), never the image;
+Under the default `gates` scan adapter, the policy for `b10x-gates` comes from the deployment
+(`B10X_GATES_POLICY`), never the image; a configuration that declares `scan: none` needs none.
 `b10x-gates` reads it only when the file and its directory are owned by the run's uid, the file
 has no group or other bits and the directory is not group- or other-writable.
 

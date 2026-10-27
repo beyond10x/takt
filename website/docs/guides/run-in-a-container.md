@@ -22,8 +22,9 @@ cd takt
 docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.14.0 .
 ```
 
-The image carries takt, `aep`, `b10x-harness` 0.20.0, `ess`, `b10x-gates` and a Rust toolchain
-with `clippy` and `rustfmt`. The toolchain is owned by root and cannot be written by the run, so
+The image carries takt, `aep`, `b10x-harness` 0.20.0, `ess`, `b10x-gates` (the `gates` scan
+adapter's program and the `bot` forge's) and a Rust toolchain with `clippy` and `rustfmt`. The
+toolchain is owned by root and cannot be written by the run, so
 neither a step nor a test can change the tools the gates trust. takt runs under `tini`, not as
 PID 1, so `docker stop` or a pod's stop ends it on SIGTERM rather than SIGKILL.
 
@@ -87,8 +88,10 @@ docker run --rm \
 ```
 
 Arguments after the final `takt` reach `takt run`, so `--story <ID>` or `--harness none` go there.
-An edit by b10x-harness also needs `B10X_GATES_POLICY`, naming a `b10x-gates` policy file in the
-container. `b10x-gates` reads it only when uid 10001 owns the file and its directory, the file
+An edit by b10x-harness also needs a [scan adapter](../reference/configuration.md#the-scan):
+`scan: none` declared in `/config/agent.yaml`, or, under the default `gates`, `B10X_GATES_POLICY`
+naming a `b10x-gates` policy file in the container. `b10x-gates` reads it only when uid 10001 owns
+the file and its directory, the file
 has no group or other bits and the directory is not group- or other-writable; a bind mount keeps
 the host's owner. This page's runs used `--harness none` and no policy. The two pieces that are
 not the image's default are:

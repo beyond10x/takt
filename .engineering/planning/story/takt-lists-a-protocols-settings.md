@@ -11,16 +11,17 @@ relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:protocol-settings-in-the-run-file
 - depends_on: story:the-run-file-sets-protocol-settings
+- depends_on: story:takt-ships-default-protocol-settings
 scope:
 - confidence: inferred
-  path: crates/takt/src/main.rs
+  path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/protocol.rs
 - confidence: inferred
-  path: crates/takt/tests
+  path: crates/takt/tests/protocol_show.rs
 - confidence: inferred
   path: website/docs
-revision: 2
+revision: 4
 ---
 # Story: takt-lists-a-protocols-settings
 
@@ -51,7 +52,7 @@ Each is a named conformance scenario run by `task check`.
 
 ## Scope
 
-- `crates/takt/src/main.rs` (`protocol show` subcommand)
+- `crates/takt-cli/src/main.rs` (`protocol show` subcommand)
 - `crates/takt/src/protocol.rs` (input listing)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/protocol_show.rs`
 - `website/docs/` (generated CLI reference)
