@@ -3,14 +3,15 @@ title: Configuration
 sidebar_position: 1
 description: The run configuration file takt run --config reads, the loom.agent/1 takt member, the endpoint file, and every takt run flag grouped by purpose.
 lede: A run's settings come from flags, from one configuration file and from defaults, in that order, and a file with a key takt does not know is refused before any case opens.
-source: crates/takt/src/run_config.rs (RunConfig, from_toml, from_yaml); crates/takt-cli/src/main.rs (RunArgs, EndpointArgs, configured); crates/takt/src/harness.rs (EndpointFields, EndpointConfig); takt run --help at 0.14.0; ADR 0099
+source: crates/takt/src/run_config.rs (RunConfig, from_toml, from_yaml); crates/takt/src/scan.rs (Scan, of_run, refused_at_open); crates/takt/src/forge/gitlab.rs and forge/bot.rs; crates/takt-cli/src/main.rs (RunArgs, EndpointArgs, configured); crates/takt/src/harness.rs (EndpointFields, EndpointConfig); takt run --help at 0.14.0; ADR 0099
 ---
 
 # Configuration
 
 `takt run` takes its settings from three places. A flag on the command line wins over the
 configuration file, and the file wins over the flag's default. No setting has an environment
-variable of its own; the one variable takt takes is the one `--endpoint-token-env` names. The commands, one by one, are in the
+variable of its own; takt reads the variable `--endpoint-token-env` names and, under the `gates`
+scan adapter, `B10X_GATES_POLICY` ([The scan](#the-scan)). The commands, one by one, are in the
 generated [CLI reference](./cli.md); a walk-through is in
 [Configure a run](../guides/configure-a-run.md).
 
@@ -24,7 +25,8 @@ generated [CLI reference](./cli.md); a walk-through is in
 | `.yaml`, `.yml` | YAML: the fields at the top level, or in the `takt` member of a `loom.agent/1` document |
 | anything else | refused |
 
-Every field is optional, and every field is the `takt run` flag of the same name, with `-` for `_`.
+Every field is optional. Every field but `scan` is the `takt run` flag of the same name, with `-`
+for `_`; `scan` has no flag.
 
 | field | meaning |
 |---|---|
@@ -36,6 +38,7 @@ Every field is optional, and every field is the `takt run` flag of the same name
 | `forge` | string: `bot`, `gitlab` or `none` |
 | `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
+| `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--story`, `--protocol`,
 `--input`, `--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
@@ -113,7 +116,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, and `continue_past_red_base`, a boolean, each optional
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -255,13 +258,17 @@ Without `--forge`, takt follows `origin`:
 | any other host, with `glab auth status --hostname <host>` exiting 0 | `gitlab` |
 | anything else | `none`, with the reason in one line |
 
-`--forge bot` is github.com through the b10x-gates GitHub App, not a general forge adapter:
-`b10x-gates bot` pushes the case's branch under the App, opens its pull request and merges it,
-and `gh` reads the pull request's state and checks. An `origin` on another host is refused
-naming it. `--forge gitlab` pushes over HTTPS
-with `glab auth git-credential` as its one credential helper and opens, reads and merges the
-merge request through `glab api`; without `glab` or its login it is refused before the case
-opens. `--forge none` opens no pull request: a delivery whose change reads ahead stops
+Each forge is an adapter, and the three are peers:
+
+| forge | what it pushes and opens through | what scans what it publishes |
+|---|---|---|
+| `gitlab` | `git push` over HTTPS with `glab auth git-credential` as its one credential helper; the merge request opened, read and merged through `glab api` | the run's scan adapter ([The scan](#the-scan)) |
+| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the case's branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its state and checks | `b10x-gates scan-text`, always: it is the `gates` adapter's own forge |
+| `none` | nothing | nothing leaves the machine |
+
+`--forge gitlab` without `glab` or its login is refused before the case opens. Under `scan:
+none` it checks that the head is a commit and pushes without a scan. `--forge bot` takes an
+`origin` on github.com only and refuses one on another host, naming it. `--forge none` opens no pull request: a delivery whose change reads ahead stops
 `Unperformable` at `pr.opened`, exit 7, and prints `candidate: <full commit id>`: its code
 commits, replayed on the base branch's tip under the configured identity and named by
 `refs/takt/candidates/<case>`. With no identity configured it makes none and names the setting.
@@ -269,15 +276,38 @@ commits, replayed on the base branch's tip under the configured identity and nam
 A scenario run creates its trial base only through the bot route: it refuses `--forge gitlab`,
 and on another host it runs with `--forge none`.
 
-## The gates scan
+## The scan
 
-For every harness but Claude Code, the scan under `B10X_GATES_POLICY` is a hard requirement.
-Codex and b10x-harness sessions may read outside the copy they work in, so a proposal of theirs is
-accepted only after `b10x-gates` has scanned it under the policy file that variable names. With no
-policy set the proposal is refused, `not scanned, which is not passed`, and a scan that cannot
-run, `b10x-gates` missing among them, refuses it as well.
-Claude Code's file tools stay inside its copy, so it needs no policy. Every proposal, from any
-harness, is checked for the shape of a credential, and scanned too when a policy is set.
+Codex and b10x-harness sessions may read outside the copy they work in, so takt accepts what they
+propose only after a scan passed it, or after the run declared that nothing scans it. The scan is
+an adapter, one per run, named by `scan` in the run configuration file:
+
+| `scan` | what scans a proposal, the change so far a prompt shows, and what `--forge gitlab` publishes |
+|---|---|
+| `gates`, the default | `b10x-gates scan-text`, beyond10x's scanner ([b10x-gates](https://github.com/beyond10x/gates)), under the policy file `B10X_GATES_POLICY` names |
+| `none` | nothing |
+
+`none` is accepted only as a declaration in the file `--config` gives; no flag and no variable
+sets it. What follows from the adapter:
+
+- A Codex or b10x-harness run under `gates` with `B10X_GATES_POLICY` unset is refused before its
+  case opens, exit 1, and nothing is written. The refusal names the adapter and both ways on: set
+  the policy, or declare `scan: none`. A resumed case (`--case`) is refused the same way.
+- Under `gates`, a proposal no scan passed is refused, `not scanned, which is not passed`, and so
+  is one whose scan cannot run, `b10x-gates` missing among the causes.
+- Under `none`, the run says so before its first step, `scan: none (declared in <file>); what
+  --harness <harness> proposes is accepted unscanned, checked only for the shape of a
+  credential`.
+- `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan
+  adapter, and a policy no scan reads would read as a scan that ran.
+- The case's `opened` event records the adapter as `scan`.
+
+Claude Code's file tools stay inside its copy, so a Claude Code run under `gates` needs no
+policy. Every proposal, from any harness and under either adapter, is checked in process for the
+shape of a credential, and scanned too under `gates` when a policy is set.
+
+A scenario run takes no run configuration file, so it cannot declare `none`: with a harness that
+may read outside its copy it needs `B10X_GATES_POLICY`.
 
 ## Every takt run flag
 

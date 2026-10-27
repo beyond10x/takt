@@ -185,7 +185,7 @@ What each part does:
 | `command.args` | `--story`, a flag only: the story is not a key of the run's file |
 | `configFiles` | `/config/takt.yaml` and `/config/endpoint.toml`, written verbatim |
 | `secretRef` | `LLM_API_KEY` in the environment, which the endpoint file names |
-| `secretFiles`, `env` | the gates policy file and `B10X_GATES_POLICY` naming it |
+| `secretFiles`, `env` | the gates policy file and `B10X_GATES_POLICY` naming it, for the default `gates` scan adapter; a `takt.yaml` that declares `scan: none` needs neither |
 | `workspace` | the claim at `/workspace` |
 | `agent.deploy.kubernetes` | the service account, the pod's resources and the egress |
 
