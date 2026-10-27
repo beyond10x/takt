@@ -2900,6 +2900,7 @@ impl CaseDir {
         let takt_dir = tree.join(TAKT_DIR);
         let takt_was = std::fs::symlink_metadata(&takt_dir).is_ok();
         let ignore_was = std::fs::symlink_metadata(takt_dir.join(TAKT_GITIGNORE)).is_ok();
+        let keep_was = std::fs::symlink_metadata(takt_dir.join(TAKT_WORKTREEKEEP)).is_ok();
         let opened = (|| {
             // The branch's tip is the implementation revision: not the HEAD the case was asked
             // on when the branch forked from a base elsewhere.
@@ -2931,7 +2932,7 @@ impl CaseDir {
             Ok(case)
         })();
         opened.map_err(|error: anyhow::Error| {
-            let existed = (takt_was, ignore_was);
+            let existed = (takt_was, ignore_was, keep_was);
             match Self::undo_open(
                 tree,
                 &dir,
@@ -2949,17 +2950,17 @@ impl CaseDir {
     }
 
     /// Takes back an open that failed after its branch was made: the case directory if any of
-    /// it was written, the cases directory when it is empty, the `.takt/.gitignore` and the
-    /// `.takt/` directory the open wrote where they were absent before (`existed`: whether
-    /// `.takt/` and its ignore file were there), and the branch, the tree back on `left`, or
-    /// detached at `start` when it was detached.
+    /// it was written, the cases directory when it is empty, the `.takt/.gitignore`, the
+    /// `.takt/.worktreekeep` and the `.takt/` directory the open wrote where they were absent
+    /// before (`existed`: whether `.takt/`, its ignore file and its keep file were there), and
+    /// the branch, the tree back on `left`, or detached at `start` when it was detached.
     fn undo_open(
         tree: &Path,
         dir: &Path,
         branch: &str,
         left: Option<&str>,
         start: &str,
-        existed: (bool, bool),
+        existed: (bool, bool, bool),
     ) -> Result<()> {
         if std::fs::symlink_metadata(dir).is_ok() {
             std::fs::remove_dir_all(dir)
@@ -2969,10 +2970,13 @@ impl CaseDir {
         if let Some(cases) = dir.parent() {
             let _ = std::fs::remove_dir(cases);
         }
-        let (takt_was, ignore_was) = existed;
+        let (takt_was, ignore_was, keep_was) = existed;
         let takt_dir = tree.join(TAKT_DIR);
         if !ignore_was {
             let _ = std::fs::remove_file(takt_dir.join(TAKT_GITIGNORE));
+        }
+        if !keep_was {
+            let _ = std::fs::remove_file(takt_dir.join(TAKT_WORKTREEKEEP));
         }
         if !takt_was {
             let _ = std::fs::remove_dir(&takt_dir);
