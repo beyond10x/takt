@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:every-harness-reads-the-repository-instructions-from-the-base
 kind: story
-status: active
+status: implemented
 title: Every harness kind is given the configured instruction files as the base holds them
 summary: context key, default AGENTS.md and CLAUDE.md, read at base, recorded
 tags:
@@ -22,10 +22,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/step_context.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T12:00:44Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":4}}}
 - {from: "proposed", to: "active", at: "2026-10-27T12:00:44Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":4}}}
+- {from: "active", to: "implemented", at: "2026-10-27T15:59:14Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":4}}}
 ---
 # Story: every-harness-reads-the-repository-instructions-from-the-base
 
