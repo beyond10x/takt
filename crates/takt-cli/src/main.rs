@@ -1150,9 +1150,9 @@ struct LoopArgs {
     /// which the assertions library starts itself, and a host none of whose adapters serves
     /// the profile or a fact --confinement-needs names are refused by name and never run
     /// unconfined. `none`: the test command runs through Substrate's `local` adapter, declared
-    /// insecure with the reason the first line and the `opened` event state: on the host as
+    /// insecure with the reason the `case` line and the `opened` event state: on the host as
     /// this user, in a cleared environment without credentials, with a scratch home and
-    /// `TMPDIR`; it can read what this user can. The first line the run prints and its
+    /// `TMPDIR`; it can read what this user can. The `case` line the run prints and its
     /// `opened` event name the adapter and the facts it proved.
     #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
     confinement: String,

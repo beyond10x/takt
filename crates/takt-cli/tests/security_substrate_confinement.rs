@@ -94,7 +94,7 @@ fn shown(output: &Output) -> String {
 }
 
 fn opened(repo: &Path) -> serde_json::Value {
-    let events = repo.join(".engineering/cases/probe/events.jsonl");
+    let events = repo.join(".takt/cases/probe/events.jsonl");
     let text = fs::read_to_string(&events)
         .unwrap_or_else(|error| panic!("{} ({error})", events.display()));
     let line = text
@@ -214,7 +214,7 @@ fn security_substrate_confinement_first_line_names_the_proved_facts() {
         .expect("takt runs");
     let first = String::from_utf8_lossy(&output.stdout)
         .lines()
-        .next()
+        .find(|line| line.starts_with("case "))
         .unwrap_or_default()
         .to_owned();
     let opened = opened(&repo);

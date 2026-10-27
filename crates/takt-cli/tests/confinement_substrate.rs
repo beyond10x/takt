@@ -4,11 +4,11 @@
 //! - `--confinement substrate` runs the test command through the first adapter of `systemd`
 //!   around `linux`, `linux` and `macos` whose facts serve its profile: the tree the workspace,
 //!   the toolchain read-only, the network isolated, nothing of the host outside the tree
-//!   readable or writable; the first line and the `opened` event name the adapter and its facts.
+//!   readable or writable; the `case` line and the `opened` event name the adapter and its facts.
 //! - A family or fact `--confinement-needs` names that no adapter serves refuses the run by
 //!   name before anything starts, under `none` as under `substrate`.
 //! - `--confinement none` runs the test command through Substrate's `local` adapter, declared
-//!   insecure with the reason the first line and the `opened` event state.
+//!   insecure with the reason the `case` line and the `opened` event state.
 //! - takt's crates hold no confinement mechanism of their own.
 //!
 //! The confined cases need an adapter of this host; where none serves the run, the case prints
@@ -121,11 +121,11 @@ fn shown(output: &Output) -> String {
     )
 }
 
-/// The first line `output` printed.
-fn first_line(output: &Output) -> String {
+/// The `case` line `output` printed: the one that names the case, its inputs and confinement.
+fn case_line(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .next()
+        .find(|line| line.starts_with("case "))
         .unwrap_or_default()
         .to_owned()
 }
@@ -146,7 +146,7 @@ fn opened(repo: &Path) -> serde_json::Value {
         }
     }
     let mut found = Vec::new();
-    find(&repo.join(".engineering"), &mut found);
+    find(&repo.join(".takt"), &mut found);
     let events = found
         .iter()
         .find_map(|path| fs::read_to_string(path).ok())
@@ -297,10 +297,10 @@ fn assert_confined(run: &Confined, adapters: &[&str]) {
         "story:confinement-through-substrate-on-linux-and-macos: the opened event names the adapter chosen and its facts: {}",
         run.opened
     );
-    let first = first_line(&run.output);
+    let first = case_line(&run.output);
     assert!(
         first.contains("; confinement substrate: Substrate ") && first.contains(adapter),
-        "story:confinement-through-substrate-on-linux-and-macos: the first line names the adapter: {first}"
+        "story:confinement-through-substrate-on-linux-and-macos: the case line names the adapter: {first}"
     );
 }
 
@@ -409,7 +409,7 @@ fn confinement_unserved_fact_refused() {
             "story:confinement-through-substrate-on-linux-and-macos: the refusal names {need}: {stderr}"
         );
         assert!(
-            !outer.0.join("ran").exists() && !repo.join(".engineering/cases").exists(),
+            !outer.0.join("ran").exists() && !repo.join(".takt/cases").exists(),
             "story:confinement-through-substrate-on-linux-and-macos: nothing started for {confinement} needing {need}: {}",
             shown(&output)
         );
@@ -417,7 +417,7 @@ fn confinement_unserved_fact_refused() {
 }
 
 /// `--confinement none` runs the test command through Substrate's `local` adapter, declared
-/// insecure: the first line and the `opened` event state the reason; the command's environment
+/// insecure: the `case` line and the `opened` event state the reason; the command's environment
 /// is cleared of a credential takt has, and its home and temporary directory are scratch ones.
 #[test]
 fn confinement_local_is_declared_insecure() {
@@ -440,13 +440,13 @@ fn confinement_local_is_declared_insecure() {
             ("HOME", outer.0.to_str().expect("UTF-8")),
         ],
     );
-    let first = first_line(&output);
+    let first = case_line(&output);
     assert!(
         first.contains(&format!(
             "; confinement none: Substrate local, declared insecure: {}; proved: ",
             takt::confinement::LOCAL_REASON
         )),
-        "story:confinement-through-substrate-on-linux-and-macos: the first line states the reason: {}",
+        "story:confinement-through-substrate-on-linux-and-macos: the case line states the reason: {}",
         shown(&output)
     );
     let opened = opened(&repo);

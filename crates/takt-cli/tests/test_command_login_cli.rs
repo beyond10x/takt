@@ -199,12 +199,14 @@ fn the_test_command_reaches_no_login_of_the_operator() {
     // runs through Substrate's `local` adapter, declared insecure: its environment still names
     // none of the operator's logins, but nothing hides what this user can read by its path (the
     // runtime directory's sockets, a registry login under the CARGO_HOME it is given), and the
-    // run says so on its first line.
+    // run says so on its `case` line.
     assert!(
-        out.lines().next().is_some_and(
-            |first| first.contains("; confinement none: Substrate local, declared insecure: ")
-        ),
-        "story:confinement-through-substrate-on-linux-and-macos: the first line declares the test command unconfined: {out}"
+        out.lines()
+            .find(|line| line.starts_with("case "))
+            .is_some_and(
+                |case| case.contains("; confinement none: Substrate local, declared insecure: ")
+            ),
+        "story:confinement-through-substrate-on-linux-and-macos: the case line declares the test command unconfined: {out}"
     );
     assert!(
         !seen.contains("hosts.yml"),

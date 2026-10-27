@@ -89,10 +89,10 @@ sandbox of its own:
   read-only in the run, and a host whose Substrate probe did not prove
   `exec.workspace-scoped-write` is refused by that name. On `macos` the tree stays writable and
   its `.git` is sealed. What no adapter serves, a family or fact
-  `--confinement-needs` names among them, is refused by name and never run unconfined. The first
+  `--confinement-needs` names among them, is refused by name and never run unconfined. The `case`
   line and the `opened` event name the adapter and the facts it proved.
 - `--confinement none`, the default, starts the test command through Substrate's `local` adapter,
-  declared insecure with its reason, which the first line and the `opened` event carry. It runs on
+  declared insecure with its reason, which the `case` line and the `opened` event carry. It runs on
   the host as this user, with an environment cleared of logins, a scratch home and `TMPDIR`, the
   timeout and a bounded output, and can read whatever this user can. On macOS it no longer runs
   under takt's Seatbelt profile, so its writes, the programs it starts, launchd and the keychain
