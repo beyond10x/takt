@@ -11459,6 +11459,8 @@ impl<'a> Run<'a> {
             out,
         )?;
         let failed = failed_checks(&events.read()?);
+        // The repository's instruction files are read at the commit the case forked from.
+        let base = crate::case::Branch::read(&self.case.dir)?.base_commit;
         let mut context = StepContext {
             tree: &self.tree,
             intent: &self.options.intent,
@@ -11473,6 +11475,7 @@ impl<'a> Run<'a> {
             change: &change,
             failed: &failed,
             scope_revision: None,
+            base_revision: base.as_deref(),
         };
         // The step is judged by what it did to the tree, against a checkpoint taken just
         // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -11853,6 +11856,26 @@ impl<'a> Run<'a> {
             Ok(report) => report,
             Err(error) => {
                 let _ = tell(out);
+                // An instruction file the base tracks that cannot be given: the step was not
+                // started, so nothing is charged; the run stops with the files named, in its
+                // output and its record, and the case stays open.
+                if let Some(refusal) =
+                    error.downcast_ref::<crate::harness::InstructionFilesRefused>()
+                {
+                    let moved = match undo() {
+                        Ok(moved) => moved,
+                        Err(undo) => {
+                            return Err(error.context(format!(
+                                "step {}: the step could not be given its instruction files, and its change could not be discarded: {undo:#}{note}",
+                                self.steps
+                            )));
+                        }
+                    };
+                    let why = format!("step {}: {refusal}{moved}{note}", self.steps);
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "{why}")?;
+                    return Ok(Judgement::Stop(Stop::StepRefused(why)));
+                }
                 // A session that ended without the line naming its action, its change put back
                 // whole, is handed to the executor, which records the try and tries again
                 // ([`NO_ACTION_TRIES`]); one whose change could not be put back is not.

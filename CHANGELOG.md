@@ -20,6 +20,10 @@ takt's releases.
 
 ### Changed
 
+- Every harness kind is given the repository's `AGENTS.md` and `CLAUDE.md` before the prompt, each only when the case's base commit tracks it.
+- They are read as the base commit holds them, never from the step's copy; Claude Code and b10x-harness steps were given none, and a Codex step read the tree.
+- The step's opening record lists them in `instructions` with path, sha256 and revision; they count against the scope files' bound of 8 files and 64 KiB.
+- A tracked instruction file that cannot be given (past the bound, not text, of a credential's shape) stops the run with `StepRefused`, naming it, before the step starts.
 - **Breaking:** `--harness codex` or `--harness harness` with neither `B10X_GATES_POLICY` nor `scan: none` is refused before the case opens, exit 1, naming the scan adapter; a resumed case too.
 - `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
 - `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.

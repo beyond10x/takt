@@ -444,7 +444,15 @@ pub fn rebuilt_prompt_line(
     let change = change_of(start, &start.case_dir, repo, &start.revision)?;
     let failed = failed_of(start);
     // The scope files as the revision the step started at holds them, in the repository.
-    let context = context(start, repo, &offer, &change, &failed, Some(&start.revision));
+    let context = context(
+        start,
+        repo,
+        &offer,
+        &change,
+        &failed,
+        Some(&start.revision),
+        None,
+    );
     let _ = probe.step(&context);
     let transcript = probe
         .last_transcript()
@@ -486,9 +494,11 @@ fn context<'a>(
     change: &'a ChangeSoFar,
     failed: &'a [crate::validator::FailedCheck],
     scope_revision: Option<&'a str>,
+    base_revision: Option<&'a str>,
 ) -> StepContext<'a> {
     StepContext {
         scope_revision,
+        base_revision,
         tree,
         intent: &start.intent,
         offered: &offer.offered,
@@ -720,7 +730,19 @@ pub fn replay_once(
     let started_at = crate::events::instant();
     let change = change_of(start, &case_dir, &tree, &revision)?;
     let failed = failed_of(start);
-    let stepped = harness.step(&context(start, &tree, &offer, &change, &failed, None));
+    // The instruction files are read at the base the case pinned, as the run read them.
+    let base = crate::case::Branch::read(&start.case_dir)
+        .ok()
+        .and_then(|branch| branch.base_commit);
+    let stepped = harness.step(&context(
+        start,
+        &tree,
+        &offer,
+        &change,
+        &failed,
+        None,
+        base.as_deref(),
+    ));
     let transcript = harness.last_transcript();
     if let Some(bytes) = &transcript {
         write_private(&dir.join("transcript.jsonl"), bytes)?;

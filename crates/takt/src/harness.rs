@@ -54,6 +54,10 @@ pub struct StepContext<'a> {
     /// the revision the step started at; none for a step in a tree, read at its `HEAD` and on
     /// disk.
     pub scope_revision: Option<&'a str>,
+    /// The case's base commit, at which the repository's instruction files are read
+    /// ([`instruction_files`]), never from the step's copy of the tree; none for a case that
+    /// pins no base, whose step is given none.
+    pub base_revision: Option<&'a str>,
 }
 
 /// What a step reported.
@@ -181,9 +185,10 @@ pub fn codex_prompt_argument(brief: &str, files: &[DeclaredContextFile]) -> Stri
 /// and untracked but not ignored, and the cases directory whole) as its working directory, never
 /// the tree itself; its change comes back as a [`Proposal`] ([`Harness::take_proposal`]), which
 /// takt's edit effect applies under the step guard whichever kind proposed it. The prompt is
-/// [`ClaudeCode`]'s for every kind, the change so far with it; a Codex session is given
-/// `AGENTS.md` and the scope files as context files ahead of its prompt besides
-/// ([`context_files`]), the other kinds none. Metaharness constructs the child's environment
+/// [`ClaudeCode`]'s for every kind, the change so far with it; every kind is given the
+/// repository's instruction files ([`Self::context`]) as the case's base holds them
+/// ([`instruction_files`]) as context files ahead of its prompt, and a Codex session the scope
+/// files besides ([`context_files`]). Metaharness constructs the child's environment
 /// from its own allowlist, so no variable the run withholds from a harness reaches it. The
 /// session the executor records for a step that proposes is kept for the run to observe into
 /// the case ([`Harness::take_session`]).
@@ -211,6 +216,10 @@ pub struct SessionHarness {
     /// opens the store by it, and the key never reaches takt, metaharness or the child's
     /// environment. None for a token file and for Claude Code and Codex.
     pub api_key_secret: Option<String>,
+    /// The repository's instruction files every step is given, as metaharness's `context` names
+    /// them: relative paths, each read at the case's base commit and given only when the base
+    /// tracks it ([`instruction_files`]). [`DEFAULT_INSTRUCTION_FILES`] unless configured.
+    pub context: Vec<String>,
     /// For `Kind::B10x` on an environment variable's key, the file its value is staged in,
     /// which the endpoint's `token_file` names ([`Self::hold_staged`]); held as long as the
     /// harness, so the file and its directory are removed when the run that holds it ends.
@@ -286,6 +295,10 @@ impl SessionHarness {
             .to_owned(),
             endpoint: None,
             api_key_secret: None,
+            context: DEFAULT_INSTRUCTION_FILES
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect(),
             staged: None,
             credential: None,
             home: None,
@@ -545,6 +558,18 @@ impl Harness for SessionHarness {
         *self.proposal.borrow_mut() = None;
         let started_at = crate::events::instant();
         let scan = crate::scan::gates::ChangeScan::from_env();
+        // The repository's instruction files as the case's base holds them, whatever the
+        // step's copy of the tree says now: given to every kind. One that cannot be given is
+        // named and the step is refused, never run without it.
+        let instructions = match context.base_revision {
+            Some(at) => instruction_files(context.tree, at, &self.context, scan.as_ref()),
+            None => InstructionFiles::default(),
+        };
+        if !instructions.left_out.is_empty() {
+            return Err(anyhow::Error::new(InstructionFilesRefused(
+                instructions.left_out.clone(),
+            )));
+        }
         let rule = ClaudeCode::rule_of(self.kind);
         // The step's prompt were it given `files` as context files, which its Codex prompt
         // names: the bound below measures the prompt so composed for each list tried, the line
@@ -557,20 +582,42 @@ impl Harness for SessionHarness {
         let mut executor =
             loom_sdk::session::SessionExecutor::new(context.tree, Vec::new(), String::new())
                 .of_kind(self.kind);
-        // Codex reads no `@<path>` as a file, so its session is given `AGENTS.md` and the scope
-        // files as context files instead ([`context_files`]), as many as fit beside its prompt
-        // in the one argument metaharness starts its child with, the prompt composed afresh
-        // for each list tried; Claude Code has its mention line and b10x-harness neither.
+        // Codex reads no `@<path>` as a file, so its session is given the instruction files and
+        // the scope files as context files ([`context_files_after`]), the scope files as many as
+        // fit beside its prompt in the one argument metaharness starts its child with, the
+        // prompt composed afresh for each list tried; Claude Code has its mention line for the
+        // scope files, and b10x-harness none, and both are given the instruction files alone.
         let given = if self.kind == Kind::Codex {
-            context_files(
+            let fit =
+                |files: &[DeclaredContextFile]| codex_prompt_argument(&prompt_for(files), files);
+            if !instructions.given.is_empty()
+                && !loom_sdk::session::metaharness::protocol::argument_fits(&fit(
+                    &instructions.given
+                ))
+            {
+                return Err(anyhow::Error::new(InstructionFilesRefused(
+                    instructions
+                        .given
+                        .iter()
+                        .map(|file| {
+                            format!(
+                                "{}: with the prompt it does not fit the one argument a Codex session is started with",
+                                file.path()
+                            )
+                        })
+                        .collect(),
+                )));
+            }
+            context_files_after(
                 context.tree,
                 context.intent,
                 context.change,
                 scan.as_ref(),
-                &|files| codex_prompt_argument(&prompt_for(files), files),
+                &fit,
+                &instructions.given,
             )
         } else {
-            Vec::new()
+            instructions.given.clone()
         };
         let prompt = prompt_for(&given);
         // Loom's executor declares no context file to metaharness, so the files' block is put
@@ -579,22 +626,37 @@ impl Harness for SessionHarness {
         // the brief is the prompt as it is.
         executor.brief =
             loom_sdk::session::metaharness::protocol::with_context_files(&prompt, &given);
-        // The step's opening record: its prompt and, for a Codex step, each context file it is
-        // given, as metaharness records one (path, bytes, sha256, channel); the other kinds are
-        // given none and their record names none.
+        // The step's opening record: its prompt and each context file it is given, as
+        // metaharness records one (path, bytes, sha256, channel): a Codex step's always, the
+        // other kinds' when they are given any; and, of those, the instruction files with the
+        // revision they were read at.
         let mut opening = serde_json::json!({
             "type": "takt.prompt",
             "step": context.step,
             "prompt": &prompt,
         });
-        if self.kind == Kind::Codex {
+        {
             use loom_sdk::session::metaharness::protocol::ContextChannel;
-            opening["context"] = serde_json::to_value(
-                given
-                    .iter()
-                    .map(|file| file.record(ContextChannel::UserPrompt))
-                    .collect::<Vec<_>>(),
-            )?;
+            if self.kind == Kind::Codex || !given.is_empty() {
+                opening["context"] = serde_json::to_value(
+                    given
+                        .iter()
+                        .map(|file| file.record(ContextChannel::UserPrompt))
+                        .collect::<Vec<_>>(),
+                )?;
+            }
+            if let Some(at) = context
+                .base_revision
+                .filter(|_| !instructions.given.is_empty())
+            {
+                let mut recorded = Vec::new();
+                for file in &instructions.given {
+                    let mut entry = serde_json::to_value(file.record(ContextChannel::UserPrompt))?;
+                    entry["revision"] = serde_json::Value::from(at);
+                    recorded.push(entry);
+                }
+                opening["instructions"] = serde_json::Value::Array(recorded);
+            }
         }
         let mut opening = opening.to_string().into_bytes();
         opening.push(b'\n');
@@ -956,7 +1018,7 @@ pub fn scope_files(
         scope_paths(intent),
         change,
         scan,
-        Given::Mention,
+        (Given::Mention, (0, 0)),
         &mut |_, _| true,
     )
 }
@@ -993,16 +1055,63 @@ pub fn context_files(
     scan: Option<&crate::scan::gates::ChangeScan>,
     argument: &dyn Fn(&[DeclaredContextFile]) -> String,
 ) -> Vec<DeclaredContextFile> {
-    let mut named = vec!["AGENTS.md"];
-    named.extend(scope_paths(intent));
     let mut given: Vec<DeclaredContextFile> = Vec::new();
+    kept_files(
+        tree,
+        None,
+        vec!["AGENTS.md"],
+        change,
+        scan,
+        (Given::Context, (0, 0)),
+        &mut |path, bytes| {
+            let Ok(file) = DeclaredContextFile::new(path.to_owned(), bytes.to_vec()) else {
+                return false;
+            };
+            given.push(file);
+            let fits = loom_sdk::session::metaharness::protocol::argument_fits(&argument(&given));
+            if !fits {
+                given.pop();
+            }
+            fits
+        },
+    );
+    context_files_after(tree, intent, change, scan, argument, &given)
+}
+
+/// The files of `tree` a Codex step's session is given as context files: `instructions`, the
+/// repository's instruction files as the case's base holds them ([`instruction_files`]), then
+/// the files the intent's `## Scope` section names, each once, each kept as [`context_files`]
+/// keeps its scope files, the instruction files counted against [`SCOPE_FILES`] and
+/// [`SCOPE_BYTES`] with them, each costing what metaharness charges for it
+/// ([`path_cost`]), and the argument ([`context_files`]) measured with them all.
+#[must_use]
+pub fn context_files_after(
+    tree: &Path,
+    intent: &str,
+    change: &ChangeSoFar,
+    scan: Option<&crate::scan::gates::ChangeScan>,
+    argument: &dyn Fn(&[DeclaredContextFile]) -> String,
+    instructions: &[DeclaredContextFile],
+) -> Vec<DeclaredContextFile> {
+    let named: Vec<&str> = scope_paths(intent)
+        .into_iter()
+        .filter(|path| !instructions.iter().any(|file| file.path() == *path))
+        .collect();
+    let spent = (
+        instructions.len(),
+        instructions
+            .iter()
+            .map(|file| file.cost() as u64)
+            .sum::<u64>(),
+    );
+    let mut given: Vec<DeclaredContextFile> = instructions.to_vec();
     kept_files(
         tree,
         None,
         named,
         change,
         scan,
-        Given::Context,
+        (Given::Context, spent),
         &mut |path, bytes| {
             let Ok(file) = DeclaredContextFile::new(path.to_owned(), bytes.to_vec()) else {
                 return false;
@@ -1018,6 +1127,123 @@ pub fn context_files(
     given
 }
 
+/// The instruction files a step is given when none is configured: the repository's `AGENTS.md`
+/// and `CLAUDE.md`, each only when the case's base tracks it.
+pub const DEFAULT_INSTRUCTION_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
+
+/// The instruction files read at a revision ([`instruction_files`]).
+#[derive(Debug, Clone, Default)]
+pub struct InstructionFiles {
+    /// The files to give, in the order configured, each as the revision holds it.
+    pub given: Vec<DeclaredContextFile>,
+    /// Each file the revision tracks that cannot be given, as `<path>: <why>`.
+    pub left_out: Vec<String>,
+}
+
+/// The cause of a step refused because an instruction file the base tracks cannot be given:
+/// past the bounds, not text, of a credential's shape, or refused by the scan. The run stops
+/// with the files named ([`crate::run::Stop::StepRefused`]); a step is never run without them.
+#[derive(Debug)]
+pub struct InstructionFilesRefused(pub Vec<String>);
+
+impl std::fmt::Display for InstructionFilesRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the repository's instruction files cannot all be given to the step, so none was started: {}",
+            self.0.join("; ")
+        )
+    }
+}
+
+impl std::error::Error for InstructionFilesRefused {}
+
+/// The files of `paths` (relative to the tree) that `revision` of `tree` tracks as regular
+/// files, read as that revision holds them, never from the working tree or the step's copy of
+/// it, in the order of `paths` and each once; a path the revision does not track is not given.
+/// A tracked file that cannot be given is named in [`InstructionFiles::left_out`] with its
+/// cause, never dropped without a word: more than [`SCOPE_FILES`] files, or more bytes than
+/// [`SCOPE_BYTES`] allows with the files before it, each costing what metaharness charges for
+/// it ([`path_cost`]); bytes that are not UTF-8 text or hold a NUL; text of a credential's
+/// shape; text the scan refuses; a path that is not a plain relative one.
+#[must_use]
+pub fn instruction_files(
+    tree: &Path,
+    revision: &str,
+    paths: &[String],
+    scan: Option<&crate::scan::gates::ChangeScan>,
+) -> InstructionFiles {
+    let mut found = InstructionFiles::default();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut total: u64 = 0;
+    for path in paths {
+        let path = path.as_str();
+        if seen.contains(&path) {
+            continue;
+        }
+        seen.push(path);
+        if !plain_scope_path(path) {
+            found.left_out.push(format!(
+                "{path}: not a plain path relative to the repository"
+            ));
+            continue;
+        }
+        let Ok(tracked) = tracked_at(tree, revision, &[path]) else {
+            found
+                .left_out
+                .push(format!("{path}: the revision's tree could not be read"));
+            continue;
+        };
+        let Some(size) = tracked
+            .iter()
+            .find(|(kept, _)| kept == path)
+            .map(|(_, size)| *size)
+        else {
+            continue;
+        };
+        let charge = path_cost(path, Given::Context);
+        if found.given.len() == SCOPE_FILES {
+            found
+                .left_out
+                .push(format!("{path}: past the {SCOPE_FILES} files allowed"));
+            continue;
+        }
+        if total + charge + size > SCOPE_BYTES {
+            found.left_out.push(format!(
+                "{path}: {size} bytes, past the {SCOPE_BYTES} bytes allowed for the files given ({total} already)"
+            ));
+            continue;
+        }
+        let Ok(bytes) = crate::git::blob(tree, &format!("{revision}:{path}")) else {
+            found
+                .left_out
+                .push(format!("{path}: it could not be read at the revision"));
+            continue;
+        };
+        if std::str::from_utf8(&bytes).is_err() || bytes.contains(&0) {
+            found.left_out.push(format!("{path}: not UTF-8 text"));
+            continue;
+        }
+        if crate::run::credential_shape(&String::from_utf8_lossy(&bytes)).is_some() {
+            found
+                .left_out
+                .push(format!("{path}: it holds text of a credential's shape"));
+            continue;
+        }
+        if scan.is_some_and(|scan| crate::run::scan_change(tree, scan, &bytes).is_err()) {
+            found.left_out.push(format!("{path}: the scan refused it"));
+            continue;
+        }
+        let Ok(file) = DeclaredContextFile::new(path.to_owned(), bytes) else {
+            found.left_out.push(format!("{path}: not UTF-8 text"));
+            continue;
+        };
+        total += file.cost() as u64;
+        found.given.push(file);
+    }
+    found
+}
+
 /// What the files [`kept_files`] keeps are given as: Claude Code file mentions
 /// ([`scope_files`]), or metaharness context files ([`context_files`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1029,16 +1255,18 @@ enum Given {
 /// The paths of `candidates` that [`scope_files`]'s rules keep, in order and each once; given
 /// as context files ([`Given::Context`]), only those [`context_files`] also keeps. Last, each
 /// file every rule keeps is asked of `admits` with its bytes, and left out, as a file past the
-/// bounds is, when it answers no.
+/// bounds is, when it answers no. The second of `given_and_spent` is the files and bytes
+/// already given to the step from the same bounds, counted against them first.
 fn kept_files(
     tree: &Path,
     at: Option<&str>,
     candidates: Vec<&str>,
     change: &ChangeSoFar,
     scan: Option<&crate::scan::gates::ChangeScan>,
-    given: Given,
+    given_and_spent: (Given, (usize, u64)),
     admits: &mut dyn FnMut(&str, &[u8]) -> bool,
 ) -> Vec<String> {
+    let (given, spent) = given_and_spent;
     let mut named: Vec<&str> = Vec::new();
     for path in candidates {
         if plain_scope_path(path)
@@ -1074,9 +1302,9 @@ fn kept_files(
     let whole = shown_whole(change);
     named.retain(|path| !whole.contains(path));
     let mut kept = Vec::new();
-    let mut total = 0;
+    let mut total = spent.1;
     for path in named {
-        if kept.len() == SCOPE_FILES {
+        if spent.0 + kept.len() == SCOPE_FILES {
             break;
         }
         let charge = path_cost(path, given);
@@ -3995,6 +4223,7 @@ mod tests {
             change: &ChangeSoFar::NoneYet,
             failed: &[],
             scope_revision: None,
+            base_revision: Some("HEAD"),
         })
     }
 
@@ -4562,8 +4791,9 @@ mod tests {
 
     /// A Codex step's `takt.prompt` record names each context file its session was given, in
     /// order, as metaharness records one: its path, its bytes, the sha256 of them and the
-    /// channel, the user prompt. A Claude Code and a b10x-harness step's record carries no
-    /// `context`, as those sessions are given none.
+    /// channel, the user prompt. A Claude Code and a b10x-harness step's record lists the
+    /// instruction files they are given in `context` and, with the revision they were read at,
+    /// in `instructions`; the scope files are not given to them as context.
     #[test]
     fn a_codex_steps_prompt_record_names_its_context_files() {
         use sha2::Digest as _;
@@ -4598,21 +4828,30 @@ mod tests {
         );
         for kind in [Kind::Claude, Kind::B10x] {
             let (line, _) = session_opening(kind, &dir.0, &intent);
-            assert!(line.get("context").is_none(), "{kind:?}: {line}");
+            assert_eq!(
+                line["context"],
+                serde_json::json!([entry(AGENTS)]),
+                "{kind:?}: {line}"
+            );
+            assert_eq!(
+                line["instructions"][0]["revision"], "HEAD",
+                "{kind:?}: {line}"
+            );
         }
     }
 
-    /// A Claude Code step's session is given no context files, and its prompt still holds the
-    /// mention line; a b10x-harness step's is given none either.
+    /// A Claude Code step's session is given the instruction files as context and its prompt
+    /// still holds the mention line; a b10x-harness step's is given the instruction files too.
     #[test]
-    fn a_claude_step_is_given_no_context_and_keeps_its_mention_line() {
+    fn a_claude_step_is_given_the_instruction_files_and_keeps_its_mention_line() {
         let dir = scratch("context-claude");
         committed(&dir.0, &[AGENTS, TODO, TESTS]);
         let intent = scoped(&["todo.py", "tests/test_todo.py"]);
         let (prompt, launched) = session_launch(Kind::Claude, &dir.0, &intent);
         assert_eq!(launched.len(), 1, "one child: {launched:?}");
-        assert!(
-            !launched[0].iter().any(|arg| arg.contains("<context-file")),
+        assert_eq!(
+            context_paths(&launched[0]),
+            ["AGENTS.md"],
             "{:?}",
             launched[0]
         );
@@ -4620,14 +4859,8 @@ mod tests {
             prompt.contains("Files in scope, attached: @todo.py @tests/test_todo.py\n\n"),
             "{prompt}"
         );
-        let (_, launched) = session_launch(Kind::B10x, &dir.0, &intent);
-        assert!(
-            launched
-                .iter()
-                .flatten()
-                .all(|arg| !arg.contains("<context-file")),
-            "{launched:?}"
-        );
+        let (line, _) = session_opening(Kind::B10x, &dir.0, &intent);
+        assert_eq!(line["context"][0]["path"], "AGENTS.md", "{line}");
     }
 
     /// `--harness claude` through metaharness (`ClaudeSession::step`) gives the step the same
