@@ -867,6 +867,7 @@ impl LoopArgs {
         {
             looping.continue_past_red_base = go_on;
         }
+        looping.setup = file.setup.unwrap_or_default();
         looping.records_of_file = file.records.filter(|_| unset("records"));
         looping.commit = looping.commit_settings(file.commit.as_ref())?;
         Ok(())
@@ -1153,6 +1154,10 @@ struct LoopArgs {
     /// whose tests fail on purpose.
     #[arg(long)]
     continue_past_red_base: bool,
+    /// The `setup` commands `--config` gave, run when the case opens; set from the file, never from
+    /// a flag.
+    #[arg(skip)]
+    setup: Vec<takt::run_config::SetupCommand>,
     /// The digest of the `llm.routes/1` document `--config` gave, recorded on the run's `opened`
     /// line; set from the file, never from a flag.
     #[arg(skip)]
@@ -1280,7 +1285,7 @@ const EXIT_DISK_LOW: u8 = 8;
 /// What `takt run --help` says about the exit codes; each line opens with its code.
 const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
-  1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
+  1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run, or stopped: SetupFailed (<name> exited <code>): a command of the run file's `setup` list did not end 0 when the case opened, before the red-base check and any model call; its output is kept under the state directory
   2  the arguments do not parse
   3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint) or RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
@@ -3125,6 +3130,7 @@ fn finish(
     if looping.continue_past_red_base {
         run.continue_past_red_base();
     }
+    run.declare_setup(looping.setup.clone());
     if let Some(settings) = &looping.commit {
         run.commit_settings(settings.clone());
     }
@@ -3164,6 +3170,7 @@ fn finish(
         Stop::Waiting { .. } => EXIT_WAITING,
         Stop::Unperformable { .. } => EXIT_UNPERFORMABLE,
         Stop::DiskLow { .. } => EXIT_DISK_LOW,
+        Stop::SetupFailed { .. } => EXIT_REFUSED,
         _ => EXIT_STOPPED,
     })
 }

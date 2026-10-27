@@ -8,6 +8,7 @@ takt's releases.
 
 ### Added
 
+- `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
 - `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
 - `forge: command` with a `forge_commands` section in the `takt run --config` file: the run's forge actions (`open`, `read`, `checks`, `merge`) are the exact argument lists the file names, run without a shell, with the placeholders `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
 - `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree) in the `takt run --config` file: the `gitlab` forge calls the GitLab REST API over HTTPS itself instead of `glab api`. The token is held in memory only, replaced where an answer of the host is quoted, and given to the push through a credential helper that reads it from that one command's environment. `glab` stays the default transport.

@@ -61,6 +61,8 @@ stops! {
         };
     Stop::RepeatedTestFailure { .. } => Some(STOP_KINDS[12]),
         Stop::RepeatedTestFailure { tests: vec!["a::two".to_owned()], count: 3 };
+    Stop::SetupFailed { .. } => Some(STOP_KINDS[13]),
+        Stop::SetupFailed { name: "deps".to_owned(), exit: Some(3) };
 }
 
 /// A stop of every variant, one per row and each of its own row's variant; each display opens

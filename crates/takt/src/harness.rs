@@ -2128,6 +2128,29 @@ pub fn keep_transcript(
     keep_transcript_making(root, repo, case, run, step, bytes, &mut Vec::new())
 }
 
+/// Keeps the output of the setup command `name` (`setup-<name>.log`) beside the transcripts of run
+/// `run` of the case `case`, under the same rules as [`keep_transcript`]: each directory it made and
+/// the file it created are put in `made`. `name` is one plain word.
+pub(crate) fn keep_setup_output(
+    root: &Path,
+    repo: &str,
+    case: &str,
+    run: u64,
+    name: &str,
+    bytes: &[u8],
+    made: &mut Vec<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    keep_named(
+        root,
+        repo,
+        case,
+        run,
+        &format!("setup-{name}.log"),
+        bytes,
+        made,
+    )
+}
+
 /// [`keep_transcript`], each directory it made and the file it created put in `made` as it is
 /// made, in order from `/`, whether or not it ends in an error: the exact paths takt itself
 /// wrote, which [`crate::run::Run`] takes as found so no step is charged with them.
@@ -2137,6 +2160,27 @@ fn keep_transcript_making(
     case: &str,
     run: u64,
     step: u64,
+    bytes: &[u8],
+    made: &mut Vec<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    keep_named(
+        root,
+        repo,
+        case,
+        run,
+        &format!("step-{step}.jsonl"),
+        bytes,
+        made,
+    )
+}
+
+/// [`keep_transcript_making`] for the file `file` of the run's directory.
+fn keep_named(
+    root: &Path,
+    repo: &str,
+    case: &str,
+    run: u64,
+    file: &str,
     bytes: &[u8],
     made: &mut Vec<std::path::PathBuf>,
 ) -> Result<std::path::PathBuf> {
@@ -2167,7 +2211,7 @@ fn keep_transcript_making(
             made.push(part.clone());
         }
     }
-    let path = dir.join(format!("step-{step}.jsonl"));
+    let path = dir.join(file);
     let mut file = match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)

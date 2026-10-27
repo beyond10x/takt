@@ -25,8 +25,8 @@ generated [CLI reference](./cli.md); a walk-through is in
 | `.yaml`, `.yml` | YAML: the fields at the top level, or in the `takt` member of a `loom.agent/1` document |
 | anything else | refused |
 
-Every field is optional. Every field but `scan`, `forge_commands`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
-for `_`; those four have no flag.
+Every field is optional. Every field but `scan`, `forge_commands`, `setup`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
+for `_`; those five have no flag.
 
 | field | meaning |
 |---|---|
@@ -45,6 +45,7 @@ for `_`; those four have no flag.
 | `commit` | mapping of `style` (`semantic`, the default, `repository` or `action`), `trailer` (default `Refs`; empty for none) and `types` (an action to its commit type), as `--commit-style`, `--commit-trailer` and `--commit-types`: how a step commit's message is written ([Commit messages](#commit-messages)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 | `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
+| `setup` | a list of `{name, argv}` commands, run once in the tree when the case opens, before the red-base check and any model call, under the test command's environment and confinement; `argv` is a program and its arguments, run without a shell; each duration is recorded on a `setup` line of the run record and the output kept under the state directory; a command that does not end 0 stops the run `SetupFailed`, exit 1; a resumed case runs them again only when its base moved; no flag |
 | `transport` | `glab`, the default, or `api`: how `forge: gitlab` reaches the host ([The GitLab API transport](#the-gitlab-api-transport)); no flag |
 | `credential` | `{env: NAME}` or `{file: PATH}`, where the `api` transport's token comes from, by reference only; no flag |
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
@@ -135,7 +136,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -522,6 +523,7 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | flag | meaning |
 |---|---|
 | `--harness <HARNESS>` | `claude`, `codex`, `harness` (b10x-harness) or `none` (validators only); default `claude` |
+| `--harness-program <PATH>` | the program each step's session starts, an absolute path to an executable file, for a harness that is not on `PATH` or a pinned version beside another; `opened` records its path, the sha256 of its bytes and the first line its `--version` prints, for the program found on `PATH` too; refused with `--harness none` |
 | `--model <MODEL>` | the harness's model, when it takes one; under `--harness harness` a route of the `llm` section, when the run has one |
 | `--llm-config <FILE>` | an `llm.routes/1` document (`.toml`, `.yaml` or `.yml`) that replaces the run file's `llm` section; with or without `--config` |
 | `--effort <LEVEL>` | the reasoning effort, as `metaharness run --effort`; refused until takt's launch carries it |

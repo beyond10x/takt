@@ -262,6 +262,8 @@ pub struct RunConfig {
     /// Where the `api` transport's credential comes from, by reference; a relative `file` is
     /// read beside the run file.
     pub credential: Option<CredentialSource>,
+    /// The `setup` list: commands run once at open, before the red-base check ([`SetupCommand`]).
+    pub setup: Option<Vec<SetupCommand>>,
 }
 
 /// What a run file says about the forge beyond its name: the commands, the transport and the
@@ -318,6 +320,62 @@ impl RunConfig {
             transport: self.transport,
             credential: self.credential.clone(),
         }
+    }
+}
+
+/// One command of a run file's `setup` list (`takt.work.SetupCommand`): a `name` and the `argv`
+/// that is run as a process, never as a shell string.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupCommand {
+    /// One plain word of letters, digits, `.`, `_` and `-`, unique in the list; it names the
+    /// command's output file.
+    pub name: String,
+    /// The program and its arguments, none empty.
+    pub argv: Vec<String>,
+}
+
+impl SetupCommand {
+    /// Why `commands` cannot be run, or `None`: a name that is not one plain word (`.` and `..`
+    /// included) or is given twice, an `argv` that is empty or names an empty program, and an
+    /// argument holding a NUL byte. The reason repeats no argument.
+    #[must_use]
+    pub fn refusal(commands: &[Self]) -> Option<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        for (index, command) in commands.iter().enumerate() {
+            let at = index + 1;
+            let plain = !command.name.is_empty()
+                && command.name != "."
+                && command.name != ".."
+                && command
+                    .name
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+            if !plain {
+                return Some(format!(
+                    "the name of `setup` command {at} is one plain word of letters, digits, `.`, `_` and `-`"
+                ));
+            }
+            if !seen.insert(command.name.as_str()) {
+                return Some(format!(
+                    "`setup` command {at} repeats the name `{}`, which is given once",
+                    command.name
+                ));
+            }
+            if command.argv.first().is_none_or(String::is_empty) {
+                return Some(format!(
+                    "the `argv` of `setup` command `{}` names a program, a non-empty first word",
+                    command.name
+                ));
+            }
+            if command.argv.iter().any(|word| word.contains('\0')) {
+                return Some(format!(
+                    "the `argv` of `setup` command `{}` holds a NUL byte, which no argument can",
+                    command.name
+                ));
+            }
+        }
+        None
     }
 }
 
@@ -694,7 +752,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1010,6 +1068,12 @@ impl RunConfig {
             Some(CredentialSource::File(file)) => Some(CredentialSource::File(beside(file))),
             other => other,
         };
+        if let Some(why) = config.setup.as_deref().and_then(SetupCommand::refusal) {
+            return Err(anyhow!(
+                "the run configuration file {} is refused: {why}",
+                path.display()
+            ));
+        }
         if let Some(commands) = &config.forge_commands {
             commands.check().map_err(|error| {
                 anyhow!(
