@@ -162,6 +162,24 @@ With `--forge bot` or `--forge gitlab`, the steps go on from `change.read`:
    the case's branch, then merges, so both reach the base with the merge. It stops `Completed`,
    exit 0.
 
+### A trial on a GitHub repository
+
+A trial that should end `Completed`, exit 0, with a merged pull request needs two things a plain
+`--forge none` run does not give it:
+
+- **The forge.** A repository on github.com takes `--forge bot`. Under `--forge none` the run
+  stops `Unperformable (pr.opened)`, exit 7, however good the change is.
+- **A qualified Claude Code binary.** The metaharness takt builds on qualifies Claude Code
+  2.1.304, 2.1.305 and 2.1.309. A newer `claude` on `PATH` has no memory canary, so a hermetic
+  run holds its first proposal after the session has been paid for. Install a qualified version
+  in its own directory and name it with `--harness-program <absolute path>`; `opened` records
+  the path, its sha256 and its `--version` line.
+
+```sh
+takt run --repo . --story story:add-sub --harness claude \
+  --harness-program /opt/claude-pinned/bin/claude --forge bot --hours 1
+```
+
 ## Approve and resume
 
 ```sh
