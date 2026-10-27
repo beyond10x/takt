@@ -24,6 +24,7 @@ takt's releases.
 - `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
 - `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
 - `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
+- `b10x-loom-sdk` moves from loom 0.43.0 to 0.45.0 with metaharness 0.20.0: a Codex step on a codex off metaharness's pin proposes its change, H9 advisory (story:codex-off-pin-proposes).
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
 - `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
