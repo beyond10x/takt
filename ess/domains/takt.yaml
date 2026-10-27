@@ -450,7 +450,7 @@ types:
 
   # The key of an `llm.routes/1` route's endpoint, which llm resolves inside takt and takt stages as
   # `takt.work.EnvironmentVariable` is: recorded by the endpoint's name and the kind of source the
-  # document's `auth.secret` names, never the variable, path, keychain entry or the key itself.
+  # document's `auth.secret` names (`environment` or `file`), never the variable, path or value.
   - name: takt.work.RouteCredential
     kind: struct
     fields:
@@ -459,7 +459,9 @@ types:
       - name: secret
         type: takt.work.RouteSecretKind
 
-  # The source kind of a route endpoint's secret, as llm reports it: `env:`, `file:` or `keychain:`.
+  # The source kind of a route endpoint's secret, as llm reports it: `env:` (environment) or `file:`
+  # (file), the two sources this build reads. A `keychain:` secret is refused before any case opens:
+  # crates/takt/Cargo.toml builds llm-models without its `keychain` feature, so no route records it.
   - name: takt.work.RouteSecretKind
     kind: enum
     variants: [environment, file, keychain]
@@ -684,13 +686,6 @@ types:
   - name: takt.work.LlmRoutes
     kind: newtype
     of: Json
-
-  # A route's name in an `llm.routes/1` document: one to 256 printable ASCII bytes with no `/`,
-  # llm's own rule. Declared ahead of the code.
-  # read from: llm 0.16.0, crates/llm-models/src/routes.rs:445-454
-  - name: takt.work.RouteName
-    kind: newtype
-    of: String
 
   # Whose a refused harness setting is: takt's own, or the run's (its `model` and its `llm`
   # section). Declared ahead of the code.
@@ -1273,9 +1268,10 @@ types:
       - name: llm_digest
         type: Optional<String>
         summary: >-
-          The digest of the `llm.routes/1` document the run ran under, as llm's `Routes::digest`
-          gives it; absent when the run file has no `llm` member, and on a line written before
-          the field.
+          The digest of the `llm.routes/1` document the run read, from its `llm` member or from
+          `--llm-config`, as llm's `Routes::digest` gives it. Recorded whatever the harness, `none`
+          included; absent when the run read no llm document, and on a line written before the
+          field.
 
   # An evaluation: its number in the case's one sequence, the decision file it was written to,
   # `decisions/<seq>.json` under the case, and the frontier as printed.

@@ -1,8 +1,8 @@
 ---
 title: Deploy on Kubernetes
 sidebar_position: 7
-description: Run takt as a Loom 0.44.0 Command LoomAgent on a kind cluster with its configuration, key, policy and workspace, watch the Job, and know what still stops it.
-lede: Loom 0.44.0 runs takt once as a Job with its configuration files, key and workspace, but its fixed seccomp profile still refuses the namespace takt's test command needs.
+description: Run takt as a Loom 0.45.0 Command LoomAgent on a kind cluster with its configuration, key, policy and workspace, watch the Job, and know what still stops it.
+lede: Loom 0.45.0 runs takt once as a Job with its configuration files, key and workspace, but its fixed seccomp profile still refuses the namespace takt's test command needs.
 source: examples/loom-agent/ (checked by crates/takt/tests/examples_config.rs; takt-agent.yaml rendered by b10x-loom-operator 0.44.0 and the chart's values by helm template); Loom 0.44.0 CHANGELOG, README, charts/loom-agents, deploy/crd, crates/loom-operator/src/render.rs and admission.rs; the docker runs of Run in a container. Not run on a cluster.
 ---
 
@@ -17,7 +17,7 @@ program once, as a Job. Loom deploys and confines it. takt decides each step ins
 
 This recipe was put together from Loom 0.44.0's chart, CRD and operator, and from the manifests
 in `examples/loom-agent/`. The operator rendered the `LoomAgent` and helm rendered the chart.
-Neither was applied to a cluster for this page. Under Loom 0.44.0 the run ends at its first test
+Neither was applied to a cluster for this page. Under Loom 0.45.0 the run ends at its first test
 run, as [What still stops it](#what-still-stops-it) explains.
 
 :::
@@ -28,8 +28,8 @@ run, as [What still stops it](#what-still-stops-it) explains.
 |---|---|
 | `kind`, `kubectl`, `helm`, `docker` | the cluster and the install |
 | a takt image | built as in [Run in a container](./run-in-a-container.md#1-build-the-image) |
-| a Loom operator image and a Loom agent image | built by you from Loom 0.44.0, which ships neither an image nor a Dockerfile |
-| a checkout of Loom at `0.44.0` | the chart `charts/loom-agents` and the CRD in `deploy/crd/` |
+| a Loom operator image and a Loom agent image | built by you from Loom 0.45.0, which ships neither an image nor a Dockerfile |
+| a checkout of Loom at `0.45.0` | the chart `charts/loom-agents` and the CRD in `deploy/crd/` |
 
 The operator image must hold `b10x-loom-operator` on its `PATH`, and the agent image `b10x-loom`:
 the Job's two init containers run `b10x-loom agent stage-files` and
@@ -51,8 +51,8 @@ nodes:
 kind create cluster --config examples/loom-agent/kind-cluster.yaml
 docker tag takt:0.14.0 registry.example/takt:0.14.0
 kind load docker-image registry.example/takt:0.14.0 --name takt-demo
-kind load docker-image registry.example/loom-operator:0.44.0 --name takt-demo
-kind load docker-image registry.example/loom-agent:0.44.0 --name takt-demo
+kind load docker-image registry.example/loom-operator:0.45.0 --name takt-demo
+kind load docker-image registry.example/loom-agent:0.45.0 --name takt-demo
 ```
 
 The names are the ones the manifests use. The images are loaded, not pulled, and a pod pulls a
@@ -74,10 +74,10 @@ The operator refuses any other Secret, egress host or claim:
 ```yaml
 image:
   repository: registry.example/loom-operator
-  tag: "0.44.0"
+  tag: "0.45.0"
 agentImage:
   repository: registry.example/loom-agent
-  tag: "0.44.0"
+  tag: "0.45.0"
 allowedSecretNames: [takt-demo-env, takt-demo-files]
 allowedEgressHosts: [llm.example.com, index.crates.io, static.crates.io]
 allowedClaimNames: [takt-demo-workspace]
@@ -193,7 +193,7 @@ What each part does:
 | `workspace` | the claim at `/workspace` |
 | `agent.deploy.kubernetes` | the service account, the pod's resources and the egress |
 
-`spec.agent` carries no `takt` member, because Loom 0.44.0 checks it strictly and refuses one
+`spec.agent` carries no `takt` member, because Loom 0.45.0 checks it strictly and refuses one
 (``Malformed at spec.agent: unknown member `takt` ``). A `configFiles` entry named `agent.yaml`
 is refused too, because Loom writes that file from `spec.agent` (`ConfigFileConflict`). Without `spec.agent` the resource is
 admitted, but its network policy then allows DNS and nothing else. The egress list opens port 443
@@ -237,11 +237,11 @@ that, and a Job's pod template cannot be patched once the Job exists. Under the 
 (`--confinement substrate`, which needs a delegated cgroup, was not tried there), and a container
 runtime's default
 profile refuses that. With `docker run` both the default seccomp and the default AppArmor profile
-refused it ([Run in a container](./run-in-a-container.md#4-run-it)). So under Loom 0.44.0 the
+refused it ([Run in a container](./run-in-a-container.md#4-run-it)). So under Loom 0.45.0 the
 first `tests.run` ends the run on an error, exit 5, before any model call. That is inferred from
 the rendered pod and the docker runs, not observed on a cluster.
 
-There is no supported way around this at Loom 0.44.0. The tests can run only where the container
+There is no supported way around this at Loom 0.45.0. The tests can run only where the container
 runtime's own default profile admits unprivileged user namespaces.
 [Known limitations](../known-limitations.md#running-under-loom) tracks it.
 
@@ -258,4 +258,4 @@ runtime's own default profile admits unprivileged user namespaces.
 | move the story to active by hand | gone: `--story` (takt 0.13.0) |
 | add packages, toolchain links, b10x-harness 0.20.0 and `b10x-gates` to the image | gone: the image ships them (takt 0.13.0) |
 | `mkdir -p "$HOME/.cargo/bin"` before takt | still needed at 0.14.0, in `command.entrypoint`; not after it: the first test run in a fresh `HOME` is no longer refused |
-| patch the pod to seccomp and AppArmor `Unconfined` | not possible at Loom 0.44.0 |
+| patch the pod to seccomp and AppArmor `Unconfined` | not possible at Loom 0.45.0 |

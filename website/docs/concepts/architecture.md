@@ -158,7 +158,7 @@ line wins over the file.
 
 The deployment shape is a container image that runs
 `takt run --repo /workspace --config /config/agent.yaml`, deployed by Loom as a `LoomAgent` of
-the `Command` variant, which Loom 0.44.0 runs once as a Kubernetes Job and whose
+the `Command` variant, which Loom 0.45.0 runs once as a Kubernetes Job and whose
 `status.run` then holds takt's exit code. How to set it up:
 [Deploy on Kubernetes](../guides/deploy-on-kubernetes.md).
 

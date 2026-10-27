@@ -24,7 +24,7 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":5}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":5}}}
@@ -100,3 +100,12 @@ against a loopback endpoint.
 - `crates/takt/src/harness.rs` (endpoint from a route; `EndpointConfig`), `crates/takt-cli/src/main.rs` (`harness_of`),
   `crates/takt/tests/`, `ess/domains/takt.yaml` (`RouteName`, `HarnessEndpoint`), `ess/ess-inputs.yaml`,
   `website/docs/reference/configuration.md`.
+
+## Conformance acceptance
+
+This story's acceptance names conformance scenarios in `ess/ess-inputs.yaml`, run by `task check`. None is run: that file
+lists no scenarios (`scenarios: []`) and this repository has no conformance runner (`Taskfile.yml` names no conformance
+step). The behaviour is checked by the cargo tests in `crates/takt-cli/tests/run_config_llm*.rs`, `run_config_llm_env_scrub.rs`
+and the unit tests of `crates/takt/src/run_config.rs` and `crates/takt/src/harness.rs`, as the Status sections say. The
+conformance acceptance stays open under `approval-record:cfgproxy-end-wave-review-and-conformance` until a later wave builds the
+runner.

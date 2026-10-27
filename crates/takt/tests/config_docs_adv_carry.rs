@@ -75,6 +75,7 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "\"default\"",
         "\"software.change/1\"",
         "{ \"software.change\" = { risk = \"elevated\" } }",
+        "\"harness\"",
     ]
     .into_iter()
     .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())
