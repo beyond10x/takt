@@ -65,6 +65,7 @@ takt's releases.
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
 - The site says what runs under Seatbelt on macOS since 0.10.0, which scan and forge adapters a run can have, and that `bot` is beyond10x's github.com route.
 - The GitLab push and fetch run no hook the repository names (`core.hooksPath`, `--no-verify`) and follow no redirect; under `api` the credential helper answers only for the host named.
+- A variable named by `credential: {env: NAME}` is removed from every child takt starts, whatever its name; a `{file: PATH}` credential is read through one open that follows no symlink.
 
 ### Security
 

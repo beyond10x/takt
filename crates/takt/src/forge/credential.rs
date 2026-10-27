@@ -5,6 +5,7 @@
 //! its value, and replaces it in any text that quotes the host's answer ([`Secret::redact`]).
 
 use std::fmt;
+use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
@@ -83,6 +84,7 @@ impl CredentialSource {
                 if name.is_empty() || name.contains(['=', '\0']) {
                     bail!("{self} names no variable");
                 }
+                crate::forge::withhold(name);
                 let value = std::env::var_os(name).ok_or_else(|| {
                     anyhow!("{self} is not set: the variable {name} is unset in takt's environment")
                 })?;
@@ -111,7 +113,10 @@ impl CredentialSource {
         if inside {
             bail!("{self} is inside the repository's tree: a credential file lives outside it");
         }
-        let meta = std::fs::metadata(&real)
+        let mut file = open_without_following(&real)
+            .map_err(|error| anyhow!("{self} cannot be read: {}", error.kind()))?;
+        let meta = file
+            .metadata()
             .map_err(|error| anyhow!("{self} cannot be read: {}", error.kind()))?;
         if !meta.is_file() {
             bail!("{self} is not a regular file");
@@ -130,14 +135,83 @@ impl CredentialSource {
                 bail!("{self} is owned by another user: it must be owned by the user running takt");
             }
         }
-        std::fs::read_to_string(&real)
-            .map_err(|error| anyhow!("{self} cannot be read: {}", error.kind()))
+        let mut text = String::new();
+        (&mut file)
+            .take(Self::LIMIT)
+            .read_to_string(&mut text)
+            .map_err(|error| anyhow!("{self} cannot be read: {}", error.kind()))?;
+        Ok(text)
+    }
+
+    /// The most bytes of a credential file that are read.
+    const LIMIT: u64 = 64 << 10;
+}
+
+/// Opens `path` for reading once, refusing a symbolic link as its last component and never
+/// blocking on a pipe put there: what is checked afterwards is the open handle, so nothing can
+/// be swapped between the check and the read.
+fn open_without_following(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(path)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scratch(name: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("takt-credential-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        dir
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_file_is_read_through_one_open_that_follows_no_link() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+        let dir = scratch("one-open");
+        let tree = dir.join("tree");
+        std::fs::create_dir_all(&tree).expect("a tree");
+        let private = dir.join("private");
+        std::fs::write(&private, "tok-secret\n").expect("a file");
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o600)).expect("mode");
+        let source = CredentialSource::File(private.clone());
+        assert_eq!(
+            source
+                .read_file(&private, &tree)
+                .expect("a plain file reads"),
+            "tok-secret\n"
+        );
+        let link = dir.join("link");
+        symlink(&private, &link).expect("a link");
+        assert!(
+            open_without_following(&link).is_err(),
+            "a link swapped in after the path was resolved is not followed"
+        );
+        let fifo = dir.join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success());
+        let error = source
+            .read_file(&fifo, &tree)
+            .expect_err("a pipe is no credential file");
+        assert!(error.to_string().contains("not a regular file"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_secret_never_prints_and_is_redacted_from_text() {
