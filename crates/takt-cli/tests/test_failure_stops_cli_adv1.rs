@@ -218,6 +218,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
         ];
         args.extend_from_slice(extra);
         self.takt(&args)
@@ -235,6 +237,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
             "--min-free-gib",
             "0",
         ];
