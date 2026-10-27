@@ -255,6 +255,9 @@ pub struct RunConfig {
     /// [`RunConfig::read`], never read from the file.
     #[serde(skip)]
     pub protocol_settings: ProtocolSettings,
+    /// The instance `forge: connectors` invokes `connectors operations` on, one plain word of
+    /// letters, digits, `.`, `_` and `-`; checked when the file is read.
+    pub forge_instance: Option<String>,
     /// The `forge_commands` section, the argument lists `forge: command` runs.
     pub forge_commands: Option<ForgeCommands>,
     /// How `forge: gitlab` reaches the host: `glab` (the default) or `api`.
@@ -272,6 +275,8 @@ pub struct RunConfig {
 pub struct ForgeSettings {
     /// `forge_commands`.
     pub commands: Option<ForgeCommands>,
+    /// `forge_instance`.
+    pub instance: Option<String>,
     /// `transport`.
     pub transport: Option<Transport>,
     /// `credential`.
@@ -284,6 +289,16 @@ impl ForgeSettings {
     /// belong to `forge: gitlab`, and `transport: api` needs a `credential` which only it takes.
     /// The refusal names keys, never a value.
     pub fn check_for(&self, forge: Option<&str>) -> Result<()> {
+        if self.instance.is_some() && forge != Some("connectors") {
+            return Err(anyhow!(
+                "`forge_instance` is set, and it belongs to `forge: connectors`, which this run does not use; nothing was opened"
+            ));
+        }
+        if forge == Some("connectors") && self.instance.is_none() {
+            return Err(anyhow!(
+                "`forge: connectors` invokes `connectors operations` on the instance of `forge_instance` in the run file, and there is none; nothing was opened"
+            ));
+        }
         if self.commands.is_some() && forge != Some("command") {
             return Err(anyhow!(
                 "`forge_commands` is set, and it belongs to `forge: command`, which this run does not use; nothing was opened"
@@ -317,6 +332,7 @@ impl RunConfig {
     pub fn forge_settings(&self) -> ForgeSettings {
         ForgeSettings {
             commands: self.forge_commands.clone(),
+            instance: self.forge_instance.clone(),
             transport: self.transport,
             credential: self.credential.clone(),
         }
@@ -752,7 +768,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1071,6 +1087,14 @@ impl RunConfig {
         if let Some(why) = config.setup.as_deref().and_then(SetupCommand::refusal) {
             return Err(anyhow!(
                 "the run configuration file {} is refused: {why}",
+                path.display()
+            ));
+        }
+        if let Some(instance) = &config.forge_instance
+            && !crate::forge::connectors::is_instance_name(instance)
+        {
+            return Err(anyhow!(
+                "the run configuration file {} is refused: `forge_instance` is one word of letters, digits, `.`, `_` and `-`, not starting with `-`",
                 path.display()
             ));
         }

@@ -10,6 +10,7 @@ use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::Frontier as _;
 use takt::forge::command::CommandForge;
+use takt::forge::connectors::ConnectorsForge;
 use takt::forge::gitlab::Glab;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
@@ -1104,7 +1105,10 @@ struct LoopArgs {
     /// any case opens unless `glab auth status --hostname <host>` exits 0; the run file's `transport: api` with a `credential` calls the GitLab API instead, `glab` never asked), `command` (the exact
     /// argument lists the run file's `forge_commands` section names for `open`, `read`, `checks` and
     /// `merge`, run without a shell; the push stays takt's scanned push; never a default, and
-    /// refused for a scenario run) or `none` (no pull
+    /// refused for a scenario run), `connectors` (`connectors operations invoke` on the instance the
+    /// run file's `forge_instance` names, its preflight listing change request create, read and
+    /// merge and pipeline read before any case opens; the push stays takt's scanned push; never a
+    /// default, and refused for a scenario run) or `none` (no pull
     /// request is opened; when `pr.open`,
     /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
     /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
@@ -2921,6 +2925,23 @@ fn forge_with(
     state_dir: Option<&Path>,
 ) -> Result<Forged> {
     settings.check_for(forge)?;
+    if let Some(connectors) = ConnectorsForge::select(
+        repo,
+        forge,
+        settings,
+        scan.clone(),
+        Box::new(Process::default()),
+    )? {
+        let line = format!(
+            "forge: connectors ({}); pr.open, ci.read and repository.merge run connectors operations invoke",
+            connectors.identity()
+        );
+        return Ok(Forged {
+            forge: Some(Rc::new(connectors)),
+            line: Some(line),
+            trials: None,
+        });
+    }
     if forge == Some("command") {
         let commands = settings.commands.clone().unwrap_or_default();
         let state = match state_dir {
@@ -3033,7 +3054,11 @@ fn forge_through(
                 "forge: none (origin names no <owner>/<repo> on a host)".to_owned(),
             )),
         },
-        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab, command or none")),
+        Some(other) => {
+            return Err(anyhow!(
+                "no forge `{other}`: bot, gitlab, command, connectors or none"
+            ));
+        }
     })
 }
 
@@ -3048,6 +3073,9 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Fo
         )),
         Some("command") => Err(anyhow!(
             "--forge command is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, which the configured commands cannot do; give --forge bot or --forge none; nothing was changed"
+        )),
+        Some("connectors") => Err(anyhow!(
+            "--forge connectors is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, which `connectors operations invoke` cannot do; give --forge bot or --forge none; nothing was changed"
         )),
         None => match takt::git::remote_url(repo, "origin")
             .ok()
@@ -4702,7 +4730,10 @@ mod tests {
             "unknown",
             &["--forge", "hub"],
         ));
-        assert_eq!(error, "no forge `hub`: bot, gitlab, command or none");
+        assert_eq!(
+            error,
+            "no forge `hub`: bot, gitlab, command, connectors or none"
+        );
         assert!(!repo.join(".takt/cases").exists());
     }
 
