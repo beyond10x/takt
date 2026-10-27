@@ -3042,6 +3042,7 @@ impl Validator for PrOpen {
             artifacts.join(BotRoute::REQUEST),
             artifacts.join(BotRoute::RESPONSE),
             artifacts.join(BotRoute::PUBLISHED),
+            artifacts.join(crate::forge::command::CommandForge::BODY),
             artifacts.join(BotRoute::MESSAGES),
             artifacts.join(BotRoute::FILES),
         ]

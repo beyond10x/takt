@@ -165,7 +165,7 @@ fn opens_with_the_configured_argv() {
         .open_pull_request(&scratch.0, &artifacts, &request("A title"))
         .expect("opens");
     assert_eq!(number, 42);
-    let body = scratch.0.join("state").join(CommandForge::BODY);
+    let body = artifacts.join(CommandForge::BODY);
     assert_eq!(
         fs::read_to_string(&body).expect("the body file"),
         "the body\nof two lines"

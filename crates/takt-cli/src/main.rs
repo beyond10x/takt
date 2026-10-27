@@ -2872,8 +2872,9 @@ impl Forged {
 
 /// [`forge_of`] under what the run file says of the forge (`settings`): `forge: command` runs the
 /// commands of its `forge_commands` section, an entry the protocol's `actions` need that is
-/// missing refused here, before any case opens; `state_dir` (else the state home) holds the
-/// command forge's standard error files and body file. Settings that do not fit the forge are
+/// missing refused here, before any case opens; `state_dir` (else a directory of this run under the
+/// state home) holds the command forge's standard error files; the body file is the case's own,
+/// in its artifacts. Settings that do not fit the forge are
 /// refused, naming their keys.
 fn forge_with(
     repo: &Path,
@@ -2888,7 +2889,9 @@ fn forge_with(
         let commands = settings.commands.clone().unwrap_or_default();
         let state = match state_dir {
             Some(dir) => state_under(dir, "forge-command"),
-            None => takt::promotion::store()?.with_file_name("forge-command"),
+            None => takt::promotion::store()?
+                .with_file_name("forge-command")
+                .join(run_directory()),
         };
         let command = CommandForge::for_tree(
             repo,
@@ -2994,7 +2997,7 @@ fn forge_through(
                 "forge: none (origin names no <owner>/<repo> on a host)".to_owned(),
             )),
         },
-        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab or none")),
+        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab, command or none")),
     })
 }
 
@@ -3040,6 +3043,14 @@ fn state_transcripts(dir: &Path) -> PathBuf {
 /// discarded step moved aside goes ([`state_transcripts`] for `dir`).
 fn state_set_aside(dir: &Path) -> PathBuf {
     state_under(dir, "set-aside")
+}
+
+/// A directory name no other run on the machine has: the process and the instant it started.
+fn run_directory() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    format!("{}-{nanos}", std::process::id())
 }
 
 /// `name` under the state directory `dir`, a relative `dir` read against the current directory.
@@ -4651,7 +4662,7 @@ mod tests {
             "unknown",
             &["--forge", "hub"],
         ));
-        assert_eq!(error, "no forge `hub`: bot, gitlab or none");
+        assert_eq!(error, "no forge `hub`: bot, gitlab, command or none");
         assert!(!repo.join(".takt/cases").exists());
     }
 
