@@ -747,14 +747,41 @@ pub(crate) fn passwd_home() -> Option<PathBuf> {
 pub(crate) const FIXED_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
 
 /// The file `program` in the first absolute directory of `searched`, a colon-separated `PATH`,
-/// that holds one; a relative entry is not searched.
+/// that holds one its owner, group or others may execute, as a shell's `PATH` lookup finds it;
+/// a relative entry is not searched (story:gate-commands-find-programs-on-a-system-path).
 fn found_on(program: &str, searched: &str) -> Option<PathBuf> {
     searched
         .split(':')
         .map(Path::new)
         .filter(|dir| dir.is_absolute())
         .map(|dir| dir.join(program))
-        .find(|candidate| candidate.is_file())
+        .find(|candidate| executable(candidate))
+}
+
+/// Whether `path` is a file with an execute bit set.
+#[cfg(unix)]
+fn executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// Whether `path` is a file.
+#[cfg(not(unix))]
+fn executable(path: &Path) -> bool {
+    path.is_file()
+}
+
+/// Whether `program`, a bare name, is a file at the root of `tree` that git tracks: one the
+/// gate's comparison covers. An ignored or untracked file of that name is in no commit, so it
+/// does not keep the name bare (story:gate-commands-find-programs-on-a-system-path).
+fn tracked_at_root(tree: &Path, program: &str) -> bool {
+    tree.join(program).is_file()
+        && crate::git::run(
+            tree,
+            &["--literal-pathspecs", "ls-files", "-z", "--", program],
+        )
+        .is_ok_and(|listed| listed.split('\0').any(|path| path == program))
 }
 
 /// An empty home made for one run of a test command or a gate's commands, outside the tree,
@@ -816,7 +843,7 @@ impl FreshHome {
     /// The assertions project file `project` with every command it admits, and every
     /// provider's, run in this home ([`FreshHome::vars`]): the gate's commands inherit nothing,
     /// so `CARGO_HOME` and `RUSTUP_HOME` are set unless the binding sets them. A bare program
-    /// name (no `/`) that is not a file of `tree` is written absolute, found on the `PATH` the
+    /// name (no `/`) that is not a file `tree` tracks is written absolute, found on the `PATH` the
     /// binding's `env` declares or else on [`FIXED_PATH`], and a binding that declares no `PATH`
     /// runs with [`FIXED_PATH`]; a name found nowhere is refused, naming it and the path searched.
     fn admitting(&self, project: &str, tree: &Path) -> Result<String> {
@@ -856,7 +883,7 @@ impl FreshHome {
                 .get("executable")
                 .and_then(serde_yaml_ng::Value::as_str)
                 .map(str::to_owned)
-                .filter(|program| !program.contains('/') && !tree.join(program).is_file())
+                .filter(|program| !program.contains('/') && !tracked_at_root(tree, program))
             {
                 let searched = declared.clone().unwrap_or_else(|| FIXED_PATH.to_owned());
                 let Some(found) = found_on(&program, &searched) else {
@@ -2414,7 +2441,11 @@ impl GateRun {
         // source identity: that identity is the repository tree's. The base revision's two
         // files are evaluated from there, the paths relative to the tree as the library takes
         // them, and are gone again before the observation ends.
-        let cases = Path::new(crate::case::CASES_DIR);
+        // The external preparation takes one excluded path: the cases root the case is in.
+        let cases = dir
+            .parent()
+            .and_then(|root| root.strip_prefix(tree).ok())
+            .unwrap_or(Path::new(crate::case::CASES_DIR));
         let inputs = dir.join(GATE_INPUTS);
         let relative = inputs
             .strip_prefix(tree)

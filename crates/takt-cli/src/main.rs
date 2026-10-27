@@ -50,7 +50,7 @@ enum Commands {
     /// The repository's scenarios: a story at a known seed commit, run from a fresh base.
     #[command(subcommand)]
     Scenario(ScenarioCommands),
-    /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
+    /// Print, per run of a case under `.takt/cases/`, its outcome, steps, tokens,
     /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` and, for
     /// a scenario run's outcome, from the held-out check beside it; a case without a record is
     /// listed as `no record`. The binary a case's runs were made with is
@@ -116,7 +116,7 @@ enum Commands {
 
 #[derive(clap::Args)]
 struct ReplayArgs {
-    /// The case directory, `<repo>/.engineering/cases/<id>`; only read.
+    /// The case directory, `<repo>/.takt/cases/<id>`; only read.
     #[arg(long, value_name = "DIR")]
     case: PathBuf,
     /// The step to replay, as the case's record numbers it in its run: a judgement step, one
@@ -331,7 +331,7 @@ struct PromoteArgs {
     /// With --baseline-only and --revision: the installed binary's sha256, lower-case hex.
     /// `<root>/bin/takt` must name no revision and hash to it, and every run of the scorecard
     /// must state the same digest in a `binary.txt` beside its record
-    /// (`.engineering/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
+    /// (`.takt/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
     /// line the operator's note, copied into the record); otherwise refused naming the binary's
     /// digest or the run, nothing written. Refused when the binary's `--version` names a
     /// revision, and without --baseline-only or --revision.
@@ -542,8 +542,11 @@ impl ScenarioRunArgs {
     /// value ([`LoopArgs::configured`]); a file that names a `story`, or declares `scan: none`,
     /// is refused.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
+        self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return Ok(());
+            return self
+                .looping
+                .configured(takt::run_config::RunConfig::default(), matches);
         };
         let file = takt::run_config::RunConfig::read(path)?;
         if file.story.is_some() {
@@ -559,7 +562,7 @@ impl ScenarioRunArgs {
                 takt::scan::gates::POLICY_VAR
             ));
         }
-        self.looping.configured(file, matches);
+        self.looping.configured(file, matches)?;
         Ok(())
     }
 }
@@ -670,7 +673,9 @@ struct RunArgs {
     /// a value written there. A container takes its run from a mounted one. `takt scenario run
     /// --config` reads the same file, and refuses one that declares `scan: none`. `llm`, the
     /// model routes, an `llm.routes/1` document or `{path: <file>}` naming one beside the file,
-    /// which no flag gives; llm validates it, and a refused section opens no case.
+    /// which no flag gives; llm validates it, and a refused section opens no case. With `--harness
+    /// harness`, `model` names a route or alias of the section, and that route is the endpoint:
+    /// no `--endpoint-*` flag, `endpoint_file` or `endpoint_token_env` may sit beside it.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
     /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
@@ -695,8 +700,11 @@ impl RunArgs {
     /// it came from, so a refusal names that file; a run that opens no story (a
     /// `self.improvement/1` turn) leaves it out.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
+        self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return Ok(());
+            return self
+                .looping
+                .configured(takt::run_config::RunConfig::default(), matches);
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
         if let Some(story) = file.story.take()
@@ -708,7 +716,7 @@ impl RunArgs {
             self.story_from = Some(path.clone());
         }
         self.declared_scan = file.scan;
-        self.looping.configured(file, matches);
+        self.looping.configured(file, matches)?;
         Ok(())
     }
 }
@@ -716,9 +724,18 @@ impl RunArgs {
 impl LoopArgs {
     /// Fills each loop flag `matches` did not take from the command line with `file`'s value,
     /// when it sets it, for `takt run` and `takt scenario run` alike.
-    fn configured(&mut self, file: takt::run_config::RunConfig, matches: &clap::ArgMatches) {
+    fn configured(
+        &mut self,
+        mut file: takt::run_config::RunConfig,
+        matches: &clap::ArgMatches,
+    ) -> Result<()> {
+        if let Some(path) = &self.llm_config {
+            file.set_llm_file(path)?;
+        }
         let unset = |id: &str| unset(matches, id);
+        let llm = self.llm_section(&file, &unset)?;
         let looping = self;
+        looping.llm = llm;
         looping.llm_digest = file.llm_digest;
         if unset("iterations") && file.iterations.is_some() {
             looping.iterations = file.iterations;
@@ -726,7 +743,7 @@ impl LoopArgs {
         if unset("hours") && file.hours.is_some() {
             looping.hours = file.hours;
         }
-        if unset("model") && file.model.is_some() {
+        if unset("model") && unset("endpoint_model") && file.model.is_some() {
             looping.model = file.model;
         }
         if unset("forge") && file.forge.is_some() {
@@ -784,6 +801,53 @@ impl LoopArgs {
             looping.continue_past_red_base = go_on;
         }
         looping.records_of_file = file.records.filter(|_| unset("records"));
+        Ok(())
+    }
+
+    /// The `llm` section `file` holds, when the run may use it, refused before any case opens
+    /// otherwise: under `--harness claude` or `codex`, which takt points at no endpoint (a `none`
+    /// run takes no endpoint, and the section is left unused); beside another endpoint source, a
+    /// flag, `--endpoint-file` or `--endpoint-token-env` alike, or the file's own `endpoint_file`
+    /// or `endpoint_token_env`, naming both; and under `--harness harness` with no `model` to name
+    /// its route. Its route is resolved later, by [`LoopArgs::take_variable`].
+    fn llm_section(
+        &self,
+        file: &takt::run_config::RunConfig,
+        unset: &dyn Fn(&str) -> bool,
+    ) -> Result<Option<takt::run_config::LlmRoutes>> {
+        let Some(llm) = &file.llm_routes else {
+            return Ok(None);
+        };
+        let harness = if unset("harness") {
+            file.harness.as_deref().unwrap_or(&self.harness)
+        } else {
+            &self.harness
+        };
+        if harness == "claude" || harness == "codex" {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section is refused with --harness {harness}: takt points an endpoint at b10x-harness only, so give --harness harness, or leave the `llm` section out; nothing was started"
+            ));
+        }
+        let mut sources: Vec<&str> = self.endpoint.all_given();
+        if file.endpoint_file.is_some() {
+            sources.push("the run file's `endpoint_file`");
+        }
+        if file.endpoint_token_env.is_some() {
+            sources.push("the run file's `endpoint_token_env`");
+        }
+        if !sources.is_empty() {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section and {} both give the run's endpoint: an `llm` section routes `--model` through llm, and an endpoint source gives the endpoint directly; give one of them, not both; nothing was started",
+                sources.join(" and ")
+            ));
+        }
+        let model_given = self.model.is_some() || file.model.is_some();
+        if harness == "harness" && !model_given {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section names its route by `model`, and neither --model nor the file's `model` gives one; nothing was started"
+            ));
+        }
+        Ok(Some(llm.clone()))
     }
 
     /// The records profile given: `--records`, else, for a new case only, the configuration
@@ -851,9 +915,20 @@ struct LoopArgs {
     /// `harness` (b10x-harness), or `none` (only validators run).
     #[arg(long, default_value = "claude")]
     harness: String,
-    /// The harness's model, when it takes one.
-    #[arg(long)]
+    /// The harness's model, when it takes one. Under `--harness harness` it names a route of the
+    /// `llm` section, when the run has one.
+    #[arg(long, conflicts_with = "endpoint_model")]
     model: Option<String>,
+    /// The old name of `--model`, kept for one minor release: the same flag, with one line on
+    /// standard error naming `--model`.
+    #[arg(long, value_name = "MODEL", conflicts_with = "model")]
+    endpoint_model: Option<String>,
+    /// The `llm.routes/1` document, a `.toml`, `.yaml` or `.yml` file, as llm's `--config` names
+    /// it. It replaces the run file's `llm` section, with its routes, its digest and its refusals;
+    /// `--model` names one of its routes under `--harness harness`, and the `opened` line records
+    /// its digest as `llm_digest`. Given with or without `--config`.
+    #[arg(long, value_name = "FILE")]
+    llm_config: Option<PathBuf>,
     #[command(flatten)]
     endpoint: EndpointArgs,
     /// The approval gate the harness may request to end the run. Not given, the case's
@@ -935,6 +1010,14 @@ struct LoopArgs {
     /// line; set from the file, never from a flag.
     #[arg(skip)]
     llm_digest: Option<String>,
+    /// The `llm.routes/1` document `--config` gave, parsed by llm; set from the file, never from a
+    /// flag. Given with `--harness harness`, `--model` names one of its routes.
+    #[arg(skip)]
+    llm: Option<takt::run_config::LlmRoutes>,
+    /// The route `--model` names in `llm`, resolved by llm before any case opens
+    /// ([`LoopArgs::take_variable`]): the endpoint the session is pointed at and the key it takes.
+    #[arg(skip)]
+    route: Option<takt::harness::RouteEndpoint>,
     /// The records profile the case keeps its decisions under: `default` keeps the latest
     /// `decisions/NNNN.json` alone and goes on numbering from it, `trial` keeps every one. A
     /// scenario run and an improvement case (`self.improvement/1`, `loop.improvement/1`) keep
@@ -949,12 +1032,13 @@ struct LoopArgs {
     records_of_file: Option<String>,
 }
 
-/// A harness that performs nothing. Asked while an approval is pending, it requests the gate
-/// action, changing no file, so the run stops `ApprovalRequired` and `takt approve` is the
-/// next step; offered an action that records a choice (`change.handover`), it takes it,
-/// changing no file, so the work committed by hand is handed over as it stands; asked for any
-/// other judgement step, it ends the run with an error, `stopped: error:`, because nothing
-/// performs that step.
+/// A harness that performs nothing. Offered an action the case holds a grant for, it takes that
+/// action, changing no file (story:harness-none-takes-a-granted-action). Asked while an approval
+/// is pending, it requests the gate action, changing no file, so the run stops
+/// `ApprovalRequired` and `takt approve` is the next step; offered an action that records a
+/// choice (`change.handover`), it takes it, changing no file, so the work committed by hand is
+/// handed over as it stands; asked for any other judgement step, it ends the run with an error,
+/// `stopped: error:`, because nothing performs that step.
 struct NoHarness;
 
 impl Harness for NoHarness {
@@ -963,6 +1047,13 @@ impl Harness for NoHarness {
     }
 
     fn step(&self, context: &takt::StepContext<'_>) -> Result<takt::StepReport> {
+        if let Some(granted) = context.granted.first() {
+            return Ok(takt::StepReport {
+                action: granted.clone(),
+                summary: "no harness: the action the case is granted is taken".to_owned(),
+                tokens: None,
+            });
+        }
         if let Some(gate) = context.approvals.first() {
             return Ok(takt::StepReport {
                 action: gate.clone(),
@@ -1046,10 +1137,14 @@ fn main() -> ExitCode {
     };
     // The endpoint's credential variable leaves takt's environment here, on the one thread
     // takt has, before it starts any process.
-    match &mut cli.command {
+    let taken = match &mut cli.command {
         Commands::Run(args) => args.looping.take_variable(false),
         Commands::Scenario(ScenarioCommands::Run(args)) => args.looping.take_variable(false),
-        _ => {}
+        _ => Ok(()),
+    };
+    if let Err(error) = taken {
+        eprintln!("takt: {error:#}");
+        return ExitCode::from(EXIT_REFUSED);
     }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -1367,7 +1462,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 takt::case::check_id(&resuming.id)?;
                 if let Some(why) = takt::case::turn_judge_refusal(
-                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &running_binary()?,
                 )? {
                     return Err(anyhow!(why));
@@ -1397,7 +1492,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             if let Some(resuming) = &resuming {
                 let run_forge = forge.forge.as_ref().map_or("none", |forge| forge.name());
                 if let Some(why) = takt::case::turn_forge_refusal(
-                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &resuming.id,
                     run_forge,
                 )? {
@@ -1677,6 +1772,40 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
 }
 
 impl LoopArgs {
+    /// Takes the flags given under the names they had for one minor release: each prints one line
+    /// on standard error naming the new name, and `--endpoint-model`, the old name of `--model`, is
+    /// the model it names. Called before anything else reads the loop's flags.
+    fn renamed(&mut self, matches: &clap::ArgMatches) {
+        const RENAMED: [(&str, &str, &str); 6] = [
+            (
+                "endpoint_base_url",
+                "--endpoint-base-url",
+                "--model-endpoint",
+            ),
+            ("endpoint_wire", "--endpoint-wire", "--model-wire"),
+            ("endpoint_model", "--endpoint-model", "--model"),
+            (
+                "endpoint_token_file",
+                "--endpoint-token-file",
+                "--subscription-token-file",
+            ),
+            (
+                "endpoint_token_pointer",
+                "--endpoint-token-pointer",
+                "--subscription-token-pointer",
+            ),
+            ("endpoint_secret", "--endpoint-secret", "--api-key-secret"),
+        ];
+        for (id, old, new) in RENAMED {
+            if !unset(matches, id) {
+                eprintln!("takt: {old} is renamed {new}; the old name works for one minor release");
+            }
+        }
+        if let Some(model) = self.endpoint_model.take() {
+            self.model = Some(model);
+        }
+    }
+
     /// Refuses, before anything of the run is done, an hour budget that is not a finite
     /// positive number: `--hours inf` would never end a wait, `--hours NaN` never compare, and
     /// zero or less would be spent before the first step.
@@ -1751,7 +1880,7 @@ impl LoopArgs {
         }
         match takt::confinement::Substrate::open(repo) {
             Ok(substrate) => {
-                self.take_variable(true);
+                self.take_variable(true)?;
                 takt::confinement::install(std::sync::Arc::new(substrate));
                 Ok(None)
             }
@@ -1770,18 +1899,37 @@ impl LoopArgs {
     }
 
     /// Under `--harness harness`, takes the variable the endpoint's credential names out of
-    /// takt's environment ([`EndpointArgs::take_variable`]). Under `--confinement substrate`
-    /// outside a delegated run it is left until `substrate` has opened in this run
-    /// (`substrate_open`), since a run delegated again under `systemd-run` reads it there.
-    fn take_variable(&mut self, substrate_open: bool) {
+    /// takt's environment ([`EndpointArgs::take_variable`]). With an `llm` section, resolves the
+    /// route `--model` names, before any case opens, and takes out of takt's environment the
+    /// variables holding the key llm resolved for it ([`takt::harness::take_environment_holding`]).
+    /// Under `--confinement substrate` outside a delegated run it is left until `substrate` has
+    /// opened in this run (`substrate_open`), since a run delegated again under `systemd-run` reads
+    /// it there. Resolved once: a second call keeps the first route.
+    fn take_variable(&mut self, substrate_open: bool) -> Result<()> {
         if self.harness != "harness"
             || (self.confinement == "substrate"
                 && !substrate_open
                 && std::env::var_os(takt::confinement::DELEGATED).is_none())
         {
-            return;
+            return Ok(());
+        }
+        if let Some(llm) = &self.llm {
+            if self.route.is_none() {
+                let model = self.model.as_deref().unwrap_or_default();
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let route =
+                    takt::harness::RouteEndpoint::resolve(llm.routes(), model, home.as_deref())?;
+                if let Some(secret) = &route.secret {
+                    // SAFETY: takt has started no thread yet (its callers run before any is
+                    // started), so nothing reads the environment while it changes.
+                    unsafe { takt::harness::take_environment_holding(secret) };
+                }
+                self.route = Some(route);
+            }
+            return Ok(());
         }
         self.endpoint.take_variable();
+        Ok(())
     }
 
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
@@ -1831,19 +1979,45 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         "claude" => Ok(Box::new(session(Kind::Claude))),
         "codex" => Ok(Box::new(session(Kind::Codex))),
         "harness" => {
+            use takt::harness::{Credential, StagedToken};
             let home = std::env::var_os("HOME").map(PathBuf::from);
             let mut session = session(Kind::B10x);
-            let config = looping.endpoint.config(home.as_deref())?;
+            let config = match &looping.route {
+                Some(route) => {
+                    session.model = Some(route.config.model.clone());
+                    route.config.clone()
+                }
+                None if looping.llm.is_some() => {
+                    return Err(anyhow!(
+                        "the run's route was not resolved before its case opens; nothing was started"
+                    ));
+                }
+                None => looping.endpoint.config(home.as_deref())?,
+            };
             session.point_at(&config);
-            // A variable's value is staged now, before any case opens, and held by the harness,
-            // so the file goes when the run ends, on success or on an error.
-            if let takt::harness::Credential::Environment { name } = &config.credential {
-                use takt::harness::StagedToken;
-                session.hold_staged(StagedToken::stage(
-                    name,
-                    looping.endpoint.variable.as_ref(),
-                    &StagedToken::candidates(),
-                )?);
+            // A key is staged now, before any case opens, and held by the harness, so the file
+            // goes when the run ends, on success or on an error: a variable's value, or a route's
+            // key as llm resolved it.
+            match &config.credential {
+                Credential::Environment { name } => {
+                    session.hold_staged(StagedToken::stage(
+                        name,
+                        looping.endpoint.variable.as_ref(),
+                        &StagedToken::candidates(),
+                    )?);
+                }
+                Credential::Route { endpoint, .. } => {
+                    let key = looping
+                        .route
+                        .as_ref()
+                        .and_then(|route| route.secret.as_ref());
+                    session.hold_staged(StagedToken::stage(
+                        endpoint,
+                        key,
+                        &StagedToken::candidates(),
+                    )?);
+                }
+                Credential::SubscriptionFile { .. } | Credential::Secret { .. } => {}
             }
             session.home = home;
             Ok(Box::new(session))
@@ -1864,30 +2038,54 @@ struct EndpointArgs {
     /// `--endpoint-file`'s `base_url`, else `https://api.anthropic.com/v1`. `https://`, or
     /// `http://` to a loopback host; no userinfo, query or fragment. Another base URL takes a
     /// credential by flag or file: the default token is sent to the default one alone.
+    #[arg(long, value_name = "URL", conflicts_with = "endpoint_base_url")]
+    model_endpoint: Option<String>,
+    /// The old name of `--model-endpoint`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "URL")]
     endpoint_base_url: Option<String>,
     /// `--harness harness`: the model API the endpoint speaks, `anthropic-messages` or
     /// `openai-responses`. Not given, `--endpoint-file`'s `wire`, else `anthropic-messages`.
+    #[arg(long, value_name = "WIRE", conflicts_with = "endpoint_wire")]
+    model_wire: Option<String>,
+    /// The old name of `--model-wire`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "WIRE")]
     endpoint_wire: Option<String>,
-    /// `--harness harness`: the model the endpoint serves; `--model` wins over it. Not given,
-    /// `--endpoint-file`'s `model`, else `claude-opus-5`.
-    #[arg(long, value_name = "MODEL")]
-    endpoint_model: Option<String>,
     /// `--harness harness`: the file holding a subscription token, which b10x-harness reads;
-    /// not with --endpoint-secret. Not given, `--endpoint-file`'s credential, else
+    /// not with --api-key-secret. Not given, `--endpoint-file`'s credential, else
     /// `~/.claude/.credentials.json` at `/claudeAiOauth/accessToken`. A relative path is read
     /// against the current directory. A file that is missing, or whose pointer resolves to no
     /// token, is refused before the case opens, exit 1.
+    #[arg(long, value_name = "PATH", conflicts_with = "endpoint_token_file")]
+    subscription_token_file: Option<PathBuf>,
+    /// The old name of `--subscription-token-file`, kept for one minor release, with one line on
+    /// standard error naming the new name.
     #[arg(long, value_name = "PATH")]
     endpoint_token_file: Option<PathBuf>,
-    /// `--harness harness`: the JSON pointer to the token inside --endpoint-token-file, given
+    /// `--harness harness`: the JSON pointer to the token inside --subscription-token-file, given
     /// only with it; not given, the whole file is the token.
+    #[arg(
+        long,
+        value_name = "JSON POINTER",
+        conflicts_with = "endpoint_token_pointer"
+    )]
+    subscription_token_pointer: Option<String>,
+    /// The old name of `--subscription-token-pointer`, kept for one minor release, with one line
+    /// on standard error naming the new name.
     #[arg(long, value_name = "JSON POINTER")]
     endpoint_token_pointer: Option<String>,
     /// `--harness harness`: the API key as a secret's name in the owner's secrets store,
     /// `<namespace>/<name>`, handed to b10x-harness by name, which the harness resolves; takt
-    /// reads no secret and opens no store. Not with --endpoint-token-file.
+    /// reads no secret and opens no store. Not with --subscription-token-file.
+    #[arg(
+        long,
+        value_name = "NAMESPACE/NAME",
+        conflicts_with = "endpoint_secret"
+    )]
+    api_key_secret: Option<String>,
+    /// The old name of `--api-key-secret`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "NAMESPACE/NAME")]
     endpoint_secret: Option<String>,
     /// `--harness harness`: the name of the environment variable holding the API key, on the
@@ -1919,32 +2117,65 @@ struct EndpointArgs {
 impl EndpointArgs {
     /// The first `--endpoint-*` flag given, by its name.
     fn given(&self) -> Option<&'static str> {
+        self.all_given().into_iter().next()
+    }
+
+    /// Every endpoint flag given, under the name it was given by, in the order the flags are
+    /// listed. `--endpoint-model` is `--model` and is not among them.
+    fn all_given(&self) -> Vec<&'static str> {
         [
+            ("--model-endpoint", self.model_endpoint.is_some()),
             ("--endpoint-base-url", self.endpoint_base_url.is_some()),
+            ("--model-wire", self.model_wire.is_some()),
             ("--endpoint-wire", self.endpoint_wire.is_some()),
-            ("--endpoint-model", self.endpoint_model.is_some()),
+            (
+                "--subscription-token-file",
+                self.subscription_token_file.is_some(),
+            ),
             ("--endpoint-token-file", self.endpoint_token_file.is_some()),
+            (
+                "--subscription-token-pointer",
+                self.subscription_token_pointer.is_some(),
+            ),
             (
                 "--endpoint-token-pointer",
                 self.endpoint_token_pointer.is_some(),
             ),
+            ("--api-key-secret", self.api_key_secret.is_some()),
             ("--endpoint-secret", self.endpoint_secret.is_some()),
             ("--endpoint-token-env", self.endpoint_token_env.is_some()),
             ("--endpoint-file", self.endpoint_file.is_some()),
         ]
         .into_iter()
-        .find_map(|(flag, given)| given.then_some(flag))
+        .filter_map(|(flag, given)| given.then_some(flag))
+        .collect()
     }
 
-    /// The fields the flags give.
+    /// The fields the flags give: each new name's value, else its old name's. The model is not
+    /// among them: `--model` names it, and the file's `model` is the endpoint's.
     fn fields(&self) -> takt::harness::EndpointFields {
         takt::harness::EndpointFields {
-            base_url: self.endpoint_base_url.clone(),
-            wire: self.endpoint_wire.clone(),
-            model: self.endpoint_model.clone(),
-            token_file: self.endpoint_token_file.clone(),
-            token_pointer: self.endpoint_token_pointer.clone(),
-            secret: self.endpoint_secret.clone(),
+            base_url: self
+                .model_endpoint
+                .clone()
+                .or_else(|| self.endpoint_base_url.clone()),
+            wire: self
+                .model_wire
+                .clone()
+                .or_else(|| self.endpoint_wire.clone()),
+            model: None,
+            token_file: self
+                .subscription_token_file
+                .clone()
+                .or_else(|| self.endpoint_token_file.clone()),
+            token_pointer: self
+                .subscription_token_pointer
+                .clone()
+                .or_else(|| self.endpoint_token_pointer.clone()),
+            secret: self
+                .api_key_secret
+                .clone()
+                .or_else(|| self.endpoint_secret.clone()),
             env: self.endpoint_token_env.clone(),
         }
     }
@@ -2543,7 +2774,7 @@ fn trial_free(repo: &Path, scenario: &str, n: u128) -> Result<String> {
 /// What of the case `case_id` is there already, its directory or its branch `takt/<case>`;
 /// none when neither is. `case_id` is one [`takt::case::check_id`] accepted.
 fn case_taken(repo: &Path, case_id: &str) -> Result<Option<String>> {
-    if repo.join(takt::case::CASES_DIR).join(case_id).exists() {
+    if takt::case::CaseDir::locate(repo, case_id).exists() {
         return Ok(Some(format!("the case {case_id}")));
     }
     let branch = takt::case::Branch::name_of(case_id);
@@ -3081,7 +3312,7 @@ fn case_to_resume(
 /// nothing outside the cases directory is read.
 fn case_protocol(repo: &Path, id: &str) -> Result<Option<LoadedProtocol>> {
     takt::case::check_id(id)?;
-    let dir = repo.join(takt::case::CASES_DIR).join(id);
+    let dir = takt::case::CaseDir::locate(repo, id);
     if !dir.join("case.yaml").is_file() {
         return Ok(None);
     }
@@ -3134,7 +3365,7 @@ fn resume_install_root(repo: &Path, id: &str, protocol: &str, given: &Path) -> R
         )
     };
     let recorded = if protocol == takt::case::TURN_PROTOCOL {
-        takt::case::install_root_of(&repo.join(takt::case::CASES_DIR).join(id))?
+        takt::case::install_root_of(&takt::case::CaseDir::locate(repo, id))?
     } else {
         None
     };
@@ -3166,7 +3397,7 @@ fn refuse_identity_for_resume(
     given: Option<&takt::git::CommitIdentity>,
     pushes: bool,
 ) -> Result<()> {
-    let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+    let recorded = takt::case::commit_identity_of(&takt::case::CaseDir::locate(repo, id))?;
     if let Some(given) = given
         && recorded.as_ref() != Some(given)
     {
@@ -3185,7 +3416,7 @@ fn refuse_identity_for_resume(
         // No command closes or drops a case: the way past one is to finish it without pushing,
         // or to remove its branch and its directory, after which no run finds it and its story
         // is taken again, the take having been committed on that branch only.
-        let dir = repo.join(takt::case::CASES_DIR).join(id);
+        let dir = takt::case::CaseDir::locate(repo, id);
         let base = takt::case::Branch::read(&dir)
             .ok()
             .and_then(|branch| branch.base)
@@ -3217,7 +3448,7 @@ fn identity_at_open(
         return Ok(Some((given.clone(), "--commit-identity".to_owned())));
     }
     if let Some(id) = resuming {
-        let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+        let recorded = takt::case::commit_identity_of(&takt::case::CaseDir::locate(repo, id))?;
         return Ok(recorded.map(|identity| (identity, format!("the case {id}"))));
     }
     let from = takt::git::current_branch(repo)?
@@ -3225,7 +3456,7 @@ fn identity_at_open(
         .and_then(|branch| branch.strip_prefix(takt::case::BRANCH_PREFIX))
         .filter(|other| takt::case::check_id(other).is_ok())
         .and_then(|other| {
-            takt::case::Branch::read(&repo.join(takt::case::CASES_DIR).join(other))
+            takt::case::Branch::read(&takt::case::CaseDir::locate(repo, other))
                 .ok()
                 .and_then(|branch| branch.base)
         });
@@ -3473,7 +3704,7 @@ mod tests {
 
     /// The one case directory under `repo`.
     fn the_case(repo: &Path) -> PathBuf {
-        let mut cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+        let mut cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
             .expect("a cases directory")
             .map(|e| e.expect("an entry").path())
             .collect();
@@ -3535,7 +3766,7 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         assert!(out.contains("frontier: nothing ready"), "{out}");
         assert!(!out.contains("case "), "{out}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
         assert_eq!(status(&repo, "story:blocked-one"), "proposed");
         assert_eq!(status(&repo, "story:waits-one"), "proposed");
     }
@@ -3806,7 +4037,7 @@ mod tests {
             &["--forge", "bot"],
         ));
         assert!(error.contains("origin"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// The bot route pushes under a GitHub App and reads through `gh`: asked for on another
@@ -3829,7 +4060,7 @@ mod tests {
             &["--forge", "bot"],
         ));
         assert!(error.contains("not github.com"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// Answers glab's login check as a glab with no login does, exit 1, and keeps each line
@@ -3904,7 +4135,7 @@ mod tests {
             &["--forge", "hub"],
         ));
         assert_eq!(error, "no forge `hub`: bot, gitlab or none");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is
@@ -3936,7 +4167,7 @@ mod tests {
                 "HEAD",
             ],
         );
-        fs::create_dir_all(repo.join(".engineering/cases/scenario-1-trial-2026101914253000000044"))
+        fs::create_dir_all(repo.join(".takt/cases/scenario-1-trial-2026101914253000000044"))
             .expect("a case directory");
         git(
             &repo,
@@ -3970,8 +4201,9 @@ mod tests {
     /// `ApprovalRequired`. `takt approve` writes the grant into that case, records the approval
     /// on the story and commits that record on the case's branch; the run after it resumes the
     /// case at the revision the grant was given at, on a clean tree, and reads the grant: the
-    /// merge is no longer approval-required but admitted, a judgement step that no harness
-    /// takes here. A grant is given only to a case at the gate.
+    /// merge is no longer approval-required but admitted, the granted action `--harness none`
+    /// takes (story:harness-none-takes-a-granted-action). A grant is given only to a case at the
+    /// gate.
     #[test]
     fn approve_writes_the_grant_and_the_next_run_resumes_the_open_case() {
         let repo = repository("one-ready", "approve");
@@ -4071,12 +4303,15 @@ mod tests {
         assert_eq!(
             git_out(
                 &repo,
-                &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+                &["status", "--porcelain", "--", ".", ":!.takt/cases"]
             ),
             ""
         );
         let (code, out) = takt(&resume);
-        assert_eq!(code, 5, "{out}");
+        assert_eq!(
+            code, 3,
+            "story:harness-none-takes-a-granted-action: the granted merge is taken, and nothing moves after it: {out}"
+        );
         assert!(
             out.contains(&format!(
                 "frontier: resumed story:ready-one: Make the check pass (case {id})"
@@ -4087,10 +4322,16 @@ mod tests {
         assert!(!out.contains("ApprovalRequired"), "{out}");
         assert!(out.contains("repository.merge (admissible)"), "{out}");
         assert!(
-            out.contains(
-                "no harness: a judgement step among implementation.edit, repository.merge, tests.write is left"
-            ),
-            "{out}"
+            out.contains("step 1: repository.merge (none)"),
+            "story:harness-none-takes-a-granted-action: the granted merge is the harness's step: {out}"
+        );
+        assert!(
+            out.contains("stopped: NoProgress"),
+            "story:harness-none-takes-a-granted-action: no forge performs the merge, so nothing moves: {out}"
+        );
+        assert!(
+            !out.contains("no harness: a judgement step"),
+            "story:harness-none-takes-a-granted-action: the granted merge is not left: {out}"
         );
         assert_eq!(the_case(&repo), case, "no second case was opened");
     }
@@ -4165,7 +4406,7 @@ mod tests {
         ]);
         assert!(error.contains("--case"), "{error}");
         assert!(error.contains("--intent"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     #[test]
@@ -4181,7 +4422,7 @@ mod tests {
             "operator",
         ]);
         assert!(error.contains("absent"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// An hour budget that is not a finite number above 0 is refused before the run, for
@@ -4209,6 +4450,6 @@ mod tests {
                 assert!(error.contains("--hours"), "{args:?}: {error}");
             }
         }
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 }

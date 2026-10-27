@@ -101,15 +101,12 @@ fn run_with_case_refuses_a_cases_directory_that_is_a_link_before_the_first_step(
     let repo = scratch.0.join("tree");
     let (code, out, err) = takt_run(&repo, &["--intent", "probe", "--case-id", "linked"]);
     assert!(
-        repo.join(".engineering/cases/linked/case.yaml").is_file(),
+        repo.join(".takt/cases/linked/case.yaml").is_file(),
         "the case opens ({code})\n{out}\n{err}"
     );
     git(&repo, &["checkout", "-q", "main"]);
     let status = Command::new("sh")
-        .args([
-            "-c",
-            "mv .engineering/cases ../x && ln -s ../../x .engineering/cases",
-        ])
+        .args(["-c", "mv .takt/cases ../x && ln -s ../../x .takt/cases"])
         .current_dir(&repo)
         .status()
         .expect("sh runs");
@@ -119,7 +116,7 @@ fn run_with_case_refuses_a_cases_directory_that_is_a_link_before_the_first_step(
     let (code, out, err) = takt_run(&repo, &["--case", "linked"]);
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(
-        err.contains(".engineering/cases") && err.contains("a link"),
+        err.contains(".takt/cases") && err.contains("a link"),
         "the refusal names the link: {err}"
     );
     assert!(!out.contains("step 1"), "a step was taken: {out}");

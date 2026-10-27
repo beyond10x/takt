@@ -1,4 +1,4 @@
-//! story:scorecard-reader: the scorecard reads the runs' events under `.engineering/cases/`
+//! story:scorecard-reader: the scorecard reads the runs' events under `.takt/cases/`
 //! only, one row per run, and compares each scenario run with a saved scorecard's. The case
 //! directories are written through `takt::events`, the format the run loop writes, never as
 //! hand-typed lines. Also the run event the scorecard and the metrics need: a step's four token
@@ -1368,7 +1368,7 @@ fn a_store_evidence_line_keeps_its_own_instant_beside_the_records() {
             Event::StoreEvidence {
                 story: "story:scratch-one".to_owned(),
                 kind: "test_result".to_owned(),
-                reference: ".engineering/cases/scenario-1-trial-1/evidence/0001.json".to_owned(),
+                reference: ".takt/cases/scenario-1-trial-1/evidence/0001.json".to_owned(),
                 observed_at: "2026-10-18T10:00:00Z".to_owned(),
                 commit: None,
             },

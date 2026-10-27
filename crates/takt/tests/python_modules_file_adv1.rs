@@ -70,7 +70,7 @@ const CHECK: &str = "test -f answer.txt\n";
 
 /// A test script that names no Python and copies a data file the tree holds, `plant.json`, into
 /// every case directory: what a test suite running code a step wrote can do.
-const CHECK_PLANTS: &str = "if [ -f plant.json ]; then for d in .engineering/cases/*/; do cp plant.json \"${d}python-modules.json\"; done; fi\ntest -f answer.txt\n";
+const CHECK_PLANTS: &str = "if [ -f plant.json ]; then for d in .takt/cases/*/; do cp plant.json \"${d}python-modules.json\"; done; fi\ntest -f answer.txt\n";
 
 /// A module file naming no standard-library module: what a step would plant to weaken the guard.
 const WEAK: &str = "{\"from\":[\"planted\"],\"strict\":[],\"names\":[]}";
@@ -201,7 +201,7 @@ impl Harness for Writes {
 }
 
 fn case_dirs(tree: &Path) -> Vec<PathBuf> {
-    let Ok(cases) = fs::read_dir(tree.join(".engineering/cases")) else {
+    let Ok(cases) = fs::read_dir(tree.join(".takt/cases")) else {
         return Vec::new();
     };
     cases
@@ -380,7 +380,7 @@ fn reference_listing_of_a_true_case_matches_what_takt_keeps() {
         .expect("the listing");
     let listed = listing
         .lines()
-        .any(|line| line.trim() == ".engineering/cases/<case>/python-modules.json");
+        .any(|line| line.trim() == ".takt/cases/<case>/python-modules.json");
 
     let tree = repository("reference", &[("todo.py", CODE)]);
     let opened = validators("true");

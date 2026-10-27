@@ -275,7 +275,7 @@ fn store_committed(repo: &Path) -> String {
             "HEAD",
             "--",
             ".engineering",
-            ":!.engineering/cases",
+            ":!.takt/cases",
         ],
     )
 }
@@ -417,7 +417,7 @@ fn an_unreadable_file_in_the_store_leaves_nothing_of_the_step() {
     let (stop, dir, text) = delivery_run(&repo, &harness);
     let left = git(
         &repo,
-        &["status", "--porcelain", "--", ".", ":!.engineering/cases"],
+        &["status", "--porcelain", "--", ".", ":!.takt/cases"],
     );
     let last = events(&dir).last().cloned().expect("a line");
     assert!(
@@ -534,7 +534,7 @@ fn a_store_write_whose_line_cannot_be_written_is_taken_back() {
     assert_eq!(
         git(
             &repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"]
         ),
         ""
     );
@@ -600,7 +600,7 @@ fn a_step_that_cannot_be_printed_is_discarded_with_its_commit() {
     assert_eq!(
         git(
             &repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"]
         ),
         ""
     );

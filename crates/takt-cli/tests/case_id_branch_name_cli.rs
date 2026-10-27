@@ -94,10 +94,7 @@ fn run_with_a_case_id_git_refuses_as_a_branch_exits_1_naming_it_with_nothing_wri
         assert!(err.contains(&format!("the case id `{id}`")), "{id}: {err}");
         assert!(err.contains(rule), "{id}: {rule} not named: {err}");
         assert!(!err.contains("git checkout"), "{id}: git's refusal: {err}");
-        assert!(
-            !repo.join(".engineering/cases").exists(),
-            "{id}: a case dir"
-        );
+        assert!(!repo.join(".takt/cases").exists(), "{id}: a case dir");
         assert!(
             git(repo, &["branch", "--list", "takt/*"]).is_empty(),
             "{id}: a branch was made"
@@ -115,7 +112,7 @@ fn run_with_case_refuses_a_path_before_reading_anything_under_it() {
     let repo = &scratch.0;
     let planted = repo.join(".engineering/planted");
     fs::create_dir_all(&planted).expect("a directory");
-    fs::create_dir_all(repo.join(".engineering/cases")).expect("a directory");
+    fs::create_dir_all(repo.join(".takt/cases")).expect("a directory");
     fs::write(planted.join("case.yaml"), "format: canon-case/1\n").expect("a file");
     fs::write(planted.join("protocol.yaml"), "planted: not a protocol\n").expect("a file");
     for (id, rule) in [

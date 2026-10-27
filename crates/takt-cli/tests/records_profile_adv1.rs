@@ -108,7 +108,7 @@ impl World {
 
 /// The one case directory under `repo`.
 fn only_case(repo: &Path) -> PathBuf {
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();

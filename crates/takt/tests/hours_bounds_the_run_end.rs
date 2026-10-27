@@ -131,21 +131,16 @@ fn kill_listed(file: &Path) {
 
 /// The lines of the case's `events.jsonl`, parsed.
 fn events(tree: &Path, id: &str) -> Vec<serde_json::Value> {
-    fs::read_to_string(
-        tree.join(".engineering/cases")
-            .join(id)
-            .join("events.jsonl"),
-    )
-    .expect("the run record")
-    .lines()
-    .map(|line| serde_json::from_str(line).expect("a JSON line"))
-    .collect()
+    fs::read_to_string(tree.join(".takt/cases").join(id).join("events.jsonl"))
+        .expect("the run record")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a JSON line"))
+        .collect()
 }
 
 /// How many evidence records the case holds.
 fn records(tree: &Path, id: &str) -> usize {
-    fs::read_dir(tree.join(".engineering/cases").join(id).join("evidence"))
-        .map_or(0, Iterator::count)
+    fs::read_dir(tree.join(".takt/cases").join(id).join("evidence")).map_or(0, Iterator::count)
 }
 
 /// A harness that fails at once.

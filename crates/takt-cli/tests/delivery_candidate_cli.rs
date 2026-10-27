@@ -368,7 +368,7 @@ fn a_forge_none_delivery_hands_a_turn_its_candidate() {
         "stdout {out} stderr {err}"
     );
     assert_eq!(code, 3, "stdout {out} stderr {err}");
-    let case = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/case.yaml"))
+    let case = fs::read_to_string(world.repo.join(".takt/cases/turn-1/case.yaml"))
         .unwrap_or_else(|_| panic!("no turn opened: stdout {out} stderr {err}"));
     assert!(case.contains(&candidate), "{case}");
     assert_eq!(world.route_calls(), "", "the route was called");

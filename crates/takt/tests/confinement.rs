@@ -400,7 +400,7 @@ impl Ran {
 
 /// Every evidence record under `tree`'s cases, whichever case wrote it.
 fn evidence(tree: &Path) -> Vec<serde_json::Value> {
-    let Ok(cases) = fs::read_dir(tree.join(".engineering/cases")) else {
+    let Ok(cases) = fs::read_dir(tree.join(".takt/cases")) else {
         return Vec::new();
     };
     let mut paths = Vec::new();

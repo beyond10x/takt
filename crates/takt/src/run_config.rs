@@ -11,12 +11,32 @@
 //! them (`crates/takt-cli/src/main.rs`).
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 
 /// llm's parsed `llm.routes/1` document, the type a run file's `llm` member is validated as; its
 /// [`Routes::digest`] is the `llm_digest` a run records.
 pub use llm_models::routes::Routes;
+
+/// The `llm.routes/1` document a run file's `llm` member holds, parsed by llm and shared, so a run
+/// resolves its `model` against it. Two are equal when their digests are.
+#[derive(Debug, Clone)]
+pub struct LlmRoutes(Arc<Routes>);
+
+impl LlmRoutes {
+    /// The parsed document.
+    #[must_use]
+    pub fn routes(&self) -> &Routes {
+        &self.0
+    }
+}
+
+impl PartialEq for LlmRoutes {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.digest() == other.0.digest()
+    }
+}
 
 /// The `format` of the agent document Loom writes to `/config/agent.yaml`.
 pub const LOOM_AGENT_FORMAT: &str = "loom.agent/1";
@@ -125,6 +145,9 @@ pub struct RunConfig {
     /// [`RunConfig::read`], never read from the file.
     #[serde(skip)]
     pub llm_digest: Option<String>,
+    /// The document `llm` holds, parsed by llm. Set by [`RunConfig::read`], never read from the file.
+    #[serde(skip)]
+    pub llm_routes: Option<LlmRoutes>,
 }
 
 /// A present `llm` member, null included: serde reads a null as absent, so a bare `llm:` would
@@ -137,6 +160,9 @@ where
 }
 
 const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`";
+
+/// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
+const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
 
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
@@ -152,12 +178,12 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
     }
 }
 
-/// The digest of the `llm.routes/1` document `llm` holds, validated by llm. A mapping whose only
+/// The `llm.routes/1` document `llm` holds, validated by llm. A mapping whose only
 /// key is `path` names a file beside the run file, parsed by `Routes::parse_toml` when it ends in
 /// `.toml` and by `Routes::parse` when it ends in `.yaml` or `.yml`; any other mapping is the
 /// whole document, re-serialised to YAML text and parsed by `Routes::parse`. llm's refusal is
 /// relayed as it stands, and nothing here repeats a value written in the file.
-fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
+fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<Routes> {
     let shape = || {
         anyhow!(
             "the run configuration file {} is refused: its `llm` member is neither an \
@@ -179,12 +205,14 @@ fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
                     path.display()
                 ));
             }
-            let file = path.parent().unwrap_or(Path::new(".")).join(name);
-            let text = std::fs::read_to_string(&file)
-                .with_context(|| format!("the llm document {}", file.display()))?;
-            let parsed = match file.extension().and_then(|extension| extension.to_str()) {
-                Some("toml") => Routes::parse_toml(&text),
-                Some("yaml" | "yml") => Routes::parse(&text),
+            let directory = match path.parent() {
+                Some(directory) if !directory.as_os_str().is_empty() => directory,
+                _ => Path::new("."),
+            };
+            let file = directory.join(name);
+            let toml = match name.extension().and_then(|extension| extension.to_str()) {
+                Some("toml") => true,
+                Some("yaml" | "yml") => false,
                 _ => {
                     return Err(anyhow!(
                         "the llm document {} is refused: its name ends in neither .toml, .yaml \
@@ -192,6 +220,37 @@ fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
                         file.display()
                     ));
                 }
+            };
+            let metadata = std::fs::metadata(&file)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            if !metadata.is_file() {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: its `llm` member names a file that is not a regular file",
+                    path.display()
+                ));
+            }
+            if metadata.len() > LLM_DOCUMENT_BOUND {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: its `llm` member names a file larger than the 2 MiB bound (2097152 bytes)",
+                    path.display()
+                ));
+            }
+            let real = std::fs::canonicalize(&file)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            let real_directory = std::fs::canonicalize(directory)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            if !real.starts_with(&real_directory) {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: its `llm` member names a file that resolves outside the run file's directory",
+                    path.display()
+                ));
+            }
+            let text = std::fs::read_to_string(&real)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            let parsed = if toml {
+                Routes::parse_toml(&text)
+            } else {
+                Routes::parse(&text)
             };
             parsed.with_context(|| format!("the llm document {}", file.display()))?
         }
@@ -206,7 +265,7 @@ fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
         }
         None => return Err(shape()),
     };
-    Ok(routes.digest().to_owned())
+    Ok(routes)
 }
 
 /// The run configuration in `text`, TOML.
@@ -318,7 +377,9 @@ impl RunConfig {
             ));
         }
         if let Some(llm) = &config.llm {
-            config.llm_digest = Some(llm_digest(path, llm)?);
+            let routes = llm_document(path, llm)?;
+            config.llm_digest = Some(routes.digest().to_owned());
+            config.llm_routes = Some(LlmRoutes(Arc::new(routes)));
         }
         let beside = |file: PathBuf| match path.parent() {
             Some(dir) if file.is_relative() => dir.join(file),
@@ -327,6 +388,48 @@ impl RunConfig {
         config.endpoint_file = config.endpoint_file.take().map(beside);
         config.state_dir = config.state_dir.take().map(beside);
         Ok(config)
+    }
+
+    /// Sets the document `--llm-config` names, a `.toml`, `.yaml` or `.yml` file of at most the bound
+    /// a run file's `llm` path takes, parsed by llm: it replaces the document the run file's `llm`
+    /// member holds, and its digest is the run's `llm_digest`. The file is read as it stands, beside
+    /// nothing: the flag names it from the working directory.
+    pub fn set_llm_file(&mut self, path: &Path) -> Result<()> {
+        let toml = match path.extension().and_then(|extension| extension.to_str()) {
+            Some("toml") => true,
+            Some("yaml" | "yml") => false,
+            _ => {
+                return Err(anyhow!(
+                    "the llm document {} is refused: its name ends in neither .toml, .yaml nor .yml",
+                    path.display()
+                ));
+            }
+        };
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("the llm document {}", path.display()))?;
+        if !metadata.is_file() {
+            return Err(anyhow!(
+                "the llm document {} is refused: it is not a regular file",
+                path.display()
+            ));
+        }
+        if metadata.len() > LLM_DOCUMENT_BOUND {
+            return Err(anyhow!(
+                "the llm document {} is refused: it is larger than the 2 MiB bound (2097152 bytes)",
+                path.display()
+            ));
+        }
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("the llm document {}", path.display()))?;
+        let parsed = if toml {
+            Routes::parse_toml(&text)
+        } else {
+            Routes::parse(&text)
+        };
+        let routes = parsed.with_context(|| format!("the llm document {}", path.display()))?;
+        self.llm_digest = Some(routes.digest().to_owned());
+        self.llm_routes = Some(LlmRoutes(Arc::new(routes)));
+        Ok(())
     }
 }
 

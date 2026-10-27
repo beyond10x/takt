@@ -82,7 +82,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(".takt/cases")
     }
 
     /// Writes `text` as `config/run.toml` and returns its path.
@@ -100,6 +100,11 @@ impl World {
     /// `takt run` on the repository with an intent, `--config <config>` and `args`, HOME the
     /// scratch one, the double first on the program path, no session bus.
     fn run(&self, config: &Path, args: &[&str]) -> Output {
+        self.run_env(config, args, &[])
+    }
+
+    /// [`World::run`] with `env` set on top of the scratch environment.
+    fn run_env(&self, config: &Path, args: &[&str], env: &[(&str, &str)]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_takt"))
             .args([
                 "run",
@@ -127,6 +132,7 @@ impl World {
             // (story:scan-and-forge-are-adapters); no step here reaches a scan.
             .env("B10X_GATES_POLICY", self.0.join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
+            .envs(env.iter().copied())
             .output()
             .expect("takt runs")
     }
@@ -443,4 +449,128 @@ fn another_extension_or_format_is_refused_naming_the_file() {
     assert!(all.contains(&config.display().to_string()), "{all}");
     assert!(!all.contains("MARKER-other-format"), "{all}");
     assert!(!world.cases().exists(), "no case was opened");
+}
+
+/// The files `examples/loom-agent/takt-agent.yaml` mounts at `/config/`, as `(name, content)`: its
+/// `spec.configFiles`, verbatim.
+fn example_config_files() -> Vec<(String, String)> {
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/loom-agent/takt-agent.yaml");
+    let text = fs::read_to_string(path).expect("the example");
+    let agent: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).expect("YAML");
+    agent["spec"]["configFiles"]
+        .as_sequence()
+        .expect("configFiles")
+        .iter()
+        .map(|file| {
+            (
+                file["name"].as_str().expect("a name").to_owned(),
+                file["content"].as_str().expect("a content").to_owned(),
+            )
+        })
+        .collect()
+}
+
+/// Acceptance 1 of story:one-run-file-for-host-and-loom-agent: the example's `takt.yaml` and
+/// `llm.yaml`, read from a directory and from the same bytes in a second directory, the `/config/`
+/// a LoomAgent mounts, each open a case whose `opened` line names the same llm digest and the same
+/// endpoint. The route's key is a marker in the environment, which no case file may carry.
+#[test]
+fn one_file_host_and_mount_open_the_same_digest_and_endpoint() {
+    let marker = "MARKER-one-file-key";
+    let files = example_config_files();
+    assert_eq!(
+        files
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["takt.yaml", "llm.yaml"]
+    );
+    let llm = &files[1].1;
+    let expected = takt::run_config::Routes::parse(llm)
+        .expect("llm parses")
+        .digest()
+        .to_owned();
+
+    let mut opened = Vec::new();
+    for mounted in [false, true] {
+        let world = World::new(if mounted {
+            "one-file-mount"
+        } else {
+            "one-file-host"
+        });
+        let dir = if mounted {
+            world.0.join("mount")
+        } else {
+            world.config_dir()
+        };
+        fs::create_dir_all(&dir).expect("a directory");
+        for (name, content) in &files {
+            fs::write(dir.join(name), content).expect("a config file");
+        }
+        let output = world.run_env(
+            &dir.join("takt.yaml"),
+            &["--iterations", "0"],
+            &[("LLM_API_KEY", marker)],
+        );
+        let all = text(&output);
+        assert_eq!(output.status.code(), Some(3), "{all}");
+        assert!(!all.contains(marker), "{all}");
+        assert!(!world.started().exists(), "b10x-harness was not started");
+        let lines = world.opened();
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert_eq!(lines[0]["llm_digest"], expected.as_str(), "{lines:?}");
+        opened.push(lines[0].clone());
+        for file in files_under(&world.0) {
+            let written = fs::read(&file).expect("a file the run wrote");
+            assert!(
+                !written
+                    .windows(marker.len())
+                    .any(|window| window == marker.as_bytes()),
+                "{} holds the key",
+                file.display()
+            );
+        }
+    }
+    assert_eq!(opened[0]["endpoint"], opened[1]["endpoint"]);
+    assert_eq!(
+        opened[0]["endpoint"]["base_url"],
+        "https://llm.example.com/v1/"
+    );
+    assert_eq!(opened[0]["endpoint"]["wire"], "openai-responses");
+    assert_eq!(opened[0]["endpoint"]["model"], "example-model");
+}
+
+/// Acceptance 3 of story:one-run-file-for-host-and-loom-agent, takt's side: a literal `auth.secret`
+/// in the mounted `llm.yaml` exits 1 before any case opens, naming `auth.secret` and repeating the
+/// literal in no output and in no file the run wrote. Loom's own `SecretLiteral` refusal of the
+/// same file is not run here.
+#[test]
+fn one_file_literal_secret_in_llm_yaml_is_refused_before_any_case() {
+    let world = World::new("one-file-literal");
+    let literal = "MARKER-one-file-literal-key";
+    for (name, content) in example_config_files() {
+        let content = content.replace("secret: env:LLM_API_KEY", &format!("secret: {literal}"));
+        world.config_named(&name, &content);
+    }
+    let config = world.config_dir().join("takt.yaml");
+    let output = world.run(&config, &["--iterations", "0"]);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("auth.secret"), "{all}");
+    assert!(!all.contains(literal), "{all}");
+    assert!(!world.cases().exists(), "no case was opened");
+    for file in files_under(&world.0) {
+        if file.starts_with(world.config_dir()) {
+            continue;
+        }
+        let written = fs::read(&file).expect("a file the run wrote");
+        assert!(
+            !written
+                .windows(literal.len())
+                .any(|window| window == literal.as_bytes()),
+            "{} holds the literal",
+            file.display()
+        );
+    }
 }

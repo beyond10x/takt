@@ -58,13 +58,23 @@ store, no commit, and no store needed.
 | a story's | `takt run --repo .`, which resumes the open case of the story being worked |
 | an intent's | `takt run --repo . --case <case>`; without a planning store, a run with neither `--intent` nor `--case` is refused |
 
-The resumed run needs a harness. Merging is a judgement step, and `--harness none` takes no
-judgement step:
+The resumed run needs a harness. Merging is a judgement step. `--harness none` takes the action
+the case is granted, once it is admissible, and no other judgement step; with `--forge none`
+nothing performs that merge, so the step changes no file and the run stops:
 
 ```console
 $ takt run --repo . --case takt-20261026T234353Z --harness none --forge none
-stopped: error: step 1: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, repository.merge, tests.write is left; steps 1, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261026T234353Z
+frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (admissible), tests.run (admissible), tests.write (admissible)
+step 1: repository.merge (none)
+  said: no harness: the action the case is granted is taken
+  effect: no file changed
+frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (admissible), tests.run (admissible), tests.write (admissible)
+stopped: NoProgress; steps 1, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261026T234353Z
 ```
+
+The case stays open, exit 3. Resumed with a forge, the merge is performed by the forge's merge
+validator, the case completes, and the run exits 0. Without a grant, `--harness none` requests the
+approval as before and does not merge.
 
 ## A commit after the grant needs a new one
 

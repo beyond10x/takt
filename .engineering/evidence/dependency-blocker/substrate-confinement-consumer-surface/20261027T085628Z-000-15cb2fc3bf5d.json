@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-27T08:56:28Z",
+  "actor": "human:timo",
+  "artifact": "dependency-blocker:substrate-confinement-consumer-surface",
+  "kind": "dependency-blocker",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "substrate 0.12.0 (tag 0.12.0, commit 65e1fca7, GitHub Release published 2026-10-27T08:04:19Z, Release run 40469131133 success) ships story:confinement-consumer-surface: CHANGELOG.md:22 at 0.12.0, 'The confinement module's consumer surface is proved and frozen'; the macos adapter runs cargo test on the macos-15 job, macOS run 40467347063 success on 65e1fca7 (.github/workflows/macos.yml:19, :55-64)",
+    "reference": "https://github.com/beyond10x/substrate/releases/tag/0.12.0"
+  }
+}

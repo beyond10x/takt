@@ -1,7 +1,7 @@
 //! The governor of Loom decides takt's recorded cases as takt decided them
 //! (`story:loom-sdk-pinned-with-evaluation-parity`).
 //!
-//! Every decision takt wrote under `.engineering/cases/turn-*/decisions/` is decided again by
+//! Every decision takt wrote under `.takt/cases/turn-*/decisions/` is decided again by
 //! `loom_sdk::governor::evaluate`, from the request the decision's own
 //! `explanation.computed_from` names (the case snapshot, the evidence ids, the instant), under
 //! the case's own `protocol.yaml`. The two are compared as parsed values. A decision that read no

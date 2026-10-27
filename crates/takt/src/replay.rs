@@ -99,17 +99,20 @@ pub struct Start {
     pub action: String,
 }
 
-/// The tree a case directory lies in, `<tree>/.engineering/cases/<id>`; an error for a
-/// directory that does not lie so.
+/// The tree a case directory lies in, `<tree>/.takt/cases/<id>` or `<tree>/.engineering/cases/<id>`;
+/// an error for a directory that does not lie so.
 pub fn tree_of(case_dir: &Path) -> Result<PathBuf> {
     let dir = std::fs::canonicalize(case_dir)
         .with_context(|| format!("resolve the case directory {}", case_dir.display()))?;
     let cases = dir.parent().unwrap_or(&dir);
-    if !cases.ends_with(crate::case::CASES_DIR) {
+    if !crate::case::CASE_ROOTS
+        .iter()
+        .any(|root| cases.ends_with(root))
+    {
         bail!(
             "the case directory {} does not lie under a tree's {}; name the repository with --repo",
             case_dir.display(),
-            crate::case::CASES_DIR
+            crate::case::CASE_ROOTS.join(" or ")
         );
     }
     Ok(cases
@@ -491,6 +494,9 @@ fn context<'a>(
         offered: &offer.offered,
         approvals: &offer.approvals,
         choices: &offer.choices,
+        // A replay gives the recorded harness its prompt, which shows no grant, and the offer a
+        // run records names none: a replayed step is given none.
+        granted: &[],
         decision: &start.decision,
         protocol: &start.protocol,
         step: usize::try_from(start.step).unwrap_or(usize::MAX),
@@ -525,7 +531,7 @@ fn failed_of(start: &Start) -> Vec<crate::validator::FailedCheck> {
 /// revision is the record's to name, and its tree could put a link anywhere.
 pub fn rebuild_case(start: &Start, tree: &Path, revision: &str) -> Result<PathBuf> {
     crate::case::refuse_link_on_the_way(tree, &start.case, "rebuilt for a replay")?;
-    let dir = tree.join(crate::case::CASES_DIR).join(&start.case);
+    let dir = crate::case::CaseDir::locate(tree, &start.case);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     plain_dir(&dir.join("evidence"))?;
     plain_dir(&dir.join("decisions"))?;

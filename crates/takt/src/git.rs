@@ -15,7 +15,7 @@ use std::process::{Output, Stdio};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
-use crate::case::{CASES_DIR, is_under_cases};
+use crate::case::{CASE_ROOTS, holds_cases_root, is_under_cases};
 use crate::confinement::Command;
 
 /// What every git takt runs is told on its command line, over whatever the repository's, the
@@ -1266,9 +1266,20 @@ fn new_gitlinks(tree: &Path, paths: &[String]) -> Result<Vec<String>> {
 /// tracked files back to `HEAD`, untracked files removed; ignored files stay. For a tree that was
 /// clean when the work being discarded began, so that everything uncommitted is that work's.
 pub fn discard_uncommitted(tree: &Path) -> Result<()> {
-    let keep = format!("{CASES_DIR}/");
     run(tree, &["reset", "-q", "--hard", "HEAD"])?;
-    run(tree, &["clean", "-fdq", "-e", &keep])?;
+    clean_untracked(tree)
+}
+
+/// `git clean -fdq` with each cases root kept (the new one and the legacy one): the untracked
+/// files a case holds are the case's, and a `.takt/.gitignore` that un-ignores them leaves them
+/// untracked and in reach of a clean.
+fn clean_untracked(tree: &Path) -> Result<()> {
+    let keep: Vec<String> = CASE_ROOTS.iter().map(|root| format!("{root}/")).collect();
+    let mut args = vec!["clean", "-fdq"];
+    for pattern in &keep {
+        args.extend(["-e", pattern.as_str()]);
+    }
+    run(tree, &args)?;
     Ok(())
 }
 
@@ -1892,6 +1903,13 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<OsString,
     for path in ignored(entries) {
         let path = OsString::from(path);
         let content = Content::of(&at(tree, &path))?;
+        // A directory that holds a cases root is kept as what is in it, never as a whole: the
+        // step's own files below it are put back or removed, the cases root is not. A link in
+        // its place is kept as the link, which `below` would otherwise follow.
+        if content == Content::Dir && holds_cases_root(&path.to_string_lossy()) {
+            below(tree, &path, &mut found)?;
+            continue;
+        }
         if content == Content::Dir {
             below(tree, &path, &mut found)?;
         }
@@ -1951,9 +1969,15 @@ fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> R
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).with_context(|| format!("list {}", full.display())),
     };
+    // A name is joined to `dir` with its `/`, which an ignored directory's name carries and a
+    // name given without one, such as a link's, does not.
+    let mut prefix = dir.to_owned();
+    if !names_dir(&prefix) {
+        prefix.push("/");
+    }
     for entry in listed {
         let entry = entry.with_context(|| format!("list {}", full.display()))?;
-        let mut path = dir.to_owned();
+        let mut path = prefix.clone();
         path.push(entry.file_name());
         // The cases directory's name is ASCII: a name that is not UTF-8 is never under it.
         if is_under_cases(&path.to_string_lossy()) {
@@ -2830,9 +2854,8 @@ impl Checkpoint {
                 run(tree, &["update-ref", "-d", reference])?;
             }
         }
-        let keep = format!("{CASES_DIR}/");
         run(tree, &["reset", "-q", "--hard", &self.head])?;
-        run(tree, &["clean", "-fdq", "-e", &keep])?;
+        clean_untracked(tree)?;
         let now = ignored_contents(tree, &status(tree, true)?)?;
         let to_move = self.set_aside_of(&now);
         for path in now.keys() {

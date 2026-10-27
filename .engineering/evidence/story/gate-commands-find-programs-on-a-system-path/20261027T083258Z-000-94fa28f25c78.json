@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-27T08:32:58Z",
+  "actor": "human:timo",
+  "artifact": "story:gate-commands-find-programs-on-a-system-path",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "fix dcfb772f on integration/takt: cargo test --workspace 208 results, 1972 passed, 0 failed, 5 ignored; clippy, fmt, citations 1222/1222",
+    "reference": "dcfb772f",
+    "review": "review-result:adversary-fresh-repository-wave",
+    "outcome": "fixed"
+  }
+}

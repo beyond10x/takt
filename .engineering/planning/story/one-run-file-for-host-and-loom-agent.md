@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:one-run-file-for-host-and-loom-agent
 kind: story
-status: active
+status: implemented
 title: One run file runs takt on the host and as a LoomAgent
 summary: loom 0.44.0 configFiles mount takt.yaml and llm.yaml verbatim; no takt member in loom.agent/1
 tags:
@@ -28,10 +28,11 @@ scope:
   path: examples/loom-agent
 - confidence: cited
   path: website/docs/guides/deploy-on-kubernetes.md
-revision: 6
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":6}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":6}}}
+- {from: "active", to: "implemented", at: "2026-10-27T09:42:11Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":6}}}
 ---
 # Story: one-run-file-for-host-and-loom-agent
 
@@ -86,3 +87,24 @@ check, run on a local kind cluster.
 
 - `Cargo.toml`, `Cargo.lock` (loom 0.44.0), `examples/loom-agent/`, `Dockerfile` (entrypoint arguments),
   `website/docs/guides/deploy-on-kubernetes.md`, `crates/takt-cli/tests/run_config_cli.rs`, `ess/ess-inputs.yaml`.
+
+## Status
+
+Commit 6e40f193 on `integration/takt` carries the implementation: the example
+run file and its llm file, the Dockerfile entrypoint, the deploy guide and the
+two suites named below. What ran and what did not:
+
+- Acceptance 1 (`one-file/host-and-mount-same-digest`): tested by
+  `one_file_host_and_mount_open_the_same_digest_and_endpoint`
+  (`crates/takt-cli/tests/run_config_cli.rs`), in the takt and takt-cli suite
+  (1995 passed, 0 failed).
+- Acceptance 2 (`one-file/example-admitted-by-loom`): takt side tested by
+  `the_loom_agents_spec_agent_is_admitted_by_loom_with_a_model_and_no_takt_member`
+  (`crates/takt/tests/examples_config.rs`). Loom's own resource admission was
+  not run. The pin is `b10x-loom-sdk` 0.45.0 (`Cargo.toml`), not the 0.44.0
+  this story names; the 0.44.0 wording stays until the story is revised.
+- Acceptance 3 (`one-file/literal-secret-refused-by-loom`): takt side tested by
+  `one_file_literal_secret_in_llm_yaml_is_refused_before_any_case`. Loom's
+  `SecretLiteral` admission was not run.
+- Acceptance 4 (`one-file/kind-run`): not run. The machine has no demo kind
+  cluster with a Loom operator installed; only the development cluster exists.

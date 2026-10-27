@@ -631,6 +631,8 @@ dependencies = [
  "b10x-canon-expr",
  "b10x-loom-sdk",
  "libc",
+ "llm-core",
+ "llm-credentials",
  "llm-models",
  "proptest",
  "serde",
@@ -639,6 +641,7 @@ dependencies = [
  "sha1-checked",
  "sha2 0.10.9",
  "time",
+ "tokio",
  "toml",
  "unsafe-libyaml",
 ]
@@ -2979,7 +2982,9 @@ version = "0.16.0"
 source = "git+https://github.com/beyond10x/llm?tag=0.16.0#33ae9001f02ba6ab8221c6609fe2605693b2cfd3"
 dependencies = [
  "llm-core",
+ "rustix",
  "serde",
+ "sha2 0.11.1",
  "thiserror",
  "tokio",
  "zeroize",

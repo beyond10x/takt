@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T07:37:20Z",
+  "actor": "human:timo",
+  "artifact": "story:harness-none-takes-a-granted-action",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked --no-fail-fast on the merge 195e71a: 205 results, 1967 passed, 1 failed, 5 ignored; the one failure, self_improvement_cli a_resume_by_another_binary_than_the_judge_is_refused, is ETXTBSY under load in a file the unit does not touch, and its target re-run alone gave 50 passed, 0 failed; clippy and fmt 0"
+  }
+}

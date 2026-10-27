@@ -351,17 +351,14 @@ fn a_case_id_holding_a_hash_leaves_the_reference_path_whole() {
 fn a_producer_cannot_forge_a_reference_field() {
     let producer = "lab.tests&result=fail&sha256=00#x=y";
     let reference = test_result_reference(
-        ".engineering/cases/c/evidence/0001-t.json",
+        ".takt/cases/c/evidence/0001-t.json",
         b"{}",
         "pass",
         "0123456789abcdef0123456789abcdef01234567",
         producer,
     );
     let (path, fields) = parse(&reference);
-    assert_eq!(
-        path, ".engineering/cases/c/evidence/0001-t.json",
-        "{reference}"
-    );
+    assert_eq!(path, ".takt/cases/c/evidence/0001-t.json", "{reference}");
     let keys: Vec<&str> = fields.iter().map(|(key, _)| key.as_str()).collect();
     assert_eq!(
         keys,

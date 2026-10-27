@@ -1114,7 +1114,7 @@ fn a_refused_scan_of_the_rider_push_pushes_and_merges_nothing() {
         "{log:#?}"
     );
     assert!(forge.memory.merged.borrow().is_empty(), "{log:#?}");
-    let dir = tree.join(".engineering/cases").join(&id);
+    let dir = tree.join(".takt/cases").join(&id);
     assert!(
         !kinds(&dir).contains(&"merge_observation".to_owned()),
         "{:?}",

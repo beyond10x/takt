@@ -120,7 +120,7 @@ impl World {
 
     /// The case directories, none when there is no cases directory.
     fn cases(&self) -> Vec<PathBuf> {
-        fs::read_dir(self.repo().join(".engineering/cases"))
+        fs::read_dir(self.repo().join(".takt/cases"))
             .map(|entries| entries.flatten().map(|entry| entry.path()).collect())
             .unwrap_or_default()
     }

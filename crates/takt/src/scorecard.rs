@@ -1,4 +1,4 @@
-//! The scorecard: per case under `.engineering/cases/`, and per run of it, its outcome, steps,
+//! The scorecard: per case under `.takt/cases/` and `.engineering/cases/`, and per run of it, its outcome, steps,
 //! tokens, refusals, `NoProgress` and errors, and wall time, read from the case's run record
 //! (`events.jsonl`, [`crate::events`]) and from nothing else. A number a candidate could plant
 //! in its tree (a `task_spend` file, an evidence record) is never read. A case without a record
@@ -61,7 +61,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::case::CASES_DIR;
+use crate::case::{CASES_DIR, LEGACY_CASES_DIR, case_dirs};
 use crate::events::{EVENTS_FILE, Events};
 
 /// The saved scorecard's format.
@@ -1074,23 +1074,7 @@ impl Scorecard {
     /// a scenario case with runs and no such file, or one that does not read, is an error
     /// naming the case.
     pub fn read(repo: &Path) -> Result<Self> {
-        let cases = repo.join(CASES_DIR);
-        let mut names: Vec<String> = Vec::new();
-        match std::fs::read_dir(&cases) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry.with_context(|| format!("read {}", cases.display()))?;
-                    if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                        names.push(entry.file_name().to_string_lossy().into_owned());
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(error).with_context(|| format!("read {}", cases.display()));
-            }
-        }
-        names.sort();
+        let cases = case_dirs(repo)?;
         let mut card = Self {
             format: FORMAT.to_owned(),
             revision: None,
@@ -1104,8 +1088,7 @@ impl Scorecard {
             no_record: Vec::new(),
             unstated: BTreeMap::new(),
         };
-        for name in names {
-            let dir = cases.join(&name);
+        for (name, dir) in cases {
             let mut rows = if dir.join(EVENTS_FILE).is_file() {
                 runs(&name, &Events::new(&dir).read()?)
             } else {
@@ -1194,7 +1177,7 @@ impl Scorecard {
         let cases = self.cases();
         writeln!(
             out,
-            "{} cases, {} runs under {CASES_DIR}; definitions: {}",
+            "{} cases, {} runs under {CASES_DIR} and {LEGACY_CASES_DIR}; definitions: {}",
             cases.len(),
             self.rows.len(),
             definitions.join(", ")

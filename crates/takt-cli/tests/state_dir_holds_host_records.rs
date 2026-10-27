@@ -132,7 +132,7 @@ mod state_dir_holds_host_records {
 
         /// The transcripts the case's run record names, relative to the transcripts directory.
         fn named(&self) -> Vec<String> {
-            let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(".engineering/cases"))
+            let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(takt::case::CASES_DIR))
                 .expect("the cases directory")
                 .map(|entry| entry.expect("an entry").path())
                 .collect();
