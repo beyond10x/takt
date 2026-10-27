@@ -12,6 +12,10 @@ takt's releases.
 - Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
 - Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
 
+### Changed
+
+- A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
+
 ### Fixed
 
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
