@@ -32,7 +32,7 @@ Put `takt` on your `PATH`. `takt --version` prints the version and the commit it
 
 ```console
 $ takt --version
-takt 0.15.1 (<the commit the 0.15.1 tag names>)
+takt 0.15.1 (2a6c362a43d9e7499a8f95d75ac1f225f5a8f542)
 ```
 
 macOS, `cargo install` from the tag, and the container image are in [Install](./guides/install.md).

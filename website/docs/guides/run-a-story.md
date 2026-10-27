@@ -175,10 +175,14 @@ pull request targets `trial/<n>` ([Scenario run](./scenario-run.md)). A second t
 
 What a trial needs that a plain run does not:
 
+- **takt 0.15.1.** The first release with `--harness-program` and the harness preflight; the steps
+  below install it from the release archive ([Install](./install.md)).
 - **The forge.** `--forge bot`. Under `--forge none` the run stops `Unperformable (pr.opened)`,
   exit 7, however good the change is. The bot route needs `b10x-gates` on `PATH`, acting as the
-  bot's GitHub App, `B10X_GATES_POLICY` naming its policy file, and `gh` logged in to read the
-  pull request.
+  bot's GitHub App; its policy file, mode 600, at `~/.config/b10x/gates/policy.json` or where
+  `B10X_GATES_POLICY` names it (with neither, `b10x-gates` refuses: `protected file ... unavailable`);
+  and `gh` logged in to read the pull request. todo-app-example need not be listed in the policy's
+  repositories: the scan and the bot route serve it unlisted.
 - **A commit identity.** The repository has no `.engineering/commit-identity.conf`, and the bot
   route refuses takt's default identity before the case opens: give `--commit-identity`.
 - **The test command.** The repository's tests are `./check.sh`, not `cargo test`: give
@@ -193,13 +197,23 @@ What a trial needs that a plain run does not:
   ones, so do not point a trial there. Copy the qualified version once to a stable path of your
   own, outside the updater's directory, and note its sha256.
 
-The steps, in a fresh clone, so the tree is clean and `origin` is the repository on github.com:
+Each trial runs in a fresh clone of its own, trials 2 and 3 included: `takt scenario run` needs a
+clean tree, and a trial leaves its clone on the case's branch with the case directory in it. The
+clone's `origin` is the repository on github.com, which the bot route serves. Install takt and the
+qualified binary once, then clone for each trial (`trial-1`, `trial-2`, `trial-3`):
 
 ```sh
+version=0.15.1 target=x86_64-unknown-linux-gnu
+release=https://github.com/beyond10x/takt/releases/download/$version
+curl -fsSLO "$release/takt-$version-$target.tar.gz"
+curl -fsSLO "$release/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+tar -xzf "takt-$version-$target.tar.gz"
+install -D -m 755 "takt-$version-$target/takt" ~/.local/bin/takt
+takt --version
 install -D -m 755 ~/.local/share/claude/versions/2.1.309 ~/.local/opt/claude-2.1.309/claude
 sha256sum ~/.local/opt/claude-2.1.309/claude
-git clone https://github.com/beyond10x/todo-app-example trial && cd trial
-export B10X_GATES_POLICY=<the bot route's policy file>
+git clone https://github.com/beyond10x/todo-app-example trial-1 && cd trial-1
 takt scenario run --repo . 1 --harness claude \
   --harness-program ~/.local/opt/claude-2.1.309/claude --forge bot \
   --commit-identity 'takt-trial <takt-trial@example.com>' --test-cmd ./check.sh --hours 1
@@ -214,8 +228,9 @@ The first line names the case, `scenario-1-trial-<n>`. The run goes on until it 
 | `HarnessUnqualified` | 1 | the binary is not a qualified version: name one and run again |
 | `Completed` | 0 | the pull request is merged into `trial/<n>`: the trial is done |
 
-Grant and resume in the same clone. `takt approve` commits the grant on the case's branch,
-`takt/scenario-1-trial-<n>`, so the tree must be on that branch and clean:
+Grant and resume in the same clone. The run that stopped `ApprovalRequired` left the clone on the
+case's branch, `takt/scenario-1-trial-<n>` (`git branch --show-current` prints it), and clean;
+`takt approve` commits the grant on that branch, and refuses a tree on another branch or with uncommitted work:
 
 ```sh
 takt approve --repo . scenario-1-trial-<n> repository.merge --by agent:<role>
