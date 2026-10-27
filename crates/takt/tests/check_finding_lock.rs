@@ -3,7 +3,7 @@
 //! says so when it waits; it refuses before building when the file system of that directory has
 //! less free space than `CHECK_FINDING_MIN_FREE_GIB` (20 GiB by default), naming both; and a run
 //! killed while it holds the lock leaves none behind. Nothing is built: the confiner on `PATH`
-//! (`bwrap`, on macOS `sandbox-exec`) is a stand-in that records the start and the end of the
+//! (bubblewrap, on macOS Seatbelt's) is a stand-in that records the start and the end of the
 //! build it was asked for and fails it, and rustup's home is a stand-in toolchain, so every check
 //! ends `takt does not build`, exit 1.
 
@@ -15,12 +15,33 @@ use std::time::{Duration, Instant};
 
 const CHECK_FINDING: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/check-finding");
 
-/// The confiner `check-finding` builds under: bubblewrap, and on macOS Seatbelt's `sandbox-exec`.
-const CONFINER: &str = if cfg!(target_os = "macos") {
-    "sandbox-exec"
-} else {
-    "bwrap"
-};
+/// The confiner `check-finding` builds under, as the script looks it up on `PATH`: bubblewrap,
+/// and on macOS Seatbelt's. Read from the script: since
+/// story:confinement-through-substrate-on-linux-and-macos no crate of takt names a confinement
+/// program, and only the script under test runs one.
+fn confiner() -> &'static str {
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let script = fs::read_to_string(CHECK_FINDING).expect("the script");
+        let lookup = if cfg!(target_os = "macos") {
+            "confiner=$(command -v "
+        } else {
+            "bwrap=$(command -v "
+        };
+        script
+            .lines()
+            .find_map(|line| {
+                Some(
+                    line.trim()
+                        .strip_prefix(lookup)?
+                        .split(')')
+                        .next()?
+                        .to_owned(),
+                )
+            })
+            .expect("check-finding looks its confiner up on PATH")
+    })
+}
 
 /// The stand-in for the confiner of the build named `name`: records `start <name> <pid>` in
 /// `log`, sleeps `sleep` seconds, records `end <name>` and fails the build. What it records is
@@ -152,7 +173,7 @@ impl World {
     /// sleeping `sleep` seconds, `env` added.
     fn check(&self, name: &str, sleep: u32, env: &[(&str, &str)]) -> Command {
         let bin = self.dir.0.join(format!("bin-{name}"));
-        executable(&bin.join(CONFINER), &standin(name, sleep, &self.log()));
+        executable(&bin.join(confiner()), &standin(name, sleep, &self.log()));
         let path = format!(
             "{}:{}",
             bin.display(),

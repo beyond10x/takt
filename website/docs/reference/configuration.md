@@ -57,7 +57,7 @@ for `_`; those six have no flag.
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
 `--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
-`--commit-identity`, `--confinement`, `--llm-config`, `--model-endpoint`, `--model-wire`,
+`--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
 `--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
 `--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
 
@@ -253,8 +253,7 @@ takt: the endpoint's base URL https://llm.example.com/v1 is not the default http
 API-key file. takt:
 
 1. takes the variable out of its own environment before it starts anything, so no process it
-   starts sees it (under `--confinement substrate` outside a delegated cgroup, `systemd-run` and
-   the takt it re-runs are the exception);
+   starts sees it;
 2. on Linux with glibc, overwrites its value in its initial environment block, which
    `/proc/<pid>/environ` reads;
 3. stages the value as a token file of mode 0600 in a new directory of mode 0700 under the first
@@ -636,7 +635,9 @@ which is `--model`) need `--harness harness`, and an `llm` section may not sit b
 
 | flag | meaning |
 |---|---|
-| `--confinement <C>` | `none` (default) or `substrate`: the test command run by Loom's `SubstrateRunner` with no network |
+| `--confinement <C>` | `none` (default): the test command through Substrate's `local` adapter, declared insecure, on the host as this user; `substrate`: through the first Substrate adapter of the host that serves it (`systemd` around `linux`, `linux`, `macos`), with no network, or refused by name |
+| `--confinement-needs <NAME>` | a contract family or fact of Substrate's (`limits`, `network_egress`, `private_tmpdir`, …) the test command needs beyond what every run needs; an adapter that does not serve or prove it is not chosen, and with none left the run is refused before anything starts. Repeatable |
+| `--confinement-cgroup-root <DIR>` | for `substrate`: a cgroup v2 directory delegated to this user, under which the `linux` adapter bounds each run without `systemd` |
 | `--commit-identity <'NAME <EMAIL>'>` | the author and committer of every commit of the case |
 
 ### The file

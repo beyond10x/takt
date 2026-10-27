@@ -366,6 +366,7 @@ fn write_opened_case(dir: &Path, case: &str) {
                 binary: None,
                 layers: None,
                 confinement: None,
+                substrate: None,
                 endpoint: None,
                 records: None,
                 scan: None,

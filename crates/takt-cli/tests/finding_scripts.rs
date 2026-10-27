@@ -11,7 +11,7 @@
 //! command ended with the exit the predicate names as the healthy one) or `error`, the results
 //! of the `scenario_result` evidence kind (the built-in `self-improvement@1`). The scratch
 //! takt is a workspace with no dependencies, so each build takes seconds; nothing reaches a
-//! network. On macOS the confiner is Seatbelt (`sandbox-exec`) in place of bubblewrap: the
+//! network. On macOS the confiner is Seatbelt's in place of bubblewrap: the
 //! caller's home is hidden, every write but to the build's or the run's own directories is
 //! refused, the network is denied, and the command's process group is killed when it ends in
 //! place of a PID namespace; a test whose guarantee differs there says so.
@@ -33,17 +33,59 @@ const SOURCE: &str = "docs/runs/trial-1.md";
 /// instead of the `--checkout` standing in for it fails without a network.
 const REPOSITORY_URL: &str = "https://example.invalid/scenarios";
 
-/// The confiner `check-finding` builds and runs under: bubblewrap, and on macOS Seatbelt's
-/// `sandbox-exec`.
-const CONFINER: &str = if cfg!(target_os = "macos") {
-    "sandbox-exec"
-} else {
-    "bwrap"
-};
+/// The confiner `check-finding` builds and runs under, as the script looks it up on `PATH`:
+/// bubblewrap, and on macOS Seatbelt's. Read from the script: since
+/// story:confinement-through-substrate-on-linux-and-macos no crate of takt names a confinement
+/// program, and only the script under test runs one.
+#[derive(Clone, Copy)]
+struct Confiner;
+
+/// The confiner, shown and joined to a directory by its name.
+const CONFINER: Confiner = Confiner;
+
+impl Confiner {
+    /// Its name, as the script's `command -v` names it.
+    fn name(self) -> &'static str {
+        static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+        NAME.get_or_init(|| {
+            let script =
+                fs::read_to_string(Path::new(SCRIPTS).join("check-finding")).expect("the script");
+            let lookup = if cfg!(target_os = "macos") {
+                "confiner=$(command -v "
+            } else {
+                "bwrap=$(command -v "
+            };
+            script
+                .lines()
+                .find_map(|line| {
+                    Some(
+                        line.trim()
+                            .strip_prefix(lookup)?
+                            .split(')')
+                            .next()?
+                            .to_owned(),
+                    )
+                })
+                .expect("check-finding looks its confiner up on PATH")
+        })
+    }
+}
+
+impl std::fmt::Display for Confiner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+impl AsRef<Path> for Confiner {
+    fn as_ref(&self) -> &Path {
+        Path::new(self.name())
+    }
+}
 
 /// The pattern, in a wrapper's `case " $* " in`, of the confiner's call that runs the predicate
 /// (not the build's): the one with a status descriptor under bubblewrap, the one with the
-/// `STEP=run` parameter under `sandbox-exec`.
+/// `STEP=run` parameter under Seatbelt's.
 const RUN_CALL: &str = if cfg!(target_os = "macos") {
     "*' STEP=run '*"
 } else {
@@ -51,7 +93,7 @@ const RUN_CALL: &str = if cfg!(target_os = "macos") {
 };
 
 /// A call of the real confiner `real` that never runs the command: under bubblewrap, a bind
-/// whose source is absent, so its mount setup fails after it forked; under `sandbox-exec`, a
+/// whose source is absent, so its mount setup fails after it forked; under Seatbelt's, a
 /// program that is not there in place of the command.
 fn never_runs(real: &str) -> String {
     if cfg!(target_os = "macos") {
@@ -65,12 +107,14 @@ fn never_runs(real: &str) -> String {
 fn names_the_confiners_error(stderr: &str) -> bool {
     if cfg!(target_os = "macos") {
         stderr.lines().any(|line| {
-            line.contains("sandbox-exec did not run the command")
-                && line.contains("sandbox-exec: ")
+            line.contains(&format!("{CONFINER} did not run the command"))
+                && line.contains(&format!("{CONFINER}: "))
                 && line.contains("/nonexistent-check-finding")
         })
     } else {
-        stderr.contains("bwrap: Can't find source path /nonexistent-check-finding")
+        stderr.contains(&format!(
+            "{CONFINER}: Can't find source path /nonexistent-check-finding"
+        ))
     }
 }
 
@@ -1066,7 +1110,7 @@ fn probe_build(home: &Path, other: &Path) -> String {
 /// On macOS also `__CF_USER_TEXT_ENCODING`, with the value CoreFoundation writes
 /// ([`cf_user_text_encoding`]): CoreFoundation sets it in the environment of a process it is
 /// loaded in when it is not set there, and the build's chain (the system's `perl`,
-/// `sandbox-exec`, cargo) loads it after the check started that chain from an environment it
+/// Seatbelt's confiner, cargo) loads it after the check started that chain from an environment it
 /// cleared (`env -i`). So the variable is the platform's, set after exec, and never the
 /// caller's: the caller sets another value ([`PLANTED_CF_USER_TEXT_ENCODING`]), which must not
 /// arrive.
@@ -1307,7 +1351,7 @@ fn a_revisions_build_reads_nothing_of_the_callers_home_or_environment_and_writes
     );
 }
 
-/// Without the confiner (bubblewrap; on macOS `sandbox-exec`) on `PATH` a revision is never
+/// Without the confiner (bubblewrap; on macOS Seatbelt's) on `PATH` a revision is never
 /// built unconfined: the check gives no result, says why, and keeps no binary.
 #[test]
 fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
@@ -1331,7 +1375,7 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
         };
         for entry in entries.flatten() {
             let name = entry.file_name();
-            if name == CONFINER || bin.join(&name).symlink_metadata().is_ok() {
+            if name == CONFINER.name() || bin.join(&name).symlink_metadata().is_ok() {
                 continue;
             }
             symlink(entry.path(), bin.join(&name)).expect("a link");
@@ -1346,7 +1390,7 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
     assert!(output.stdout.is_empty(), "{}", shown(&output));
     assert!(
         String::from_utf8_lossy(&output.stderr).contains(if cfg!(target_os = "macos") {
-            "sandbox-exec"
+            CONFINER.name()
         } else {
             "bubblewrap"
         }),
@@ -1368,7 +1412,7 @@ fn a_check_without_bubblewrap_builds_nothing_and_gives_no_result() {
 /// command, and its own exit 1 is not the command's: a predicate naming 1 as the defect's exit,
 /// or as the healthy one, gets no result, and the check names bubblewrap's error. Bubblewrap's
 /// status names the command's pid in both cases; only an `exit-code` line, its last, says that
-/// bubblewrap ran the command to its end. On macOS the same holds of a `sandbox-exec` that
+/// bubblewrap ran the command to its end. On macOS the same holds of a Seatbelt confiner that
 /// fails to start the program it is given: its exit is not the command's, and only the
 /// `exit-code` line the check's own wrapper writes once the command ended says it ran.
 #[test]
@@ -1529,7 +1573,7 @@ fn a_process_left_running_by_one_check_cannot_change_the_next_checks_result() {
 /// mutant M8b, the line read but not compared, takes the 1 as the command's); an `exit-code`
 /// line written ahead of bubblewrap's own is not the one read (M8d, the first line for the
 /// last, reads it). On macOS the line is the one the check's own wrapper writes under
-/// `sandbox-exec` once the command ended, and the same two mutants are caught there.
+/// Seatbelt's confiner once the command ended, and the same two mutants are caught there.
 #[test]
 fn only_the_last_line_bubblewrap_writes_gives_the_commands_exit() {
     use std::os::unix::fs::PermissionsExt;

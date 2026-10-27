@@ -531,8 +531,8 @@ dependencies = [
  "b10x-loom-intake-references",
  "b10x-loom-intake-router",
  "b10x-loom-protocols",
- "b10x-substrate-host",
- "b10x-substrate-wire",
+ "b10x-substrate-host 0.13.0",
+ "b10x-substrate-wire 0.13.0",
  "chrono",
  "intake",
  "jiff",
@@ -605,7 +605,42 @@ version = "0.13.0"
 source = "git+https://github.com/beyond10x/substrate?rev=c2b95f2882ec1e425459b23ed9e48dae121ae6d3#c2b95f2882ec1e425459b23ed9e48dae121ae6d3"
 dependencies = [
  "async-trait",
- "b10x-substrate-wire",
+ "b10x-substrate-wire 0.13.0",
+ "base64 0.23.1",
+ "bytes",
+ "chrono",
+ "curl",
+ "git2",
+ "gix",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "libc",
+ "nix",
+ "parking_lot",
+ "rustls",
+ "rustls-pemfile",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+ "ulid",
+ "url",
+ "zeroize",
+]
+
+[[package]]
+name = "b10x-substrate-host"
+version = "0.14.0"
+source = "git+https://github.com/beyond10x/substrate?tag=0.14.0#0b9d50c6105cacc7f959eb41d5e65f252084a282"
+dependencies = [
+ "async-trait",
+ "b10x-substrate-wire 0.14.0",
  "base64 0.23.1",
  "bytes",
  "chrono",
@@ -651,6 +686,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "b10x-substrate-wire"
+version = "0.14.0"
+source = "git+https://github.com/beyond10x/substrate?tag=0.14.0#0b9d50c6105cacc7f959eb41d5e65f252084a282"
+dependencies = [
+ "base64 0.23.1",
+ "chrono",
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "thiserror",
+ "time",
+ "ulid",
+]
+
+[[package]]
 name = "b10x-takt"
 version = "0.15.1"
 dependencies = [
@@ -660,6 +711,7 @@ dependencies = [
  "b10x-canon-engineering-assertions 0.11.0",
  "b10x-canon-expr",
  "b10x-loom-sdk",
+ "b10x-substrate-host 0.14.0",
  "libc",
  "llm-core",
  "llm-credentials",

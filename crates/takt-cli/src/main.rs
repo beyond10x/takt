@@ -93,10 +93,12 @@ enum Commands {
     /// within the rule cannot add up past it (a --rebaseline that only adds a scenario keeps the
     /// series start, and the scenario it adds is judged against the --rebaseline that added it),
     /// and, when no scenario is worse than any of them, build a fresh clone of
-    /// that revision confined in bubblewrap (`bwrap`, or on macOS `/usr/bin/sandbox-exec`: only
-    /// the clone, rustup's default toolchain as its settings file names it, never one on PATH, the host's registry cache read-only
-    /// and the system directories visible, the environment cleared, `cargo build --locked
-    /// --offline`), install the binary with
+    /// that revision confined through the Substrate adapter a run's `--confinement substrate`
+    /// would choose (`systemd` around `linux`, `linux` or `macos`, by the facts it proves: the
+    /// build directory the workspace, rustup's default toolchain as its settings file names it,
+    /// never one on PATH, and the host's registry cache read-only, the fresh install root the
+    /// one writable host root, the environment cleared, the network isolated, `cargo build
+    /// --locked --offline`), install the binary with
     /// `cargo install --locked --path crates/takt-cli`, record the promotion under
     /// `$XDG_STATE_HOME/takt/promotions/` (`~/.local/state/takt/promotions/`), where the latest
     /// record is the next baseline, and then move the binary into place. The revision must be
@@ -360,10 +362,10 @@ struct PromoteArgs {
 /// What `takt promote --help` says about the exit codes.
 const PROMOTE_EXIT_CODES: &str = "Exit codes:
   0  promoted and recorded; or the baseline recorded (--baseline-only); or the baseline's scorecard replaced (--rebaseline); or, with --dry-run, the candidate would be promoted or the baseline would be recorded
-  1  refused, nothing written or installed but the head beside the store where none was found (written from the chain as it stands, said on stderr; not on --dry-run): the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's origin/main as last fetched (or there is none), a local main moved by hand counting for nothing, was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result, or a scenario case whose run tokens are unknown, a harness step of it having recorded no tokens or 0 (the case and the step named; with --baseline-only and --rebaseline too, so a re-read under tokens definition 2 that finds a run the stored scorecard summed as 0 is no rebaseline); the baseline's scorecard, or one the series compares the candidate with, holds such a case (the record, the case and the step named), nothing judged; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; bubblewrap (`bwrap`; on macOS `/usr/bin/sandbox-exec`) or a toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), a run of the scorecard that names no revision beside runs that name one, or a run that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard sharing a case with one it was refused on (the case named); --rebaseline with a scorecard of another revision than the baseline's, missing a case of the stored scorecard's or holding one more that is not of a scenario it adds whole, one the stored scorecard lacks (the first named; a new scenario joins the corpus only this way), under a metric definition below the stored one (named), with none newer when it adds no scenario, or with no baseline; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the scorecard and the baseline's hold no scenario case between them (`no scenario case`), or a scenario only the candidate has (`not in the saved scorecard`), however many its cases: the comparison covers every scenario either side has; --baseline-only with a scorecard holding no scenario case, a baseline that would judge nothing; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, a chain of records with a gap, or one that ends before the head beside the store (promotions.head) or runs past it; the record could not be written; the reason on stderr
+  1  refused, nothing written or installed but the head beside the store where none was found (written from the chain as it stands, said on stderr; not on --dry-run): the scorecard, the store, the install root or the build directory is inside the repository; the scorecard has more than one link, names no full revision, is not named by it, differs from HEAD, is no ancestor of the checkout's origin/main as last fetched (or there is none), a local main moved by hand counting for nothing, was saved under another rule or metric definition, holds a run made with another binary than the revision's (the run named; its `opened` line names another revision, the revision -dirty, or none; with --binary-sha256 the binary.txt statements are checked instead) or a scenario run without its held-out result, or a scenario case whose run tokens are unknown, a harness step of it having recorded no tokens or 0 (the case and the step named; with --baseline-only and --rebaseline too, so a re-read under tokens definition 2 that finds a run the stored scorecard summed as 0 is no rebaseline); the baseline's scorecard, or one the series compares the candidate with, holds such a case (the record, the case and the step named), nothing judged; the checkout has uncommitted or untracked files or index entries marked assume-unchanged or skip-worktree, or commits a rust-toolchain.toml with a `path`; the toolchain is not found; another promotion holds the store's lock; no baseline is recorded; the installed binary does not name the latest record's revision, or names none and hashes to another digest than the record's binary_sha256, or to none it records (with --baseline-only, the revision recorded); --revision or --binary-sha256 without --baseline-only, --binary-sha256 without --revision, a --revision that is no full commit id or not the scorecard's, a --binary-sha256 that is no sha256; with --binary-sha256, an installed binary whose --version names a revision or that hashes to another digest (both named), a run of the scorecard that names no revision beside runs that name one, or a run that states no binary or another (the run named); the revision or its tree was refused (without --rejudge) or recorded already; --rejudge without an earlier refusal of the revision or its tree, with --baseline-only, or on a scorecard sharing a case with one it was refused on (the case named); --rebaseline with a scorecard of another revision than the baseline's, missing a case of the stored scorecard's or holding one more that is not of a scenario it adds whole, one the stored scorecard lacks (the first named; a new scenario joins the corpus only this way), under a metric definition below the stored one (named), with none newer when it adds no scenario, or with no baseline; a scenario the baseline has has fewer cases than the rule's trials on either side, or a scenario only the candidate has fewer on its side; the scorecard and the baseline's hold no scenario case between them (`no scenario case`), or a scenario only the candidate has (`not in the saved scorecard`), however many its cases: the comparison covers every scenario either side has; --baseline-only with a scorecard holding no scenario case, a baseline that would judge nothing; the store holds a file takt does not read, a record that disagrees with its name, instant or scorecard copy, a chain of records with a gap, or one that ends before the head beside the store (promotions.head) or runs past it; the record could not be written; the reason on stderr
   2  the arguments do not parse
   3  refused on the scorecard: a scenario is worse than the baseline's, or than the series start's, the latest --baseline-only record or --rebaseline under a newer metric definition, or, for a scenario a later --rebaseline added, than that --rebaseline's (the record and the scenario named); the refusal is recorded (not with --dry-run), nothing installed
-  5  the candidate held but its clone, its confined build or its install failed, the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
+  5  the candidate held but its clone, its confined build or its install failed (no Substrate adapter on the host serving the build among them, each tried named with what it lacked), the built binary names another revision, or the binary names another revision or hashes differently once in place (then the binary before it is back in place and the record removed); nothing recorded, the installed binary unchanged";
 
 #[derive(clap::Args)]
 struct ScorecardArgs {
@@ -1136,18 +1138,34 @@ struct LoopArgs {
     /// commit with the identity it was opened with, and another given for it is refused.
     #[arg(long, value_name = "'NAME <EMAIL>'")]
     commit_identity: Option<takt::git::CommitIdentity>,
-    /// The adapter every child of the run starts through. `none`: each child as takt has
-    /// always started it, its environment without the credentials it does not need, the test
-    /// command in a user and mount namespace of its own. `substrate`: the test command run by
-    /// the `SubstrateRunner` of loom-sdk, on a fixed `PATH` of read-only toolchain roots, with
-    /// only the build directory writable and no network; a test command its profile does not
-    /// serve (it serves `cargo` on a Rust toolchain; a Python one among those it does not), and
-    /// a gate's commands, which the assertions library starts itself, are refused by name and
-    /// never run unconfined. `substrate` needs a delegated cgroup: outside one, takt runs the
-    /// same command again under `systemd-run --user --scope -p Delegate=yes` and exits as that
-    /// run does. The first line the run prints and its `opened` event name the adapter.
+    /// The adapter every child of the run starts through, each a Substrate adapter; takt has no
+    /// confinement mechanism of its own. `substrate`: the test command runs through the first
+    /// of `systemd` around `linux`, `linux` (with --confinement-cgroup-root when given) and
+    /// `macos` whose facts serve its profile: the tree as the workspace, its `target/`
+    /// writable, the toolchain and the host's cargo caches as read-only roots, the tree as
+    /// the working directory, the network isolated, and where the adapter serves `limits` the
+    /// timeout, 2048 processes, 8 GiB of memory and an hour of CPU time; a test command its
+    /// profile does not serve (it serves `cargo` on a Rust toolchain; a Python one among those it
+    /// does not), a gate's commands,
+    /// which the assertions library starts itself, and a host none of whose adapters serves
+    /// the profile or a fact --confinement-needs names are refused by name and never run
+    /// unconfined. `none`: the test command runs through Substrate's `local` adapter, declared
+    /// insecure with the reason the `case` line and the `opened` event state: on the host as
+    /// this user, in a cleared environment without credentials, with a scratch home and
+    /// `TMPDIR`; it can read what this user can. The `case` line the run prints and its
+    /// `opened` event name the adapter and the facts it proved.
     #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
     confinement: String,
+    /// A contract family or fact the run's test command needs beyond those every run needs,
+    /// by its Substrate name (`limits`, `network_egress`, `private_tmpdir`, …): an adapter that
+    /// does not serve or prove it is not chosen, and with none left the run is refused by
+    /// name before anything starts. Repeatable.
+    #[arg(long = "confinement-needs", value_name = "NAME")]
+    confinement_needs: Vec<String>,
+    /// For `--confinement substrate`: a cgroup v2 directory delegated to this user, which the
+    /// `linux` adapter places each run under so it serves `limits` without `systemd`.
+    #[arg(long, value_name = "DIR")]
+    confinement_cgroup_root: Option<PathBuf>,
     /// The state directory the run keeps its host records in, in place of
     /// `$XDG_STATE_HOME/takt` (`~/.local/state/takt` without it): each harness step's
     /// transcript under `<DIR>/transcripts`, where the step's line names it relative to that
@@ -1326,8 +1344,8 @@ fn main() -> ExitCode {
     // The endpoint's credential variable leaves takt's environment here, on the one thread
     // takt has, before it starts any process.
     let taken = match &mut cli.command {
-        Commands::Run(args) => args.looping.take_variable(false),
-        Commands::Scenario(ScenarioCommands::Run(args)) => args.looping.take_variable(false),
+        Commands::Run(args) => args.looping.take_variable(),
+        Commands::Scenario(ScenarioCommands::Run(args)) => args.looping.take_variable(),
         _ => Ok(()),
     };
     if let Err(error) = taken {
@@ -1587,7 +1605,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 declared_scan,
                 protocol_settings,
                 forge_settings,
-                mut looping,
+                looping,
             } = *args;
             looping.check()?;
             // The run's scan adapter, `gates` unless the configuration file declares `none`:
@@ -1596,9 +1614,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let repo = repo
                 .canonicalize()
                 .with_context(|| format!("the repository {}", repo.display()))?;
-            if let Some(code) = looping.confine(&repo)? {
-                return Ok(code);
-            }
+            looping.confine(&repo)?;
             looping.check_set_aside(&repo)?;
             looping.check_state_dir(&repo)?;
             let inputs = inputs
@@ -2160,30 +2176,34 @@ impl LoopArgs {
     }
 
     /// Installs the adapter --confinement names for a run on `repo`, before anything of the
-    /// run is done. For `substrate` outside a delegated cgroup, the same command is run again
-    /// inside one and its exit code is this run's: `Some(code)`.
-    fn confine(&mut self, repo: &Path) -> Result<Option<u8>> {
-        if self.confinement != "substrate" {
-            return Ok(None);
-        }
-        match takt::confinement::Substrate::open(repo) {
-            Ok(substrate) => {
-                self.take_variable(true)?;
-                takt::confinement::install(std::sync::Arc::new(substrate));
-                Ok(None)
-            }
-            Err(error)
-                if takt::confinement::undelegated(&error)
-                    && std::env::var_os(takt::confinement::DELEGATED).is_none() =>
-            {
-                let code = takt::confinement::delegate()?;
-                Ok(Some(u8::try_from(code).unwrap_or(EXIT_REFUSED)))
-            }
-            Err(error) => Err(anyhow!(
-                "confinement substrate refused the run on {}: {error}; nothing was started",
+    /// run is done: `substrate` opens the first Substrate adapter whose facts serve the test
+    /// command's profile ([`takt::confinement::CANDIDATES`]); `none` checks that Substrate's
+    /// `local` adapter admits it, declared insecure. A refusal names what was missing, and
+    /// nothing is started.
+    fn confine(&self, repo: &Path) -> Result<()> {
+        let options = takt::confinement::Options {
+            needs: self.confinement_needs.clone(),
+            cgroup_root: self.confinement_cgroup_root.clone(),
+        };
+        let refused = |error: anyhow::Error| {
+            anyhow!(
+                "confinement {} refused the run on {}: {error:#}; nothing was started",
+                self.confinement,
                 repo.display()
-            )),
+            )
+        };
+        if self.confinement == "substrate" {
+            let substrate = takt::confinement::Substrate::open(repo, &options).map_err(refused)?;
+            takt::confinement::install(std::sync::Arc::new(substrate));
+            return Ok(());
         }
+        if options.cgroup_root.is_some() {
+            return Err(refused(anyhow!(
+                "--confinement-cgroup-root is for --confinement substrate"
+            )));
+        }
+        takt::confinement::check_none(repo, &options).map_err(refused)?;
+        Ok(())
     }
 
     /// Under `--harness harness`, takes the variable the endpoint's credential names out of
@@ -2191,15 +2211,9 @@ impl LoopArgs {
     /// route `--model` names, before any case opens, and takes out of takt's environment the
     /// variables holding the key llm resolved for it ([`takt::harness::take_environment_holding`])
     /// and every variable the document's `env:` references name, in any endpoint.
-    /// Under `--confinement substrate` outside a delegated run it is left until `substrate` has
-    /// opened in this run (`substrate_open`), since a run delegated again under `systemd-run` reads
-    /// it there. Resolved once: a second call keeps the first route.
-    fn take_variable(&mut self, substrate_open: bool) -> Result<()> {
-        if self.harness != "harness"
-            || (self.confinement == "substrate"
-                && !substrate_open
-                && std::env::var_os(takt::confinement::DELEGATED).is_none())
-        {
+    /// Resolved once: a second call keeps the first route.
+    fn take_variable(&mut self) -> Result<()> {
+        if self.harness != "harness" {
             return Ok(());
         }
         if let Some(llm) = &self.llm {
@@ -2580,9 +2594,7 @@ struct EndpointArgs {
     /// stages the value as a token file of mode 0600 in a new directory of mode 0700 under the
     /// first of `$XDG_RUNTIME_DIR`, `/dev/shm` and the temporary directory that b10x-harness's
     /// token-file reader accepts, removed when the run ends, by SIGTERM, SIGINT or SIGHUP too
-    /// (SIGKILL leaves it). Under --confinement substrate outside a delegated cgroup, the
-    /// variable is passed to systemd-run and to the takt it re-runs, which takes it out; the
-    /// first takt keeps it in its environment while it waits. Not with --endpoint-token-file or
+    /// (SIGKILL leaves it). Not with --endpoint-token-file or
     /// --endpoint-secret. A name that is no portable variable name, another wire, a variable
     /// unset or empty, or no directory accepted, is refused before the case opens, exit 1.
     #[arg(long, value_name = "NAME")]
@@ -3444,15 +3456,13 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         scenario,
         declared_on,
         config: _,
-        mut looping,
+        looping,
     } = args;
     looping.check()?;
     let repo = repo
         .canonicalize()
         .with_context(|| format!("the repository {}", repo.display()))?;
-    if let Some(code) = looping.confine(&repo)? {
-        return Ok(code);
-    }
+    looping.confine(&repo)?;
     looping.check_set_aside(&repo)?;
     looping.check_state_dir(&repo)?;
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;

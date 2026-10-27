@@ -74,37 +74,45 @@ github.com: `b10x-gates bot` pushes and opens the pull request as a GitHub App, 
 `none` opens nothing and leaves the delivery as a candidate commit. Without `--forge`, takt picks
 one from `origin` ([Configuration](./reference/configuration.md#the-forge)).
 
-:::note[macOS]
+:::note[Confinement]
 
-Since 0.10.0, takt confines on macOS with Seatbelt, `/usr/bin/sandbox-exec`, where Linux uses
-namespaces and bubblewrap:
+takt confines through Substrate's confinement contract on Linux and macOS alike, and has no
+sandbox of its own:
 
-- The test command runs under a profile that writes only to the tree, its git directories (not
-  their hooks or configuration), a fresh home that holds its `TMPDIR`, and the cargo caches. It
-  reads no registry login, keychain, runtime directory or bus socket, and connects to no bus or
-  launchd socket.
-- A promotion's build, and its binary's `--version`, run under a profile with no network that
-  writes only to the directories the build owns. `takt promote` runs on macOS as on Linux.
-- With no `sandbox-exec`, both are refused by name and never run unconfined.
+- `--confinement substrate` runs the test command through the first Substrate adapter of the host
+  that serves its profile: `systemd` around `linux` (a scope from the user's systemd manager, which
+  bounds processes, memory and CPU), then `linux` (bubblewrap through Substrate's host driver,
+  bounded only in a cgroup root given with `--confinement-cgroup-root`), then `macos` (a Seatbelt
+  profile Substrate renders). The profile: the tree as the workspace, its `target/` written, the
+  toolchain and the cargo caches read-only, no network. Under `linux` and `systemd` around it
+  `target/` is the only path of the tree the test command writes: the rest, `.git` with it, is
+  read-only in the run, and a host whose Substrate probe did not prove
+  `exec.workspace-scoped-write` is refused by that name. On `macos` the tree stays writable and
+  its `.git` is sealed. What no adapter serves, a family or fact
+  `--confinement-needs` names among them, is refused by name and never run unconfined. The `case`
+  line and the `opened` event name the adapter and the facts it proved.
+- `--confinement none`, the default, starts the test command through Substrate's `local` adapter,
+  declared insecure with its reason, which the `case` line and the `opened` event carry. It runs on
+  the host as this user, with an environment cleared of logins, a scratch home and `TMPDIR`, the
+  timeout and a bounded output, and can read whatever this user can. On macOS it no longer runs
+  under takt's Seatbelt profile, so its writes, the programs it starts, launchd and the keychain
+  are not limited.
+- `takt promote` builds a candidate through the same selection: the fresh install root beside the
+  real one is the one host root declared writable to the adapter.
 
-What differs from Linux:
-
-- A promotion's build sees the clone, its target and the fresh root at their host paths, and may
-  read every file outside the user's home.
-- The test command's denials are by path: a hard link to a denied file elsewhere, and the keychain
-  daemons reached over Mach, are not denied.
-- A process that clears `TAKT_CHILD` from its environment and leaves takt's process group outlives
-  the run; on Linux takt adopts and kills it. A harness session's program runs in takt's process
-  group, not a session of its own.
-- `--confinement substrate` runs on Linux only: loom-sdk's `SubstrateRunner` needs a delegated
-  cgroup v2 scope, which takt gets from `systemd-run --user --scope -p Delegate=yes`.
+On macOS, whose adapter serves no writable root, a promotion's build installs into the workspace
+and takt copies the binary into the fresh install root. Its `PATH` names the selected developer
+tools' own programs before `/usr/bin`, whose shims cannot run under `macos`, so the build's `git`
+reads the revision. A `.cargo/config.toml` in a directory above the build directory,
+`~/.cargo/config.toml` included, fails the build: the adapter lets cargo see the file but not read
+it.
 
 :::
 
 ## A run with no model
 
 Make a crate with one passing test and commit it, `Cargo.lock` included. A test run that writes a
-lock file the commit lacks is refused as a change the validator may not make; the refusal names the three ways out: commit `Cargo.lock`, ignore it in `.gitignore`, or give `--test-cmd` a command that does not write it.
+lock file the commit lacks is refused as a change the validator may not make; the refusal names the three ways out: commit `Cargo.lock`, ignore it in `.gitignore`, or give `--test-cmd` a command that does not write it. Under `--confinement substrate` on Linux the second does not work: the test command cannot write the tree outside `target`, so a lock it would write fails the run with a read-only `Cargo.lock`, and a dependency change needs its `Cargo.lock` committed with it.
 
 ```sh
 cargo new --lib takt-demo

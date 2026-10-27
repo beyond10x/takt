@@ -49,6 +49,7 @@ fn opened(case: &str) -> Event {
         binary: None,
         layers: None,
         confinement: None,
+        substrate: None,
         endpoint: None,
         records: None,
         scan: None,

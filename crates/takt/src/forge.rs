@@ -31,7 +31,6 @@
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsStr;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -491,7 +490,7 @@ impl Finished {
 
 /// How long the rest of a process's output may take to arrive once it has ended and its group
 /// has been killed.
-const GRACE: Duration = Duration::from_secs(2);
+pub(crate) const GRACE: Duration = Duration::from_secs(2);
 
 /// The names of the variables a run file names as a credential source (`credential: {env: NAME}`),
 /// whatever they look like: no child takt starts inherits one.
@@ -565,7 +564,8 @@ pub fn without_credentials(command: &mut Command, keep: fn(&str) -> bool) {
 /// The variables that tell a program where a login of the user's is found besides `HOME`: the
 /// session bus and the runtime directory it is found in (the keyring is reached through it), the
 /// XDG base directories, and the configuration a forge client, git, GnuPG, a cloud or container
-/// client reads its login from. [`without_login`] removes every one.
+/// client reads its login from. A test command run on the host under `none`
+/// ([`crate::confinement::unconfined`]) inherits none of them.
 pub const LOGIN_LOCATIONS: [&str; 17] = [
     "XDG_RUNTIME_DIR",
     "DBUS_SESSION_BUS_ADDRESS",
@@ -620,327 +620,6 @@ impl Drop for ScratchHome {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
-}
-
-/// Starts `command` with no login of the user's in reach: `HOME` is `home`, every variable of
-/// [`LOGIN_LOCATIONS`] is removed, and the toolchain stays where it was (`CARGO_HOME` and
-/// `RUSTUP_HOME`, when unset, name the user's `~/.cargo` and `~/.rustup`). `HOME`,
-/// `CARGO_HOME` and `RUSTUP_HOME` are read as the command will see them: its own setting
-/// first, this process's after, a relative one from the command's directory. On Linux the process
-/// starts in a user and a mount namespace of its own, which every child of it inherits, where
-/// `/run/user` and the runtime directory `XDG_RUNTIME_DIR` names (unless it holds `home` or the
-/// command's directory) are empty and read-only, and where each socket
-/// `DBUS_SESSION_BUS_ADDRESS` names by path and each registry login under the `CARGO_HOME` the
-/// command will see is
-/// `/dev/null`; with no capability left once it executes, nothing it runs can unmount them. The
-/// spawn fails when the host refuses the namespaces: the command is never run with the user's
-/// session in reach. Not hidden: an abstract socket a bus address names, and the user's home
-/// read by its path. On macOS the command is started by `sandbox-exec` under the profile
-/// [`crate::seatbelt::test_command`] writes: it writes only to the command's directory, the git
-/// directories of a linked worktree there but their hooks and configuration
-/// ([`crate::seatbelt::git_dirs`]), `home`, which holds its temporary directory `TMPDIR`
-/// (`home/tmp`), and the cargo caches; it starts no program outside the profile, connects to
-/// no launchd socket, and reads no registry login, nothing under
-/// the user's `Library/Keychains`, the runtime directory or a bus socket; with no `sandbox-exec`
-/// the spawn fails ([`refused_namespaces`] names it). Call it before anything is set on
-/// `command` that is not to be carried over by `Command::wrap`: the standard streams and the
-/// process group are set after it.
-pub fn without_login(command: &mut Command, home: &Path) {
-    // What the command will see of `name`: its own setting when it has one (a caller such as
-    // the test command's fresh home sets `CARGO_HOME`, or removes a variable), else this
-    // process's. A relative path is read from the command's own directory.
-    let seen = |name: &str| -> Option<PathBuf> {
-        let own = command
-            .get_envs()
-            .find(|(key, _)| *key == OsStr::new(name))
-            .map(|(_, value)| value.map(OsStr::to_os_string));
-        let value = match own {
-            Some(value) => value,
-            None => std::env::var_os(name),
-        }
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)?;
-        Some(match command.get_current_dir() {
-            Some(dir) if value.is_relative() => dir.join(value),
-            _ => value,
-        })
-    };
-    let user_home = seen("HOME").filter(|dir| dir.is_absolute());
-    let mut cargo_home = seen("CARGO_HOME");
-    let rustup_home = seen("RUSTUP_HOME");
-    // The `PATH` the program is looked up on, as `std` looks it up: the command's own, else
-    // this process's.
-    #[cfg(target_os = "macos")]
-    let path: Option<std::ffi::OsString> = command
-        .get_envs()
-        .find(|(key, _)| *key == OsStr::new("PATH"))
-        .map_or_else(
-            || std::env::var_os("PATH"),
-            |(_, value)| value.map(OsStr::to_os_string),
-        );
-    for name in LOGIN_LOCATIONS {
-        command.env_remove(name);
-    }
-    if let Some(user_home) = &user_home {
-        for (name, dir, set) in [
-            ("CARGO_HOME", ".cargo", cargo_home.is_some()),
-            ("RUSTUP_HOME", ".rustup", rustup_home.is_some()),
-        ] {
-            let dir = user_home.join(dir);
-            if !set && dir.is_dir() {
-                command.env(name, &dir);
-                if name == "CARGO_HOME" {
-                    cargo_home = Some(dir);
-                }
-            }
-        }
-    }
-    command.env("HOME", home);
-    #[cfg(target_os = "linux")]
-    {
-        let mut dirs = vec![PathBuf::from("/run/user")];
-        if let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from)
-            && runtime.is_absolute()
-        {
-            dirs.push(runtime);
-        }
-        let kept: Vec<PathBuf> = [Some(home), command.get_current_dir()]
-            .into_iter()
-            .flatten()
-            .filter_map(|dir| dir.canonicalize().ok())
-            .collect();
-        let mut hidden: Vec<PathBuf> = Vec::new();
-        for dir in dirs.iter().filter_map(|dir| dir.canonicalize().ok()) {
-            if dir.is_dir()
-                && !hidden.iter().any(|outer| dir.starts_with(outer))
-                && !kept.iter().any(|inner| inner.starts_with(&dir))
-            {
-                hidden.push(dir);
-            }
-        }
-        let dirs = hidden;
-        let mut files: Vec<PathBuf> = std::env::var("DBUS_SESSION_BUS_ADDRESS")
-            .unwrap_or_default()
-            .split(';')
-            .filter_map(|address| address.split_once(':').map(|(_, keys)| keys))
-            .flat_map(|keys| keys.split(','))
-            .filter_map(|key| key.strip_prefix("path="))
-            .map(PathBuf::from)
-            .collect();
-        if let Some(cargo_home) = cargo_home {
-            files.extend(
-                crate::seatbelt::CARGO_LOGINS
-                    .iter()
-                    .map(|name| cargo_home.join(name)),
-            );
-        }
-        let files: Vec<PathBuf> = files
-            .into_iter()
-            .filter(|file| file.exists() && !file.is_dir())
-            .filter_map(|file| file.canonicalize().ok())
-            .filter(|file| !dirs.iter().any(|dir| file.starts_with(dir)))
-            .collect();
-        session::hide(command, &dirs, &files);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        let tree = command.get_current_dir().map(Path::to_path_buf);
-        // Its own temporary directory, in its fresh home: never the user's, which the system's
-        // tools read for every program of the user.
-        let temp = home.join("tmp");
-        let _ = std::fs::create_dir_all(&temp);
-        command.env("TMPDIR", &temp);
-        let git = tree
-            .as_deref()
-            .map(crate::seatbelt::git_dirs)
-            .unwrap_or_default();
-        let mut writable: Vec<PathBuf> = vec![home.to_path_buf()];
-        writable.extend(tree.clone());
-        writable.extend(git.writable);
-        let kept: Vec<PathBuf> = [Some(home), tree.as_deref()]
-            .into_iter()
-            .flatten()
-            .map(crate::seatbelt::real)
-            .collect();
-        let hidden_dirs: Vec<PathBuf> = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .filter(|dir| dir.is_absolute())
-            .map(|dir| crate::seatbelt::real(&dir))
-            .filter(|dir| !kept.iter().any(|inner| inner.starts_with(dir)))
-            .into_iter()
-            .collect();
-        let hidden_files: Vec<PathBuf> = std::env::var("DBUS_SESSION_BUS_ADDRESS")
-            .unwrap_or_default()
-            .split(';')
-            .filter_map(|address| address.split_once(':').map(|(_, keys)| keys))
-            .flat_map(|keys| keys.split(','))
-            .filter_map(|key| key.strip_prefix("path="))
-            .map(PathBuf::from)
-            .filter(|file| file.is_absolute())
-            .collect();
-        let user_homes: Vec<PathBuf> = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .filter(|dir| dir.is_absolute())
-            .into_iter()
-            .chain(crate::validator::passwd_home())
-            .chain(user_home)
-            .collect();
-        let profile = crate::seatbelt::test_command(&crate::seatbelt::TestCommand {
-            writable,
-            cargo_home,
-            user_homes,
-            hidden_dirs,
-            hidden_files,
-            sealed_dirs: git.sealed_dirs,
-            sealed_files: git.sealed_files,
-        });
-        let resolved = crate::seatbelt::resolve(
-            command.get_program(),
-            path.as_deref(),
-            command.get_current_dir(),
-        );
-        command.wrap(crate::seatbelt::SANDBOX_EXEC, &profile.args(), &resolved);
-    }
-}
-
-/// The namespaces [`without_login`] starts a child in.
-#[cfg(target_os = "linux")]
-mod session {
-    use std::ffi::{CStr, CString};
-    use std::os::unix::ffi::OsStrExt as _;
-    use std::path::PathBuf;
-
-    use crate::confinement::Command;
-
-    /// Writes `text` to the file at `path`, as the child between fork and exec may: system
-    /// calls only, nothing allocated.
-    fn write(path: &CStr, text: &[u8]) -> std::io::Result<()> {
-        // SAFETY: `path` is a NUL-terminated string; `open` reads it only.
-        let fd = unsafe { libc::open(path.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        // SAFETY: `text` is valid for `text.len()` bytes; `write` reads them only.
-        let written = unsafe { libc::write(fd, text.as_ptr().cast(), text.len()) };
-        let error = std::io::Error::last_os_error();
-        // SAFETY: `fd` was opened above and is closed once.
-        unsafe {
-            libc::close(fd);
-        }
-        if usize::try_from(written).ok() == Some(text.len()) {
-            Ok(())
-        } else {
-            Err(error)
-        }
-    }
-
-    /// Fails with the last error when `result` is negative.
-    fn check(result: libc::c_int) -> std::io::Result<()> {
-        if result < 0 {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Has `command` start in a user namespace mapping this user to itself and a mount
-    /// namespace of its own, with an empty read-only tmpfs over each of `dirs` and `/dev/null`
-    /// bound over each of `files`.
-    pub fn hide(command: &mut Command, dirs: &[PathBuf], files: &[PathBuf]) {
-        let c = |path: &PathBuf| CString::new(path.as_os_str().as_bytes()).ok();
-        let dirs: Vec<CString> = dirs.iter().filter_map(c).collect();
-        let files: Vec<CString> = files.iter().filter_map(c).collect();
-        // SAFETY: `getuid` and `getgid` take nothing and cannot fail.
-        let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
-        let uid_map = format!("{uid} {uid} 1\n").into_bytes();
-        let gid_map = format!("{gid} {gid} 1\n").into_bytes();
-        let hidden = libc::MS_RDONLY | libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC;
-        let steps = move || -> std::io::Result<()> {
-            // SAFETY: each call below is a system call given integers or NUL-terminated
-            // strings that live as long as the closure; none allocates, so each is safe
-            // between fork and exec.
-            unsafe {
-                check(libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNS))?;
-                write(c"/proc/self/setgroups", b"deny")?;
-                write(c"/proc/self/uid_map", &uid_map)?;
-                write(c"/proc/self/gid_map", &gid_map)?;
-                check(libc::mount(
-                    std::ptr::null(),
-                    c"/".as_ptr(),
-                    std::ptr::null(),
-                    libc::MS_REC | libc::MS_PRIVATE,
-                    std::ptr::null(),
-                ))?;
-                for dir in &dirs {
-                    check(libc::mount(
-                        c"tmpfs".as_ptr(),
-                        dir.as_ptr(),
-                        c"tmpfs".as_ptr(),
-                        hidden,
-                        c"mode=0755".as_ptr().cast(),
-                    ))?;
-                }
-                for file in &files {
-                    check(libc::mount(
-                        c"/dev/null".as_ptr(),
-                        file.as_ptr(),
-                        std::ptr::null(),
-                        libc::MS_BIND,
-                        std::ptr::null(),
-                    ))?;
-                }
-            }
-            Ok(())
-        };
-        // Whichever step the host refuses, and with whatever error, the spawn fails with
-        // `EPERM`, which [`super::refused_namespaces`] names; building the error allocates
-        // nothing.
-        let child = move || steps().map_err(|_| std::io::Error::from_raw_os_error(libc::EPERM));
-        // SAFETY: the closure runs between fork and exec and makes system calls only.
-        unsafe {
-            command.pre_exec(child);
-        }
-    }
-}
-
-/// What a test command that cannot run in the user and mount namespace [`without_login`]
-/// starts it in is told.
-#[cfg(target_os = "linux")]
-pub const NAMESPACES_REFUSED: &str = "the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed";
-
-/// What a test command [`without_login`] would confine on macOS is told when there is no
-/// `sandbox-exec` to confine it with.
-#[cfg(target_os = "macos")]
-pub const SANDBOX_MISSING: &str = "the test command runs in the macOS sandbox, started by `/usr/bin/sandbox-exec`, where no login of the user's is in reach, and this host has no `/usr/bin/sandbox-exec`; the test command is not run unconfined";
-
-/// `error`, from starting a command [`without_login`] confined, with the cause named when it
-/// is the refusal of its namespaces: on Linux an `EPERM` (`PermissionDenied`), which every
-/// refused namespace step fails with, gets [`NAMESPACES_REFUSED`] as its context. Any other
-/// error, and an `EACCES` (`PermissionDenied` too: a program that is not executable), is
-/// returned as it was. On macOS a `NotFound` at the start while [`crate::seatbelt::SANDBOX_EXEC`]
-/// does not exist gets `SANDBOX_MISSING` as its context.
-#[must_use]
-pub fn refused_namespaces(error: anyhow::Error) -> anyhow::Error {
-    #[cfg(target_os = "macos")]
-    if !Path::new(crate::seatbelt::SANDBOX_EXEC).exists()
-        && error.chain().any(|cause| {
-            cause
-                .downcast_ref::<std::io::Error>()
-                .is_some_and(|cause| cause.kind() == std::io::ErrorKind::NotFound)
-        })
-    {
-        return error.context(SANDBOX_MISSING);
-    }
-    #[cfg(target_os = "linux")]
-    if error.chain().any(|cause| {
-        cause.downcast_ref::<std::io::Error>().is_some_and(|cause| {
-            cause.kind() == std::io::ErrorKind::PermissionDenied
-                && cause.raw_os_error() == Some(libc::EPERM)
-        })
-    }) {
-        return error.context(NAMESPACES_REFUSED);
-    }
-    error
 }
 
 /// What [`tail`] kept of a stream.
@@ -1067,7 +746,7 @@ static LIVE: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet
 
 /// The variable every child of [`run_child`] carries, its value unique to the call: a process
 /// that still carries it after the child ended was started by the child.
-const MARK: &str = "TAKT_CHILD";
+pub(crate) const MARK: &str = "TAKT_CHILD";
 
 /// What a child left behind once it ended: on Linux, takt is the subreaper of everything it
 /// starts (`PR_SET_CHILD_SUBREAPER`), so a process the child started and orphaned, in a session
@@ -1166,6 +845,228 @@ mod leftovers {
         }
         anyhow::bail!("processes the child started were still running after 64 rounds of killing")
     }
+
+    /// Whether the process `pid` has ended: gone, or a zombie its parent has not reaped yet.
+    pub fn ended(pid: libc::pid_t) -> bool {
+        let Ok(text) = std::fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            return true;
+        };
+        let state = text
+            .rfind(')')
+            .and_then(|at| text.get(at + 2..))
+            .and_then(|rest| rest.chars().next());
+        matches!(state, None | Some('Z' | 'X'))
+    }
+
+    /// Kills, round after round, every process but `spare` that is in process group `group` or
+    /// carries `mark`, and reaps each that is this process's child: what a run on the host left
+    /// once its leader `spare` ended, which Substrate's `local` adapter reaps itself. A zombie
+    /// another process will reap is left to it. An error when one is still there after the last
+    /// round.
+    pub fn sweep_marked(group: libc::pid_t, mark: &str, spare: libc::pid_t) -> anyhow::Result<()> {
+        let me = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
+        let mark = format!("{}={mark}", super::MARK).into_bytes();
+        let found = || -> Vec<libc::pid_t> {
+            let Ok(entries) = std::fs::read_dir("/proc") else {
+                return Vec::new();
+            };
+            entries
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .filter(|pid| *pid != me && *pid != spare)
+                .filter(|pid| {
+                    stat(*pid).is_some_and(|(parent, pgrp, _)| {
+                        (pgrp == group || carries(*pid, &mark)) && (parent == me || !ended(*pid))
+                    })
+                })
+                .collect()
+        };
+        for _ in 0..64 {
+            let left = found();
+            if left.is_empty() {
+                return Ok(());
+            }
+            for pid in &left {
+                // SAFETY: `kill` takes two integers and touches no memory of this process.
+                unsafe {
+                    libc::kill(*pid, libc::SIGKILL);
+                }
+            }
+            let until = Instant::now() + Duration::from_secs(2);
+            let mut waiting = left;
+            while !waiting.is_empty() && Instant::now() < until {
+                waiting.retain(|pid| match stat(*pid) {
+                    None => false,
+                    Some((parent, _, _)) if parent == me => {
+                        let mut status = 0;
+                        // SAFETY: `waitpid` writes the status into the integer it is given.
+                        let reaped = unsafe { libc::waitpid(*pid, &raw mut status, libc::WNOHANG) };
+                        reaped == 0
+                    }
+                    Some(_) => !ended(*pid),
+                });
+                if !waiting.is_empty() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            }
+        }
+        anyhow::bail!(
+            "processes the test command started were still running after 64 rounds of killing"
+        )
+    }
+}
+
+/// A process takt started outside [`run_child`] and waits on through another owner (Substrate's
+/// `local` adapter), counted among [`run_child`]'s running children for as long as this lives,
+/// so that no sweep takes it or what stays in its process group for a leftover; on macOS its
+/// mark is counted as live too.
+pub(crate) struct Led {
+    pid: u32,
+    #[cfg(target_os = "macos")]
+    mark: String,
+}
+
+impl Led {
+    /// The process's id, which is its process group's.
+    pub(crate) fn pid(&self) -> u32 {
+        self.pid
+    }
+}
+
+impl Drop for Led {
+    fn drop(&mut self) {
+        RUNNING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.pid);
+        #[cfg(target_os = "macos")]
+        LIVE.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&self.mark);
+    }
+}
+
+/// A mark for one child, unique to this process: `<pid>-<n>`, the value of [`MARK`] in its
+/// environment.
+pub(crate) fn next_mark() -> String {
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
+
+/// Starts a process through `start`, which answers its owner's handle and the process's id, a
+/// process group leader carrying `mark`: no sweep runs between its start and its being counted
+/// ([`Led`]). On Linux this process is made the subreaper of what it starts first.
+///
+/// # Errors
+///
+/// What `start` returns.
+pub(crate) fn lead<T>(mark: &str, start: impl FnOnce() -> Result<(T, u32)>) -> Result<(T, Led)> {
+    #[cfg(target_os = "linux")]
+    leftovers::adopt();
+    let mut running = RUNNING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (owned, pid) = start()?;
+    running.insert(pid);
+    #[cfg(target_os = "macos")]
+    LIVE.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .insert(mark.to_owned());
+    #[cfg(not(target_os = "macos"))]
+    let _ = mark;
+    Ok((
+        owned,
+        Led {
+            pid,
+            #[cfg(target_os = "macos")]
+            mark: mark.to_owned(),
+        },
+    ))
+}
+
+/// Whether the process `pid` has ended: gone, or a zombie not reaped yet. Elsewhere than on Linux
+/// and macOS, always.
+pub(crate) fn exited(pid: u32) -> bool {
+    let Ok(pid) = i32::try_from(pid) else {
+        return true;
+    };
+    #[cfg(target_os = "linux")]
+    {
+        leftovers::ended(pid)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        crate::marked::ended(pid)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
+/// Kills what the ended leader `leader` of a run on the host left: on Linux every process but it
+/// in its process group, while the leader is not reaped yet and so still holds the group's id,
+/// or carrying `mark`, reaping this process's children among them; on macOS every process of
+/// this user carrying `mark` (the leader, ended, carries none the kernel shows). Never the leader
+/// itself, which its owner reaps.
+///
+/// # Errors
+///
+/// When one is still there after the last round of killing.
+pub(crate) fn sweep_led(leader: u32, mark: &str) -> Result<()> {
+    let Ok(leader) = i32::try_from(leader) else {
+        return Ok(());
+    };
+    #[cfg(target_os = "linux")]
+    {
+        // Once reaped, its id may name another process's group: only the mark is swept then.
+        let group = if Path::new(&format!("/proc/{leader}")).exists() {
+            leader
+        } else {
+            -1
+        };
+        leftovers::sweep_marked(group, mark, leader)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = leader;
+        crate::marked::sweep(MARK, |carried| carried == mark.as_bytes())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (leader, mark);
+        Ok(())
+    }
+}
+
+/// Kills every process of this user that carries `mark` as its [`MARK`], wherever it went, and
+/// reaps this process's children among them: what a confined run left once it ended, when its
+/// adapter proves no `whole_tree_kill` (story:confinement-through-substrate-on-linux-and-macos;
+/// `macos`, whose run a build script can leave in a session of its own). Not killed: one that
+/// dropped the mark. Elsewhere than on Linux and macOS, nothing is done.
+///
+/// # Errors
+///
+/// When one is still there after the last round of killing.
+pub(crate) fn sweep_mark(mark: &str) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // No process is in group -1 and none is spared: only the mark is swept.
+        leftovers::sweep_marked(-1, mark, 0)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        crate::marked::sweep(MARK, |carried| carried == mark.as_bytes())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = mark;
+        Ok(())
+    }
 }
 
 /// Kills and reaps what this process started or adopted that is in a process group of its own
@@ -1233,12 +1134,7 @@ pub fn run_child_keeping_head(
     limits: Limits,
     head: usize,
 ) -> Result<Finished> {
-    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mark = format!(
-        "{}-{}",
-        std::process::id(),
-        CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
+    let mark = next_mark();
     command.env(MARK, &mark);
     #[cfg(target_os = "linux")]
     leftovers::adopt();

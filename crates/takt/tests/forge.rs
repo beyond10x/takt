@@ -19,7 +19,7 @@ use takt::evidence::Record;
 use takt::forge::gitlab::{Glab, encoded, project_of};
 use takt::forge::{
     BotRoute, Checks, Exit, Forge, Head, LOGIN_LOCATIONS, Memory, Outgoing, PullRequest,
-    PullRequestState, PullRequestView, Runner, repository_of, without_login, without_userinfo,
+    PullRequestState, PullRequestView, Runner, repository_of, without_userinfo,
 };
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::run::{
@@ -3430,19 +3430,20 @@ fn a_failed_glab_api_is_an_error_naming_the_line_and_the_status() {
 }
 
 /// glab reads its login from `GLAB_CONFIG_DIR` when it is set, as gh does from
-/// `GH_CONFIG_DIR`: a command started with no login of the user's in reach does not inherit it.
+/// `GH_CONFIG_DIR`: a test command takt starts does not inherit it. Since
+/// story:confinement-through-substrate-on-linux-and-macos takt has no command wrapper of its
+/// own: the variable is kept out of the environment a `none` run hands Substrate's `local`
+/// adapter ([`takt::confinement::inheritable`]).
 #[test]
 fn glab_s_configuration_directory_is_no_login_a_child_inherits() {
     assert!(LOGIN_LOCATIONS.contains(&"GLAB_CONFIG_DIR"));
-    let mut command = takt::confinement::Command::new("true");
-    command.env("GLAB_CONFIG_DIR", "/elsewhere/glab-cli");
-    without_login(&mut command, Path::new("/nonexistent/home"));
     assert!(
-        command
-            .get_envs()
-            .any(|(name, value)| name == "GLAB_CONFIG_DIR" && value.is_none()),
-        "{:?}",
-        command.get_envs().collect::<Vec<_>>()
+        !takt::confinement::inheritable("GLAB_CONFIG_DIR", "/elsewhere/glab-cli"),
+        "story:confinement-through-substrate-on-linux-and-macos: a login location is not passed to a test command"
+    );
+    assert!(
+        takt::confinement::inheritable("LANG", "C.UTF-8"),
+        "story:confinement-through-substrate-on-linux-and-macos: the locale is"
     );
 }
 

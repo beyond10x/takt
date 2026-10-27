@@ -11364,8 +11364,16 @@ impl<'a> Run<'a> {
             layers.insert("takt".to_owned(), binary.clone());
         }
         // The adapter every child of this run starts through, named on the first line and
-        // in the record so a reader knows what confined the evidence.
-        let confinement = crate::confinement::current().name().to_owned();
+        // in the record so a reader knows what confined the evidence: takt's name for it and
+        // the Substrate adapter it opened, with the facts that adapter proved and, for `none`,
+        // the reason it is declared insecure.
+        let current = crate::confinement::current();
+        let confinement = current.name().to_owned();
+        let substrate = current.substrate();
+        let adapter = substrate
+            .as_ref()
+            .map(|record| format!(": {}", record.describe()))
+            .unwrap_or_default();
         // Before the first session, on open and on every resume: the harness binary asked of
         // metaharness, with no model call (`Harness::preflight`).
         let preflight = self.harness.preflight()?;
@@ -11400,6 +11408,7 @@ impl<'a> Run<'a> {
                 binary: self.binary.clone(),
                 layers: Some(layers),
                 confinement: Some(confinement.clone()),
+                substrate: substrate.map(Box::new),
                 // The endpoint the harness is pointed at, by reference: never a token.
                 endpoint: self.harness.endpoint_reference(),
                 records: Some(self.kept_records().name().to_owned()),
@@ -11416,7 +11425,7 @@ impl<'a> Run<'a> {
         )?;
         writeln!(
             out,
-            "case {} on {} in {}; inputs {}; confinement {confinement}",
+            "case {} on {} in {}; inputs {}; confinement {confinement}{adapter}",
             self.case.id,
             self.case.protocol.id,
             self.tree.display(),
