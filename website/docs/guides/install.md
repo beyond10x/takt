@@ -91,6 +91,9 @@ takt starts other programs and finds them on the `PATH`. Which ones depends on t
 | `--forge gitlab` | `glab`, with `glab auth status --hostname <host>` exiting 0 |
 | `takt promote` | `bwrap` on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
 
+A gate's commands are the exception: they find a program by name on `/usr/local/bin:/usr/bin:/bin`,
+or on the `PATH` their `env` sets, as the [run-a-story guide](./run-a-story.md) states.
+
 The neighbours, each with its own docs:
 [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
 keeps the planning store,

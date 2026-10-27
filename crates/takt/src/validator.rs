@@ -740,6 +740,23 @@ pub(crate) fn passwd_home() -> Option<PathBuf> {
     None
 }
 
+/// The directories a gate's command finds a program by name on, when its binding declares no
+/// `PATH` of its own. The user's `PATH` is never read: credentials never enter a child's
+/// environment (`AGENTS.md` § Rules), and a program found on it would differ from one machine to
+/// the next.
+pub(crate) const FIXED_PATH: &str = "/usr/local/bin:/usr/bin:/bin";
+
+/// The file `program` in the first absolute directory of `searched`, a colon-separated `PATH`,
+/// that holds one; a relative entry is not searched.
+fn found_on(program: &str, searched: &str) -> Option<PathBuf> {
+    searched
+        .split(':')
+        .map(Path::new)
+        .filter(|dir| dir.is_absolute())
+        .map(|dir| dir.join(program))
+        .find(|candidate| candidate.is_file())
+}
+
 /// An empty home made for one run of a test command or a gate's commands, outside the tree,
 /// removed when dropped. The command runs with `HOME` there and `PYTHONNOUSERSITE=1`, so
 /// nothing a step wrote in the caller's home (Python's user site, its start-up files) runs
@@ -798,8 +815,11 @@ impl FreshHome {
 
     /// The assertions project file `project` with every command it admits, and every
     /// provider's, run in this home ([`FreshHome::vars`]): the gate's commands inherit nothing,
-    /// so `CARGO_HOME` and `RUSTUP_HOME` are set unless the binding sets them.
-    fn admitting(&self, project: &str) -> Result<String> {
+    /// so `CARGO_HOME` and `RUSTUP_HOME` are set unless the binding sets them. A bare program
+    /// name (no `/`) that is not a file of `tree` is written absolute, found on the `PATH` the
+    /// binding's `env` declares or else on [`FIXED_PATH`], and a binding that declares no `PATH`
+    /// runs with [`FIXED_PATH`]; a name found nowhere is refused, naming it and the path searched.
+    fn admitting(&self, project: &str, tree: &Path) -> Result<String> {
         let mut doc: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(project).context("read the project file")?;
         let Some(top) = doc.as_mapping_mut() else {
@@ -827,6 +847,38 @@ impl FreshHome {
             }
         }
         for binding in bindings {
+            let declared = binding
+                .get("env")
+                .and_then(|env| env.get("PATH"))
+                .and_then(serde_yaml_ng::Value::as_str)
+                .map(str::to_owned);
+            if let Some(program) = binding
+                .get("executable")
+                .and_then(serde_yaml_ng::Value::as_str)
+                .map(str::to_owned)
+                .filter(|program| !program.contains('/') && !tree.join(program).is_file())
+            {
+                let searched = declared.clone().unwrap_or_else(|| FIXED_PATH.to_owned());
+                let Some(found) = found_on(&program, &searched) else {
+                    bail!(
+                        "the command runs {program}, which is on no directory of the path searched, {searched}; a bare program name is found on the PATH the command's env declares, or else on the fixed path {FIXED_PATH}, never on the user's PATH"
+                    );
+                };
+                let inside = match (found.canonicalize(), tree.canonicalize()) {
+                    (Ok(at), Ok(root)) => at.starts_with(root),
+                    _ => true,
+                };
+                if inside {
+                    bail!(
+                        "the command runs {program} from {}, inside the tree, which the gate's comparison does not cover; a program a gate runs is outside the tree",
+                        found.display()
+                    );
+                }
+                binding.insert(
+                    "executable".into(),
+                    found.to_string_lossy().into_owned().into(),
+                );
+            }
             let env = binding
                 .entry("env".into())
                 .or_insert_with(|| serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new()));
@@ -839,6 +891,9 @@ impl FreshHome {
                 .collect();
             for (name, value) in self.vars(|name| set.iter().any(|key| key == name)) {
                 env.insert(name.into(), value.to_string_lossy().into_owned().into());
+            }
+            if !env.contains_key("PATH") {
+                env.insert("PATH".into(), FIXED_PATH.into());
             }
         }
         serde_yaml_ng::to_string(&doc).context("write the project file")
@@ -2368,7 +2423,7 @@ impl GateRun {
             let gates = copy("gates", &self.gates, &gates)?;
             let copied = project
                 .as_ref()
-                .map(|(path, text)| copy("project", path, &home.admitting(text)?))
+                .map(|(path, text)| copy("project", path, &home.admitting(text, tree)?))
                 .transpose()?;
             let mut prepared = canon_engineering_assertions::prepare(
                 tree,
