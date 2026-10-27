@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-pull-request-and-the-store-carry-the-evidence
 kind: story
-status: active
+status: implemented
 title: The pull request and the store record carry the case's evidence
 summary: store test_result names result, revision, producer and sha256; the PR body summarises evidence, steps, tokens and stop
 tags:
@@ -18,10 +18,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:44:48Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-27T01:44:48Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-27T11:33:40Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-pull-request-and-the-store-carry-the-evidence
 
