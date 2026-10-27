@@ -13,7 +13,7 @@ of this repository builds or pushes an image, and none is published: you build i
 loads your build.
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.14.0 .
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.15.0 .
 ```
 
 Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a Loom agent:
@@ -78,7 +78,7 @@ argument, so the configuration file is read only when they name it again. The ar
 of `takt run` and win over the file:
 
 ```console
-$ docker run --rm takt:0.14.0 --config /config/agent.yaml --story <story-id> --hours 1
+$ docker run --rm takt:0.15.0 --config /config/agent.yaml --story <story-id> --hours 1
 ```
 
 A `LABEL` names the source (`org.opencontainers.image.source`), the licence (`Apache-2.0`) and the

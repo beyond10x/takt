@@ -67,7 +67,7 @@ No takt image is published. Build one from a checkout of the tag:
 ```sh
 git clone --branch 0.14.0 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.14.0 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.15.0 .
 ```
 
 The image is about 1.3 GB. It holds takt, `aep`, `b10x-harness`, `ess`, `b10x-gates` and a Rust

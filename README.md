@@ -39,9 +39,9 @@ the plan, and no container image is published: you build one from `Dockerfile`.
 
 ## Status
 
-0.14.0 is the latest release. A run whose tests are red now stops (`RedBase` before the first
-model call, `RepeatedTestFailure` after two runs that fail the same tests) instead of spending model
-calls, and takt runs as a Loom agent. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
+0.15.0 is the latest release. A run names the Claude Code binary it starts (`--harness-program`)
+and stops `HarnessUnqualified` before the first session when metaharness does not qualify it, so a
+trial on a GitHub repository can end with its pull request merged. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64) are on the
 [releases](https://github.com/beyond10x/takt/releases) page. Changes: [`CHANGELOG.md`](CHANGELOG.md).
 

@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-10-27
+
+A run names the Claude Code binary it starts and stops before the first session when metaharness
+does not qualify it, so a trial on a GitHub repository can end with its pull request merged.
+
 ### Added
 
 - `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
@@ -43,6 +48,8 @@ takt's releases.
 - `--commit-style semantic|repository|action`, `--commit-trailer`, `--commit-types` and a `commit` run-file section; a commit rule in the repository's instruction files wins over the style.
 - A reply with a missing or ill-shaped `commit` falls back to `<type>: <story title>` and a `commit.fallback` event; `opened` records the style in effect as `commit`.
 - `b10x-loom-sdk` moves from loom 0.43.0 to 0.45.0 with metaharness 0.20.0: a Codex step on a codex off metaharness's pin proposes its change, H9 advisory (story:codex-off-pin-proposes).
+- `b10x-loom-sdk` moves to loom 0.46.0 with metaharness 0.22.0, whose `qualify` the harness preflight calls.
+- **Breaking:** a harness binary metaharness does not qualify stops the run `HarnessUnqualified` before the first session, exit 1; `--harness-program` names a qualified one.
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
 - `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
@@ -616,7 +623,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.14.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.15.0...HEAD
+[0.15.0]: https://github.com/beyond10x/takt/compare/0.14.0...0.15.0
 [0.14.0]: https://github.com/beyond10x/takt/compare/0.13.1...0.14.0
 [0.13.1]: https://github.com/beyond10x/takt/compare/0.13.0...0.13.1
 [0.13.0]: https://github.com/beyond10x/takt/compare/0.12.0...0.13.0
