@@ -3,7 +3,7 @@ title: Read a case
 sidebar_position: 5
 description: After a run, find out from the case directory what happened, step by step, why it stopped and what the model was told, with jq, takt scorecard and takt view.
 lede: Everything a run did is in its case directory and in the transcripts beside it, so the questions after a run are answered by reading files, not by asking the model.
-source: crates/takt/src/case.rs, crates/takt/src/events.rs; takt scorecard, trace and view --help at 0.14.0; a story case of takt 0.14.0 on a scratch repository, 2026-10-26; the layout of a 12-run case from a cluster trial of takt 0.13.1, read, not copied
+source: crates/takt/src/case.rs (Records), crates/takt/src/events.rs; takt scorecard, trace and view --help at 0.14.0; a story case of takt 0.14.0 on a scratch repository, 2026-10-26; the layout of a 12-run case from a cluster trial of takt 0.13.1, read, not copied
 ---
 
 # Read a case
@@ -95,7 +95,9 @@ does: [How a run ends](../concepts/how-a-run-ends.md).
 ## Why an action was or was not taken
 
 `decisions/NNNN.json` holds one evaluation by the governor: every action's status
-(`admissible`, `approval-required` or `blocked`), and for a blocked one the claims that block it:
+(`admissible`, `approval-required` or `blocked`). A case keeps the latest one alone unless the
+run was made with `--records trial` (the `opened` line's `records` says which). For a blocked
+action the file names the claims that block it:
 
 ```console
 $ jq -c '.actions["pr.open"]' decisions/0003.json

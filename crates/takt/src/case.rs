@@ -2382,6 +2382,52 @@ pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Resul
     Ok(())
 }
 
+/// The records profile a run keeps its case's decisions under: `default` keeps the latest
+/// `decisions/NNNN.json` alone, `trial` every one. Named by `--records` and the run
+/// configuration's `records` (story:a-run-keeps-every-decision-only-on-a-trial).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Records {
+    /// Only the latest decision is kept; the sequence still continues from it.
+    #[default]
+    Default,
+    /// Every decision is kept, as every run kept them before the profile.
+    Trial,
+}
+
+impl Records {
+    /// The profile `name` names, `default` or `trial`; any other name is none.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        match name {
+            "default" => Some(Self::Default),
+            "trial" => Some(Self::Trial),
+            _ => None,
+        }
+    }
+
+    /// The profile's name as the flag and the run configuration spell it.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Trial => "trial",
+        }
+    }
+
+    /// The profile a case of protocol `protocol` keeps when `self` is asked for: an improvement
+    /// case (`self.improvement/1`, `loop.improvement/1`) keeps every decision whatever is asked,
+    /// since its scorecard reads every one of them; any other keeps what is asked. A scenario
+    /// run is asked for `trial` by its caller.
+    #[must_use]
+    pub fn for_protocol(self, protocol: &str) -> Self {
+        if protocol == TURN_PROTOCOL || protocol == LOOP_PROTOCOL {
+            Self::Trial
+        } else {
+            self
+        }
+    }
+}
+
 /// The parts of the `canon-decision/1` document the governor of Loom rendered for a case that
 /// the loop acts on: claim values, obligation, action and outcome statuses
 /// ([`CaseDir::evaluate`]).
@@ -2835,6 +2881,36 @@ impl CaseDir {
             }
         }
         Ok(highest)
+    }
+
+    /// Removes the decisions numbered below `seq`, the `decisions/<n>.json` of the earlier
+    /// evaluations, so that decision `seq` is the only one the case keeps; the `default` records
+    /// profile does this after it writes each decision. Only regular `.json` files whose name is
+    /// a number below `seq` go; the sequence is unchanged, since [`CaseDir::evaluations`] still
+    /// reads `seq` as the highest. Returns how many were removed.
+    pub fn keep_only_decision(&self, seq: usize) -> Result<usize> {
+        let decisions = self.dir.join("decisions");
+        let mut removed = 0;
+        for entry in std::fs::read_dir(&decisions)
+            .with_context(|| format!("read {}", decisions.display()))?
+        {
+            let entry = entry?;
+            let path = entry.path();
+            let numbered_below = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.parse::<usize>().ok())
+                .is_some_and(|n| n < seq);
+            let json = path
+                .extension()
+                .is_some_and(|extension| extension == "json");
+            if numbered_below && json && entry.file_type()?.is_file() {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("remove {}", path.display()))?;
+                removed += 1;
+            }
+        }
+        Ok(removed)
     }
 
     /// The story the case was opened for; `None` for a case opened on an intent.
@@ -3680,6 +3756,23 @@ pub fn turn_judge_refusal(case_dir: &Path, binary: &Path) -> Result<Option<Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// story:a-run-keeps-every-decision-only-on-a-trial: an improvement case keeps every decision
+    /// whatever is asked, a story's case keeps what is asked, and the names are the flag's.
+    #[test]
+    fn improvement_cases_keep_every_decision_whatever_is_asked() {
+        for asked in [Records::Default, Records::Trial] {
+            assert_eq!(asked.for_protocol(TURN_PROTOCOL), Records::Trial);
+            assert_eq!(asked.for_protocol(LOOP_PROTOCOL), Records::Trial);
+            assert_eq!(asked.for_protocol("story.delivery/1"), asked);
+        }
+        assert_eq!(Records::named("default"), Some(Records::Default));
+        assert_eq!(Records::named("trial"), Some(Records::Trial));
+        assert_eq!(Records::named("Trial"), None);
+        assert_eq!(Records::named(""), None);
+        assert_eq!(Records::default(), Records::Default);
+        assert_eq!(Records::Trial.name(), "trial");
+    }
 
     #[test]
     fn statuses_are_read_from_each_section() {

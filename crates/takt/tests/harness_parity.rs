@@ -373,6 +373,9 @@ fn run_scanned(
     let validators = validators();
     let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
     run.scan_change_with(scan);
+    // story:a-run-keeps-every-decision-only-on-a-trial: the parity compares every decision the
+    // case holds, so the run keeps every one, as a `--records trial` run does.
+    run.keep_records(takt::case::Records::Trial);
     let mut out = Vec::new();
     run.continue_past_red_base();
     let stop = run.run(&mut out);

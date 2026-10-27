@@ -135,6 +135,8 @@ fn recorded_with(outer: &Path, intent: &str, files: &[(&str, &str)]) -> Recorded
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "start"]);
     fake_claude(&bin.join("claude"), &calls);
+    // story:a-run-keeps-every-decision-only-on-a-trial: a replay of an earlier step reads the
+    // decisions before it, which only a `--records trial` run keeps.
     let output = takt(&bin, &state)
         .args([
             "run",
@@ -149,6 +151,8 @@ fn recorded_with(outer: &Path, intent: &str, files: &[(&str, &str)]) -> Recorded
             "none",
             "--iterations",
             "4",
+            "--records",
+            "trial",
             "--test-cmd",
             "./check.sh",
         ])

@@ -59,7 +59,8 @@ small = "lab/small"
 "#;
 
 /// A TOML value of a type the file takes for `key` (a string, an integer, a fraction, a
-/// boolean, or `"gates"`, a value `scan` takes; story:scan-and-forge-are-adapters), or none
+/// boolean, `"gates"`, a value `scan` takes (story:scan-and-forge-are-adapters), or `"default"`,
+/// a value `records` takes (story:a-run-keeps-every-decision-only-on-a-trial), or none
 /// when it takes the key with none of them. `llm` takes `{path = <file>}` naming the probe
 /// beside it (story:llm-section-is-an-llm-routes-document).
 fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
@@ -71,6 +72,7 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "true",
         "\"gates\"",
         "{path = \"llm-probe.toml\"}",
+        "\"default\"",
     ]
     .into_iter()
     .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())
@@ -101,12 +103,15 @@ fn keys_the_file_takes(dir: &Path) -> Vec<String> {
         .unwrap_or_else(|| panic!("the refusal names what the file holds: {message}"))
         .1;
     // story:scan-and-forge-are-adapters: the refusal names `scan`'s values, `gates` and `none`,
-    // after it; they are values, not keys. So are the format name and the `{path: <file>}`
-    // form `llm` takes (story:llm-section-is-an-llm-routes-document).
+    // after it, and `records`'s, `default` and `trial`
+    // (story:a-run-keeps-every-decision-only-on-a-trial); they are values, not keys. So are the
+    // format name and the `{path: <file>}` form `llm` takes
+    // (story:llm-section-is-an-llm-routes-document).
     let keys: Vec<String> = quoted(shape)
         .into_iter()
         .filter(|name| {
-            !["gates", "none", "llm.routes/1", "{path: <file>}"].contains(&name.as_str())
+            !["gates", "none", "default", "trial", "llm.routes/1", "{path: <file>}"]
+                .contains(&name.as_str())
         })
         .collect();
     assert!(
@@ -147,8 +152,7 @@ fn key_of(flag: &str) -> String {
 }
 
 /// The reference's field table, which it introduces as "every field is the `takt run` flag of
-/// the same name", lists every key `takt run --config` takes. It lists eight; the merged tree
-/// takes eleven.
+/// the same name", lists every key `takt run --config` takes.
 #[test]
 fn the_reference_field_table_lists_every_key_the_file_takes() {
     let dir = scratch("fields");

@@ -75,8 +75,8 @@ fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
 
 /// The fields a run configuration file may set, each one a `takt run` flag's: `story`,
 /// `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`,
-/// `test_cmd`, `state_dir` and `continue_past_red_base`; and `scan` and `llm`, which no flag
-/// gives. None is required.
+/// `test_cmd`, `state_dir`, `continue_past_red_base` and `records`; and `scan` and `llm`, which
+/// no flag gives. None is required.
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfig {
@@ -103,6 +103,8 @@ pub struct RunConfig {
     pub state_dir: Option<PathBuf>,
     /// `--continue-past-red-base`.
     pub continue_past_red_base: Option<bool>,
+    /// `--records`: `default` or `trial`, checked when the file is read.
+    pub records: Option<String>,
     /// The run's scan adapter, `gates` or `none` ([`crate::scan::Scan`]): the one field no
     /// flag sets, so a run is unscanned only where its file says so. Not set, it is `gates`.
     pub scan: Option<crate::scan::ScanName>,
@@ -125,7 +127,7 @@ where
     <serde_yaml_ng::Value as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`";
 
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
@@ -292,6 +294,14 @@ impl RunConfig {
         } else {
             from_yaml(path, text)?
         };
+        if let Some(records) = &config.records
+            && crate::case::Records::named(records).is_none()
+        {
+            return Err(anyhow!(
+                "the run configuration file {} is refused: `records` is `default` or `trial`, no other value",
+                path.display()
+            ));
+        }
         if let Some(llm) = &config.llm {
             config.llm_digest = Some(llm_digest(path, llm)?);
         }
@@ -379,6 +389,36 @@ mod tests {
             error.contains("`continue_past_red_base`, a boolean"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn records_is_default_or_trial_in_either_format() {
+        let path = scratch("records", "records = \"trial\"\n");
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.records.as_deref(), Some("trial"));
+        let path = scratch_named(
+            "records-loom",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  records: default\n",
+        );
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.records.as_deref(), Some("default"));
+        let path = scratch("records-value", "records = \"sometimes\"\n");
+        let error = format!("{:#}", RunConfig::read(&path).expect_err("refused"));
+        assert!(error.contains("`records`"), "{error}");
+        assert!(!error.contains("sometimes"), "{error}");
+        let path = scratch_named(
+            "records-loom-value",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  records: MARKER-records\n",
+        );
+        let error = format!("{:#}", RunConfig::read(&path).expect_err("refused"));
+        assert!(error.contains("`records`"), "{error}");
+        assert!(!error.contains("MARKER-records"), "{error}");
+        let path = scratch("records-type", "records = true\n");
+        let error = format!("{:#}", RunConfig::read(&path).expect_err("refused"));
+        assert!(error.contains("`records`"), "{error}");
+        assert!(error.contains("line 1"), "{error}");
     }
 
     #[test]

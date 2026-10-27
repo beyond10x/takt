@@ -218,8 +218,15 @@ pub fn starting_state(case_dir: &Path, step: u64, run: Option<u64>) -> Result<St
         );
     }
     let decision_path = case_dir.join(&decision_file);
-    let decision_bytes = read_plain(&decision_path)?
-        .ok_or_else(|| anyhow!("{} is not in the case", decision_path.display()))?;
+    let decision_bytes = match read_plain(&decision_path)? {
+        Some(bytes) => bytes,
+        // A `default` run keeps the latest decision alone: an earlier one it evaluated is gone,
+        // and a replay needs it, so it is refused by name, not read as missing from the case.
+        None if records_of_run(&lines, r) == Some("default") => bail!(
+            "the decision before step {step} of run {r}, {decision_file}, is not in the case: the run kept its latest decision alone, as the default records profile does, and dropped the earlier ones; replay a step of a run made with `--records trial`, which keeps every decision"
+        ),
+        None => bail!("{} is not in the case", decision_path.display()),
+    };
     let decision = Decision::from_json(
         &String::from_utf8(decision_bytes)
             .with_context(|| format!("read {}", decision_path.display()))?,
@@ -309,6 +316,15 @@ fn frontier_statuses(line: &str) -> BTreeMap<String, String> {
             Some((action.to_owned(), status.to_owned()))
         })
         .collect()
+}
+
+/// The records profile run `run` named on its `opened` line, `default` or `trial`; none on a
+/// line written before the profile, which kept every decision.
+fn records_of_run(lines: &[Line], run: u64) -> Option<&str> {
+    lines
+        .iter()
+        .find(|line| line.run == run && line.value["event"] == "opened")
+        .and_then(|line| line.value["records"].as_str())
 }
 
 /// The revision the step whose line is `lines[index]` started at: the last the record names

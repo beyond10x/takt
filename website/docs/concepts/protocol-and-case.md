@@ -104,7 +104,7 @@ protocol.yaml
 | file | holds |
 |---|---|
 | `case.yaml` | the case: protocol, artifacts at their revisions, inputs |
-| `decisions/NNNN.json` | each evaluation the governor returned, numbered |
+| `decisions/NNNN.json` | each evaluation the governor returned, numbered; the latest alone under the default records profile, every one under `--records trial` |
 | `evidence/` | each `canon-evidence/1` record a validator wrote |
 | `authority.yaml` | the grants, once `takt approve` gave one |
 | `events.jsonl` | the run record, one line per event ([reference](../reference/events-jsonl.md)) |
@@ -122,6 +122,7 @@ any `--input` is refused before the run.
 Neither a judgement step nor a validator's command may write into a case's directory, so every
 file in it was written by takt. From the same files `takt replay` rebuilds the prompt one
 judgement step was given, checks it byte for byte against the recorded one, and runs that step
-again in a scratch worktree at the revision it started from, writing nothing into the case.
+again in a scratch worktree at the revision it started from, writing nothing into the case. A step
+whose decision a `default` run dropped is refused, naming `--records trial`.
 
 Next: [The step loop and the frontier](./one-step-at-a-time.md).

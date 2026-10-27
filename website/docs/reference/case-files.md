@@ -3,7 +3,7 @@ title: Case files
 sidebar_position: 4
 description: The layout of .engineering/cases/<case>/, which file takt or a command writes, and which are never edited by hand.
 lede: A case is a directory of files in the repository, and every file in it is written by takt, by one of its validators or by takt approve.
-source: crates/takt/src/case.rs (CaseDir, Branch, Authority, the file constants), crates/takt/src/events.rs, crates/takt/src/evidence.rs, crates/takt/src/validator.rs, crates/takt/src/run.rs; a case from a takt 0.14.0 run on a scratch repository and one from a container run, read, not copied
+source: crates/takt/src/case.rs (CaseDir, Branch, Authority, Records, the file constants), crates/takt/src/events.rs, crates/takt/src/evidence.rs, crates/takt/src/validator.rs, crates/takt/src/run.rs; a case from a takt 0.14.0 run on a scratch repository and one from a container run, read, not copied
 ---
 
 # Case files
@@ -29,7 +29,6 @@ $ find .engineering/cases -type f | sort
 .engineering/cases/<case>/authority.yaml
 .engineering/cases/<case>/branch.yaml
 .engineering/cases/<case>/case.yaml
-.engineering/cases/<case>/decisions/0001.json
 .engineering/cases/<case>/decisions/0002.json
 .engineering/cases/<case>/events.jsonl
 .engineering/cases/<case>/evidence/0001-test-result-1.json
@@ -39,7 +38,9 @@ $ find .engineering/cases -type f | sort
 .engineering/cases/<case>/protocol.yaml
 ```
 
-A case that works a story, goes through a forge or a harness has more files. All of them:
+The run kept its latest decision alone, as the default records profile does; `--records trial`
+would list `decisions/0001.json` as well. A case that works a story, goes through a forge or a
+harness has more files. All of them:
 
 | file | what it holds | written by |
 |---|---|---|
@@ -52,7 +53,7 @@ A case that works a story, goes through a forge or a harness has more files. All
 | `commit-identity` | the identity of every commit of the case, `<name> <email>` on one line; absent when none was configured | takt, at open ([identity](./configuration.md#commit-identity)) |
 | `observations.json` | the observations reported to the case, in order, as Loom's file case store keeps them | takt, appended during the run |
 | `python-modules.json` | the Python module names a test command can import from outside the repository, as the Python the case opened with answered, or built-in lists | takt, at open, only when a Python answered or could not be established; absent otherwise, when the built-in lists stand in |
-| `decisions/NNNN.json` | one file per evaluation: every action's status (`admissible`, `approval-required`, `blocked`), the claims and why | the governor of Loom, through takt, one per decision |
+| `decisions/NNNN.json` | one file per evaluation: every action's status (`admissible`, `approval-required`, `blocked`), the claims and why; under the default records profile only the latest is kept, numbering goes on from it, and `--records trial` keeps every one ([Records profiles](./configuration.md#records-profiles)) | the governor of Loom, through takt, one per decision |
 | `evidence/NNNN-<kind>-<n>.json` | one `canon-evidence/1` record: `kind`, `result`, `subject`, `subject_revision`, `observed_at`, `producer` | a validator only |
 | `artifacts/` | what a validator retained beside its record, such as a gate's bundle | the validator, through takt |
 | `authority.yaml` | the grants: `capability`, `decision`, `approver`, `granted_at`, `revision` | `takt approve` |

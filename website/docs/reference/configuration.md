@@ -3,7 +3,7 @@ title: Configuration
 sidebar_position: 1
 description: The run configuration file takt run --config reads, the loom.agent/1 takt member, the endpoint file, and every takt run flag grouped by purpose.
 lede: A run's settings come from flags, from one configuration file and from defaults, in that order, and a file with a key takt does not know is refused before any case opens.
-source: crates/takt/src/run_config.rs (RunConfig, from_toml, from_yaml); crates/takt/src/scan.rs (Scan, of_run, refused_at_open); crates/takt/src/forge/gitlab.rs and forge/bot.rs; crates/takt-cli/src/main.rs (RunArgs, EndpointArgs, configured); crates/takt/src/harness.rs (EndpointFields, EndpointConfig); takt run --help at 0.14.0; ADR 0099
+source: crates/takt/src/run_config.rs (RunConfig, SHAPE, from_toml, from_yaml); crates/takt/src/case.rs (Records); crates/takt/src/events.rs (Opened); crates/takt/src/replay.rs; crates/takt/src/scan.rs (Scan, of_run, refused_at_open); crates/takt/src/forge/gitlab.rs and forge/bot.rs; crates/takt-cli/src/main.rs (RunArgs, EndpointArgs, configured); crates/takt/src/harness.rs (EndpointFields, EndpointConfig); takt run --help at 0.14.0; ADR 0099
 ---
 
 # Configuration
@@ -41,6 +41,7 @@ for `_`; `scan` has no flag.
 | `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
 | `state_dir` | path: the state directory, as `--state-dir`; a relative path is read beside the configuration file |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
+| `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest` |
 
@@ -123,7 +124,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -316,6 +317,23 @@ shape of a credential, and scanned too under `gates` when a policy is set.
 A scenario run cannot declare `none`: `takt scenario run --config` refuses a file that declares it,
 naming the file, and with a harness that may read outside its copy it needs `B10X_GATES_POLICY`.
 
+## Records profiles
+
+`--records default|trial`, or `records` in the file, names which `decisions/NNNN.json` files the
+case keeps. The flag wins over the file, and the file over the default, `default`.
+
+| profile | what the case keeps |
+|---|---|
+| `default` | the latest decision alone; the numbering goes on from it, so the next decision is the next number, not `0001` again |
+| `trial` | every decision, as the case kept them before the profile existed |
+
+A scenario run (`takt scenario run`) and an improvement case (`self.improvement/1`,
+`loop.improvement/1`) keep every decision whatever is asked. The case's `opened` event records the
+profile the case keeps as `records`; a line without it was written before the profile and reads as
+every decision kept. `takt replay` refuses a step whose decision a `default` run dropped, naming
+`--records trial`: replay a step of a run made with it. The [case files](./case-files.md) page
+lists the file.
+
 ## Every takt run flag
 
 One line each, from `takt run --help` at 0.14.0. The generated [CLI reference](./cli.md) has the
@@ -385,6 +403,12 @@ All `--endpoint-*` flags need `--harness harness`.
 | flag | meaning |
 |---|---|
 | `--state-dir <DIR>` | the state directory the run keeps its session transcripts in (`<DIR>/transcripts`), in place of `$XDG_STATE_HOME/takt`; for a container, a directory on a kept volume |
+
+### Records
+
+| flag | meaning |
+|---|---|
+| `--records <default\|trial>` | the decisions the case keeps: `default` the latest alone, `trial` every one ([Records profiles](#records-profiles)); default `default` |
 
 ### Confinement and identity
 

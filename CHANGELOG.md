@@ -25,11 +25,14 @@ takt's releases.
 - `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
 - `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
+- `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
+- `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 
 ### Fixed
 
+- A gate's command finds a bare program name on `/usr/local/bin:/usr/bin:/bin`, or on the `PATH` its `env` declares, never on the user's `PATH`; a name found nowhere refuses the gate.
 - The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.
 - A `tests.run` that writes an untracked `Cargo.lock` is refused with the remedy named: commit it, ignore it (`.gitignore`), or give `--test-cmd` a command that does not write it.
 - The endpoint token staging tests pass when the temporary directory is writable by others without the sticky bit.
