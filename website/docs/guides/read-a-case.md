@@ -31,7 +31,6 @@ intent.md
 observations.json
 protocol.ir.json
 protocol.yaml
-python-modules.json
 story.yaml
 $ ls -1 evidence
 0001-test-result-1.json

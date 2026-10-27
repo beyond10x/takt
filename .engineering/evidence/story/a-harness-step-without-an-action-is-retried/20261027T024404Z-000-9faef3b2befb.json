@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T02:44:04Z",
+  "actor": "human:timo",
+  "artifact": "story:a-harness-step-without-an-action-is-retried",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check steps at 386075a8 on carry/wave-38-on-integration: 183 results, 1875 passed, 0 failed, 5 ignored"
+  }
+}

@@ -16,7 +16,7 @@ scope:
   path: crates/takt/src/replay.rs
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:44:47Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-27T01:44:48Z", actor: "human:timo", revision: 4}
@@ -25,9 +25,12 @@ transitions:
 
 ## Outcome
 
-A case keeps `python-modules.json` only when a Python interpreter answered at case open. When none answered, the
-case keeps no such file and the step guard uses the built-in lists exactly as it does when the file holds them: at
-open, at resume and in a replay.
+A case keeps `python-modules.json` only when its answer at case open is not the built-in lists: a Python interpreter
+answered, or the interpreter the test command names could not be established and the guard fails closed, which the
+file records with its reason. When no Python answered, the case keeps no such file and the step guard uses the
+built-in lists exactly as it does when the file holds them: at open, at resume and in a replay. A resume never writes
+the file; a case without it is asked again for that run, so the file exists only as the case opened with it and a
+replay of any step rebuilds the case as that step found it.
 
 ## Context
 

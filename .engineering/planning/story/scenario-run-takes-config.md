@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scenario-run-takes-config
 kind: story
-status: active
+status: implemented
 title: takt scenario run takes --config as takt run does
 summary: takt scenario run refuses --config, so a trial set cannot run from the loom.agent/1 file takt run takes (trial of 0.13.1)
 tags:
@@ -17,10 +17,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T20:53:25Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:56Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-27T02:43:57Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1},"asserted":{"test_result":1,"review_outcome":1}}}
 ---
 ## Outcome
 
