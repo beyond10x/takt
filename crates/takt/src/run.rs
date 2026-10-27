@@ -8792,6 +8792,10 @@ pub struct Run<'a> {
     /// on the `opened` line; none unless the caller sets it, since this library does not know
     /// the build it is linked into.
     pub binary: Option<String>,
+    /// The digest of the `llm.routes/1` document the run's configuration file gave, recorded on
+    /// the `opened` line as `llm_digest`; none unless the caller sets it, as it does
+    /// [`Run::binary`].
+    pub llm_digest: Option<String>,
     /// Where discarding a harness step moves the files inside an ignored directory it rewrote,
     /// under the case's id and the step's number: [`default_set_aside`], checked when the run
     /// opens, unless [`Run::set_aside_in`] gives another; none when nothing names one, and then
@@ -8967,6 +8971,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            llm_digest: None,
             set_aside,
             transcripts: None,
             store: None,
@@ -9249,6 +9254,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            llm_digest: None,
             set_aside,
             transcripts: None,
             store: None,
@@ -10806,7 +10812,7 @@ impl<'a> Run<'a> {
         // The adapter every child of this run starts through, named on the first line and
         // in the record so a reader knows what confined the evidence.
         let confinement = crate::confinement::current().name().to_owned();
-        events.emit(
+        events.emit_opened(
             self.steps,
             &Event::Opened {
                 case: self.case.id.clone(),
@@ -10828,6 +10834,7 @@ impl<'a> Run<'a> {
                 // The scan adapter every proposal and the change so far pass.
                 scan: Some(self.scan.name().to_owned()),
             },
+            self.llm_digest.as_deref(),
         )?;
         writeln!(
             out,

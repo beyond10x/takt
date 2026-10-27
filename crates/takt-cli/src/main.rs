@@ -668,7 +668,9 @@ struct RunArgs {
     /// read only when the harness is `harness`. Any other key, or a `scan` that is neither
     /// `gates` nor `none`, is refused before the case opens, naming the file and the line, never
     /// a value written there. A container takes its run from a mounted one. `takt scenario run
-    /// --config` reads the same file, and refuses one that declares `scan: none`.
+    /// --config` reads the same file, and refuses one that declares `scan: none`. `llm`, the
+    /// model routes, an `llm.routes/1` document or `{path: <file>}` naming one beside the file,
+    /// which no flag gives; llm validates it, and a refused section opens no case.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
     /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
@@ -717,6 +719,7 @@ impl LoopArgs {
     fn configured(&mut self, file: takt::run_config::RunConfig, matches: &clap::ArgMatches) {
         let unset = |id: &str| unset(matches, id);
         let looping = self;
+        looping.llm_digest = file.llm_digest;
         if unset("iterations") && file.iterations.is_some() {
             looping.iterations = file.iterations;
         }
@@ -928,6 +931,10 @@ struct LoopArgs {
     /// whose tests fail on purpose.
     #[arg(long)]
     continue_past_red_base: bool,
+    /// The digest of the `llm.routes/1` document `--config` gave, recorded on the run's `opened`
+    /// line; set from the file, never from a flag.
+    #[arg(skip)]
+    llm_digest: Option<String>,
     /// The records profile the case keeps its decisions under: `default` keeps the latest
     /// `decisions/NNNN.json` alone and goes on numbering from it, `trial` keeps every one. A
     /// scenario run and an improvement case (`self.improvement/1`, `loop.improvement/1`) keep
@@ -2340,6 +2347,7 @@ fn finish(
     if let Some(dir) = &looping.state_dir {
         run.set_aside_in(state_set_aside(dir))?;
     }
+    run.llm_digest = looping.llm_digest.clone();
     // The transcripts directory is made now, before any step; one that cannot be (a read-only
     // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
     // as a step whose transcript could not be kept does. --state-dir, or the configuration's

@@ -10,9 +10,13 @@
 //! command line wins over the file, and the file over the flag's default; the run applies
 //! them (`crates/takt-cli/src/main.rs`).
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow};
+
+/// llm's parsed `llm.routes/1` document, the type a run file's `llm` member is validated as; its
+/// [`Routes::digest`] is the `llm_digest` a run records.
+pub use llm_models::routes::Routes;
 
 /// The `format` of the agent document Loom writes to `/config/agent.yaml`.
 pub const LOOM_AGENT_FORMAT: &str = "loom.agent/1";
@@ -80,8 +84,8 @@ fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
 
 /// The fields a run configuration file may set, each one a `takt run` flag's: `story`,
 /// `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`,
-/// `test_cmd`, `state_dir`, `continue_past_red_base` and `records`, and `scan`, which no flag
-/// has. None is required.
+/// `test_cmd`, `state_dir`, `continue_past_red_base` and `records`; and `scan` and `llm`, which
+/// no flag gives. None is required.
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfig {
@@ -113,9 +117,26 @@ pub struct RunConfig {
     /// The run's scan adapter, `gates` or `none` ([`crate::scan::Scan`]): the one field no
     /// flag sets, so a run is unscanned only where its file says so. Not set, it is `gates`.
     pub scan: Option<crate::scan::ScanName>,
+    /// The model routes: an `llm.routes/1` document written as a mapping, or `{path: <file>}`
+    /// read beside the file. Kept as written; [`RunConfig::read`] has llm validate it.
+    #[serde(default, deserialize_with = "present")]
+    pub llm: Option<serde_yaml_ng::Value>,
+    /// The digest of the document `llm` holds, as [`Routes::digest`] gives it. Set by
+    /// [`RunConfig::read`], never read from the file.
+    #[serde(skip)]
+    pub llm_digest: Option<String>,
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional; `records` is `default` or `trial`";
+/// A present `llm` member, null included: serde reads a null as absent, so a bare `llm:` would
+/// otherwise open a case with no section. It is kept as a value and refused by `llm_digest`.
+fn present<'de, D>(deserializer: D) -> std::result::Result<Option<serde_yaml_ng::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <serde_yaml_ng::Value as serde::Deserialize>::deserialize(deserializer).map(Some)
+}
+
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`";
 
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
@@ -129,6 +150,63 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
             path.display()
         ),
     }
+}
+
+/// The digest of the `llm.routes/1` document `llm` holds, validated by llm. A mapping whose only
+/// key is `path` names a file beside the run file, parsed by `Routes::parse_toml` when it ends in
+/// `.toml` and by `Routes::parse` when it ends in `.yaml` or `.yml`; any other mapping is the
+/// whole document, re-serialised to YAML text and parsed by `Routes::parse`. llm's refusal is
+/// relayed as it stands, and nothing here repeats a value written in the file.
+fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
+    let shape = || {
+        anyhow!(
+            "the run configuration file {} is refused: its `llm` member is neither an \
+             `llm.routes/1` document nor `{{path: <file>}}`",
+            path.display()
+        )
+    };
+    let routes = match llm
+        .as_mapping()
+        .filter(|mapping| mapping.len() == 1)
+        .and_then(|mapping| mapping.get("path"))
+    {
+        Some(file) => {
+            let file = file.as_str().ok_or_else(shape)?;
+            let name = Path::new(file);
+            if name.is_absolute() || name.components().any(|part| part == Component::ParentDir) {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: its `llm` member names a file that is absolute or has a `..` part, and a file is read beside the run file",
+                    path.display()
+                ));
+            }
+            let file = path.parent().unwrap_or(Path::new(".")).join(name);
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            let parsed = match file.extension().and_then(|extension| extension.to_str()) {
+                Some("toml") => Routes::parse_toml(&text),
+                Some("yaml" | "yml") => Routes::parse(&text),
+                _ => {
+                    return Err(anyhow!(
+                        "the llm document {} is refused: its name ends in neither .toml, .yaml \
+                         nor .yml",
+                        file.display()
+                    ));
+                }
+            };
+            parsed.with_context(|| format!("the llm document {}", file.display()))?
+        }
+        None if llm.as_mapping().is_some_and(|mapping| !mapping.is_empty()) => {
+            let text = serde_yaml_ng::to_string(llm).map_err(|_| shape())?;
+            Routes::parse(&text).with_context(|| {
+                format!(
+                    "the run configuration file {}: its `llm` document",
+                    path.display()
+                )
+            })?
+        }
+        None => return Err(shape()),
+    };
+    Ok(routes.digest().to_owned())
 }
 
 /// The run configuration in `text`, TOML.
@@ -238,6 +316,9 @@ impl RunConfig {
                 "the run configuration file {} is refused: `records` is `default` or `trial`, no other value",
                 path.display()
             ));
+        }
+        if let Some(llm) = &config.llm {
+            config.llm_digest = Some(llm_digest(path, llm)?);
         }
         let beside = |file: PathBuf| match path.parent() {
             Some(dir) if file.is_relative() => dir.join(file),
