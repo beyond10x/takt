@@ -12,18 +12,18 @@ relations:
 - decomposes: epic:downstream-story-delivery
 scope:
 - confidence: inferred
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
   path: crates/takt/src/forge.rs
 - confidence: inferred
   path: crates/takt/src/forge/command.rs
 - confidence: inferred
-  path: crates/takt/src/main.rs
-- confidence: inferred
   path: crates/takt/src/run_config.rs
 - confidence: inferred
-  path: crates/takt/tests
+  path: crates/takt/tests/command_forge.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 2
+revision: 4
 ---
 # Story: a-command-forge-runs-the-configured-commands
 
@@ -84,9 +84,9 @@ script.
 - `crates/takt/src/forge/command.rs` (new)
 - `crates/takt/src/forge.rs` (adapter registration)
 - `crates/takt/src/run_config.rs` (`forge_commands` section)
-- `crates/takt/src/main.rs` (`--forge command`)
+- `crates/takt-cli/src/main.rs` (`--forge command`)
 - `ess/domains/takt.yaml` (the command forge and its errors, before code)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/command_forge.rs`
 
 ## Out of scope
 

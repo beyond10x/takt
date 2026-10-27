@@ -12,16 +12,16 @@ relations:
 - decomposes: epic:downstream-story-delivery
 scope:
 - confidence: inferred
-  path: crates/takt/src/main.rs
+  path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/src/run_config.rs
 - confidence: inferred
-  path: crates/takt/tests
+  path: crates/takt/tests/setup.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 2
+revision: 4
 ---
 # Story: declared-setup-runs-before-the-first-check
 
@@ -50,11 +50,13 @@ Each is a named conformance scenario run by `task check`.
 2. `setup::setup_runs_before_the_red_base_check`: the event order is setup, then the red-base check.
 3. `setup::a_resume_on_the_same_base_skips_setup`, and one on a moved base runs it again.
 4. `setup::an_unknown_setup_key_is_refused_at_its_line`.
+5. `setup::an_argument_is_never_a_shell_string`: a setup argv `["printf", "%s", "a; touch pwned"]` writes `a; touch
+   pwned` to its output, and no file `pwned` exists afterwards.
 
 ## Scope
 
 - `crates/takt/src/run_config.rs` (`setup` key)
 - `crates/takt/src/run.rs` (open and resume; the new stop)
-- `crates/takt/src/main.rs` (exit code)
+- `crates/takt-cli/src/main.rs` (exit code)
 - `ess/domains/takt.yaml` (the `SetupFailed` stop, before code)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/setup.rs`

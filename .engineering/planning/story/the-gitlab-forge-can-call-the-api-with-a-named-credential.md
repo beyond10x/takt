@@ -19,10 +19,10 @@ scope:
 - confidence: inferred
   path: crates/takt/src/run_config.rs
 - confidence: inferred
-  path: crates/takt/tests
+  path: crates/takt/tests/gitlab_api.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 2
+revision: 4
 ---
 # Story: the-gitlab-forge-can-call-the-api-with-a-named-credential
 
@@ -70,7 +70,7 @@ Each is a named conformance scenario run by `task check`, against a fake GitLab 
 - `crates/takt/src/forge.rs` (`credential` source, redaction)
 - `crates/takt/src/run_config.rs` (`transport`, `credential`)
 - `ess/domains/takt.yaml` (the credential source, before code)
-- `crates/takt/tests/` (fake server, conformance scenarios)
+- `crates/takt/tests/gitlab_api.rs` (with its fake server)
 
 ## Out of scope
 

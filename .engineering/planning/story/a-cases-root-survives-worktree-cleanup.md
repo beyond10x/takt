@@ -15,10 +15,10 @@ scope:
 - confidence: inferred
   path: crates/takt/src/case.rs
 - confidence: inferred
-  path: crates/takt/tests
+  path: crates/takt/tests/cases_kept.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 2
+revision: 4
 ---
 # Story: a-cases-root-survives-worktree-cleanup
 
@@ -52,7 +52,7 @@ Each is a named conformance scenario run by `task check`.
 ## Scope
 
 - `crates/takt/src/case.rs` (state-root creation)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/cases_kept.rs`
 - `ess/domains/takt.yaml` (the retained-state rule)
 
 ## Delivery
