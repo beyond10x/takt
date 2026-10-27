@@ -7,6 +7,7 @@ title: On --forge none an approved case merges into its base
 relations:
 - decomposes: epic:composable-agentic-work
 - informed_by: story:an-intent-run-can-finish
+- informed_by: story:harness-none-takes-a-granted-action
 revision: 1
 ---
 ## Outcome
