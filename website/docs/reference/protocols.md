@@ -6,9 +6,9 @@ description: The protocols takt runs and the ones it holds for its own improveme
 
 # Protocols
 
-The [protocol viewer](pathname:///takt/protocols/) shows takt's three protocols, `story.delivery/1`
-among them: their actions, evidence kinds, claims, obligations and outcomes as tables, and as one
-graph of how they connect. It is built on every site build from the documents of the
+The [protocol viewer](pathname:///takt/protocols/) shows all eight protocols `takt protocols`
+lists, `software.change/1` first: their actions, evidence kinds, claims, obligations and outcomes
+as tables, and as one graph of how they connect. It is built on every site build from the documents of the
 `b10x-canon-engineering` release takt pins.
 
 ## Built in

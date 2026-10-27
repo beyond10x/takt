@@ -1,7 +1,7 @@
 ---
 title: Capabilities and approvals
 sidebar_position: 4
-description: Which actions need a person's grant, how takt refuses a step that does more than the frontier admits, how a grant is recorded and bound to a revision, and where credentials never go.
+description: Which actions need a person's grant, how takt refuses a step that does more than admitted, how a grant is bound to a revision, and where credentials never go.
 lede: An action that requires a capability waits for a grant recorded in the case's authority.yaml, bound to the case revision and the commit it was given at; a step that does anything the frontier does not admit is refused and its change discarded; and no credential enters a harness, a prompt or the case record.
 source: crates/takt/src/case.rs (Authority, AuthorityDecision, CaseAuthority, prepare_grant, holds_grant), run.rs (proposal_refusal, JUDGE_SURFACE, Shape::only_behind), validator.rs (PrMerged), harness.rs (SessionHarness); crates/takt/tests/authority.rs, grant_subject.rs, merge_under_authority.rs, judge_guard.rs; takt approve --help and takt run --help at 0.14.0; engineering-protocols 0.10.0 protocols/software-change/1.yaml and protocols/story-delivery/1.yaml; AGENTS.md § Rules; scratch runs of takt 0.14.0
 ---

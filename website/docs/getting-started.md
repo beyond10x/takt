@@ -41,26 +41,59 @@ macOS, `cargo install` from the tag, and the container image are in [Install](./
 
 | for | you need |
 |---|---|
-| any run | `git`; on Linux, unprivileged user namespaces (the test command runs in a user and mount namespace of its own) |
+| any run | `git`; on Linux, unprivileged user namespaces (the test command runs in a user and mount namespace of its own); on macOS, `/usr/bin/sandbox-exec` (the test command runs under a Seatbelt profile) |
 | the tests | the test command's toolchain; the default is `cargo test --quiet` |
 | no model | `--harness none`: only the validators run |
 | Claude Code | `claude` on the `PATH`, logged in (the default harness) |
-| Codex or b10x-harness | `codex` or `b10x-harness` on the `PATH`, and `b10x-gates` with a gates policy in `B10X_GATES_POLICY` before an edit is accepted |
+| Codex or b10x-harness | `codex` or `b10x-harness` on the `PATH`, and [b10x-gates](https://github.com/beyond10x/gates) with a policy file in `B10X_GATES_POLICY`: required, not optional (below) |
 | a story | `aep`, a planning store with a ready story, and a gates document ([Run a story](./guides/run-a-story.md)) |
-| a pull request | a forge: `b10x-gates` and `gh` for github.com, or `glab` logged in for a GitLab host; `--forge none` runs without one |
-| `takt promote` | bubblewrap (`bwrap`) and rustup's default toolchain |
+| a pull request on github.com | `--forge bot`: the b10x-gates bot App, with `b10x-gates` configured for it, and `gh` to read the pull request |
+| a merge request on a GitLab host | `--forge gitlab`: `glab` logged in to that host |
+| no pull request | `--forge none` |
+| `takt promote` | on Linux bubblewrap (`bwrap`), on macOS `/usr/bin/sandbox-exec`; and rustup's default toolchain |
+
+### The gates scan is required for every harness but Claude Code
 
 Codex and b10x-harness sessions may read outside the copy they work in, so takt accepts what they
-propose only after `b10x-gates` has scanned it under a policy. Without `B10X_GATES_POLICY` the edit
-is refused: `not scanned, which is not passed`. Claude Code's file tools stay inside the copy, so
-it needs no policy.
+propose only after `b10x-gates` has scanned it under the policy file `B10X_GATES_POLICY` names.
+This is a hard requirement, not a check that is skipped when absent: with no policy the proposal
+is refused, `not scanned, which is not passed`, and a scan that cannot run, `b10x-gates` missing
+among them, refuses it as well. Claude Code's file tools
+stay inside the copy, so a Claude Code session needs no policy. Every proposal, from any harness,
+is also checked for the shape of a credential.
 
-:::warning[macOS]
+### The bot forge is github.com through the b10x-gates App
 
-bubblewrap is Linux only, so on macOS `takt promote` refuses with exit 1 before it judges;
-`--dry-run` and `--baseline-only` still run. The test command's user and mount namespace is
-Linux only too, and on macOS takt kills only what a child left in its own process group and
-session.
+`--forge bot`, the default for a repository whose `origin` is on github.com, pushes the case's
+branch, opens its pull request and merges it through `b10x-gates bot`, which acts as the b10x-gates
+GitHub App, and reads the pull request's state and checks with `gh`. It serves github.com only and
+is not a general forge adapter. A GitLab host is `--forge gitlab`; anything else runs with
+`--forge none` ([Configuration](./reference/configuration.md#the-forge)).
+
+:::note[macOS]
+
+Since 0.10.0, takt confines on macOS with Seatbelt, `/usr/bin/sandbox-exec`, where Linux uses
+namespaces and bubblewrap:
+
+- The test command runs under a profile that writes only to the tree, its git directories (not
+  their hooks or configuration), a fresh home that holds its `TMPDIR`, and the cargo caches. It
+  reads no registry login, keychain, runtime directory or bus socket, and connects to no bus or
+  launchd socket.
+- A promotion's build, and its binary's `--version`, run under a profile with no network that
+  writes only to the directories the build owns. `takt promote` runs on macOS as on Linux.
+- With no `sandbox-exec`, both are refused by name and never run unconfined.
+
+What differs from Linux:
+
+- A promotion's build sees the clone, its target and the fresh root at their host paths, and may
+  read every file outside the user's home.
+- The test command's denials are by path: a hard link to a denied file elsewhere, and the keychain
+  daemons reached over Mach, are not denied.
+- A process that clears `TAKT_CHILD` from its environment and leaves takt's process group outlives
+  the run; on Linux takt adopts and kills it. A harness session's program runs in takt's process
+  group, not a session of its own.
+- `--confinement substrate` runs on Linux only: loom-sdk's `SubstrateRunner` needs a delegated
+  cgroup v2 scope, which takt gets from `systemd-run --user --scope -p Delegate=yes`.
 
 :::
 

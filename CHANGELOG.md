@@ -12,6 +12,11 @@ takt's releases.
 - Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
 - Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
 
+### Fixed
+
+- The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
+- The site says what runs under Seatbelt on macOS since 0.10.0, that the gates scan is required for every harness but Claude Code, and that `bot` is github.com.
+
 ## [0.14.0] - 2026-10-26
 
 A run whose tests are red stops instead of spending model calls: at a red base before the first

@@ -3,7 +3,7 @@ title: What takt is
 slug: /
 sidebar_label: Overview
 sidebar_position: 1
-description: takt drives one case of an engineering protocol over a repository to a computed outcome, every step checked by a validator, every grant recorded, every run ending on a named stop.
+description: takt drives a case of an engineering protocol over a repository to a computed outcome, each step checked, each grant recorded, each run ending on a named stop.
 ---
 
 # What takt is

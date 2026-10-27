@@ -255,8 +255,10 @@ Without `--forge`, takt follows `origin`:
 | any other host, with `glab auth status --hostname <host>` exiting 0 | `gitlab` |
 | anything else | `none`, with the reason in one line |
 
-`--forge bot` pushes the case's branch, opens its pull request and merges it through
-`b10x-gates`, and reads the pull request's state with `gh`. `--forge gitlab` pushes over HTTPS
+`--forge bot` is github.com through the b10x-gates GitHub App, not a general forge adapter:
+`b10x-gates bot` pushes the case's branch under the App, opens its pull request and merges it,
+and `gh` reads the pull request's state and checks. An `origin` on another host is refused
+naming it. `--forge gitlab` pushes over HTTPS
 with `glab auth git-credential` as its one credential helper and opens, reads and merges the
 merge request through `glab api`; without `glab` or its login it is refused before the case
 opens. `--forge none` opens no pull request: a delivery whose change reads ahead stops
@@ -266,6 +268,16 @@ commits, replayed on the base branch's tip under the configured identity and nam
 
 A scenario run creates its trial base only through the bot route: it refuses `--forge gitlab`,
 and on another host it runs with `--forge none`.
+
+## The gates scan
+
+For every harness but Claude Code, the scan under `B10X_GATES_POLICY` is a hard requirement.
+Codex and b10x-harness sessions may read outside the copy they work in, so a proposal of theirs is
+accepted only after `b10x-gates` has scanned it under the policy file that variable names. With no
+policy set the proposal is refused, `not scanned, which is not passed`, and a scan that cannot
+run, `b10x-gates` missing among them, refuses it as well.
+Claude Code's file tools stay inside its copy, so it needs no policy. Every proposal, from any
+harness, is checked for the shape of a credential, and scanned too when a policy is set.
 
 ## Every takt run flag
 

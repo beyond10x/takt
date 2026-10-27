@@ -93,7 +93,7 @@ has no group or other bits and the directory is not group- or other-writable; a 
 the host's owner. This page's runs used `--harness none` and no policy. The two pieces that are
 not the image's default are:
 
-1. **seccomp and AppArmor unconfined.** The test command runs in a user and mount namespace of
+1. **seccomp and AppArmor unconfined.** Under the default `--confinement none` the test command runs in a user and mount namespace of
    its own, and both default profiles refuse to create one: with only seccomp or only AppArmor
    unconfined, the first test run still failed.
 2. **`mkdir -p "$HOME/.cargo/bin"` before takt.** In a fresh `HOME` the first test run creates

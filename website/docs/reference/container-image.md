@@ -64,7 +64,7 @@ at case open ([case files](./case-files.md)).
 
 ## User, home and entrypoint
 
-| | |
+| setting | value |
 |---|---|
 | user | `10001:10001`, `takt` |
 | `HOME` | `/var/lib/takt` |
@@ -120,7 +120,7 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
   `harness: harness` (or `none`). The default, `claude`, is not there.
 - **No forge client.** No `gh` and no `glab`. Set `forge: none`. The default follows `origin`, and
   `bot` and `gitlab` need those programs. The delivery stays a branch in `/workspace`.
-- **Unconfined seccomp and AppArmor.** The test command runs in a user and mount namespace of
+- **Unconfined seccomp and AppArmor.** Under the default `--confinement none` the test command runs in a user and mount namespace of
   its own, which a container runtime's default seccomp and AppArmor profiles refuse. Under the
   default profile the first test run fails with a refusal, exit 5. The one that ran:
 
