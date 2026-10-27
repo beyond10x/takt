@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-command-forge-merges-through-its-merge-entry
 kind: story
-status: draft
+status: active
 title: The command forge reaches its configured merge entry
 summary: repository.merge reads the target tip for the command forge
 tags:
@@ -10,7 +10,10 @@ tags:
 relations:
 - decomposes: epic:downstream-story-delivery
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T17:52:15Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-27T17:52:20Z", actor: "human:timo", revision: 4}
 ---
 # Story: the-command-forge-merges-through-its-merge-entry
 
