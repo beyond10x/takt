@@ -84,12 +84,12 @@ takt starts other programs and finds them on the `PATH`. Which ones depends on t
 |---|---|
 | every run | `git`, and the test command's toolchain (`cargo` by default) |
 | `--harness claude`, the default | `claude` (Claude Code), logged in |
-| `--harness codex` | `codex`, and `b10x-gates` with `B10X_GATES_POLICY` set |
+| `--harness codex` | `codex`, and `b10x-gates` with `B10X_GATES_POLICY` set (required: [the gates scan](../reference/configuration.md#the-gates-scan)) |
 | `--harness harness` | `b10x-harness` 0.20.0, an LLM endpoint, and `b10x-gates` with `B10X_GATES_POLICY` set |
 | a story | `aep` and a planning store; a gates document for the gate |
-| `--forge bot` | `b10x-gates` and `gh` |
+| `--forge bot` (github.com only) | `b10x-gates` acting as the b10x-gates GitHub App, and `gh` |
 | `--forge gitlab` | `glab`, with `glab auth status --hostname <host>` exiting 0 |
-| `takt promote` | `bwrap`, and rustup's default toolchain |
+| `takt promote` | `bwrap` on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
 
 The neighbours, each with its own docs:
 [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
@@ -100,7 +100,8 @@ is the agent that talks to an LLM endpoint, and
 is the layer every harness runs through. metaharness is a library inside takt, not a program to
 install.
 
-On Linux, the test command always runs in a user and mount namespace of its own, and there is no
-way to turn that off. A host or container that refuses unprivileged user namespaces ends the
-first test run on an error, exit 5. In a container, that means running it with seccomp and
+On Linux, under the default `--confinement none`, the test command runs in a user and mount
+namespace of its own. `--confinement substrate` runs it through loom-sdk's `SubstrateRunner`
+instead, which needs a delegated cgroup v2 scope. Under the default, a host or container that
+refuses unprivileged user namespaces ends the first test run on an error, exit 5. In a container, that means running it with seccomp and
 AppArmor unconfined ([Run in a container](./run-in-a-container.md)).

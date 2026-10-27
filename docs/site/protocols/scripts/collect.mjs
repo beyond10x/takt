@@ -1,8 +1,8 @@
-// Reads takt's three protocol documents, the engineering protocols' built-ins, and writes them,
-// parsed but otherwise unchanged, to src/protocols.json. They are read from the source of the
-// `b10x-canon-engineering` that takt's library depends on (`cargo metadata --locked`), where the
-// registry itself embeds them from: `protocols/<name>/<major>.yaml` two directories above the
-// crate's manifest. The documents are the source of truth: the viewer shows what they say and
+// Reads every protocol document `takt protocols` lists, the engineering protocols' built-ins,
+// and writes them, parsed but otherwise unchanged, to src/protocols.json. They are read from
+// the source of the `b10x-canon-engineering` that takt's library depends on (`cargo metadata
+// --locked`), where the registry itself embeds them from: `protocols/<name>/<major>.yaml` two
+// directories above the crate's manifest. The documents are the source of truth: the viewer shows what they say and
 // nothing else, and a rebuild after the pin moves picks up every change.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -12,7 +12,16 @@ import { parse } from "yaml";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..", "..", "..", "..");
-const PROTOCOLS = ["story-delivery/1", "self-improvement/1", "loop-improvement/1"];
+const PROTOCOLS = [
+  "software-change/1",
+  "story-delivery/1",
+  "eval-gated-change/1",
+  "incident-response/1",
+  "ml-experiment/1",
+  "support-triage/1",
+  "self-improvement/1",
+  "loop-improvement/1",
+];
 
 const metadata = JSON.parse(
   execFileSync("cargo", ["metadata", "--locked", "--format-version", "1"], {

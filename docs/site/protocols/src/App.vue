@@ -179,7 +179,7 @@ const groups = computed(() => {
   <main>
     <h1>Protocols</h1>
     <p class="lede">
-      Every protocol takt runs under, read from the engineering protocols' <code>protocol/1</code> documents takt pins, at build time.
+      Every protocol <code>takt protocols</code> lists, read from the engineering protocols' <code>protocol/1</code> documents takt pins, at build time.
       The documents are the source of truth; this page shows what they say.
     </p>
     <nav class="tabs" aria-label="Protocols">

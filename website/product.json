@@ -72,7 +72,7 @@
         },
         {
           "title": "Tests confined",
-          "description": "The test command runs in a user and mount namespace of its own, or with --confinement substrate on read-only toolchain roots with no network. The harness and the forge still run as plain child processes.",
+          "description": "The test command runs in a user and mount namespace of its own on Linux and under Seatbelt on macOS, or, with the substrate confinement, on read-only toolchain roots with no network. The harness and the forge still run as plain child processes.",
           "status": "shipped",
           "icon": "evidence",
           "href": "/docs/reference/configuration"

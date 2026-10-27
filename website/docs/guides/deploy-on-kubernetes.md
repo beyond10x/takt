@@ -1,7 +1,7 @@
 ---
 title: Deploy on Kubernetes
 sidebar_position: 7
-description: Run takt as a Loom 0.44.0 LoomAgent of the Command variant on a kind cluster, with its configuration, key, gates policy and workspace, watch it run as a Job, and know what still stops it.
+description: Run takt as a Loom 0.44.0 Command LoomAgent on a kind cluster with its configuration, key, policy and workspace, watch the Job, and know what still stops it.
 lede: Loom 0.44.0 runs takt once as a Job with its configuration files, key and workspace, but its fixed seccomp profile still refuses the namespace takt's test command needs.
 source: examples/loom-agent/ (checked by crates/takt/tests/examples_config.rs; takt-agent.yaml rendered by b10x-loom-operator 0.44.0 and the chart's values by helm template); Loom 0.44.0 CHANGELOG, README, charts/loom-agents, deploy/crd, crates/loom-operator/src/render.rs and admission.rs; the docker runs of Run in a container. Not run on a cluster.
 ---
@@ -224,8 +224,10 @@ emptyDir of mode 0700, as is `/tmp`, and the root file system is read-only. Tran
 ## What still stops it
 
 Loom renders every agent pod with `seccompProfile: RuntimeDefault`. The CRD has no field to change
-that, and a Job's pod template cannot be patched once the Job exists. takt's test command runs in
-a user and mount namespace of its own, with no fallback, and a container runtime's default
+that, and a Job's pod template cannot be patched once the Job exists. Under the default
+`--confinement none`, takt's test command runs in a user and mount namespace of its own
+(`--confinement substrate`, which needs a delegated cgroup, was not tried there), and a container
+runtime's default
 profile refuses that. With `docker run` both the default seccomp and the default AppArmor profile
 refused it ([Run in a container](./run-in-a-container.md#4-run-it)). So under Loom 0.44.0 the
 first `tests.run` ends the run on an error, exit 5, before any model call. That is inferred from
