@@ -168,6 +168,19 @@ pub enum Stop {
         /// The results in a row.
         count: u64,
     },
+    /// The harness binary the run would start does not qualify under the run's hermetic mode:
+    /// asked of metaharness before the first session, on open and on every resume, with no model
+    /// call ([`Harness::preflight`]). The case stays open, and the next run asks again.
+    HarnessUnqualified {
+        /// The harness as `--harness` names it.
+        kind: String,
+        /// The version its `--version` printed, when it printed one that reads as one.
+        version: Option<String>,
+        /// Each row that stops the run, as `<row> <verdict>: <what was read>`.
+        rows: Vec<String>,
+        /// The versions that qualify: the ones the adapter is pinned to.
+        qualified: Vec<String>,
+    },
 }
 
 /// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
@@ -177,7 +190,7 @@ pub const REPEATED_FAILURES: u64 = 2;
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 13] = [
+pub const STOP_KINDS: [&str; 14] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -191,6 +204,7 @@ pub const STOP_KINDS: [&str; 13] = [
     "ActiveTime",
     "RedBase",
     "RepeatedTestFailure",
+    "HarnessUnqualified",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -273,6 +287,18 @@ impl std::fmt::Display for Stop {
                 f,
                 "RepeatedTestFailure ({count} tests.run results in a row, each at a new revision, failed the same tests: {})",
                 tests.join(", ")
+            ),
+            Stop::HarnessUnqualified {
+                kind,
+                version,
+                rows,
+                qualified,
+            } => write!(
+                f,
+                "HarnessUnqualified ({kind} {}: {}; qualified versions: {}; select another binary with --harness-program)",
+                version.as_deref().unwrap_or("with no readable version"),
+                rows.join("; "),
+                qualified.join(", ")
             ),
         }
     }
@@ -10999,6 +11025,9 @@ impl<'a> Run<'a> {
         // The adapter every child of this run starts through, named on the first line and
         // in the record so a reader knows what confined the evidence.
         let confinement = crate::confinement::current().name().to_owned();
+        // Before the first session, on open and on every resume: the harness binary asked of
+        // metaharness, with no model call (`Harness::preflight`).
+        let preflight = self.harness.preflight()?;
         let commit_record = self.commit_plan_now().record();
         events.emit_opened_with(
             self.steps,
@@ -11021,6 +11050,7 @@ impl<'a> Run<'a> {
                 records: Some(self.kept_records().name().to_owned()),
                 // The scan adapter every proposal and the change so far pass.
                 scan: Some(self.scan.name().to_owned()),
+                preflight: preflight.clone(),
             },
             self.llm_digest.as_deref(),
             &commit_record,
@@ -11037,6 +11067,29 @@ impl<'a> Run<'a> {
                 inputs.join(" ")
             }
         )?;
+        if let Some(preflight) = &preflight {
+            if preflight.failing.is_empty() {
+                if !preflight.advisory.is_empty() {
+                    writeln!(
+                        out,
+                        "harness: {} {}; advisory: {}",
+                        preflight.kind,
+                        preflight
+                            .version
+                            .as_deref()
+                            .unwrap_or("with no readable version"),
+                        preflight.advisory.join("; ")
+                    )?;
+                }
+            } else {
+                return Ok(Stop::HarnessUnqualified {
+                    kind: preflight.kind.clone(),
+                    version: preflight.version.clone(),
+                    rows: preflight.failing.clone(),
+                    qualified: preflight.qualified.clone(),
+                });
+            }
+        }
         // One sequence per case, continued across its runs: no decision file is overwritten,
         // so the latest by name is the latest written, and a record id, numbered by the same
         // sequence, never repeats.

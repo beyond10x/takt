@@ -162,7 +162,7 @@ fn planting_claude(at: &Path, paths: &[&str]) {
         items.join(", ")
     );
     let script = format!(
-        "#!/bin/sh\n{writes}printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{result}\",\"usage\":{{\"input_tokens\":3,\"output_tokens\":4}}}}'\n"
+        "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\n{writes}printf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{result}\",\"usage\":{{\"input_tokens\":3,\"output_tokens\":4}}}}'\n"
     );
     executable(at.parent().expect("a program directory"), "claude", &script);
 }
@@ -369,6 +369,7 @@ fn write_opened_case(dir: &Path, case: &str) {
                 endpoint: None,
                 records: None,
                 scan: None,
+                preflight: None,
             },
         ),
         (

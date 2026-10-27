@@ -176,6 +176,7 @@ fn world(name: &str, identity: bool) -> World {
     executable(
         &bin.join("claude"),
         r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 case "$2" in
   *"- change.handover:"*)
     if [ -e work.txt ]; then action=change.handover;

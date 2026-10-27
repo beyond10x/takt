@@ -8,6 +8,7 @@ takt's releases.
 
 ### Added
 
+- `takt run` asks metaharness whether the harness binary qualifies before its first session, on open and on every resume: an unqualified binary stops `HarnessUnqualified`, exit 1, the case resumable.
 - `forge: command` with a `forge_commands` section in the `takt run --config` file: the forge actions `open`, `read`, `checks` and `merge` are the argument lists the file names, run without a shell.
 - Placeholders of `forge_commands`: `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
 - `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree): the `gitlab` forge calls the GitLab REST API over HTTPS. `glab` stays the default transport.

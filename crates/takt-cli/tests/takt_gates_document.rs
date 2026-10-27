@@ -443,6 +443,7 @@ exit 2
         "claude",
         &format!(
             r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 work() {{
   echo "the work" >> work.txt
   {edit}

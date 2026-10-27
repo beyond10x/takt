@@ -168,6 +168,33 @@ pub trait Harness {
     fn endpoint_reference(&self) -> Option<EndpointConfig> {
         None
     }
+    /// What the harness's binary would be held to, asked before any session and with no model
+    /// call: the run asks it on open and on every resume, and stops [`crate::run::Stop::HarnessUnqualified`]
+    /// when [`Preflight::failing`] names a row. None for a harness that starts no program of its
+    /// own, by default.
+    ///
+    /// # Errors
+    ///
+    /// The run's confinement adapter refusing the program.
+    fn preflight(&self) -> Result<Option<Preflight>> {
+        Ok(None)
+    }
+}
+
+/// What metaharness read of a harness binary before its first session: its kind as `--harness`
+/// names it, the version its `--version` printed, the rows that were not `ok` and stop the run
+/// ([`Self::failing`]) and those that were not `ok` and do not ([`Self::advisory`]), each as
+/// `<row> <verdict>: <what was read>`, and the versions that qualify. The run records the kind,
+/// the version and the advisory rows on its `opened` line.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Preflight {
+    pub kind: String,
+    pub version: Option<String>,
+    pub advisory: Vec<String>,
+    #[serde(skip)]
+    pub failing: Vec<String>,
+    #[serde(skip)]
+    pub qualified: Vec<String>,
 }
 
 pub use loom_sdk::session::{Endpoint, Proposal, ProposedFile};
@@ -265,6 +292,9 @@ pub struct SessionHarness {
     pub session: std::cell::RefCell<Option<AgentSession>>,
     /// The `commit` member of the last step's reply until the run takes it
     /// ([`Harness::take_commit`]).
+    /// `strict-version`: the version of the binary off the adapter's pin stops the run before the
+    /// first session ([`Harness::preflight`]), which metaharness otherwise reads as advisory.
+    pub strict_version: bool,
     pub commit: std::cell::RefCell<Option<serde_json::Value>>,
 }
 
@@ -324,6 +354,7 @@ impl SessionHarness {
             staged: None,
             credential: None,
             home: None,
+            strict_version: false,
             runner: None,
             reported: std::cell::Cell::new(None),
             call: std::cell::RefCell::new(None),
@@ -573,6 +604,76 @@ impl Harness for SessionHarness {
             reference.model.clone_from(model);
         }
         Some(reference.recorded(self.home.as_deref()))
+    }
+
+    /// Asks metaharness whether the binary the next session would start qualifies under the
+    /// session's hermetic mode (`loom_sdk::session::metaharness::qualify`: the binary's
+    /// `--version`, once, and no model call): Claude Code `Strict`, Codex and b10x-harness `On`,
+    /// the modes Loom's executor runs them under. The program is the one [`Self::step`] hands the
+    /// executor, asked of the run's confinement adapter first, as the session's own start does.
+    /// The rows that stop the run are the gating rows that are not `ok` under that mode (H11 for
+    /// Claude Code, which reads `unk` for a version with no memory canary), and H9 as well when
+    /// [`Self::strict_version`] is set and the version is not one the adapter pins; every other
+    /// row that is not `ok` is advisory. A program metaharness cannot find, and a harness whose
+    /// sessions a supplied runner starts, are not asked about: the step reports the first, and
+    /// the second starts no program.
+    fn preflight(&self) -> Result<Option<Preflight>> {
+        use loom_sdk::session::metaharness::protocol::{HermeticMode, HermeticRow, Verdict};
+        if self.runner.is_some() {
+            return Ok(None);
+        }
+        let (name, program, hermetic) = match self.kind {
+            Kind::Claude => {
+                let Ok(program) = Self::resolved(&self.program) else {
+                    return Ok(None);
+                };
+                ("claude", program, HermeticMode::Strict)
+            }
+            Kind::Codex if self.program.contains('/') => (
+                "codex",
+                std::path::PathBuf::from(&self.program),
+                HermeticMode::On,
+            ),
+            Kind::Codex => ("codex", std::path::PathBuf::from("codex"), HermeticMode::On),
+            Kind::B10x => (
+                "harness",
+                std::path::PathBuf::from("b10x-harness"),
+                HermeticMode::On,
+            ),
+        };
+        crate::confinement::current().admit(program.as_os_str())?;
+        let Ok(found) = loom_sdk::session::metaharness::qualify(
+            self.kind,
+            &program.display().to_string(),
+            hermetic,
+        ) else {
+            return Ok(None);
+        };
+        let strict = self.strict_version && found.strict_version_refuses;
+        let mut preflight = Preflight {
+            kind: name.to_owned(),
+            version: found.version.clone(),
+            advisory: Vec::new(),
+            failing: Vec::new(),
+            qualified: found.pinned.clone(),
+        };
+        for row in &found.rows {
+            if row.row.verdict == Verdict::Ok {
+                continue;
+            }
+            let said = format!(
+                "{} {}: {}",
+                row.row.row.id(),
+                format!("{:?}", row.row.verdict).to_lowercase(),
+                row.row.detail
+            );
+            if row.gates || (strict && row.row.row == HermeticRow::H9) {
+                preflight.failing.push(said);
+            } else {
+                preflight.advisory.push(said);
+            }
+        }
+        Ok(Some(preflight))
     }
 
     /// Codex's shell reads where its sandbox grants reading, the whole file system;
@@ -5661,6 +5762,7 @@ mod endpoint_tests {
             endpoint,
             records: None,
             scan: None,
+            preflight: None,
         })
         .expect("the opened line serializes")
     }

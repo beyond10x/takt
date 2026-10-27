@@ -31,7 +31,7 @@ fn executable(path: &Path, text: &str) {
 }
 
 /// The `claude` double: it writes a file and answers `tests.write`, each call.
-const CLAUDE: &str = "#!/bin/sh\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{\\\"action\\\": \\\"tests.write\\\", \\\"summary\\\": \\\"wrote a test\\\"}\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}'\n";
+const CLAUDE: &str = "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{\\\"action\\\": \\\"tests.write\\\", \\\"summary\\\": \\\"wrote a test\\\"}\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}'\n";
 
 /// A scratch world under this crate's build directory, removed on drop: a repository with one
 /// commit, a program directory holding the `claude` double, a `config` directory and an

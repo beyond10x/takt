@@ -73,7 +73,7 @@ fn a_claude_that_sleeps_past_the_hour_budget_is_killed_and_the_run_exits_on_hour
     executable(
         &bin.join("claude"),
         &format!(
-            "#!/bin/sh\necho stray > stray.txt\nsleep 20 &\necho $$ $! > '{}'\nwait\n",
+            "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\necho stray > stray.txt\nsleep 20 &\necho $$ $! > '{}'\nwait\n",
             pids.display()
         ),
     );

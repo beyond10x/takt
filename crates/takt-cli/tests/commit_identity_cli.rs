@@ -134,7 +134,7 @@ fn world(name: &str, identity: Option<&str>) -> World {
     fs::create_dir_all(&bin).expect("a stub directory");
     fs::write(
         bin.join("claude"),
-        "#!/bin/sh\necho \"the work\" >> work.txt\nprintf '{\"result\":\"{\\\\\"action\\\\\": \\\\\"implementation.edit\\\\\", \\\\\"summary\\\\\": \\\\\"the double\\\\\"}\",\"usage\":{\"input_tokens\":1}}'\n",
+        "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\necho \"the work\" >> work.txt\nprintf '{\"result\":\"{\\\\\"action\\\\\": \\\\\"implementation.edit\\\\\", \\\\\"summary\\\\\": \\\\\"the double\\\\\"}\",\"usage\":{\"input_tokens\":1}}'\n",
     )
     .expect("the double is written");
     // The bot route's programs: each call logged and failed, so nothing reaches a network.

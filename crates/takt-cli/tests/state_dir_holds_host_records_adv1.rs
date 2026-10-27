@@ -75,7 +75,7 @@ mod state_dir_holds_host_records_adv1 {
             executable(
                 &world.bin().join("claude"),
                 &format!(
-                    "#!/bin/sh\nmkdir -p '{repo}/cache'\necho rewritten > '{repo}/cache/state.txt'\nprintf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{{\\\"action\\\": \\\"implementation.edit\\\", \\\"summary\\\": \\\"rewrote a cache\\\"}}\",\"usage\":{{\"input_tokens\":3,\"output_tokens\":4}}}}'\n",
+                    "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nmkdir -p '{repo}/cache'\necho rewritten > '{repo}/cache/state.txt'\nprintf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{{\\\"action\\\": \\\"implementation.edit\\\", \\\"summary\\\": \\\"rewrote a cache\\\"}}\",\"usage\":{{\"input_tokens\":3,\"output_tokens\":4}}}}'\n",
                     repo = world.repo().display()
                 ),
             );

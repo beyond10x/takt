@@ -61,6 +61,7 @@ fn executable(path: &Path, text: &str) {
 /// prints a result naming `tests.write`.
 fn fake_claude(at: &Path, calls: &Path) {
     let script = r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 prompt=''
 prev=''
 for a in "$@"; do

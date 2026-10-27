@@ -107,6 +107,7 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 endpoint: None,
                 records: None,
                 scan: None,
+                preflight: None,
             },
         ),
         (
@@ -879,6 +880,7 @@ fn run_with_layers(repo: &Path, case: &str, layers: &[(&str, &str)], model: Opti
                 endpoint: None,
                 records: None,
                 scan: None,
+                preflight: None,
             },
         ),
         (

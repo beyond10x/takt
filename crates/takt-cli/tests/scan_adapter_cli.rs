@@ -51,11 +51,11 @@ impl World {
         git(&world.repo(), &["init", "-q", "-b", "main"]);
         git(&world.repo(), &["add", "-A"]);
         git(&world.repo(), &["commit", "-q", "-m", "start"]);
-        for program in ["codex", "b10x-harness"] {
+        for program in ["codex", "b10x-harness", "claude"] {
             let double = world.bin().join(program);
             fs::write(
                 &double,
-                format!("#!/bin/sh\ntouch '{}'\nexit 1\n", world.started().display()),
+                format!("#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\ntouch '{}'\nexit 1\n", world.started().display()),
             )
             .expect("a double");
             fs::set_permissions(&double, fs::Permissions::from_mode(0o755)).expect("exec bit");

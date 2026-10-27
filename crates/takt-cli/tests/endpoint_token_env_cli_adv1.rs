@@ -48,6 +48,14 @@ impl World {
         fs::set_permissions(world.runtime(), fs::Permissions::from_mode(0o700))
             .expect("a private runtime directory");
         fs::write(world.repo().join("README.md"), "a story\n").expect("a file");
+        fs::create_dir_all(world.0.join("bin")).expect("a program directory");
+        let claude = world.0.join("bin/claude");
+        fs::write(
+            &claude,
+            "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nexit 1\n",
+        )
+        .expect("a claude double");
+        fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).expect("exec bit");
         git(&world.repo(), &["init", "-q", "-b", "main"]);
         git(&world.repo(), &["add", "-A"]);
         git(&world.repo(), &["commit", "-q", "-m", "start"]);
@@ -79,6 +87,14 @@ impl World {
             ])
             .args(args)
             .env("HOME", self.home())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    self.0.join("bin").display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")

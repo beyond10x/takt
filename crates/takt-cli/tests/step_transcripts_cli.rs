@@ -46,6 +46,7 @@ fn executable(path: &Path, text: &str) {
 /// test file, the result event naming `tests.write`. What it printed is copied to `printed`.
 fn fake_claude(at: &Path, printed: &Path) {
     let script = r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 tools=''
 prev=''
 for a in "$@"; do
@@ -554,7 +555,7 @@ fn a_module_written_beside_the_transcripts_is_still_refused() {
     let home = Home::new("python-module");
     let module = home.home.join(".local/planted.py");
     let script = format!(
-        "#!/bin/sh\nprintf 'x = 1\\n' > '{}'\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{}'\n",
+        "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nprintf 'x = 1\\n' > '{}'\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{}'\n",
         module.display(),
         r#"{"type":"result","subtype":"success","result":"{\"action\": \"tests.write\", \"summary\": \"wrote a test\"}","usage":{"input_tokens":3,"output_tokens":4}}"#
     );

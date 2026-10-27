@@ -377,6 +377,7 @@ fn record(repo: &Path, case: &str, layers: Option<BTreeMap<String, String>>, mod
                 endpoint: None,
                 records: None,
                 scan: None,
+                preflight: None,
             },
         ),
         (

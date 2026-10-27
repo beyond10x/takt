@@ -52,6 +52,7 @@ fn opened(case: &str) -> Event {
         endpoint: None,
         records: None,
         scan: None,
+        preflight: None,
     }
 }
 

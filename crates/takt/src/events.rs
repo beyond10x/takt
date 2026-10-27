@@ -90,6 +90,11 @@ pub enum Event {
     /// The scan: the name of the run's scan adapter ([`crate::scan::Scan::name`]), `gates` or
     /// `none`, the one every proposal and the change so far pass; absent on a line written
     /// before it, which a reader reads as "scan not recorded".
+    ///
+    /// The preflight: what metaharness read of the harness binary before the first session, its
+    /// kind, its version and the rows that were not `ok` and did not stop the run, as advisory
+    /// ([`crate::harness::Preflight`]); absent for a harness that starts no program of its own
+    /// and on a line written before it.
     Opened {
         case: String,
         protocol: String,
@@ -110,6 +115,8 @@ pub enum Event {
         records: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         scan: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preflight: Option<crate::harness::Preflight>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
