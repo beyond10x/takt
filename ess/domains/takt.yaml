@@ -565,7 +565,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:640-651
   # read from: crates/takt-cli/src/main.rs:667-671
   # read from: crates/takt/src/run_config.rs:93-95
-  # read from: crates/takt/src/scan.rs:30-42
+  # read from: crates/takt/src/scan.rs:30-52
   # read from: crates/takt-cli/src/main.rs:681
   - name: takt.work.RunConfiguration
     kind: struct
@@ -1498,7 +1498,7 @@ types:
   # read from: crates/takt/src/run.rs
   # read from: crates/takt/src/git.rs
   # read from: crates/takt/src/scan/gates.rs:46-58
-  # read from: crates/takt/src/scan.rs:122-134
+  # read from: crates/takt/src/scan.rs:136-148
   - name: takt.work.ChangeSoFar
     kind: enum
     variants: [shown, none_yet, not_known, not_shown]
@@ -2875,9 +2875,9 @@ types:
   # with `b10x-gates` whatever the run's scan: it is that adapter. `takt.work.RunOpened.scan`
   # carries the adapter a run used.
   # read from: crates/takt/src/scan.rs:20-28
-  # read from: crates/takt/src/scan.rs:88-103
-  # read from: crates/takt/src/scan.rs:157-173
-  # read from: crates/takt/src/scan.rs:180-185
+  # read from: crates/takt/src/scan.rs:102-117
+  # read from: crates/takt/src/scan.rs:171-187
+  # read from: crates/takt/src/scan.rs:194-199
   # read from: crates/takt/src/scan/gates.rs:13-16
   # read from: crates/takt-cli/src/main.rs:1129
   # read from: crates/takt-cli/src/main.rs:1365-1368
@@ -4127,7 +4127,7 @@ entities:
       # read from: crates/takt/src/promotion.rs:539-543
       # read from: crates/takt/src/scan/gates.rs:18-20
       # read from: crates/takt/src/forge/gitlab.rs:557-566
-      # read from: crates/takt/src/scan.rs:193-198
+      # read from: crates/takt/src/scan.rs:207-212
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
@@ -5780,7 +5780,7 @@ entities:
   # read from: GitLab 19.5.1, doc/security/tokens/_index.md:426-449
   # read from: Loom 0.35.0, crates/loom-session-executor/src/lib.rs:1232-1239
   # read from: crates/takt/src/run.rs:11266-11270
-  # read from: crates/takt/src/scan.rs:140-145
+  # read from: crates/takt/src/scan.rs:154-159
   - name: takt.work.Proposal
     naming:
       summary: >-

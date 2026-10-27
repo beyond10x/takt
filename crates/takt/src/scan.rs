@@ -34,12 +34,26 @@ impl<'de> serde::Deserialize<'de> for ScanName {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
     ) -> std::result::Result<Self, D::Error> {
-        let name = String::deserialize(deserializer)?;
-        match name.as_str() {
-            "gates" => Ok(Self::Gates),
-            "none" => Ok(Self::None),
-            other => Err(serde::de::Error::unknown_variant(other, &["gates", "none"])),
+        /// Takes a string and nothing else; refused inside the reader, so a refusal keeps the
+        /// value's line.
+        struct Name;
+        impl serde::de::Visitor<'_> for Name {
+            type Value = ScanName;
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("`gates` or `none`")
+            }
+            fn visit_str<E: serde::de::Error>(
+                self,
+                name: &str,
+            ) -> std::result::Result<ScanName, E> {
+                match name {
+                    "gates" => Ok(ScanName::Gates),
+                    "none" => Ok(ScanName::None),
+                    other => Err(E::unknown_variant(other, &["gates", "none"])),
+                }
+            }
         }
+        deserializer.deserialize_str(Name)
     }
 }
 
