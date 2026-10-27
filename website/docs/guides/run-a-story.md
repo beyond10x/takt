@@ -24,9 +24,12 @@ stories; AEP keeps them, and `aep` is the tool you use to add one.
 | `Cargo.lock`, committed | so a test run writes no file |
 
 Without a gates document, a story cannot get past the gate: the run stops `Unperformable` on
-`gate.green`, exit 7. A gate's commands run with the environment cleared and no `PATH` lookup,
-so name the executable by its absolute path and give it a `PATH` yourself. This one checks the
-formatting:
+`gate.green`, exit 7. A gate's commands run with the environment cleared. A bare program name such
+as `cargo` is found on `/usr/local/bin:/usr/bin:/bin`, never on your `PATH`; a command whose `env`
+sets `PATH` finds its program on that `PATH` and runs with it. A program that lives elsewhere, such
+as rustup's `cargo` in `~/.cargo/bin`, needs that directory in the command's `PATH`, or its absolute
+path. A name found nowhere refuses the gate, naming the program and the path searched. This one
+checks the formatting:
 
 ```yaml title=".engineering/gates.yaml"
 format: engineering-gates/1
@@ -43,10 +46,8 @@ format: engineering-assertions-project/1
 timeout_seconds: 300
 commands:
   format:
-    executable: /usr/bin/env
+    executable: cargo
     args:
-      - PATH=/usr/local/bin:/usr/bin:/bin
-      - cargo
       - fmt
       - --check
 ```
