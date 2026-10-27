@@ -1,7 +1,7 @@
 ---
 title: Getting started
 sidebar_position: 2
-description: Install takt 0.15.0, run it once with no model and no credentials, then once with a model, and pick the guide for what comes next.
+description: Install takt 0.15.1, run it once with no model and no credentials, then once with a model, and pick the guide for what comes next.
 lede: One run needs nothing but git and cargo; the second adds a model, and both leave a case directory you can read.
 source: takt run --help and takt approve --help at 0.14.0; runs of takt 0.14.0 on fresh cargo crates, 2026-10-26; the install commands run against the 0.14.0 release assets
 ---
@@ -19,7 +19,7 @@ Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-
 needs no Rust toolchain to start, though a repository whose tests are cargo's needs one to test.
 
 ```sh
-version=0.15.0 target=x86_64-unknown-linux-gnu
+version=0.15.1 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
@@ -32,7 +32,7 @@ Put `takt` on your `PATH`. `takt --version` prints the version and the commit it
 
 ```console
 $ takt --version
-takt 0.15.0 (<the commit the 0.15.0 tag names>)
+takt 0.15.1 (<the commit the 0.15.1 tag names>)
 ```
 
 macOS, `cargo install` from the tag, and the container image are in [Install](./guides/install.md).

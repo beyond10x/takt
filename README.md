@@ -39,7 +39,7 @@ the plan, and no container image is published: you build one from `Dockerfile`.
 
 ## Status
 
-0.15.0 is the latest release. A run names the Claude Code binary it starts (`--harness-program`)
+0.15.1 is the latest release. A run names the Claude Code binary it starts (`--harness-program`)
 and stops `HarnessUnqualified` before the first session when metaharness does not qualify it, so a
 trial on a GitHub repository can end with its pull request merged. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64) are on the
