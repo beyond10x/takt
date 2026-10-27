@@ -152,7 +152,7 @@ fn a_failed_setup_stops_before_a_model_call() {
 #[test]
 fn setup_runs_before_the_red_base_check() {
     let world = world("order");
-    let output = world.run("  - name: deps\n    argv: [/bin/true]\n");
+    let output = world.run("  - name: deps\n    argv: [sh, -c, exit 0]\n");
     let said = said(&output);
     assert_eq!(output.status.code(), Some(3), "{said}");
     assert!(said.contains("stopped: RedBase"), "{said}");
