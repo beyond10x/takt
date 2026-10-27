@@ -447,6 +447,7 @@ fn the_run_file_reads_argument_lists_only() {
 fn settings_must_fit_the_forge() {
     let some = takt::run_config::ForgeSettings {
         commands: Some(commands()),
+        ..Default::default()
     };
     assert!(some.check_for(Some("command")).is_ok());
     let error = some.check_for(Some("bot")).expect_err("not for bot");

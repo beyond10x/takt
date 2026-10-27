@@ -25,8 +25,8 @@ generated [CLI reference](./cli.md); a walk-through is in
 | `.yaml`, `.yml` | YAML: the fields at the top level, or in the `takt` member of a `loom.agent/1` document |
 | anything else | refused |
 
-Every field is optional. Every field but `scan` and `forge_commands` is the `takt run` flag of the same name, with `-`
-for `_`; `scan` and `forge_commands` have no flag.
+Every field is optional. Every field but `scan`, `forge_commands`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
+for `_`; those four have no flag.
 
 | field | meaning |
 |---|---|
@@ -44,6 +44,8 @@ for `_`; `scan` and `forge_commands` have no flag.
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 | `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
+| `transport` | `glab`, the default, or `api`: how `forge: gitlab` reaches the host ([The GitLab API transport](#the-gitlab-api-transport)); no flag |
+| `credential` | `{env: NAME}` or `{file: PATH}`, where the `api` transport's token comes from, by reference only; no flag |
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
 | `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says |
 | `protocols` | a mapping of a protocol, by name (every revision) or `<name>/<major>`, to a mapping of its declared case inputs, each set to one of the values the protocol declares; an unknown protocol, input or value is refused at its line before any case opens. An input is taken from `--input`, else a story tag `input:<name>=<value>`, else this section, else takt's built-in default for the protocol; each value is recorded with its source in the case's `case.yaml` |
@@ -132,7 +134,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -326,7 +328,7 @@ Each forge is an adapter, and the four are peers:
 
 | forge | what it pushes and opens through | what scans what it publishes |
 |---|---|---|
-| `gitlab` | `git push` over HTTPS with `glab auth git-credential` as its one credential helper; the merge request opened, read and merged through `glab api` | the run's scan adapter ([The scan](#the-scan)) |
+| `gitlab` | `git push` over HTTPS with `glab auth git-credential` as its one credential helper; the merge request opened, read and merged through `glab api`, or through the API itself under `transport: api` | the run's scan adapter ([The scan](#the-scan)) |
 | `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the case's branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its state and checks | `b10x-gates scan-text`, always: it is the `gates` adapter's own forge |
 | `command` | the commands of the run file's `forge_commands`, each an argument list run without a shell; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
 | `none` | nothing | nothing leaves the machine |
@@ -340,6 +342,32 @@ commits, replayed on the base branch's tip under the configured identity and nam
 
 A scenario run creates its trial base only through the bot route: it refuses `--forge gitlab` and
 `--forge command`, and on another host it runs with `--forge none`.
+
+### The GitLab API transport
+
+`forge: gitlab` runs `glab api` under glab's own login. With `transport: api` it calls the GitLab
+REST API over HTTPS itself, under a credential the run file names by reference:
+
+```yaml
+forge: gitlab
+transport: api
+credential:
+  file: /etc/takt/gitlab-token
+```
+
+- **Credential.** `{env: NAME}` is a variable of takt's environment; `{file: PATH}` is a regular
+  file of mode 600 owned by the user and outside the repository's tree, a relative path read beside
+  the run file. A variable that is unset or empty, a file open to group or others, owned by another
+  user or inside the tree, is refused before the case opens, naming the source and never its value.
+- **Never written.** The token is held in memory only: not in the run file, an argument line, the
+  state directory, a case record, an event or an error. Where an answer of the host is quoted, the
+  token in it is replaced by `<redacted>`. The push passes it to git through a credential helper
+  that reads it from its own environment, set for that one command.
+- **Calls.** Merge request create, read and merge, and the head pipeline of the merge request,
+  bound to the head the request reports, so a check read for another head never counts. A redirect
+  is never followed. Plain HTTP is used only to a loopback host.
+- **Default.** Without `transport`, or with `transport: glab`, nothing changes; `credential` is
+  refused there, as are both keys under another forge.
 
 ### The command forge
 

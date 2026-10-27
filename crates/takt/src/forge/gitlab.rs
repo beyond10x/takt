@@ -5,6 +5,9 @@
 //! scan under `--repository <project>`; under a declared `none`, no scan. takt holds no token:
 //! the only credential is `glab`'s own login for the host, which `glab auth status` must confirm
 //! before a run opens its case.
+//!
+//! A second transport, `api` ([`Transport`]), calls the GitLab REST API over HTTPS directly under
+//! a credential the run file names ([`CredentialSource`]): [`api`]. The default stays `glab`.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -13,10 +16,13 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::scan::Scan;
 
+pub mod api;
+
+use super::credential::CredentialSource;
 use super::{
     BotRoute, Checks, Exit, Failed, Forge, Head, IdentityScan, Outgoing, Process, PullRequest,
     PullRequestState, PullRequestView, Runner, Scanner, exact_ref, fresh, head_is_a_commit,
-    held_by, is_object_id, push_over_https, reading_of, succeed, without_userinfo,
+    held_by, is_object_id, push_over_https_with, reading_of, succeed, without_userinfo,
 };
 
 /// The host and the full project path (`group/sub/repo`) an `origin` URL names, in the forms git
@@ -56,6 +62,30 @@ pub fn project_of(url: &str) -> Option<(String, String)> {
             .iter()
             .all(|segment| !segment.is_empty() && *segment != "." && *segment != "..");
     (!host.is_empty() && !host.contains('/') && named).then(|| (host.to_owned(), path.to_owned()))
+}
+
+/// How the forge reaches the host, `transport` of the run file: `glab`, the default, through
+/// `glab api` under glab's own login; `api`, direct HTTPS calls under a named credential.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(try_from = "String")]
+pub enum Transport {
+    /// Through `glab`.
+    #[default]
+    Glab,
+    /// Through the REST API directly.
+    Api,
+}
+
+impl TryFrom<String> for Transport {
+    type Error = String;
+
+    fn try_from(name: String) -> std::result::Result<Self, String> {
+        match name.as_str() {
+            "glab" => Ok(Self::Glab),
+            "api" => Ok(Self::Api),
+            _ => Err("the transport is `glab` or `api`".to_owned()),
+        }
+    }
 }
 
 /// `text` percent-encoded as one segment of an API path: every byte but the unreserved ones
@@ -154,6 +184,7 @@ pub struct Glab {
     /// refused, never cut ([`BotRoute::SCAN_LIMIT`] by default).
     pub scan_limit: usize,
     runner: Box<dyn Runner>,
+    api: Option<api::Api>,
 }
 
 impl fmt::Debug for Glab {
@@ -164,6 +195,7 @@ impl fmt::Debug for Glab {
             .field("scan", &self.scan)
             .field("remote", &self.remote)
             .field("scan_limit", &self.scan_limit)
+            .field("transport", &self.transport())
             .finish_non_exhaustive()
     }
 }
@@ -202,6 +234,7 @@ impl Glab {
             remote: "origin".to_owned(),
             scan_limit: BotRoute::SCAN_LIMIT,
             runner,
+            api: None,
         }
     }
 
@@ -214,6 +247,15 @@ impl Glab {
 
     /// [`Self::for_tree`], every line, the login check first, run through `runner`.
     pub fn for_tree_through(tree: &Path, scan: &Scan, runner: Box<dyn Runner>) -> Result<Self> {
+        let (host, project) = Self::origin_of(tree)?;
+        let glab = Self::new(host, project, scan.clone(), runner);
+        glab.logged_in(tree)?;
+        Ok(glab)
+    }
+
+    /// The host and the project `tree`'s `origin` names; refused when it names none or the bot
+    /// route's host.
+    fn origin_of(tree: &Path) -> Result<(String, String)> {
         let url = crate::git::remote_url(tree, "origin")
             .context("the forge `gitlab` needs an origin remote")?;
         let shown = without_userinfo(&url);
@@ -227,9 +269,101 @@ impl Glab {
                 "the origin remote {shown} is on {host}, which the bot route serves: give --forge bot, not gitlab"
             );
         }
-        let glab = Self::new(host, project, scan.clone(), runner);
-        glab.logged_in(tree)?;
+        Ok((host, project))
+    }
+
+    /// For `tree` under the `api` transport: [`Self::for_tree`]'s host and project, and the
+    /// credential `source` resolved before anything is opened (an unset, open or misplaced
+    /// source is refused naming it, never its value); no `glab` is asked for a login.
+    pub fn for_tree_api(tree: &Path, scan: &Scan, source: &CredentialSource) -> Result<Self> {
+        Self::for_tree_api_through(tree, scan, source, Box::new(Process::default()))
+    }
+
+    /// [`Self::for_tree_api`], the push and the scan run through `runner`.
+    pub fn for_tree_api_through(
+        tree: &Path,
+        scan: &Scan,
+        source: &CredentialSource,
+        runner: Box<dyn Runner>,
+    ) -> Result<Self> {
+        let (host, project) = Self::origin_of(tree)?;
+        let secret = source.resolve(tree)?;
+        let mut glab = Self::new(host.clone(), project, scan.clone(), runner);
+        glab.api = Some(api::Api::new(&host, secret));
         Ok(glab)
+    }
+
+    /// The transport this forge reaches the host through.
+    #[must_use]
+    pub fn transport(&self) -> Transport {
+        if self.api.is_some() {
+            Transport::Api
+        } else {
+            Transport::Glab
+        }
+    }
+
+    /// One call of the host's API: under `glab` the line [`Self::api_get_argv`] or
+    /// [`Self::api_write_argv`] runs; under `api` the HTTPS call. The line that names the call,
+    /// for what is said of it (never the token), and what the host answered, as an [`Exit`].
+    fn exchange(
+        &self,
+        tree: &Path,
+        method: &str,
+        path: &str,
+        input: Option<&Path>,
+    ) -> Result<(Vec<String>, Exit)> {
+        if let Some(api) = &self.api {
+            let body = input
+                .map(|input| {
+                    std::fs::read(input).with_context(|| format!("read {}", input.display()))
+                })
+                .transpose()?;
+            let exit = api.send(method, path, body)?;
+            return Ok((vec![method.to_owned(), api.url(path)], exit));
+        }
+        let argv = match input {
+            Some(input) => self.api_write_argv(method, path, input),
+            None => self.api_get_argv(path),
+        };
+        let exit = self.runner.run(tree, &argv)?;
+        Ok((argv, exit))
+    }
+
+    /// The credential helper of every push and fetch: under `glab`, its own; under `api`, the one
+    /// that answers from the token in the environment of that one line.
+    fn helper(&self) -> &'static str {
+        if self.api.is_some() {
+            api::CREDENTIAL_HELPER
+        } else {
+            Self::CREDENTIAL_HELPER
+        }
+    }
+
+    /// What a push or a fetch is run with: git held to HTTPS, and under `api` the token in the
+    /// variable the helper reads, for that one line.
+    fn push_env(&self) -> Vec<(&str, &str)> {
+        let mut env = BotRoute::PUSH_ENV.to_vec();
+        if let Some(api) = &self.api {
+            env.push((api::HELPER_VARIABLE, api.secret().expose()));
+        }
+        env
+    }
+
+    /// `text` with the token replaced, when there is one.
+    fn redacted(&self, text: &str) -> String {
+        match &self.api {
+            Some(api) => api.secret().redact(text),
+            None => text.to_owned(),
+        }
+    }
+
+    /// An error with the token replaced, when there is one.
+    fn without_token(&self, error: anyhow::Error) -> anyhow::Error {
+        match &self.api {
+            Some(api) => anyhow!("{}", api.secret().redact(&format!("{error:#}"))),
+            None => error,
+        }
     }
 
     /// Whether `glab` is logged in to the host: [`Self::auth_status_argv`] exits 0. A `glab`
@@ -319,7 +453,7 @@ impl Glab {
             "-c",
             "credential.helper=",
             "-c",
-            Self::CREDENTIAL_HELPER,
+            self.helper(),
             "push",
             &url,
             &refspec,
@@ -340,7 +474,7 @@ impl Glab {
             "-c",
             "credential.helper=",
             "-c",
-            Self::CREDENTIAL_HELPER,
+            self.helper(),
             "fetch",
             &url,
             object,
@@ -355,37 +489,49 @@ impl Glab {
     /// The line that reads the project's branch `base`.
     #[must_use]
     pub fn branch_argv(&self, base: &str) -> Vec<String> {
-        self.api_get_argv(&format!(
+        self.api_get_argv(&self.branch_path(base))
+    }
+
+    /// The API path of the project's branch `base`.
+    fn branch_path(&self, base: &str) -> String {
+        format!(
             "{}/repository/branches/{}",
             self.api_project(),
             encoded(base)
-        ))
+        )
     }
 
     /// The line that opens the merge request `input` describes.
     #[must_use]
     pub fn open_argv(&self, input: &Path) -> Vec<String> {
-        self.api_write_argv(
-            "POST",
-            &format!("{}/merge_requests", self.api_project()),
-            input,
-        )
+        self.api_write_argv("POST", &self.open_path(), input)
+    }
+
+    /// The API path merge requests are opened at.
+    fn open_path(&self) -> String {
+        format!("{}/merge_requests", self.api_project())
     }
 
     /// The line that reads merge request `iid`: its state, head and base, and its head pipeline.
     #[must_use]
     pub fn view_argv(&self, iid: u64) -> Vec<String> {
-        self.api_get_argv(&format!("{}/merge_requests/{iid}", self.api_project()))
+        self.api_get_argv(&self.view_path(iid))
+    }
+
+    /// The API path of merge request `iid`.
+    fn view_path(&self, iid: u64) -> String {
+        format!("{}/merge_requests/{iid}", self.api_project())
     }
 
     /// The line that merges merge request `iid`, the head to match read from `input`.
     #[must_use]
     pub fn merge_argv(&self, iid: u64, input: &Path) -> Vec<String> {
-        self.api_write_argv(
-            "PUT",
-            &format!("{}/merge_requests/{iid}/merge", self.api_project()),
-            input,
-        )
+        self.api_write_argv("PUT", &self.merge_path(iid), input)
+    }
+
+    /// The API path that merges merge request `iid`.
+    fn merge_path(&self, iid: u64) -> String {
+        format!("{}/merge_requests/{iid}/merge", self.api_project())
     }
 
     /// The scan before a push and a merge request, the run's scan adapter's: under `gates`, the
@@ -413,8 +559,7 @@ impl Glab {
     /// project has no such branch (`glab` says `HTTP 404`). Anything else that is not a commit id
     /// in `.commit.id` is an error.
     fn base_tip(&self, tree: &Path, base: &str) -> Result<Option<String>> {
-        let argv = self.branch_argv(base);
-        let exit = self.runner.run(tree, &argv)?;
+        let (argv, exit) = self.exchange(tree, "GET", &self.branch_path(base), None)?;
         if !exit.success() && exit.stderr.contains("HTTP 404") {
             return Ok(None);
         }
@@ -427,8 +572,7 @@ impl Glab {
 
     /// The merge request `iid` as `glab api` reports it.
     fn read(&self, tree: &Path, iid: u64) -> Result<(Vec<String>, serde_json::Value)> {
-        let argv = self.view_argv(iid);
-        let exit = self.runner.run(tree, &argv)?;
+        let (argv, exit) = self.exchange(tree, "GET", &self.view_path(iid), None)?;
         let document = answer_of(&argv, &exit)?;
         Ok((argv, document))
     }
@@ -519,13 +663,15 @@ impl Forge for Glab {
     /// Pushes the commit `revision` as `branch`, by its id ([`Self::push_revision_argv`]), over
     /// HTTPS alone.
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
-        push_over_https(
+        push_over_https_with(
             &*self.runner,
             tree,
             &self.push_revision_argv(branch, revision),
             &self.push_url(),
             "the forge gitlab",
+            &self.push_env(),
         )
+        .map_err(|error| self.without_token(error))
     }
 
     /// The run's scan adapter over the text the bot route scans: the merge request, when one
@@ -581,8 +727,7 @@ impl Forge for Glab {
                 )
             })?;
         }
-        let argv = self.open_argv(&input);
-        let exit = self.runner.run(tree, &argv)?;
+        let (argv, exit) = self.exchange(tree, "POST", &self.open_path(), Some(&input))?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
         let response = answer_of(&argv, &exit)?;
@@ -627,8 +772,7 @@ impl Forge for Glab {
         let document = serde_json::json!({ "sha": head });
         let bytes = serde_json::to_vec_pretty(&document).context("serialize the merge request")?;
         std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
-        let argv = self.merge_argv(number, &input);
-        let exit = self.runner.run(tree, &argv)?;
+        let (argv, exit) = self.exchange(tree, "PUT", &self.merge_path(number), Some(&input))?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
         let response = answer_of(&argv, &exit)?;
@@ -664,12 +808,15 @@ impl Forge for Glab {
             );
         }
         let argv = self.fetch_object_argv(&tip);
-        let exit = self.runner.run_env(tree, &argv, &BotRoute::PUSH_ENV)?;
+        let exit = self
+            .runner
+            .run_env(tree, &argv, &self.push_env())
+            .map_err(|error| self.without_token(error))?;
         if !exit.success() {
             return Err(Failed {
                 line: argv.join(" "),
                 code: exit.code,
-                stderr: exit.stderr.trim().to_owned(),
+                stderr: self.redacted(exit.stderr.trim()),
             }
             .into());
         }

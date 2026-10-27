@@ -1053,7 +1053,7 @@ struct LoopArgs {
     /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
     /// pipeline and merges it; what it publishes passes the run's scan adapter first, under
     /// `gates` `b10x-gates scan-text`, under a declared `scan: none` no scan; refused before
-    /// any case opens unless `glab auth status --hostname <host>` exits 0), `command` (the exact
+    /// any case opens unless `glab auth status --hostname <host>` exits 0; the run file's `transport: api` with a `credential` calls the GitLab API instead, `glab` never asked), `command` (the exact
     /// argument lists the run file's `forge_commands` section names for `open`, `read`, `checks` and
     /// `merge`, run without a shell; the push stays takt's scanned push; never a default, and
     /// refused for a scenario run) or `none` (no pull
@@ -2847,6 +2847,21 @@ fn forge_with(
             trials: None,
         });
     }
+    if forge == Some("gitlab")
+        && settings.transport == Some(takt::forge::gitlab::Transport::Api)
+        && let Some(source) = &settings.credential
+    {
+        let glab = Glab::for_tree_api(repo, scan, source)?;
+        let line = format!(
+            "forge: gitlab ({} {}); pr.open, ci.read and repository.merge go through the GitLab API under {source}",
+            glab.host, glab.project
+        );
+        return Ok(Forged {
+            forge: Some(Rc::new(glab)),
+            line: Some(line),
+            trials: None,
+        });
+    }
     forge_of(repo, forge, scan)
 }
 
@@ -4604,6 +4619,7 @@ mod tests {
                 checks: Some(tool),
                 ..Default::default()
             }),
+            ..Default::default()
         };
         let actions = takt::protocol::LoadedProtocol::builtin("story.delivery/1")
             .expect("a built-in")

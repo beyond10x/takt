@@ -16,6 +16,8 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result, anyhow};
 
 use crate::forge::command::ForgeCommands;
+use crate::forge::credential::CredentialSource;
+use crate::forge::gitlab::Transport;
 
 /// llm's parsed `llm.routes/1` document, the type a run file's `llm` member is validated as; its
 /// [`Routes::digest`] is the `llm_digest` a run records.
@@ -252,18 +254,29 @@ pub struct RunConfig {
     pub protocol_settings: ProtocolSettings,
     /// The `forge_commands` section, the argument lists `forge: command` runs.
     pub forge_commands: Option<ForgeCommands>,
+    /// How `forge: gitlab` reaches the host: `glab` (the default) or `api`.
+    pub transport: Option<Transport>,
+    /// Where the `api` transport's credential comes from, by reference; a relative `file` is
+    /// read beside the run file.
+    pub credential: Option<CredentialSource>,
 }
 
-/// What a run file says about the forge beyond its name: the commands of `forge: command`.
+/// What a run file says about the forge beyond its name: the commands, the transport and the
+/// credential's source.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ForgeSettings {
     /// `forge_commands`.
     pub commands: Option<ForgeCommands>,
+    /// `transport`.
+    pub transport: Option<Transport>,
+    /// `credential`.
+    pub credential: Option<CredentialSource>,
 }
 
 impl ForgeSettings {
     /// Refuses what does not fit the forge `forge` names, before any case opens: `forge_commands`
-    /// belongs to `forge: command` and `forge: command` needs it.
+    /// belongs to `forge: command` and `forge: command` needs it; `transport` and `credential`
+    /// belong to `forge: gitlab`, and `transport: api` needs a `credential` which only it takes.
     /// The refusal names keys, never a value.
     pub fn check_for(&self, forge: Option<&str>) -> Result<()> {
         if self.commands.is_some() && forge != Some("command") {
@@ -276,7 +289,20 @@ impl ForgeSettings {
                 "`forge: command` runs the commands of a `forge_commands` section in the run file, and there is none; nothing was opened"
             ));
         }
-        Ok(())
+        if (self.transport.is_some() || self.credential.is_some()) && forge != Some("gitlab") {
+            return Err(anyhow!(
+                "`transport` or `credential` is set, and they belong to `forge: gitlab`, which this run does not use; nothing was opened"
+            ));
+        }
+        match (self.transport, &self.credential) {
+            (Some(Transport::Api), None) => Err(anyhow!(
+                "`transport: api` needs a `credential`, `{{env: NAME}}` or `{{file: PATH}}`; nothing was opened"
+            )),
+            (Some(Transport::Glab) | None, Some(_)) => Err(anyhow!(
+                "`credential` belongs to `transport: api`; the default transport, glab, runs under its own login; nothing was opened"
+            )),
+            _ => Ok(()),
+        }
     }
 }
 
@@ -286,6 +312,8 @@ impl RunConfig {
     pub fn forge_settings(&self) -> ForgeSettings {
         ForgeSettings {
             commands: self.forge_commands.clone(),
+            transport: self.transport,
+            credential: self.credential.clone(),
         }
     }
 }
@@ -663,7 +691,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -967,6 +995,10 @@ impl RunConfig {
         };
         config.endpoint_file = config.endpoint_file.take().map(beside);
         config.state_dir = config.state_dir.take().map(beside);
+        config.credential = match config.credential.take() {
+            Some(CredentialSource::File(file)) => Some(CredentialSource::File(beside(file))),
+            other => other,
+        };
         if let Some(commands) = &config.forge_commands {
             commands.check().map_err(|error| {
                 anyhow!(

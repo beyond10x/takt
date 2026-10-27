@@ -8,4 +8,4 @@ takt's releases.
 
 ### Added
 
-- `forge: command` with a `forge_commands` section in the `takt run --config` file: the run's forge actions (`open`, `read`, `checks`, `merge`) are the exact argument lists the file names, run without a shell, with the placeholders `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
+- `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree) in the `takt run --config` file: the `gitlab` forge calls the GitLab REST API over HTTPS itself instead of `glab api`. The token is held in memory only, replaced where an answer of the host is quoted, and given to the push through a credential helper that reads it from that one command's environment. `glab` stays the default transport.

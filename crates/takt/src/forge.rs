@@ -43,6 +43,7 @@ use crate::confinement::Command;
 
 pub mod bot;
 pub mod command;
+pub mod credential;
 pub mod gitlab;
 
 pub use bot::BotRoute;
@@ -1444,7 +1445,20 @@ fn push_over_https(
     url: &str,
     route: &str,
 ) -> Result<()> {
-    let exit = runner.run_env(tree, argv, &BotRoute::PUSH_ENV)?;
+    push_over_https_with(runner, tree, argv, url, route, &BotRoute::PUSH_ENV)
+}
+
+/// [`push_over_https`] with `env` as the line's environment, which holds [`BotRoute::PUSH_ENV`]
+/// and what the adapter's credential helper reads besides.
+fn push_over_https_with(
+    runner: &dyn Runner,
+    tree: &Path,
+    argv: &[String],
+    url: &str,
+    route: &str,
+    env: &[(&str, &str)],
+) -> Result<()> {
+    let exit = runner.run_env(tree, argv, env)?;
     if exit.success() {
         return Ok(());
     }
