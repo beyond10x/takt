@@ -577,13 +577,13 @@ types:
   # as any other bad field is.
   # A container started from takt's image reads it at `/config/agent.yaml`.
   # read from: crates/takt/src/run_config.rs:81-105
-  # read from: crates/takt/src/run_config.rs:135-138
-  # read from: crates/takt/src/run_config.rs:308-313
-  # read from: crates/takt/src/run_config.rs:241-256
-  # read from: crates/takt/src/run_config.rs:281-282
+  # read from: crates/takt/src/run_config.rs:138-141
+  # read from: crates/takt/src/run_config.rs:344-349
+  # read from: crates/takt/src/run_config.rs:277-292
+  # read from: crates/takt/src/run_config.rs:317-318
   # read from: crates/takt/src/run_config.rs:30-36
   # read from: crates/takt/src/run_config.rs:38-73
-  # read from: crates/takt/src/run_config.rs:290-291
+  # read from: crates/takt/src/run_config.rs:326-327
   # read from: crates/takt-cli/src/main.rs:718-723
   # read from: crates/takt-cli/src/main.rs:737-741
   # read from: crates/takt-cli/src/main.rs:700-706
@@ -627,11 +627,11 @@ types:
         type: Optional<takt.work.ScanName>
       # The run file's model routes: an `llm.routes/1` document, or `{path: <file>}`. takt types
       # none of its keys; a section llm refuses opens no case.
-      # read from: .engineering/planning/story/llm-section-is-an-llm-routes-document.md:59
+      # read from: .engineering/planning/story/llm-section-is-an-llm-routes-document.md:60
       - name: llm
         type: Optional<takt.work.LlmRoutes>
       # read from: crates/takt/src/run_config.rs:107
-      # read from: crates/takt/src/run_config.rs:297-302
+      # read from: crates/takt/src/run_config.rs:333-338
       - name: records
         type: Optional<String>
 
@@ -640,7 +640,7 @@ types:
   # the run file and parsed by its extension (`.toml` by `Routes::parse_toml`, `.yaml` or `.yml` by
   # `Routes::parse`). An opaque reference: takt types none of the document's keys, and a refusal is
   # llm's own message, relayed unedited. Declared ahead of the code.
-  # read from: .engineering/planning/story/llm-section-is-an-llm-routes-document.md:61
+  # read from: .engineering/planning/story/llm-section-is-an-llm-routes-document.md:62
   # read from: llm 0.16.0, crates/llm-models/src/routes.rs:1484
   # read from: llm 0.16.0, crates/llm-models/src/routes.rs:1510
   - name: takt.work.LlmRoutes
@@ -1222,7 +1222,7 @@ types:
           The records profile the case keeps its decisions under, `default` or `trial`; absent on
           a line written before the field, which reads as every decision kept.
 
-      # read from: .engineering/planning/story/llm-section-is-an-llm-routes-document.md:65
+      # read from: .engineering/planning/story/llm-section-is-an-llm-routes-document.md:66
       - name: llm_digest
         type: Optional<String>
         summary: >-

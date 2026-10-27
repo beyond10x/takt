@@ -129,6 +129,9 @@ where
 
 const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`";
 
+/// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
+const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
+
 /// The refusal of the file at `path`, at `line` when it is known, repeating nothing written in it.
 fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
     match line {
@@ -170,12 +173,14 @@ fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
                     path.display()
                 ));
             }
-            let file = path.parent().unwrap_or(Path::new(".")).join(name);
-            let text = std::fs::read_to_string(&file)
-                .with_context(|| format!("the llm document {}", file.display()))?;
-            let parsed = match file.extension().and_then(|extension| extension.to_str()) {
-                Some("toml") => Routes::parse_toml(&text),
-                Some("yaml" | "yml") => Routes::parse(&text),
+            let directory = match path.parent() {
+                Some(directory) if !directory.as_os_str().is_empty() => directory,
+                _ => Path::new("."),
+            };
+            let file = directory.join(name);
+            let toml = match name.extension().and_then(|extension| extension.to_str()) {
+                Some("toml") => true,
+                Some("yaml" | "yml") => false,
                 _ => {
                     return Err(anyhow!(
                         "the llm document {} is refused: its name ends in neither .toml, .yaml \
@@ -183,6 +188,37 @@ fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
                         file.display()
                     ));
                 }
+            };
+            let metadata = std::fs::metadata(&file)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            if !metadata.is_file() {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: its `llm` member names a file that is not a regular file",
+                    path.display()
+                ));
+            }
+            if metadata.len() > LLM_DOCUMENT_BOUND {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: its `llm` member names a file larger than the 2 MiB bound (2097152 bytes)",
+                    path.display()
+                ));
+            }
+            let real = std::fs::canonicalize(&file)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            let real_directory = std::fs::canonicalize(directory)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            if !real.starts_with(&real_directory) {
+                return Err(anyhow!(
+                    "the run configuration file {} is refused: its `llm` member names a file that resolves outside the run file's directory",
+                    path.display()
+                ));
+            }
+            let text = std::fs::read_to_string(&real)
+                .with_context(|| format!("the llm document {}", file.display()))?;
+            let parsed = if toml {
+                Routes::parse_toml(&text)
+            } else {
+                Routes::parse(&text)
             };
             parsed.with_context(|| format!("the llm document {}", file.display()))?
         }

@@ -2,6 +2,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use takt::run_config::Routes;
+
 struct World(PathBuf);
 
 impl Drop for World {
@@ -85,6 +87,39 @@ impl World {
             .output()
             .expect("takt runs")
     }
+
+    fn opened(&self) -> Vec<serde_json::Value> {
+        let events: Vec<PathBuf> = files_under(&self.cases())
+            .into_iter()
+            .filter(|path| path.file_name().is_some_and(|name| name == "events.jsonl"))
+            .collect();
+        assert_eq!(events.len(), 1, "one case record: {events:?}");
+        fs::read_to_string(&events[0])
+            .expect("the run record")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a JSON line"))
+            .filter(|line| line["event"] == "opened")
+            .collect()
+    }
+}
+
+fn files_under(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(meta) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.is_dir() {
+            found.extend(files_under(&path));
+        } else if meta.is_file() {
+            found.push(path);
+        }
+    }
+    found
 }
 
 fn text(output: &Output) -> String {
@@ -177,5 +212,75 @@ fn adversary_llm_path_escape_refused() {
         Some(1),
         "acceptance Decision: the document is read beside the run file, so one outside its directory is refused: {all}"
     );
+    assert!(!world.cases().exists(), "no case opened: {all}");
+}
+
+#[test]
+fn symlink_outside_the_directory_is_refused() {
+    let world = World::new("symlink-outside");
+    let elsewhere = world.0.join("elsewhere");
+    fs::create_dir_all(&elsewhere).expect("a sibling directory");
+    fs::write(elsewhere.join("routes.yaml"), document().to_string())
+        .expect("a document outside the configuration directory");
+    std::os::unix::fs::symlink(
+        elsewhere.join("routes.yaml"),
+        world.config_dir().join("routes.yaml"),
+    )
+    .expect("a symlink beside the run file");
+    let config = world.file("run.yaml", &run_file("llm: {path: routes.yaml}\n"));
+    let output = world.run_fresh(&config);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("`llm`"), "{all}");
+    assert!(!world.cases().exists(), "no case opened: {all}");
+}
+
+#[test]
+fn symlink_inside_the_directory_is_accepted() {
+    let world = World::new("symlink-inside");
+    fs::create_dir_all(world.config_dir().join("docs")).expect("a docs directory");
+    fs::write(
+        world.config_dir().join("docs/routes.yaml"),
+        document().to_string(),
+    )
+    .expect("a document inside the configuration directory");
+    std::os::unix::fs::symlink("docs/routes.yaml", world.config_dir().join("routes.yaml"))
+        .expect("a symlink beside the run file");
+    let config = world.file("run.yaml", &run_file("llm: {path: routes.yaml}\n"));
+    let output = world.run_fresh(&config);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let opened = world.opened();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    let digest = Routes::parse(&document().to_string())
+        .expect("llm accepts the document")
+        .digest()
+        .to_owned();
+    assert_eq!(opened[0]["llm_digest"], digest, "{opened:?}");
+}
+
+#[test]
+fn absolute_path_is_refused() {
+    let world = World::new("absolute");
+    let absolute = world.file("llm.yaml", &document().to_string());
+    let config = world.file(
+        "run.yaml",
+        &run_file(&format!("llm: {{path: \"{}\"}}\n", absolute.display())),
+    );
+    let output = world.run_fresh(&config);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(!world.cases().exists(), "no case opened: {all}");
+}
+
+#[test]
+fn directory_named_by_path_is_refused_not_read() {
+    let world = World::new("directory");
+    fs::create_dir_all(world.config_dir().join("notroutes.yaml")).expect("a directory");
+    let config = world.file("run.yaml", &run_file("llm: {path: notroutes.yaml}\n"));
+    let output = world.run_fresh(&config);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("not a regular file"), "{all}");
+    assert!(!all.contains("Is a directory"), "{all}");
     assert!(!world.cases().exists(), "no case opened: {all}");
 }

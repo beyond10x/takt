@@ -303,3 +303,46 @@ fn no_llm_section_no_digest() {
     assert_eq!(opened.len(), 1, "{opened:?}");
     assert!(opened[0].get("llm_digest").is_none(), "{opened:?}");
 }
+
+/// A TOML run file holding the routes inline as an `[llm]` table, the same routes as
+/// [`TOML_DOCUMENT`] nested under it.
+const TOML_RUN_FILE: &str = r#"iterations = 0
+harness = "none"
+forge = "none"
+
+[llm]
+format = "llm.routes/1"
+
+[llm.endpoints.lab]
+base_url = "http://127.0.0.1:8000/v1"
+protocol = "chat-completions"
+auth = { kind = "anonymous" }
+
+[llm.routes]
+small = "lab/small"
+"#;
+
+/// A TOML run file with the routes inline as an `[llm]` table is accepted, and so is one that
+/// names the same routes by path; each `opened` line names the digest the inline form names.
+#[test]
+fn llm_toml_run_file_accepted() {
+    let world = World::new("toml-inline");
+    let config = world.file("run.toml", TOML_RUN_FILE);
+    let output = world.run(&config);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let opened = world.opened();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert_eq!(opened[0]["llm_digest"], expected_digest(), "{opened:?}");
+
+    let world = World::new("toml-path");
+    world.file("llm.toml", TOML_DOCUMENT);
+    let config = world.file(
+        "run.toml",
+        "iterations = 0\nharness = \"none\"\nforge = \"none\"\n\n[llm]\npath = \"llm.toml\"\n",
+    );
+    let output = world.run(&config);
+    assert_eq!(output.status.code(), Some(3), "{}", text(&output));
+    let opened = world.opened();
+    assert_eq!(opened.len(), 1, "{opened:?}");
+    assert_eq!(opened[0]["llm_digest"], expected_digest(), "{opened:?}");
+}
