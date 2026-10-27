@@ -132,11 +132,11 @@ fn files(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     into
 }
 
-/// The tree's files outside `.engineering/`, where the run keeps its case.
+/// The tree's files outside `.engineering/` and `.takt/`, where the run keeps its cases.
 fn work(tree: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
     files(tree)
         .into_iter()
-        .filter(|(path, _)| !path.starts_with(".engineering"))
+        .filter(|(path, _)| !path.starts_with(".engineering") && !path.starts_with(".takt"))
         .collect()
 }
 
@@ -602,7 +602,7 @@ fn a_session_proposal_the_guard_refuses_leaves_the_tree_unchanged() {
         ),
         (
             "cases",
-            vec![(".engineering/cases/planted.yaml", "granted: true\n")],
+            vec![(".takt/cases/planted.yaml", "granted: true\n")],
             "implementation.edit",
         ),
         ("inspect", vec![("src/lib.rs", FIXED)], "repository.inspect"),
@@ -627,7 +627,7 @@ fn a_session_proposal_the_guard_refuses_leaves_the_tree_unchanged() {
         );
         assert_eq!(work(&tree), before, "{name}: the tree is unchanged\n{text}");
         assert!(
-            !tree.join(".engineering/cases/planted.yaml").exists(),
+            !tree.join(".takt/cases/planted.yaml").exists(),
             "{name}: nothing planted\n{text}"
         );
         assert_eq!(

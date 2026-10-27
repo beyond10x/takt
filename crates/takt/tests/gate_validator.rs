@@ -175,7 +175,7 @@ fn the_evaluated_bundle_is_retained_under_the_case_artifacts() {
     assert!(
         outcome
             .text
-            .contains("artifact: .engineering/cases/retained/artifacts/gate-result-1.bundle.json"),
+            .contains("artifact: .takt/cases/retained/artifacts/gate-result-1.bundle.json"),
         "{}",
         outcome.text
     );
@@ -198,7 +198,7 @@ fn the_evaluated_bundle_is_retained_under_the_case_artifacts() {
 }
 
 /// The bundle's `source_identity` is the repository tree's: what the loop writes under
-/// `.engineering/cases` between two observations at one revision does not move it, a change
+/// `.takt/cases` between two observations at one revision does not move it, a change
 /// to the tree does.
 #[test]
 fn the_bundle_source_identity_leaves_the_case_directory_out() {
@@ -227,7 +227,7 @@ fn the_bundle_source_identity_leaves_the_case_directory_out() {
             .to_owned()
     };
     let first = validator.observe(&tree, "r0", 1).expect("observes");
-    let case = tree.join(".engineering/cases/identity");
+    let case = tree.join(".takt/cases/identity");
     fs::create_dir_all(case.join("decisions")).expect("a case directory");
     fs::write(case.join("decisions/0001.json"), "{}\n").expect("a decision");
     fs::write(case.join("intent.md"), "pass the gate").expect("an intent");
@@ -988,7 +988,7 @@ fn a_record_does_not_land_when_its_bundle_cannot_be_retained() {
         &document(&[("license", r#"fs.file.exists("LICENSE")"#)]),
         &[("protocol.yaml", EDIT_PROTOCOL)],
     );
-    let artifacts = tree.join(".engineering/cases/unretained/artifacts");
+    let artifacts = tree.join(".takt/cases/unretained/artifacts");
     let _writable = WritableAgain(artifacts.clone());
     let protocol = tree.join("protocol.yaml");
     let harness = WritesAndLocksArtifacts {
@@ -1059,7 +1059,7 @@ fn every_observation_retains_its_own_bundle_and_each_replays_to_its_truth() {
         "{}",
         ran.text
     );
-    let artifacts = tree.join(".engineering/cases/two-bundles/artifacts");
+    let artifacts = tree.join(".takt/cases/two-bundles/artifacts");
     let mut names: Vec<String> = fs::read_dir(&artifacts)
         .expect("an artifacts directory")
         .map(|entry| {

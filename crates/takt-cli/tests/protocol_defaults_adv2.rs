@@ -137,7 +137,7 @@ fn store_changing_between_lists(dir: &Path) -> PathBuf {
 
 /// The one case directory under `repo`, by name.
 fn the_case(repo: &Path) -> String {
-    let names: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+    let names: Vec<String> = fs::read_dir(repo.join(".takt/cases"))
         .expect("a cases directory")
         .map(|entry| {
             entry

@@ -374,10 +374,22 @@ impl SessionHarness {
             .filter(|path| !path.is_empty())
             .map(str::to_owned)
             .collect();
-        let cases = tree.join(crate::case::CASES_DIR);
         let plain = |dir: &Path| std::fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir());
-        if cases.parent().is_some_and(plain) && plain(&cases) {
-            walk(tree, &cases, &mut files);
+        for root in crate::case::CASE_ROOTS {
+            let cases = tree.join(root);
+            if cases.parent().is_some_and(plain) && plain(&cases) {
+                walk(tree, &cases, &mut files);
+            }
+        }
+        let gitignore = tree
+            .join(crate::case::TAKT_DIR)
+            .join(crate::case::TAKT_GITIGNORE);
+        if std::fs::symlink_metadata(&gitignore).is_ok_and(|meta| meta.is_file()) {
+            files.push(format!(
+                "{}/{}",
+                crate::case::TAKT_DIR,
+                crate::case::TAKT_GITIGNORE
+            ));
         }
         files.sort();
         files.dedup();

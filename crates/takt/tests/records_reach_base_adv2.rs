@@ -534,7 +534,7 @@ fn a_store_write_at_a_path_that_is_not_utf8_is_kept_as_committed_or_not_at_all()
     stage(&repo, committed, b"{}\n");
     git(&repo, &["commit", "-q", "-m", "a store write"]);
     let commit = git(&repo, &["rev-parse", "HEAD"]);
-    let case_dir = repo.join(".engineering/cases/probe");
+    let case_dir = repo.join(".takt/cases/probe");
     fs::create_dir_all(&case_dir).expect("a directory");
     match takt::case::keep_rider(&repo, &case_dir, &revision, &commit, "test_result") {
         Err(error) => {

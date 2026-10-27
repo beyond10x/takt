@@ -203,12 +203,8 @@ fn run(
 }
 
 fn events(tree: &Path, id: &str) -> String {
-    fs::read_to_string(
-        tree.join(".engineering/cases")
-            .join(id)
-            .join("events.jsonl"),
-    )
-    .expect("events.jsonl")
+    fs::read_to_string(tree.join(".takt/cases").join(id).join("events.jsonl"))
+        .expect("events.jsonl")
 }
 
 /// A try whose session reported no tokens, then a try that names its action: the run recovers,

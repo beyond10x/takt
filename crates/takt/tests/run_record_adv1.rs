@@ -520,7 +520,7 @@ fn a_hanging_or_missing_aep_leaves_the_stop_and_ends_the_record() {
         assert_eq!(
             git(
                 &repo,
-                &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+                &["status", "--porcelain", "--", ".", ":!.takt/cases"]
             ),
             "",
             "{name}"

@@ -113,7 +113,7 @@ fn status(repo: &Path, id: &str) -> String {
 }
 
 fn case_names(repo: &Path) -> Vec<String> {
-    let dir = repo.join(".engineering/cases");
+    let dir = repo.join(".takt/cases");
     if !dir.exists() {
         return Vec::new();
     }

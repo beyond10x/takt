@@ -457,7 +457,7 @@ fn the_budget_refusal_is_written_once_and_names_the_step() {
     kill_listed(&pids);
     let text = String::from_utf8_lossy(&out);
     assert!(matches!(stop, Ok(Stop::Hours(_))), "{stop:?}\n{text}");
-    let events = fs::read_to_string(tree.join(".engineering/cases/adv2-once/events.jsonl"))
+    let events = fs::read_to_string(tree.join(".takt/cases/adv2-once/events.jsonl"))
         .expect("the run record");
     let refusals: Vec<&str> = events
         .lines()

@@ -1,6 +1,6 @@
 //! The loop scorecard and the three validators that drive a `loop.improvement/1` case
 //! (the built-in `loop-improvement@1`): `loop.measure` over the recorded `self.improvement`
-//! cases under `.engineering/cases/`, one row per turn and the figures computed from the rows;
+//! cases under `.takt/cases/`, one row per turn and the figures computed from the rows;
 //! `loop.definition.check` comparing the metric definitions at the candidate with those at the
 //! baseline; `loop.compare` comparing the figures of the turns filed after the candidate merged
 //! with those of the turns before. The turns here are fixture cases written file by file: a
@@ -105,7 +105,7 @@ fn commit(tree: &Path, definitions: &str, message: &str) -> String {
     let path = tree.join(DEFINITIONS);
     fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
     fs::write(&path, definitions).expect("the definitions");
-    git(tree, &["add", "-A", "--", ".", ":!.engineering/cases"]);
+    git(tree, &["add", "-A", "--", ".", ":!.takt"]);
     git(tree, &["commit", "-q", "--allow-empty", "-m", message]);
     git(tree, &["rev-parse", "HEAD"])
 }
@@ -152,7 +152,7 @@ const OUTCOMES: [&str; 4] = ["accepted", "declined", "unreproducible", "abandone
 /// story it was opened for (`story:<finding>`), its decisions in order, and a run record whose
 /// one step reported `tokens` when given.
 fn turn(tree: &Path, id: &str, finding: Option<&str>, decisions: &[At<'_>], tokens: Option<u64>) {
-    let dir = tree.join(".engineering/cases").join(id);
+    let dir = tree.join(".takt/cases").join(id);
     fs::create_dir_all(dir.join("decisions")).expect("the case directory");
     fs::create_dir_all(dir.join("evidence")).expect("the evidence directory");
     let baseline = git(tree, &["rev-parse", "HEAD"]);
@@ -654,7 +654,7 @@ fn the_time_from_finding_to_verified_is_computed_from_each_rows_instants() {
 #[test]
 fn the_recorded_first_turn_reads_as_an_accepted_promoted_row() {
     let (tree, head) = scratch("turn-1", DEFINED);
-    let into = tree.join(".engineering/cases/turn-1-scenario-help");
+    let into = tree.join(".takt/cases/turn-1-scenario-help");
     copy(Path::new(TURN_1), &into);
     let card = LoopScorecard::read_at(&tree, Some(&head)).expect("reads");
     assert_eq!(card.rows.len(), 1);
@@ -848,7 +848,7 @@ fn on_baseline(tree: &Path, id: &str, revision: &str) {
 
 /// Moves the turn `id`'s `artifact` to `revision`.
 fn at_revision(tree: &Path, id: &str, artifact: &str, revision: &str) {
-    let path = tree.join(".engineering/cases").join(id).join("case.yaml");
+    let path = tree.join(".takt/cases").join(id).join("case.yaml");
     let mut doc: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(&fs::read_to_string(&path).expect("case.yaml")).expect("yaml");
     doc["artifacts"][artifact]["revision"] = revision.into();
@@ -2351,7 +2351,7 @@ fn every_yaml_file_the_loop_reads_is_refused_with_an_anchor_naming_the_file_and_
         None,
     );
     for name in ["case.yaml", "protocol.yaml"] {
-        let path = tree.join(".engineering/cases/turn-a").join(name);
+        let path = tree.join(".takt/cases/turn-a").join(name);
         let original = fs::read_to_string(&path).expect("the file");
         let line = original.lines().count() + 1;
         fs::write(&path, format!("{original}extra: &x [1]\n")).expect("the anchor");
@@ -2393,7 +2393,7 @@ fn loop_measure_refuses_a_turns_story_yaml_holding_an_anchor_naming_the_file_and
         None,
     );
     let head = git(&tree, &["rev-parse", "HEAD"]);
-    let path = tree.join(".engineering/cases/turn-a/story.yaml");
+    let path = tree.join(".takt/cases/turn-a/story.yaml");
     fs::write(&path, "id: &s story:turn-a\n").expect("the anchor");
     loop_case(&tree, "loop-story", &head, &head);
     let error = LoopMeasure
@@ -2554,7 +2554,7 @@ fn a_measured_turn_gone_from_the_cases_makes_the_comparison_record_nothing() {
     for id in ["after-a", "after-b", "after-c"] {
         after(&tree, id, "2026-10-18T11:00:00Z", "accepted");
     }
-    fs::remove_dir_all(tree.join(".engineering/cases/before-c")).expect("a measured turn goes");
+    fs::remove_dir_all(tree.join(".takt/cases/before-c")).expect("a measured turn goes");
     let observation = LoopCompare.observe(&tree, &candidate, 2).expect("observes");
     assert!(observation.records.is_empty(), "{}", observation.summary);
     assert!(
@@ -2586,7 +2586,7 @@ fn a_case_on_another_major_of_the_protocol_is_no_turn() {
         None,
     );
     fs::write(
-        tree.join(".engineering/cases/turn-b/protocol.yaml"),
+        tree.join(".takt/cases/turn-b/protocol.yaml"),
         "format: protocol/1\nprotocol:\n  id: self.improvement\n  revision: 2\n",
     )
     .expect("protocol.yaml");

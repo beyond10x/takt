@@ -2414,7 +2414,11 @@ impl GateRun {
         // source identity: that identity is the repository tree's. The base revision's two
         // files are evaluated from there, the paths relative to the tree as the library takes
         // them, and are gone again before the observation ends.
-        let cases = Path::new(crate::case::CASES_DIR);
+        // The external preparation takes one excluded path: the cases root the case is in.
+        let cases = dir
+            .parent()
+            .and_then(|root| root.strip_prefix(tree).ok())
+            .unwrap_or(Path::new(crate::case::CASES_DIR));
         let inputs = dir.join(GATE_INPUTS);
         let relative = inputs
             .strip_prefix(tree)

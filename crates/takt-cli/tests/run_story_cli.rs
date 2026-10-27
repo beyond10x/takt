@@ -154,7 +154,7 @@ fn status(repo: &Path, id: &str) -> String {
 
 /// The case directories under `repo`, sorted; empty when there is no cases directory.
 fn cases(repo: &Path) -> Vec<PathBuf> {
-    let dir = repo.join(".engineering/cases");
+    let dir = repo.join(".takt/cases");
     if !dir.exists() {
         return Vec::new();
     }

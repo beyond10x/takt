@@ -175,7 +175,7 @@ exit 2
 
 /// The one case directory under `repo`, by name.
 fn the_case(repo: &Path) -> String {
-    let names: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+    let names: Vec<String> = fs::read_dir(repo.join(".takt/cases"))
         .expect("a cases directory")
         .map(|entry| {
             entry
@@ -369,7 +369,7 @@ fn adv1_a_plain_run_on_the_cases_own_branch_resumes_only_a_case_whose_take_is_on
         "decision B: from a tree on a case branch only a case whose take is committed on its branch is resumed: exit {code}\nstdout {out}\nstderr {err}"
     );
     assert_eq!(code, 3, "stdout {out} stderr {err}");
-    let cases: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<String> = fs::read_dir(repo.join(".takt/cases"))
         .expect("a cases directory")
         .map(|entry| {
             entry

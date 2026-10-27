@@ -205,7 +205,7 @@ fn a_store_with_nothing_ready_gives_no_unit_and_moves_nothing() {
     .expect("the frontier answers");
     assert!(run.is_none(), "{}", String::from_utf8_lossy(&out));
     assert_eq!(String::from_utf8_lossy(&out), "");
-    assert!(!repo.join(".engineering/cases").exists());
+    assert!(!repo.join(".takt/cases").exists());
     assert_eq!(status(&repo, "story:blocked-one"), "proposed");
     assert_eq!(status(&repo, "story:waits-one"), "proposed");
     assert_eq!(status(&repo, "story:draft-dep"), "draft");
@@ -547,7 +547,7 @@ fn a_refused_take_removes_the_case_it_opened_and_the_next_story_gets_one() {
     assert_eq!(story.id, "story:b");
     assert_eq!(story.title, "Title of story:b");
     assert!(run.case.id.starts_with("story-b-"), "{}", run.case.id);
-    let cases: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<String> = fs::read_dir(repo.join(".takt/cases"))
         .expect("a cases directory")
         .map(|e| {
             e.expect("an entry")
@@ -632,9 +632,9 @@ esac
     path.display().to_string()
 }
 
-/// The names under `<repo>/.engineering/cases`, sorted; `None` when the directory is absent.
+/// The names under `<repo>/.takt/cases`, sorted; `None` when the directory is absent.
 fn case_names(repo: &Path) -> Option<Vec<String>> {
-    let dir = repo.join(".engineering/cases");
+    let dir = repo.join(".takt/cases");
     if !dir.exists() {
         return None;
     }
@@ -710,7 +710,7 @@ fn a_given_case_id_names_the_taken_story_case_after_a_refusal() {
         run.case.id, "given",
         "the case id given is the case id used for a story"
     );
-    assert_eq!(run.case.dir, repo.join(".engineering/cases/given"));
+    assert_eq!(run.case.dir, repo.join(".takt/cases/given"));
     assert_eq!(case_names(&repo), Some(vec!["given".to_owned()]));
     let intent = fs::read_to_string(run.case.dir.join("intent.md")).expect("intent.md");
     assert_eq!(
@@ -729,7 +729,7 @@ fn a_given_case_id_names_the_taken_story_case_after_a_refusal() {
 #[test]
 fn a_refusal_removes_only_the_case_it_opened_not_its_neighbours() {
     let repo = repository("one-ready", "adv2-neighbour");
-    let earlier = repo.join(".engineering/cases/earlier");
+    let earlier = repo.join(".takt/cases/earlier");
     fs::create_dir_all(earlier.join("evidence")).expect("an earlier case");
     fs::write(
         earlier.join("case.yaml"),

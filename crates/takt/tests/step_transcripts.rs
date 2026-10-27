@@ -161,7 +161,7 @@ fn relative(tree: &Path, id: &str, run: usize, n: usize) -> String {
 
 /// The one line of the case `id`'s run record whose `event` is `event`.
 fn line_of(tree: &Path, id: &str, event: &str) -> serde_json::Value {
-    let lines = Events::new(&tree.join(".engineering/cases").join(id))
+    let lines = Events::new(&tree.join(".takt/cases").join(id))
         .read()
         .expect("the run record");
     let found: Vec<&serde_json::Value> =
@@ -235,7 +235,7 @@ fn assert_kept_in(
         path.display()
     );
     let in_case = tree
-        .join(".engineering/cases")
+        .join(".takt/cases")
         .join(id)
         .join("artifacts")
         .join(format!("run-{run}"));
@@ -710,7 +710,7 @@ fn a_transcript_the_step_writes_itself_is_refused_and_replaced() {
     let tree = repository("self-tree");
     let scripts = directory("self-scripts");
     let end = format!(
-        "mkdir -p .engineering/cases/self/artifacts/run-1\nprintf 'forged\\n' > .engineering/cases/self/artifacts/run-1/step-1.jsonl\n{EDITS}"
+        "mkdir -p .takt/cases/self/artifacts/run-1\nprintf 'forged\\n' > .takt/cases/self/artifacts/run-1/step-1.jsonl\n{EDITS}"
     );
     let harness = fake_claude(&scripts, &end);
     let validators: Vec<Box<dyn Validator>> = Vec::new();

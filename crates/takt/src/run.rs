@@ -36,7 +36,8 @@ use loom_sdk::commission::ports::executor::AgentExecutor;
 use loom_sdk::{CanonGovernor, EffectPort, LoopContext, run_until_blocked};
 
 use crate::case::{
-    CASES_DIR, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT, Records,
+    CASE_ROOTS, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT, Records,
+    is_under_cases,
 };
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::evidence::{CaseEvidence, uuid_from};
@@ -556,7 +557,7 @@ struct Proposed {
 /// ([`Kept`] borrows it).
 struct StepKept {
     checkpoint: crate::git::Checkpoint,
-    cases: PathBuf,
+    tree: PathBuf,
     cases_kept: BTreeMap<PathBuf, Entry>,
     surface: JudgeSurface,
     surface_kept: BTreeMap<PathBuf, Entry>,
@@ -568,7 +569,7 @@ impl StepKept {
     fn kept(&self) -> Kept<'_> {
         Kept {
             checkpoint: &self.checkpoint,
-            cases: &self.cases,
+            tree: &self.tree,
             cases_kept: &self.cases_kept,
             surface: &self.surface,
             surface_kept: &self.surface_kept,
@@ -1784,6 +1785,19 @@ fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
     snapshot_without(dir, None)
 }
 
+/// [`snapshot`] of both cases roots under `tree` ([`CASE_ROOTS`]), each entry keyed by its path
+/// relative to `tree`: one map holds a case under either root, and [`restore`] puts it back from
+/// `tree`. A root that is absent contributes nothing.
+fn snapshot_cases(tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+    let mut entries = BTreeMap::new();
+    for root in CASE_ROOTS {
+        for (path, entry) in snapshot(&tree.join(root))? {
+            entries.insert(Path::new(root).join(path), entry);
+        }
+    }
+    Ok(entries)
+}
+
 /// [`snapshot`] of `dir` without what lies under `without`, a path relative to it.
 fn snapshot_without(dir: &Path, without: Option<&Path>) -> Result<BTreeMap<PathBuf, Entry>> {
     fn walk(
@@ -1900,16 +1914,26 @@ fn restore(
     changed: &[PathBuf],
 ) -> Result<()> {
     no_link_on_the_way(root, dir)?;
-    let all: Vec<PathBuf>;
-    let changed = match std::fs::symlink_metadata(dir) {
-        Ok(meta) if !meta.is_dir() => {
-            std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
-            all = before.keys().cloned().collect();
-            &all
+    let mut changed = changed.to_vec();
+    if std::fs::symlink_metadata(dir).is_ok_and(|meta| !meta.is_dir()) {
+        std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
+        changed = before.keys().cloned().collect();
+    }
+    // A cases root that is no longer a directory (a file, a link, another kind) is removed, and
+    // every path of `before` under it put back, whichever root the step replaced.
+    for case_root in CASE_ROOTS {
+        let at = dir.join(case_root);
+        if std::fs::symlink_metadata(&at).is_ok_and(|meta| !meta.is_dir()) {
+            no_link_on_the_way(root, &at)?;
+            std::fs::remove_file(&at).with_context(|| format!("remove {}", at.display()))?;
+            for path in before.keys().filter(|path| path.starts_with(case_root)) {
+                if !changed.contains(path) {
+                    changed.push(path.clone());
+                }
+            }
         }
-        _ => changed,
-    };
-    for path in changed {
+    }
+    for path in &changed {
         let full = dir.join(path);
         no_link_on_the_way(root, &full)?;
         if let Ok(meta) = std::fs::symlink_metadata(&full) {
@@ -7844,11 +7868,11 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
 }
 
 /// What a judgement step or an observation is checked against and put back to when it is
-/// discarded: the checkpoint, the cases directory, the judge surface and what lies outside the
-/// tree, each as it was just before.
+/// discarded: the checkpoint, the cases roots (`cases_kept`, keyed relative to `tree`), the judge
+/// surface and what lies outside the tree, each as it was just before.
 struct Kept<'k> {
     checkpoint: &'k crate::git::Checkpoint,
-    cases: &'k Path,
+    tree: &'k Path,
     cases_kept: &'k BTreeMap<PathBuf, Entry>,
     surface: &'k JudgeSurface,
     surface_kept: &'k BTreeMap<PathBuf, Entry>,
@@ -7881,12 +7905,12 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
         .restore(tree)
         .context("discard the step's change");
     let surface = kept.surface.put_back(tree, kept.surface_kept);
-    let cases = snapshot(kept.cases).and_then(|now| {
+    let cases = snapshot_cases(kept.tree).and_then(|now| {
         let again = differing(kept.cases_kept, &now);
         if again.is_empty() {
             Ok(())
         } else {
-            restore(tree, kept.cases, kept.cases_kept, &again)
+            restore(tree, kept.tree, kept.cases_kept, &again)
         }
     });
     let outside = kept.outside.put_back(tree, kept.outside_dirs);
@@ -7907,7 +7931,7 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
         // The way to the cases directory and to every case is read again first, as a run reads
         // it before it writes there ([`crate::case::CaseDir::check_way`]): past a link or a part that
         // is not a directory, nothing is moved out of the tree, and each file is named with why.
-        let aside = match cases_way(tree, kept.cases, kept.cases_kept) {
+        let aside = match cases_way(tree, kept.cases_kept) {
             Ok(()) => kept.checkpoint.set_aside(tree, &due),
             Err(way) => crate::git::SetAside::not_moved(
                 &due,
@@ -7952,37 +7976,40 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
     }
 }
 
-/// That every part of the way from `tree` down to the cases directory `cases`, and down to each
+/// That every part of the way from `tree` down to each cases root that is there, and down to each
 /// directory a file of `kept` lies in, is a real directory, none a link, each read with
-/// `symlink_metadata` and never followed; the error names the first that is not.
-fn cases_way(tree: &Path, cases: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
-    let mut dirs = BTreeSet::from([cases.to_path_buf()]);
+/// `symlink_metadata` and never followed; the error names the first that is not. The keys of
+/// `kept` are relative to `tree` ([`snapshot_cases`]).
+fn cases_way(tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+    let mut dirs: BTreeSet<PathBuf> = CASE_ROOTS
+        .iter()
+        .filter(|root| std::fs::symlink_metadata(tree.join(root)).is_ok())
+        .map(PathBuf::from)
+        .collect();
     for path in kept.keys() {
         let mut at = path.parent();
         while let Some(dir) = at.filter(|dir| !dir.as_os_str().is_empty()) {
-            dirs.insert(cases.join(dir));
+            dirs.insert(dir.to_path_buf());
             at = dir.parent();
         }
     }
     for dir in &dirs {
-        no_link_on_the_way(tree, dir)?;
+        let full = tree.join(dir);
+        no_link_on_the_way(tree, &full)?;
         let meta =
-            std::fs::symlink_metadata(dir).with_context(|| format!("read {}", dir.display()))?;
+            std::fs::symlink_metadata(&full).with_context(|| format!("read {}", full.display()))?;
         if !meta.is_dir() {
-            bail!(
-                "{} is not a directory",
-                dir.strip_prefix(tree).unwrap_or(dir).display()
-            );
+            bail!("{} is not a directory", dir.display());
         }
     }
     Ok(())
 }
 
-/// The paths of the cases directory `cases` a step or an observation changed, as a refusal names
-/// them, under [`CASES_DIR`]: the directory itself first when something else stands in its
-/// place (a link, with where it leads), then each of `paths`, one that is a link now with where
-/// it leads. Read before the directory is put back.
-fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
+/// The paths under the cases roots of `tree` that a step or an observation changed, as a refusal
+/// names them: each root that is not a directory first (a link, with where it leads, or a file),
+/// then each of `paths`, relative to `tree`, one that is a link now with where it leads. Read
+/// before the roots are put back.
+fn cases_named<'p>(tree: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
     let link = |at: &Path| {
         std::fs::symlink_metadata(at)
             .ok()
@@ -7993,19 +8020,23 @@ fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -
             })
     };
     let mut named = Vec::new();
-    let replaced = match std::fs::symlink_metadata(cases) {
-        Ok(meta) if !meta.is_dir() => {
+    let mut replaced: Vec<&str> = Vec::new();
+    for root in CASE_ROOTS {
+        let at = tree.join(root);
+        if let Ok(meta) = std::fs::symlink_metadata(&at)
+            && !meta.is_dir()
+        {
             named.push(format!(
-                "{CASES_DIR}{}",
-                link(cases).unwrap_or_else(|| ", replaced by a file".to_owned())
+                "{root}{}",
+                link(&at).unwrap_or_else(|| ", replaced by a file".to_owned())
             ));
-            true
+            replaced.push(root);
         }
-        _ => false,
-    };
+    }
     named.extend(paths.into_iter().map(|path| {
-        let shown = Path::new(CASES_DIR).join(path).display().to_string();
-        match (!replaced).then(|| link(&cases.join(path))).flatten() {
+        let shown = path.display().to_string();
+        let under_replaced = replaced.iter().any(|root| path.starts_with(root));
+        match (!under_replaced).then(|| link(&tree.join(path))).flatten() {
             Some(link) => format!("{shown}{link}"),
             None => shown,
         }
@@ -8157,25 +8188,12 @@ fn taken_on_case_branches(tree: &Path) -> Result<Vec<String>> {
 
 /// Every case under `tree` that records a story, as `(case id, story id)` in case order.
 fn cases_with_story(tree: &Path) -> Result<Vec<(String, String)>> {
-    let cases = tree.join(CASES_DIR);
-    if !cases.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&cases)
-        .with_context(|| format!("read {}", cases.display()))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    dirs.sort();
     let mut found = Vec::new();
-    for dir in dirs {
+    for (id, dir) in crate::case::case_dirs(tree)? {
         if !dir.join("case.yaml").is_file() {
             continue;
         }
         if let Some(story) = crate::case::story_of(&dir)? {
-            let id = dir
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
             found.push((id, story));
         }
     }
@@ -8204,7 +8222,7 @@ fn to_base(tree: &Path) -> Result<()> {
     // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
     crate::case::check_id(case)
         .with_context(|| format!("the branch {} names no case", crate::case::shown(&branch)))?;
-    let Some(base) = crate::case::Branch::read(&tree.join(CASES_DIR).join(case))
+    let Some(base) = crate::case::Branch::read(&CaseDir::locate(tree, case))
         .ok()
         .and_then(|recorded| recorded.base)
     else {
@@ -10068,7 +10086,12 @@ impl<'a> Run<'a> {
     /// writes and a step may not, names it under the case's `evidence/`: a record put there by
     /// any other hand is never one the run observed. `None` when there is none.
     fn observed_pass(&self, recorded: &[serde_json::Value]) -> Result<Option<(String, String)>> {
-        let mine = Path::new(CASES_DIR).join(&self.case.id).join("evidence");
+        let mine = self
+            .case
+            .dir
+            .strip_prefix(&self.tree)
+            .with_context(|| format!("locate the case {}", self.case.id))?
+            .join("evidence");
         for line in recorded.iter().rev() {
             if line["event"] != "evidence"
                 || line["kind"] != TEST_RESULT
@@ -10275,7 +10298,6 @@ impl<'a> Run<'a> {
                 crate::git::paths_named(&named)
             ));
         }
-        let cases = format!("{CASES_DIR}/");
         for file in &proposal.files {
             let path = file.path.as_str();
             if !loom_sdk::session::plain_relative(path) {
@@ -10283,7 +10305,7 @@ impl<'a> Run<'a> {
                     "{action} proposes {path:?}, which is no plain path of the tree"
                 ));
             }
-            if path == CASES_DIR || path.starts_with(&cases) {
+            if is_under_cases(path) {
                 return Some(format!(
                     "{action} proposes a path in the cases directory: {path}"
                 ));
@@ -10463,8 +10485,7 @@ impl<'a> Run<'a> {
             return Ok(Taken::Stop(Stop::StepRefused(why)));
         }
         let checkpoint = self.checkpoint(false)?;
-        let cases = self.tree.join(CASES_DIR);
-        let kept = snapshot(&cases)?;
+        let kept = snapshot_cases(&self.tree)?;
         let globs = self.judge_list()?.unwrap_or_default();
         let (surface, surface_kept) =
             JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
@@ -10493,7 +10514,7 @@ impl<'a> Run<'a> {
         // error.
         let kept_all = Kept {
             checkpoint: &checkpoint,
-            cases: &cases,
+            tree: &self.tree,
             cases_kept: &kept,
             surface: &surface,
             surface_kept: &surface_kept,
@@ -10502,7 +10523,7 @@ impl<'a> Run<'a> {
         };
         let seen = (|| -> Result<_> {
             let on_surface = differing(&surface_kept, &surface.snapshot(&self.tree)?);
-            let touched = differing(&kept, &snapshot(&cases)?);
+            let touched = differing(&kept, &snapshot_cases(&self.tree)?);
             let change = checkpoint.change(&self.tree)?;
             let moved = outside_kept.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
             Ok((on_surface, touched, change, moved))
@@ -10522,15 +10543,18 @@ impl<'a> Run<'a> {
                 });
             }
         };
-        let own: Vec<PathBuf> = match self.case.dir.file_name() {
-            Some(id) => validator
+        let own: Vec<PathBuf> = match self.case.dir.strip_prefix(&self.tree) {
+            Ok(case) => validator
                 .writes()
                 .iter()
-                .map(|path| Path::new(id).join(path))
+                .map(|path| case.join(path))
                 .collect(),
-            None => Vec::new(),
+            Err(_) => Vec::new(),
         };
-        let mut foreign = cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
+        let mut foreign = cases_named(
+            &self.tree,
+            touched.iter().filter(|path| !own.contains(path)),
+        );
         let mut outside: Vec<String> = planted;
         outside.extend(change.paths.iter().cloned());
         if change.staged {
@@ -10599,7 +10623,7 @@ impl<'a> Run<'a> {
             && self.deadline().is_some_and(|deadline| returned >= deadline)
             && let Some(h) = self.options.hours
         {
-            restore(&self.tree, &cases, &kept, &touched)?;
+            restore(&self.tree, &self.tree, &kept, &touched)?;
             let why = format!(
                 "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
                 self.steps,
@@ -11319,8 +11343,7 @@ impl<'a> Run<'a> {
         // would decide what only a validator or the operator decides. It is snapshotted
         // before the step and put back after, whatever the step reported and however it
         // ended; a step that touched it is refused.
-        let cases = self.tree.join(CASES_DIR);
-        let kept = snapshot(&cases)?;
+        let kept = snapshot_cases(&self.tree)?;
         // The judge surface likewise ([`JudgeSurface`]): the planning store and everything
         // else under `.engineering/` but the cases (the project file that says where the
         // store is kept, the gates and the assertions project file among it), whose
@@ -11465,7 +11488,7 @@ impl<'a> Run<'a> {
         let tree = self.tree.clone();
         let kept_all = Kept {
             checkpoint: &checkpoint,
-            cases: &cases,
+            tree: &self.tree,
             cases_kept: &kept,
             surface: &surface,
             surface_kept: &surface_kept,
@@ -11593,7 +11616,7 @@ impl<'a> Run<'a> {
         // What the step left, read now; a read that fails (a file the run may not read)
         // discards the step before the run ends on the error.
         let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
-            let touched = differing(&kept, &snapshot(&cases)?);
+            let touched = differing(&kept, &snapshot_cases(&self.tree)?);
             let mut surface_touched: BTreeSet<String> =
                 differing(&surface_kept, &surface.snapshot(&tree)?)
                     .iter()
@@ -11624,7 +11647,7 @@ impl<'a> Run<'a> {
         };
         // Named as the step left them; the cases directory is put back with the rest of the
         // step's change by `undo`, after the reset, on every path below that discards it.
-        let touched_named = cases_named(&cases, &touched);
+        let touched_named = cases_named(&self.tree, &touched);
         // A step that returned when the hour budget ended, failed (killed by it) or not, is
         // discarded whole like any failed step, recorded as a refusal, and the run stops on
         // the budget. One that reported keeps its step line, with its tokens and their
@@ -12037,7 +12060,7 @@ impl<'a> Run<'a> {
                 ask: true,
                 held: StepKept {
                     checkpoint,
-                    cases,
+                    tree: self.tree.clone(),
                     cases_kept: kept,
                     surface,
                     surface_kept,
@@ -12091,7 +12114,7 @@ impl<'a> Run<'a> {
             ask: false,
             held: StepKept {
                 checkpoint,
-                cases,
+                tree: self.tree.clone(),
                 cases_kept: kept,
                 surface,
                 surface_kept,

@@ -388,7 +388,7 @@ fn a_case_opened_with_no_identity_is_not_resumed_through_the_bot_route() {
         for named in [
             "the case local was opened with none",
             "--forge none",
-            ".engineering/cases/local",
+            ".takt/cases/local",
             "branch -D takt/local",
             IDENTITY_FILE,
             "--commit-identity",
@@ -427,7 +427,7 @@ fn a_pushing_run_with_no_identity_is_refused_before_its_case_opens() {
         ] {
             assert!(err.contains(named), "{named}: {said}");
         }
-        assert!(!world.repo.join(".engineering/cases").exists(), "{said}");
+        assert!(!world.repo.join(".takt/cases").exists(), "{said}");
         assert_eq!(git(&world.repo, &["rev-parse", "HEAD"]), start, "{said}");
         assert_eq!(
             git(&world.repo, &["branch", "--show-current"]),
@@ -502,7 +502,7 @@ fn a_scenario_run_through_the_bot_route_with_no_identity_is_refused_before_anyth
         "",
         "{said}"
     );
-    assert!(!world.repo.join(".engineering/cases").exists(), "{said}");
+    assert!(!world.repo.join(".takt/cases").exists(), "{said}");
     assert_eq!(world.route_calls(), "", "{said}");
 }
 
@@ -625,7 +625,7 @@ impl World {
             "{said}"
         );
         assert_eq!(git(&self.repo, &["status", "--porcelain"]), "", "{said}");
-        assert!(!self.repo.join(".engineering/cases").exists(), "{said}");
+        assert!(!self.repo.join(".takt/cases").exists(), "{said}");
         assert!(!self.repo.join("work.txt").exists(), "{said}");
         let calls = self.route_calls();
         let scans: Vec<&str> = calls

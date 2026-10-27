@@ -133,7 +133,7 @@ fn takts_gates_document_binds_the_check_tasks_commands_through_gate_exec() {
         &root,
         Path::new(GATES),
         Some(Path::new(PROJECT)),
-        Some(Path::new(".engineering/cases")),
+        Some(Path::new(".takt/cases")),
     )
     .unwrap_or_else(|error| panic!("takt's {GATES} with {PROJECT} loads: {error:#}"));
     let mut bound = Vec::new();

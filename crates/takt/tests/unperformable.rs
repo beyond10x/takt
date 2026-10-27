@@ -339,7 +339,7 @@ fn an_unperformable_stop_is_no_completion() {
 /// Writes the case `case` under `repo` with one run per stop line, each `(stop, completed)`;
 /// `completed` none writes a line without the field, as a binary before it did.
 fn stopped_runs(repo: &Path, case: &str, stops: &[(&str, Option<bool>)]) {
-    let dir = repo.join(".engineering/cases").join(case);
+    let dir = repo.join(".takt/cases").join(case);
     fs::create_dir_all(&dir).expect("a case directory");
     let mut text = String::new();
     for (n, (stop, completed)) in stops.iter().enumerate() {
@@ -414,8 +414,8 @@ fn the_stop_line_records_whether_the_stop_is_a_completion() {
     run.stop_when_unperformable();
     let mut out = Vec::new();
     run.run(&mut out).expect("the run stops without an error");
-    let text = fs::read_to_string(tree.join(".engineering/cases/stop-line/events.jsonl"))
-        .expect("the record");
+    let text =
+        fs::read_to_string(tree.join(".takt/cases/stop-line/events.jsonl")).expect("the record");
     let stop = text
         .lines()
         .rfind(|line| line.contains("\"event\":\"stop\""))
@@ -427,7 +427,7 @@ fn the_stop_line_records_whether_the_stop_is_a_completion() {
 /// [`stopped_runs`] and the held-out result `held` beside it, as the scorecard reads it.
 fn scenario_rows(repo: &Path, case: &str, stops: &[(&str, Option<bool>)], held: &str) -> Vec<Row> {
     stopped_runs(repo, case, stops);
-    let dir = repo.join(".engineering/cases").join(case);
+    let dir = repo.join(".takt/cases").join(case);
     fs::write(
         dir.join(takt::scorecard::HELD_OUT_FILE),
         format!("{held}\n"),
@@ -616,7 +616,7 @@ fn untouched(tree: &Path) -> [String; 3] {
                 "--untracked-files=all",
                 "--",
                 ".",
-                ":(exclude).engineering/cases",
+                ":(exclude).takt/cases",
             ],
         ),
         git(tree, &["ls-files", "--stage"]),

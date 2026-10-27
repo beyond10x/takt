@@ -1,4 +1,5 @@
-//! A Canon case on disk: `<tree>/.engineering/cases/<id>/` holds `case.yaml`, `protocol.ir.json`,
+//! A Canon case on disk: `<tree>/.takt/cases/<id>/` (or the legacy `<tree>/.engineering/cases/<id>/`,
+//! where a case already is) holds `case.yaml`, `protocol.ir.json`,
 //! `evidence/*.json`, `decisions/*.json`, `branch.yaml`, the case's branch and its pull
 //! request, `story.yaml`, the story the case was opened for, when it was, and `authority.yaml`,
 //! the authority the operator granted the case, once granted, `commit-identity`, the identity
@@ -33,8 +34,28 @@ use sha2::{Digest as _, Sha256};
 use crate::evidence::Record;
 use crate::protocol::LoadedProtocol;
 
-/// The directory under the tree that holds cases; excluded from the tree's change detection.
-pub const CASES_DIR: &str = ".engineering/cases";
+/// The directory under the tree that holds the cases a run opens: each case's record, evidence
+/// and files, under [`TAKT_DIR`], which takt keeps out of version control (its `.gitignore`).
+/// Excluded from the tree's change detection.
+pub const CASES_DIR: &str = ".takt/cases";
+
+/// The directory under the tree that held the cases before [`CASES_DIR`]. A case already there
+/// is read and written where it is; no new case opens here. Excluded from the tree's change
+/// detection like [`CASES_DIR`], and takt's own repository keeps its improvement turns here.
+pub const LEGACY_CASES_DIR: &str = ".engineering/cases";
+
+/// Both roots a case may be under, the one a new case opens under first.
+pub const CASE_ROOTS: [&str; 2] = [CASES_DIR, LEGACY_CASES_DIR];
+
+/// The directory under the tree that holds takt's runtime data, cases among it.
+pub const TAKT_DIR: &str = ".takt";
+
+/// The file in [`TAKT_DIR`] that ignores everything under it, written when it is absent. A
+/// repository that wants its cases in version control commits its own, and takt leaves it alone.
+pub const TAKT_GITIGNORE: &str = ".gitignore";
+
+/// The text of [`TAKT_GITIGNORE`] that takt writes: every path under [`TAKT_DIR`] ignored.
+const TAKT_GITIGNORE_TEXT: &str = "*\n";
 
 /// The prefix of a case's branch: `takt/<case id>`.
 pub const BRANCH_PREFIX: &str = "takt/";
@@ -123,7 +144,7 @@ fn opening_base(tree: &Path) -> Result<(Option<String>, Option<String>, Option<S
         Some((name, Some(other))) => {
             // The name is joined to the cases directory only as a case id.
             check_id(other).with_context(|| format!("the branch {} names no case", shown(name)))?;
-            let Some(base) = Branch::read(&tree.join(CASES_DIR).join(other))
+            let Some(base) = Branch::read(&CaseDir::locate(tree, other))
                 .ok()
                 .and_then(|branch| branch.base)
             else {
@@ -230,15 +251,53 @@ pub fn loop_baseline(tree: &Path, value: Option<&str>) -> Result<String> {
     }
 }
 
-/// Whether `path`, relative to the tree, is the cases directory or lies under it: what the
-/// kernel's change detection, commit and clean leave out. The directory and its contents only,
-/// never a path that merely starts with the same characters.
+/// Whether `path`, relative to the tree, is a cases root ([`CASE_ROOTS`]) or lies under one:
+/// what the kernel's change detection, commit and clean leave out, the new root and the legacy
+/// one alike. The directory and its contents only, never a path that merely starts with the
+/// same characters.
 #[must_use]
 pub fn is_under_cases(path: &str) -> bool {
-    path == CASES_DIR
-        || path
-            .strip_prefix(CASES_DIR)
+    CASE_ROOTS.iter().any(|root| {
+        path == *root
+            || path
+                .strip_prefix(root)
+                .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// Whether `path`, relative to the tree, is a directory that holds a cases root, such as
+/// `.takt`: git names an ignored directory as one entry, which would take its cases with it.
+#[must_use]
+pub fn holds_cases_root(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    CASE_ROOTS.iter().any(|root| {
+        root.strip_prefix(path)
             .is_some_and(|rest| rest.starts_with('/'))
+    })
+}
+
+/// Every case directory under `tree`, under either root, by case id in name order: a case under
+/// both roots is listed once, under the new one. Neither root present is none; a root that is
+/// not a directory is an error naming it.
+pub fn case_dirs(tree: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
+    for root in CASE_ROOTS {
+        let dir = tree.join(root);
+        match std::fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry.with_context(|| format!("read {}", dir.display()))?;
+                    if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                        let id = entry.file_name().to_string_lossy().into_owned();
+                        found.entry(id).or_insert_with(|| entry.path());
+                    }
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error).with_context(|| format!("read {}", dir.display())),
+        }
+    }
+    Ok(found.into_iter().collect())
 }
 
 /// The Unicode format characters, general category Cf (Unicode 15.1), as inclusive ranges:
@@ -364,7 +423,7 @@ fn branch_refusal(id: &str) -> Option<String> {
 /// point, named by its code point); and an id whose branch `takt/<id>` git would not accept,
 /// past 250 bytes among them ([`branch_refusal`]). Every id an operator gives (`takt approve`,
 /// `takt run --case`, `RunOptions.case_id`) passes here before it is joined to a path, so no
-/// id reaches outside `.engineering/cases`, nests a case inside another, holds a character
+/// id reaches outside a cases root ([`CASE_ROOTS`]), nests a case inside another, holds a character
 /// that does not show in a message or a `takt/<id>` branch, or opens a case whose branch git
 /// cannot make. The check does not normalise: `café` precomposed (NFC) and decomposed (NFD)
 /// are two ids, two case directories and two branches. The refusal names the id as typed, a
@@ -430,7 +489,8 @@ fn take_hold(case_dir: &Path, id: &str) -> Result<()> {
                 _ => "since a moment ago".to_owned(),
             };
             bail!(
-                "the case {id} is held {since} ({CASES_DIR}/{id}/{LOCK_FILE}) by a run or an approval; if neither is in progress, remove the file"
+                "the case {id} is held {since} ({}) by a run or an approval; if neither is in progress, remove the file",
+                case_dir.join(LOCK_FILE).display()
             );
         }
         Err(error) => {
@@ -1020,7 +1080,7 @@ pub fn prepare_grant(
     approver: &str,
 ) -> Result<PendingGrant> {
     check_id(id)?;
-    let dir = tree.join(CASES_DIR).join(id);
+    let dir = CaseDir::locate(tree, id);
     if !dir.join("case.yaml").is_file() {
         bail!("no case {id} at {}", dir.display());
     }
@@ -1345,7 +1405,7 @@ fn held_evidence(case: &str, name: &str, text: &str) -> Result<HeldEvidence> {
     })
 }
 
-/// The governor of Loom's case store over one case's directory, `.engineering/cases/<id>/`:
+/// The governor of Loom's case store over one case's directory, `.takt/cases/<id>/`:
 /// the case is read from the files takt writes (`case.yaml`, `evidence/`), and observations are
 /// kept in [`OBSERVATIONS_FILE`] beside them. It holds one case, the one whose directory it is,
 /// under the name its protocol is registered with the governor by (`<name>/<major>`, the
@@ -1934,15 +1994,10 @@ pub fn resumable(
     active: &[String],
     out: &mut dyn Write,
 ) -> Result<Option<(String, String)>> {
-    let cases = tree.join(CASES_DIR);
-    if active.is_empty() || !cases.is_dir() {
+    if active.is_empty() {
         return Ok(None);
     }
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&cases)
-        .with_context(|| format!("read {}", cases.display()))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    dirs.sort();
+    let dirs: Vec<PathBuf> = case_dirs(tree)?.into_iter().map(|(_, dir)| dir).collect();
     for dir in dirs {
         if !dir.join("case.yaml").is_file() {
             continue;
@@ -2348,7 +2403,7 @@ pub fn current(tree: &Path) -> Result<PathBuf> {
         )
     })?;
     check_id(id).with_context(|| format!("the branch {} names no case", shown(&branch)))?;
-    let dir = tree.join(CASES_DIR).join(id);
+    let dir = CaseDir::locate(tree, id);
     if !dir.join("case.yaml").is_file() {
         bail!(
             "the branch {} names no case at {}",
@@ -2359,27 +2414,41 @@ pub fn current(tree: &Path) -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// Refuses the case `id` under `tree` when a link stands on the way to its directory:
-/// `.engineering`, the cases directory or the case's own directory. What a link points at could
-/// be anywhere, in the tree or out of it, and a run snapshots the cases directory without
-/// following one, so a case reached through a link would be read and written where no snapshot
-/// sees it. `what` says what the case is not: `opened`, `resumed`.
+/// Refuses the case `id` under `tree` when a link stands on the way to its directory under
+/// either root: `.takt` or `.engineering`, the cases directory or the case's own directory.
+/// What a link points at could be anywhere, in the tree or out of it, and a run snapshots the
+/// cases directories without following one, so a case reached through a link would be read and
+/// written where no snapshot sees it. `what` says what the case is not: `opened`, `resumed`.
 pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Result<()> {
-    let mut way = PathBuf::new();
-    for part in Path::new(CASES_DIR).join(id).components() {
-        way.push(part);
-        let at = tree.join(&way);
-        if std::fs::symlink_metadata(&at).is_ok_and(|meta| meta.file_type().is_symlink()) {
-            let target = std::fs::read_link(&at)
-                .with_context(|| format!("read the link {}", at.display()))?;
-            bail!(
-                "the case {id} is not {what}: {} is a link to {}; a case is never read or written through a link",
-                way.display(),
-                target.display()
-            );
+    for root in CASE_ROOTS {
+        let mut way = PathBuf::new();
+        for part in Path::new(root).join(id).components() {
+            way.push(part);
+            let at = tree.join(&way);
+            if std::fs::symlink_metadata(&at).is_ok_and(|meta| meta.file_type().is_symlink()) {
+                let target = std::fs::read_link(&at)
+                    .with_context(|| format!("read the link {}", at.display()))?;
+                bail!(
+                    "the case {id} is not {what}: {} is a link to {}; a case is never read or written through a link",
+                    way.display(),
+                    target.display()
+                );
+            }
         }
     }
     Ok(())
+}
+
+/// Writes [`TAKT_GITIGNORE`] under `tree`'s [`TAKT_DIR`] when there is none, creating the
+/// directory as needed. A file already there is left as it is, byte for byte.
+fn write_takt_gitignore(tree: &Path) -> Result<()> {
+    let takt = tree.join(TAKT_DIR);
+    let path = takt.join(TAKT_GITIGNORE);
+    if std::fs::symlink_metadata(&path).is_ok() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&takt).with_context(|| format!("create {}", takt.display()))?;
+    std::fs::write(&path, TAKT_GITIGNORE_TEXT).with_context(|| format!("write {}", path.display()))
 }
 
 /// The records profile a run keeps its case's decisions under: `default` keeps the latest
@@ -2557,7 +2626,8 @@ impl Decision {
 pub struct CaseDir {
     /// The case id.
     pub id: String,
-    /// `<tree>/.engineering/cases/<id>`.
+    /// `<tree>/.takt/cases/<id>`, or `<tree>/.engineering/cases/<id>` for a case that is there
+    /// ([`CaseDir::locate`]).
     pub dir: PathBuf,
     /// The case's branch, `takt/<id>`.
     pub branch: String,
@@ -2572,6 +2642,24 @@ pub struct CaseDir {
 }
 
 impl CaseDir {
+    /// The directory of case `id` under `tree`: under [`CASES_DIR`] when it is there, else under
+    /// [`LEGACY_CASES_DIR`] when it is there, so a case already under the legacy root is read and
+    /// written where it is. A case in neither is one a new open makes, so the directory under
+    /// [`CASES_DIR`] is named. Nothing is created or read beyond the two existence checks.
+    #[must_use]
+    pub fn locate(tree: &Path, id: &str) -> PathBuf {
+        let new = tree.join(CASES_DIR).join(id);
+        if std::fs::symlink_metadata(&new).is_ok() {
+            return new;
+        }
+        let legacy = tree.join(LEGACY_CASES_DIR).join(id);
+        if std::fs::symlink_metadata(&legacy).is_ok() {
+            legacy
+        } else {
+            new
+        }
+    }
+
     /// Opens a new case under `tree` on `protocol` for `intent`: the `intent` artifact at the
     /// SHA-256 of the intent text, `implementation` at `HEAD`, every other artifact at `r0`, and
     /// the inputs given; a declared input that is not given is refused, naming its values: the
@@ -2614,8 +2702,12 @@ impl CaseDir {
         check_id(id)?;
         refuse_link_on_the_way(tree, id, "opened")?;
         let dir = tree.join(CASES_DIR).join(id);
-        if dir.exists() {
-            return Err(anyhow!("the case {id} already exists at {}", dir.display()));
+        let existing = CaseDir::locate(tree, id);
+        if std::fs::symlink_metadata(&existing).is_ok() {
+            return Err(anyhow!(
+                "the case {id} already exists at {}",
+                existing.display()
+            ));
         }
         let uncommitted = crate::git::uncommitted(tree)?;
         if !uncommitted.is_empty() {
@@ -2708,6 +2800,9 @@ impl CaseDir {
             pull_request: None,
         };
         crate::git::create_branch(tree, &branch.name, from.as_deref())?;
+        let takt_dir = tree.join(TAKT_DIR);
+        let takt_was = std::fs::symlink_metadata(&takt_dir).is_ok();
+        let ignore_was = std::fs::symlink_metadata(takt_dir.join(TAKT_GITIGNORE)).is_ok();
         let opened = (|| {
             // The branch's tip is the implementation revision: not the HEAD the case was asked
             // on when the branch forked from a base elsewhere.
@@ -2729,6 +2824,7 @@ impl CaseDir {
             {
                 case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
+            write_takt_gitignore(tree)?;
             case.create(intent, &branch)?;
             if let Some(identity) = &identity {
                 let path = case.dir.join(COMMIT_IDENTITY_RECORD);
@@ -2738,7 +2834,15 @@ impl CaseDir {
             Ok(case)
         })();
         opened.map_err(|error: anyhow::Error| {
-            match Self::undo_open(tree, &dir, &branch.name, branch.left.as_deref(), &head) {
+            let existed = (takt_was, ignore_was);
+            match Self::undo_open(
+                tree,
+                &dir,
+                &branch.name,
+                branch.left.as_deref(),
+                &head,
+                existed,
+            ) {
                 Ok(()) => error,
                 Err(undo) => error.context(format!(
                     "and the half-opened case {id} could not be taken back: {undo:#}"
@@ -2748,14 +2852,17 @@ impl CaseDir {
     }
 
     /// Takes back an open that failed after its branch was made: the case directory if any of
-    /// it was written, the cases directory when it is empty, and the branch, the tree back on
-    /// `left`, or detached at `start` when it was detached.
+    /// it was written, the cases directory when it is empty, the `.takt/.gitignore` and the
+    /// `.takt/` directory the open wrote where they were absent before (`existed`: whether
+    /// `.takt/` and its ignore file were there), and the branch, the tree back on `left`, or
+    /// detached at `start` when it was detached.
     fn undo_open(
         tree: &Path,
         dir: &Path,
         branch: &str,
         left: Option<&str>,
         start: &str,
+        existed: (bool, bool),
     ) -> Result<()> {
         if std::fs::symlink_metadata(dir).is_ok() {
             std::fs::remove_dir_all(dir)
@@ -2764,6 +2871,14 @@ impl CaseDir {
         // The cases directory stays only while a case is in it.
         if let Some(cases) = dir.parent() {
             let _ = std::fs::remove_dir(cases);
+        }
+        let (takt_was, ignore_was) = existed;
+        let takt_dir = tree.join(TAKT_DIR);
+        if !ignore_was {
+            let _ = std::fs::remove_file(takt_dir.join(TAKT_GITIGNORE));
+        }
+        if !takt_was {
+            let _ = std::fs::remove_dir(&takt_dir);
         }
         match left {
             Some(left) => crate::git::run(tree, &["checkout", "-q", left])?,
@@ -2793,7 +2908,7 @@ impl CaseDir {
     pub fn resume(tree: &Path, id: &str) -> Result<Self> {
         check_id(id)?;
         refuse_link_on_the_way(tree, id, "resumed")?;
-        let dir = tree.join(CASES_DIR).join(id);
+        let dir = Self::locate(tree, id);
         let snapshot = dir.join("case.yaml");
         if !snapshot.is_file() {
             bail!("no case {id} at {}", dir.display());
@@ -2856,7 +2971,8 @@ impl CaseDir {
     /// hold among them, until this holds ([`crate::Run::run`]).
     pub fn check_way(&self) -> Result<()> {
         let mut way = PathBuf::new();
-        for part in Path::new(CASES_DIR).join(&self.id).components() {
+        let relative = self.dir.strip_prefix(&self.tree).unwrap_or(&self.dir);
+        for part in relative.components() {
             way.push(part);
             let at = self.tree.join(&way);
             let meta =

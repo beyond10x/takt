@@ -50,7 +50,7 @@ enum Commands {
     /// The repository's scenarios: a story at a known seed commit, run from a fresh base.
     #[command(subcommand)]
     Scenario(ScenarioCommands),
-    /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
+    /// Print, per run of a case under `.takt/cases/`, its outcome, steps, tokens,
     /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` and, for
     /// a scenario run's outcome, from the held-out check beside it; a case without a record is
     /// listed as `no record`. The binary a case's runs were made with is
@@ -116,7 +116,7 @@ enum Commands {
 
 #[derive(clap::Args)]
 struct ReplayArgs {
-    /// The case directory, `<repo>/.engineering/cases/<id>`; only read.
+    /// The case directory, `<repo>/.takt/cases/<id>`; only read.
     #[arg(long, value_name = "DIR")]
     case: PathBuf,
     /// The step to replay, as the case's record numbers it in its run: a judgement step, one
@@ -331,7 +331,7 @@ struct PromoteArgs {
     /// With --baseline-only and --revision: the installed binary's sha256, lower-case hex.
     /// `<root>/bin/takt` must name no revision and hash to it, and every run of the scorecard
     /// must state the same digest in a `binary.txt` beside its record
-    /// (`.engineering/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
+    /// (`.takt/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
     /// line the operator's note, copied into the record); otherwise refused naming the binary's
     /// digest or the run, nothing written. Refused when the binary's `--version` names a
     /// revision, and without --baseline-only or --revision.
@@ -1358,7 +1358,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 takt::case::check_id(&resuming.id)?;
                 if let Some(why) = takt::case::turn_judge_refusal(
-                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &running_binary()?,
                 )? {
                     return Err(anyhow!(why));
@@ -1388,7 +1388,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             if let Some(resuming) = &resuming {
                 let run_forge = forge.forge.as_ref().map_or("none", |forge| forge.name());
                 if let Some(why) = takt::case::turn_forge_refusal(
-                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &resuming.id,
                     run_forge,
                 )? {
@@ -2500,7 +2500,7 @@ fn trial_free(repo: &Path, scenario: &str, n: u128) -> Result<String> {
 /// What of the case `case_id` is there already, its directory or its branch `takt/<case>`;
 /// none when neither is. `case_id` is one [`takt::case::check_id`] accepted.
 fn case_taken(repo: &Path, case_id: &str) -> Result<Option<String>> {
-    if repo.join(takt::case::CASES_DIR).join(case_id).exists() {
+    if takt::case::CaseDir::locate(repo, case_id).exists() {
         return Ok(Some(format!("the case {case_id}")));
     }
     let branch = takt::case::Branch::name_of(case_id);
@@ -3037,7 +3037,7 @@ fn case_to_resume(
 /// nothing outside the cases directory is read.
 fn case_protocol(repo: &Path, id: &str) -> Result<Option<LoadedProtocol>> {
     takt::case::check_id(id)?;
-    let dir = repo.join(takt::case::CASES_DIR).join(id);
+    let dir = takt::case::CaseDir::locate(repo, id);
     if !dir.join("case.yaml").is_file() {
         return Ok(None);
     }
@@ -3090,7 +3090,7 @@ fn resume_install_root(repo: &Path, id: &str, protocol: &str, given: &Path) -> R
         )
     };
     let recorded = if protocol == takt::case::TURN_PROTOCOL {
-        takt::case::install_root_of(&repo.join(takt::case::CASES_DIR).join(id))?
+        takt::case::install_root_of(&takt::case::CaseDir::locate(repo, id))?
     } else {
         None
     };
@@ -3122,7 +3122,7 @@ fn refuse_identity_for_resume(
     given: Option<&takt::git::CommitIdentity>,
     pushes: bool,
 ) -> Result<()> {
-    let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+    let recorded = takt::case::commit_identity_of(&takt::case::CaseDir::locate(repo, id))?;
     if let Some(given) = given
         && recorded.as_ref() != Some(given)
     {
@@ -3141,7 +3141,7 @@ fn refuse_identity_for_resume(
         // No command closes or drops a case: the way past one is to finish it without pushing,
         // or to remove its branch and its directory, after which no run finds it and its story
         // is taken again, the take having been committed on that branch only.
-        let dir = repo.join(takt::case::CASES_DIR).join(id);
+        let dir = takt::case::CaseDir::locate(repo, id);
         let base = takt::case::Branch::read(&dir)
             .ok()
             .and_then(|branch| branch.base)
@@ -3173,7 +3173,7 @@ fn identity_at_open(
         return Ok(Some((given.clone(), "--commit-identity".to_owned())));
     }
     if let Some(id) = resuming {
-        let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+        let recorded = takt::case::commit_identity_of(&takt::case::CaseDir::locate(repo, id))?;
         return Ok(recorded.map(|identity| (identity, format!("the case {id}"))));
     }
     let from = takt::git::current_branch(repo)?
@@ -3181,7 +3181,7 @@ fn identity_at_open(
         .and_then(|branch| branch.strip_prefix(takt::case::BRANCH_PREFIX))
         .filter(|other| takt::case::check_id(other).is_ok())
         .and_then(|other| {
-            takt::case::Branch::read(&repo.join(takt::case::CASES_DIR).join(other))
+            takt::case::Branch::read(&takt::case::CaseDir::locate(repo, other))
                 .ok()
                 .and_then(|branch| branch.base)
         });
@@ -3429,7 +3429,7 @@ mod tests {
 
     /// The one case directory under `repo`.
     fn the_case(repo: &Path) -> PathBuf {
-        let mut cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+        let mut cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
             .expect("a cases directory")
             .map(|e| e.expect("an entry").path())
             .collect();
@@ -3491,7 +3491,7 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         assert!(out.contains("frontier: nothing ready"), "{out}");
         assert!(!out.contains("case "), "{out}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
         assert_eq!(status(&repo, "story:blocked-one"), "proposed");
         assert_eq!(status(&repo, "story:waits-one"), "proposed");
     }
@@ -3762,7 +3762,7 @@ mod tests {
             &["--forge", "bot"],
         ));
         assert!(error.contains("origin"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// The bot route pushes under a GitHub App and reads through `gh`: asked for on another
@@ -3785,7 +3785,7 @@ mod tests {
             &["--forge", "bot"],
         ));
         assert!(error.contains("not github.com"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// Answers glab's login check as a glab with no login does, exit 1, and keeps each line
@@ -3860,7 +3860,7 @@ mod tests {
             &["--forge", "hub"],
         ));
         assert_eq!(error, "no forge `hub`: bot, gitlab or none");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is
@@ -3892,7 +3892,7 @@ mod tests {
                 "HEAD",
             ],
         );
-        fs::create_dir_all(repo.join(".engineering/cases/scenario-1-trial-2026101914253000000044"))
+        fs::create_dir_all(repo.join(".takt/cases/scenario-1-trial-2026101914253000000044"))
             .expect("a case directory");
         git(
             &repo,
@@ -4027,7 +4027,7 @@ mod tests {
         assert_eq!(
             git_out(
                 &repo,
-                &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+                &["status", "--porcelain", "--", ".", ":!.takt/cases"]
             ),
             ""
         );
@@ -4121,7 +4121,7 @@ mod tests {
         ]);
         assert!(error.contains("--case"), "{error}");
         assert!(error.contains("--intent"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     #[test]
@@ -4137,7 +4137,7 @@ mod tests {
             "operator",
         ]);
         assert!(error.contains("absent"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// An hour budget that is not a finite number above 0 is refused before the run, for
@@ -4165,6 +4165,6 @@ mod tests {
                 assert!(error.contains("--hours"), "{args:?}: {error}");
             }
         }
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 }

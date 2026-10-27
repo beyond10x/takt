@@ -1,6 +1,6 @@
 //! The governor of Loom holds and decides takt's cases (`story:governor-holds-takts-cases`).
 //!
-//! `CaseFiles` is the governor's case store over `.engineering/cases/<id>/`: the case's files are
+//! `CaseFiles` is the governor's case store over `.takt/cases/<id>/`: the case's files are
 //! where takt writes them, and `observations.json` beside them. Every `decisions/NNNN.json` is the
 //! `canon-decision/1` document the governor rendered for that evaluation, which supplies no
 //! authority. A grant reaches the run as the answer of `CaseAuthority`, the authority provider

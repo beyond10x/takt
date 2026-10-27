@@ -131,7 +131,7 @@ fn commit(tree: &Path, definitions: &str, message: &str) -> String {
     let path = tree.join(DEFINITIONS);
     fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
     fs::write(&path, definitions).expect("the definitions");
-    git(tree, &["add", "-A", "--", ".", ":!.engineering/cases"]);
+    git(tree, &["add", "-A", "--", ".", ":!.takt"]);
     git(tree, &["commit", "-q", "--allow-empty", "-m", message]);
     git(tree, &["rev-parse", "HEAD"])
 }
@@ -180,7 +180,7 @@ fn turn(
     decisions: &[At<'_>],
     events: &[serde_json::Value],
 ) {
-    let dir = tree.join(".engineering/cases").join(id);
+    let dir = tree.join(".takt/cases").join(id);
     fs::create_dir_all(dir.join("decisions")).expect("the case directory");
     fs::create_dir_all(dir.join("evidence")).expect("the evidence directory");
     fs::write(
@@ -323,7 +323,7 @@ fn merged(case: &mut CaseDir) {
 
 /// Moves the turn `id`'s `baseline` revision to `revision`.
 fn on_baseline(tree: &Path, id: &str, revision: &str) {
-    let path = tree.join(".engineering/cases").join(id).join("case.yaml");
+    let path = tree.join(".takt/cases").join(id).join("case.yaml");
     let text = fs::read_to_string(&path).expect("case.yaml").replace(
         &format!("revision: b-{id}"),
         &format!("revision: {revision}"),
@@ -333,7 +333,7 @@ fn on_baseline(tree: &Path, id: &str, revision: &str) {
 
 /// Moves the turn `id`'s `finding` revision to `revision`.
 fn on_finding(tree: &Path, id: &str, revision: &str) {
-    let path = tree.join(".engineering/cases").join(id).join("case.yaml");
+    let path = tree.join(".takt/cases").join(id).join("case.yaml");
     let text = fs::read_to_string(&path).expect("case.yaml").replace(
         &format!("revision: f-{id}"),
         &format!("revision: {revision}"),

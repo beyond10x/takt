@@ -298,10 +298,7 @@ fn assert_refused_and_put_back(tree: &Scratch, ran: &Ran, path: &str) {
         "{}",
         ran.text
     );
-    let left = git(
-        tree,
-        &["status", "--porcelain", "--", ".", ":!.engineering/cases"],
-    );
+    let left = git(tree, &["status", "--porcelain", "--", ".", ":!.takt/cases"]);
     assert!(
         left.is_empty(),
         "the step's change is left: {left}\n{}",

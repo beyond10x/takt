@@ -119,7 +119,7 @@ impl World {
 
     /// The transcripts the case's run record names, relative to the transcripts directory.
     fn named(&self) -> Vec<String> {
-        let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(".engineering/cases"))
+        let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(".takt/cases"))
             .expect("the cases directory")
             .map(|entry| entry.expect("an entry").path())
             .collect();
@@ -269,7 +269,7 @@ fn an_unusable_named_state_dir_is_refused_before_the_case_opens() {
             );
             assert!(said.contains(why), "{why}: {args:?}\n{said}");
             assert!(
-                !world.repo().join(".engineering/cases").exists(),
+                !world.repo().join(".takt/cases").exists(),
                 "no case was opened: {args:?}\n{said}"
             );
         }
