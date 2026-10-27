@@ -110,8 +110,15 @@ fn keys_the_file_takes(dir: &Path) -> Vec<String> {
     let keys: Vec<String> = quoted(shape)
         .into_iter()
         .filter(|name| {
-            !["gates", "none", "default", "trial", "llm.routes/1", "{path: <file>}"]
-                .contains(&name.as_str())
+            ![
+                "gates",
+                "none",
+                "default",
+                "trial",
+                "llm.routes/1",
+                "{path: <file>}",
+            ]
+            .contains(&name.as_str())
         })
         .collect();
     assert!(
