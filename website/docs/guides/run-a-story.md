@@ -167,7 +167,7 @@ With `--forge bot` or `--forge gitlab`, the steps go on from `change.read`:
 A trial is one delivery of a known story on
 [todo-app-example](https://github.com/beyond10x/todo-app-example), the scratch repository takt's
 live trials run against, ending `Completed`, exit 0, with its pull request merged. Each trial is
-one `takt scenario run` of scenario 1 (`story:remove-a-todo`, seed `865eaa8`, as
+one `takt scenario run` of scenario 1 (`story:remove-a-todo`, from the seed
 `.engineering/scenarios.conf` on its `main` declares): the run cuts a fresh base branch
 `trial/<n>` from the seed, opens the case `scenario-1-trial-<n>` on `story.delivery/1`, and its
 pull request targets `trial/<n>` ([Scenario run](./scenario-run.md)). A second trial is another
@@ -240,6 +240,38 @@ takt run --repo . --case scenario-1-trial-<n> --harness claude \
 
 `--by` names who grants: `human:<name>` for a person, `agent:<role>` for the agent that runs the
 trial. The case keeps the commit identity it was opened with, so the resume does not give it.
+
+**An agent's grant needs a delegation at the base.** Before it merges, `repository.merge` judges
+every path the change touches against `.engineering/judge-allow.yaml` at the tip of the merge
+target, `trial/<n>`. A path that file does not admit is a judge surface. With no such file, every
+path is one. A change to a judge surface merges under the owner's grant (`human:<id>`). An agent
+role's grant (`agent:<role>`) counts only when `.engineering/delegations.yaml` at that same tip
+records an unrevoked delegation to exactly that role:
+
+```yaml
+delegations:
+  - owner: human:<id>
+    role: agent:<role>
+    capability: repository.merge.judge_surface
+    given_at: "2026-10-27T18:00:00Z"
+```
+
+`role` must be the `--by` value word for word. Both files are read only at the merge target's tip,
+never from the case's tree, so they belong in the seed commit the trial branch is cut from; a
+case's own edit of either counts for nothing. A change to either file merges under the owner's
+grant alone.
+
+When the delegation is missing, the `ApprovalRequired` stop does not say so. `takt approve --by
+agent:<role>` succeeds, and the resumed run merges nothing. Its `repository.merge` evidence reads:
+
+```text
+pull request #<number> at <revision> is open and granted by agent:<role>, and merging <revision>
+into trial/<n> at <tip> changes judge surfaces, ...; agent:<role> is not the owner, and no
+delegation of repository.merge.judge_surface to it is on record at trial/<n> <tip>
+(.engineering/delegations.yaml is not there); nothing merged, the claim stays unknown
+```
+
+Put the delegation on the seed, cut a new trial, and run it again.
 
 The record is the clone's `.takt/cases/scenario-1-trial-<n>/` ([Case files](../reference/case-files.md)):
 `events.jsonl` holds the `opened` line, with `harness_program` and `preflight`, every step, and the
