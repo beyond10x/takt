@@ -1,0 +1,15 @@
+{
+  "at": "2026-10-27T08:32:58Z",
+  "actor": "human:timo",
+  "artifact": "story:harness-none-takes-a-granted-action",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "findings 4 and 5: the case is finished only by a local merge on --forge none, story:forge-none-merges-locally (informed_by this story); the adversary case reaches the branch, pinned to today's stop, in dcfb772f; finding 6 (ess-inputs lists no scenario, pre-existing) to story:story-acceptance-scenarios-run-in-task-check",
+    "reference": "dcfb772f",
+    "review": "review-result:adversary-fresh-repository-wave",
+    "outcome": "escalated"
+  }
+}

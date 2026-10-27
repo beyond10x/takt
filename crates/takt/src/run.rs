@@ -8018,13 +8018,15 @@ fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -
 const CARGO_LOCK_REMEDY: &str = "commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it";
 
 /// Whether one of the `paths` a step changed is a `Cargo.lock` at any directory level that the
-/// repository does not track: git lists it under neither the index nor a commit.
+/// repository does not track: git lists it under neither the index nor a commit. The path is
+/// looked up literally (`--literal-pathspecs`): a directory named `:` or holding a glob
+/// character is no pathspec magic (story:untracked-cargo-lock-remedy).
 fn untracked_cargo_lock(tree: &Path, paths: &[String]) -> bool {
     paths.iter().any(|path| {
         Path::new(path)
             .file_name()
             .is_some_and(|name| name == "Cargo.lock")
-            && crate::git::run(tree, &["ls-files", "-z", "--", path])
+            && crate::git::run(tree, &["--literal-pathspecs", "ls-files", "-z", "--", path])
                 .is_ok_and(|listed| listed.is_empty())
     })
 }

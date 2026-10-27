@@ -2,14 +2,16 @@
 format: aep.planning-md/3
 id: dependency-blocker:substrate-confinement-consumer-surface
 kind: dependency-blocker
-status: open
+status: cleared
 title: Substrate's confinement consumer surface is in no substrate release yet
 summary: substrate story:confinement-consumer-surface, in the first substrate release after 0.11.0 that ships it
 tags:
 - adr-0109
 relations:
 - blocks: story:confinement-through-substrate-on-linux-and-macos
-revision: 1
+revision: 2
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-27T08:56:28Z", actor: "human:timo", revision: 2, decided_on: {"recorded":{"verification":1}}}
 ---
 # Dependency blocker: substrate-confinement-consumer-surface
 
