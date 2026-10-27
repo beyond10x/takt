@@ -45,30 +45,34 @@ macOS, `cargo install` from the tag, and the container image are in [Install](./
 | the tests | the test command's toolchain; the default is `cargo test --quiet` |
 | no model | `--harness none`: only the validators run |
 | Claude Code | `claude` on the `PATH`, logged in (the default harness) |
-| Codex or b10x-harness | `codex` or `b10x-harness` on the `PATH`, and [b10x-gates](https://github.com/beyond10x/gates) with a policy file in `B10X_GATES_POLICY`: required, not optional (below) |
+| Codex or b10x-harness | `codex` or `b10x-harness` on the `PATH`, and a scan adapter for what they propose (below) |
 | a story | `aep`, a planning store with a ready story, and a gates document ([Run a story](./guides/run-a-story.md)) |
-| a pull request on github.com | `--forge bot`: the b10x-gates bot App, with `b10x-gates` configured for it, and `gh` to read the pull request |
-| a merge request on a GitLab host | `--forge gitlab`: `glab` logged in to that host |
-| no pull request | `--forge none` |
+| a pull request or merge request | a forge adapter: `gitlab` (`glab` logged in to the host) or `bot` (github.com through the beyond10x bot App); `--forge none` runs without one |
 | `takt promote` | on Linux bubblewrap (`bwrap`), on macOS `/usr/bin/sandbox-exec`; and rustup's default toolchain |
 
-### The gates scan is required for every harness but Claude Code
+### The scan before a proposal is accepted
 
 Codex and b10x-harness sessions may read outside the copy they work in, so takt accepts what they
-propose only after `b10x-gates` has scanned it under the policy file `B10X_GATES_POLICY` names.
-This is a hard requirement, not a check that is skipped when absent: with no policy the proposal
-is refused, `not scanned, which is not passed`, and a scan that cannot run, `b10x-gates` missing
-among them, refuses it as well. Claude Code's file tools
-stay inside the copy, so a Claude Code session needs no policy. Every proposal, from any harness,
-is also checked for the shape of a credential.
+propose only after a scan passed it, or after the run declared that nothing scans it. The scan is
+an adapter, named by `scan` in the [run configuration file](./reference/configuration.md#the-scan):
 
-### The bot forge is github.com through the b10x-gates App
+| `scan` | what scans a proposal |
+|---|---|
+| `gates`, the default | [b10x-gates](https://github.com/beyond10x/gates), beyond10x's scanner, under the policy file `B10X_GATES_POLICY` names |
+| `none` | nothing; declared only in the file `--config` gives, never by a flag |
 
-`--forge bot`, the default for a repository whose `origin` is on github.com, pushes the case's
-branch, opens its pull request and merges it through `b10x-gates bot`, which acts as the b10x-gates
-GitHub App, and reads the pull request's state and checks with `gh`. It serves github.com only and
-is not a general forge adapter. A GitLab host is `--forge gitlab`; anything else runs with
-`--forge none` ([Configuration](./reference/configuration.md#the-forge)).
+A Codex or b10x-harness run with neither a policy nor `scan: none` is refused before its case
+opens, exit 1. Under `scan: none` the run says so before its first step. Every proposal, from any
+harness and under either adapter, is checked for the shape of a credential. Claude Code's file
+tools stay inside the copy, so a Claude Code run needs neither.
+
+### The forge
+
+The forge is the adapter a change leaves the machine through. `gitlab` pushes over HTTPS under
+`glab`'s login and opens the merge request through `glab api`. `bot` is beyond10x's route for
+github.com: `b10x-gates bot` pushes and opens the pull request as a GitHub App, and `gh` reads it.
+`none` opens nothing and leaves the delivery as a candidate commit. Without `--forge`, takt picks
+one from `origin` ([Configuration](./reference/configuration.md#the-forge)).
 
 :::note[macOS]
 
@@ -100,7 +104,7 @@ What differs from Linux:
 ## A run with no model
 
 Make a crate with one passing test and commit it, `Cargo.lock` included. A test run that writes a
-lock file the commit lacks is refused as a change the validator may not make.
+lock file the commit lacks is refused as a change the validator may not make; the refusal names the three ways out: commit `Cargo.lock`, ignore it in `.gitignore`, or give `--test-cmd` a command that does not write it.
 
 ```sh
 cargo new --lib takt-demo
@@ -176,6 +180,32 @@ its own validator ran the tests again on the new revision. The model never ran t
 and its word is not evidence. Without `--harness codex`, the same command runs Claude Code and
 needs no `B10X_GATES_POLICY`. To use an LLM endpoint of your own through b10x-harness, see
 [Configure a run](./guides/configure-a-run.md).
+
+The same command with no policy and no `scan: none` is refused before anything is opened:
+
+```console
+$ takt run --repo . --harness codex --forge none --intent "add a function sub"
+takt: --harness codex runs a session that may read outside its copy, and the scan adapter `gates` has no policy (B10X_GATES_POLICY is not set): what it proposes would not be scanned, and not scanned is never passed; set B10X_GATES_POLICY to a gates policy file, or declare `scan: none` in the run configuration file given with --config (`takt run --config <file>`) to accept what it proposes unscanned, checked only for the shape of a credential; nothing was opened
+```
+
+Without b10x-gates, declare in a file that nothing scans, and give it with `--config` (output run
+beside `~/takt-demo`; only that path was shortened):
+
+```toml
+scan = "none"
+harness = "codex"
+forge = "none"
+```
+
+```console
+$ takt run --repo takt-demo --config run.toml --iterations 0 --intent "add a function sub"
+scan: none (declared in run.toml); what --harness codex proposes is accepted unscanned, checked only for the shape of a credential
+case takt-20261027T014116Z on software.change/1 in ~/takt-demo; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
+frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
+stopped: Iterations (0); steps 0, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261027T014116Z
+```
+
+The case's `opened` event records `"scan":"none"`.
 
 ## Next
 

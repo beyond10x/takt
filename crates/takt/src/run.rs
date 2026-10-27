@@ -44,6 +44,8 @@ use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::git::{BoundedDiff, DiffContext};
 use crate::harness::{CHANGE_SHOWN_BYTES, ChangeSoFar, Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
+use crate::scan::Scan;
+pub use crate::scan::gates::ChangeScan;
 use crate::validator::{ChoiceEffect, Effect, Step, Validator, ValidatorEffect, outcome};
 
 /// What a run is given.
@@ -526,10 +528,18 @@ impl Step for GuardedStep<'_, '_> {
 }
 
 /// What a judgement step came to before Commission's runtime hands its action on
-/// ([`Run::harness_turn`]): a stop that ends the run, or the action proposed, its change held.
+/// ([`Run::harness_turn`]): a stop that ends the run, or the action proposed, its change held;
+/// or a session that ended without the line naming its action
+/// ([`crate::harness::NoActionLine`]), its change discarded and nothing recorded of it yet: the
+/// error the run ends on unless the step is tried again ([`NO_ACTION_TRIES`]), and the
+/// transcript kept of it.
 enum Judgement {
     Stop(Stop),
     Propose(Box<Proposed>),
+    NoAction {
+        error: anyhow::Error,
+        transcript: Option<std::result::Result<String, String>>,
+    },
 }
 
 /// A judgement step's proposal: what the harness reported, the transcript kept of it, the paths
@@ -646,23 +656,76 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
             Taker::Validator(validator) => step(proposal(validator.action())),
             Taker::Nobody => step(ExecutorOutcome::NoUsefulAction(LoomUnit(true))),
             Taker::Harness => {
-                let started = Instant::now();
-                let judged = turn.run.harness_turn(
-                    turn.events,
-                    &mut *turn.out,
-                    turn.decision,
-                    turn.offered,
-                    turn.approvals,
-                    turn.shape,
-                    turn.run_number,
-                );
-                // The session Loom's executor recorded for the step, whatever became of its
-                // proposal, is observed into the case before the step's own outcome.
-                let judged = match turn.run.harness.take_session() {
-                    Some(session) => {
-                        observe_session(&turn.run.case, frontier, &session).and(judged)
+                let mut tried = 0;
+                let (started, judged) = loop {
+                    tried += 1;
+                    let started = Instant::now();
+                    let judged = turn.run.harness_turn(
+                        turn.events,
+                        &mut *turn.out,
+                        turn.decision,
+                        turn.offered,
+                        turn.approvals,
+                        turn.shape,
+                        turn.run_number,
+                    );
+                    // The session Loom's executor recorded for the step, whatever became of its
+                    // proposal, is observed into the case before the step's own outcome.
+                    let judged = match turn.run.harness.take_session() {
+                        Some(session) => {
+                            observe_session(&turn.run.case, frontier, &session).and(judged)
+                        }
+                        None => judged,
+                    };
+                    // A session that ended without the line naming its action, its change put
+                    // back, is a try, recorded with its tokens; the step is tried again from the
+                    // tree it was put back to, a step of its own, unless the run's own stop (a
+                    // budget, the free disk) comes first, and after [`NO_ACTION_TRIES`] tries the
+                    // run ends on its error. A refused step, or any other failure, is not retried.
+                    let Ok(Judgement::NoAction { error, transcript }) = judged else {
+                        break (started, judged);
+                    };
+                    if let Err(unrecorded) =
+                        turn.run.charge_no_action(turn.events, transcript, tried)
+                    {
+                        break (
+                            started,
+                            Err(error.context(format!(
+                                "and the tokens its session reported could not be recorded: {unrecorded:#}"
+                            ))),
+                        );
                     }
-                    None => judged,
+                    if tried >= NO_ACTION_TRIES {
+                        break (
+                            started,
+                            Err(error.context(format!(
+                                "{tried} tries of the step ended without the line naming its action, {NO_ACTION_TRIES} at most"
+                            ))),
+                        );
+                    }
+                    // Said once the run's own stop was asked: the step is told as tried again
+                    // only when it is.
+                    let stopped = turn.host_stop();
+                    let then = if stopped.is_some() {
+                        "the run stops before another try"
+                    } else {
+                        "the step is tried again"
+                    };
+                    if let Err(unsaid) = writeln!(
+                        turn.out,
+                        "step {}: the session named no action (try {tried} of {NO_ACTION_TRIES}); {then}",
+                        turn.run.steps
+                    ) {
+                        break (
+                            started,
+                            Err(error.context(format!("and the try could not be told: {unsaid}"))),
+                        );
+                    }
+                    if let Some(stop) = stopped {
+                        return step(ExecutorOutcome::Suspended(ExecutorOutcomeSuspended {
+                            reason: SuspensionReason::HostStop(stop),
+                        }));
+                    }
                 };
                 let suspended = |detail: String| {
                     step(ExecutorOutcome::Suspended(ExecutorOutcomeSuspended {
@@ -673,7 +736,7 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
                     }))
                 };
                 match judged {
-                    Err(error) => {
+                    Err(error) | Ok(Judgement::NoAction { error, .. }) => {
                         let detail = format!("{error:#}");
                         turn.failed = Some(error);
                         suspended(detail)
@@ -952,8 +1015,17 @@ impl LoopContext for TurnContext<'_, '_, '_> {
     }
 
     fn host_stop(&mut self) -> Option<LoomHostStop> {
-        let mut guard = self.turn.borrow_mut();
-        let turn = &mut *guard;
+        self.turn.borrow_mut().host_stop()
+    }
+}
+
+impl Turn<'_, '_> {
+    /// The host's stop before a step ([`TurnContext::host_stop`]), asked again before a judgement
+    /// step is tried again ([`NO_ACTION_TRIES`]): the run's budget spent, then, for a step
+    /// somebody takes, a file system under its threshold; kept in `host`, or the error the check
+    /// failed on in `failed`.
+    fn host_stop(&mut self) -> Option<LoomHostStop> {
+        let turn = self;
         let stop = match turn.run.budget_spent() {
             Some(stop) => (stop, true),
             None if matches!(turn.taker, Taker::Nobody) => return None,
@@ -2454,7 +2526,8 @@ pub fn outside_import_dirs(runs: &[String], tree: &Path, modules: &Modules) -> V
     dirs.into_iter().filter(|dir| !in_tree(tree, dir)).collect()
 }
 
-/// The file a case keeps its module names in ([`Modules`]), under its directory.
+/// The file a case keeps its module names in when a Python answered at open ([`Modules`]), under
+/// its directory.
 pub const MODULES_FILE: &str = "python-modules.json";
 
 /// What a Python asked at case open prints ([`Modules::ask`]): its path and version (`V`),
@@ -2515,8 +2588,9 @@ for entry in sys.path + sites:
 "#;
 
 /// The top-level module names no step may put in a directory Python imports from: asked at case
-/// open of the Python the test command runs, and kept with the case ([`MODULES_FILE`]); the
-/// built-in lists ([`STDLIB_MODULES`], [`RUNNER_PACKAGES`]) when no Python answered.
+/// open of the Python the test command runs, and kept with the case ([`MODULES_FILE`]) only when
+/// a Python answered or could not be established; the built-in lists ([`STDLIB_MODULES`],
+/// [`RUNNER_PACKAGES`]) when none answered, and then the case keeps no file.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Modules {
     /// Where the names came from: each Python asked, with its version, or the built-in lists.
@@ -2845,17 +2919,32 @@ impl Modules {
         })
     }
 
-    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); asked of the Python the test
-    /// command `runs` in `tree` and kept there when it keeps none.
+    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); else asked of the Python the test
+    /// command `runs` in `tree`, and kept there only when the answer is not the built-in lists
+    /// ([`Modules::default`]): when a Python answered, or one could not be established (it fails
+    /// closed). Otherwise no file is written, and [`Modules::read`] reads the built-in lists.
     pub fn of_case(case_dir: &Path, runs: &[String], tree: &Path) -> Result<Self> {
         let file = case_dir.join(MODULES_FILE);
         if file.is_file() {
             return Ok(Self::read(case_dir));
         }
         let modules = Self::ask(runs, tree);
-        std::fs::write(&file, serde_json::to_vec_pretty(&modules)?)
-            .with_context(|| format!("write {}", file.display()))?;
+        if modules != Self::default() {
+            std::fs::write(&file, serde_json::to_vec_pretty(&modules)?)
+                .with_context(|| format!("write {}", file.display()))?;
+        }
         Ok(modules)
+    }
+
+    /// The names a resumed case guards: the ones it keeps ([`MODULES_FILE`]), else asked again
+    /// and kept by no one, so the file exists only as the case opened with it and a replay of
+    /// any step rebuilds the case as that step found it.
+    #[must_use]
+    pub fn at_resume(case_dir: &Path, runs: &[String], tree: &Path) -> Self {
+        if case_dir.join(MODULES_FILE).is_file() {
+            return Self::read(case_dir);
+        }
+        Self::ask(runs, tree)
     }
 
     /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); the built-in lists when it
@@ -7100,8 +7189,12 @@ impl Outside {
     /// The paths at which `now` differs from this, in path order: a part of the way (`.cargo`)
     /// before what is under it. A path this holds and `now` does not list (a directory that
     /// did not exist, `~/.local` on the way to `~/.local/bin`, now made; a program that is no
-    /// longer executable) is compared with what is at it now.
+    /// longer executable) is compared with what is at it now. A directory made where there was
+    /// nothing, on the way to other paths this or `now` reads (`~/.cargo`, which cargo makes for
+    /// its cache, before `~/.cargo/bin` and `~/.cargo/config.toml`), holds nothing read of its
+    /// own: it differs only with a path under it that differs.
     fn differing(&self, now: &Self) -> Vec<PathBuf> {
+        use std::ops::Bound::{Excluded, Unbounded};
         let entry = |outside: &Self, path: &PathBuf| {
             outside.0.get(path).and_then(|(_, entry, _)| entry.clone())
         };
@@ -7109,13 +7202,35 @@ impl Outside {
             Some((_, entry, _)) => entry.clone(),
             None => Self::entry_at(path).unwrap_or(Some(Entry::Other("unreadable"))),
         };
-        self.0
+        // Whether the first path after `path` in path order is under it: a path's descendants
+        // follow it directly.
+        let read_under = |outside: &Self, path: &PathBuf| {
+            outside
+                .0
+                .range::<PathBuf, _>((Excluded(path), Unbounded))
+                .next()
+                .is_some_and(|(next, _)| next.starts_with(path))
+        };
+        let differ: BTreeSet<PathBuf> = self
+            .0
             .keys()
             .chain(now.0.keys())
             .filter(|path| entry(self, path) != current(path))
             .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .collect();
+        differ
+            .iter()
+            .filter(|path| {
+                let made_on_the_way = entry(self, path).is_none()
+                    && current(path) == Some(Entry::Other("directory"))
+                    && (read_under(self, path) || read_under(now, path));
+                !made_on_the_way
+                    || differ
+                        .range::<PathBuf, _>((Excluded(*path), Unbounded))
+                        .next()
+                        .is_some_and(|next| next.starts_with(path))
+            })
+            .cloned()
             .collect()
     }
 
@@ -7897,6 +8012,22 @@ fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -
     named
 }
 
+/// What a refusal says after an untracked `Cargo.lock`: a cargo test command writes one into a
+/// repository that commits none, and each of the three ways out is named on the same line.
+const CARGO_LOCK_REMEDY: &str = "commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it";
+
+/// Whether one of the `paths` a step changed is a `Cargo.lock` at any directory level that the
+/// repository does not track: git lists it under neither the index nor a commit.
+fn untracked_cargo_lock(tree: &Path, paths: &[String]) -> bool {
+    paths.iter().any(|path| {
+        Path::new(path)
+            .file_name()
+            .is_some_and(|name| name == "Cargo.lock")
+            && crate::git::run(tree, &["ls-files", "-z", "--", path])
+                .is_ok_and(|listed| listed.is_empty())
+    })
+}
+
 /// How a refusal names ignored paths ([`crate::git::paths_named`]).
 fn ignored_named(paths: &[std::ffi::OsString]) -> String {
     crate::git::paths_named(paths)
@@ -8156,33 +8287,8 @@ pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
     }
 }
 
-/// What the change a case has made so far passes before a judgement step's prompt shows it
-/// ([`crate::harness::ChangeSoFar`]): `<program> scan-text --repo <tree> --policy <policy>
-/// <file>`, the diff written to `<file>` outside the tree. A scan that refuses or cannot run (the
-/// program not there, a policy that does not load, any exit but 0) shows nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChangeScan {
-    /// The `b10x-gates` program.
-    pub program: PathBuf,
-    /// The policy file.
-    pub policy: PathBuf,
-}
-
-impl ChangeScan {
-    /// The scan the environment names: `b10x-gates` under the policy `B10X_GATES_POLICY`
-    /// names, when it is set (empty or not); none when it is not, and then the change so far is
-    /// shown unscanned.
-    #[must_use]
-    pub fn from_env() -> Option<Self> {
-        std::env::var_os(crate::forge::POLICY_VAR).map(|policy| Self {
-            program: PathBuf::from("b10x-gates"),
-            policy: PathBuf::from(policy),
-        })
-    }
-}
-
 /// How [`scan_change`] says a scan that never ran.
-const SCAN_DID_NOT_RUN: &str = "the scan could not run";
+pub(crate) const SCAN_DID_NOT_RUN: &str = "the scan could not run";
 
 /// The summary a harness step's line carries in place of the session's own when its proposal
 /// did not pass the content scan before the edit effect: what the session wrote is never
@@ -8194,6 +8300,18 @@ pub const PROPOSAL_NOT_RECORDED: &str =
 /// with the tokens its session reported ([`Run::charge_unproposed`]).
 pub const UNPROPOSED_SUMMARY: &str =
     "the harness failed and proposed nothing; the tokens its session reported are charged";
+
+/// How many times one judgement step is tried in a run while its session ends without the line
+/// naming its action ([`crate::harness::NoActionLine`]): each try is a step, counted by
+/// `--iterations`, its step line written with the tokens its session reported
+/// ([`Run::charge_no_action`]), and starts from the tree the try before it was discarded to; the
+/// run ends on the error (exit 5) after the last. A run whose budget a try spent stops on the
+/// budget instead (exit 3).
+pub const NO_ACTION_TRIES: u32 = 3;
+
+/// The summary of the step line of a try whose session named no action
+/// ([`Run::charge_no_action`]), followed by the try and the bound.
+pub const NO_ACTION_SUMMARY: &str = "the session named no action: it ended without the line naming its action; everything it changed was discarded and the tokens it reported are charged";
 
 /// The shapes of a credential [`credential_shape`] knows, each a login a session could read in
 /// the user's home: a private key block (`~/.ssh`); a JWT (Codex's `auth.json` tokens); an
@@ -8352,27 +8470,59 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
     None
 }
 
+/// Why a path `proposal` names may not reach the tree, the record or a refusal: it holds text of
+/// the shape of a credential ([`credential_shape`]). Read before any refusal that names a path,
+/// and naming none. None when every path passes.
+fn proposed_path_refusal(proposal: &crate::harness::Proposal) -> Option<String> {
+    let shape = proposal
+        .files
+        .iter()
+        .find_map(|file| credential_shape(&file.path))?;
+    Some(format!(
+        "{} proposes a path that holds text of the shape of a credential ({shape})",
+        proposal.action
+    ))
+}
+
 /// Why the content of `proposal` may not reach the tree or the record, read before the edit
 /// effect writes a byte of it: each proposed file's content and the session's summary, each
-/// apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`
-/// (`b10x-gates scan-text` under the gates policy, [`ChangeScan`]); a scan that cannot run (no
-/// program, a policy that does not load, any exit but 0) refuses as a match does. With no scan
-/// set, the proposal of a harness whose session may have read outside its copy (`unscanned_refused`,
-/// [`crate::harness::Harness::reads_outside_its_copy`]) is refused: not scanned is never passed.
-/// A refusal names the file or the summary and the shape or the scan's exit, never the text
-/// matched. None when it passes.
+/// apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`, the
+/// scan of the run's adapter `adapter` ([`Scan::change_scan`], [`ChangeScan`]); a scan that
+/// cannot run (no program, a policy that does not load, any exit but 0) refuses as a match does.
+/// With no scan set, the proposal of a harness whose session may have read outside its copy
+/// (`unscanned_refused`, [`crate::harness::Harness::reads_outside_its_copy`]) is refused, as
+/// [`Scan::unscanned`] says: not scanned is never passed. A run under a declared `none` passes
+/// `unscanned_refused` false, and its proposals are checked for the shape of a credential alone.
+/// The paths the proposal names are read first ([`proposed_path_refusal`]) and, under a scan,
+/// scanned as one text. A refusal names the file or the summary and the shape or the scan's
+/// exit, never the text matched. None when it passes.
 fn proposal_scan_refusal(
     tree: &Path,
+    adapter: &Scan,
     scan: Option<&ChangeScan>,
     unscanned_refused: bool,
     proposal: &crate::harness::Proposal,
 ) -> Option<String> {
+    if let Some(why) = proposed_path_refusal(proposal) {
+        return Some(why);
+    }
     let action = &proposal.action;
-    let mut texts: Vec<(&str, &str)> = proposal
+    let paths: Vec<&str> = proposal
         .files
         .iter()
-        .filter_map(|file| Some((file.path.as_str(), file.content.as_deref()?)))
+        .map(|file| file.path.as_str())
         .collect();
+    let paths = paths.join("\n");
+    let mut texts: Vec<(&str, &str)> = Vec::new();
+    if !paths.is_empty() {
+        texts.push(("the paths it names", paths.as_str()));
+    }
+    texts.extend(
+        proposal
+            .files
+            .iter()
+            .filter_map(|file| Some((file.path.as_str(), file.content.as_deref()?))),
+    );
     texts.push(("the step's summary", proposal.summary.as_str()));
     for (what, text) in &texts {
         if let Some(shape) = credential_shape(text) {
@@ -8382,12 +8532,7 @@ fn proposal_scan_refusal(
         }
     }
     let Some(scan) = scan else {
-        return unscanned_refused.then(|| {
-            format!(
-                "{action} proposes a change of a session that could read outside its copy, and no gates policy is set ({}): not scanned, which is not passed",
-                crate::forge::POLICY_VAR
-            )
-        });
+        return unscanned_refused.then(|| adapter.unscanned(action));
     };
     texts.iter().find_map(|(what, text)| {
         scan_bytes(tree, scan, "proposed.txt", text.as_bytes())
@@ -8453,12 +8598,7 @@ fn scan_bytes(
         .and_then(|mut handle| handle.write_all(bytes))
         .map_err(|error| format!("{SCAN_DID_NOT_RUN}: write {}: {error}", file.display()))?;
     let ran = crate::confinement::Command::new(&scan.program)
-        .arg("scan-text")
-        .arg("--repo")
-        .arg(tree)
-        .arg("--policy")
-        .arg(&scan.policy)
-        .arg(&file)
+        .args(scan.args(tree, &file))
         .current_dir(tree)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -8473,6 +8613,40 @@ fn scan_bytes(
             scan.program.display()
         ))
     }
+}
+
+/// What the last observation of each validator's action failed, as `record` (the case's record
+/// so far) holds it: for each action a validator's `step` line names, the `failed` entries of
+/// the `evidence` lines of that action's last such step ([`crate::validator::FailedCheck`]), in
+/// the record's order. A later observation of the same action that failed nothing, or wrote no
+/// record, leaves its action nothing; a judgement step's line leaves it as it was. A run reads
+/// it before each judgement step; a replay reads it the same way for the step it rebuilds.
+#[must_use]
+pub fn failed_checks(record: &[serde_json::Value]) -> Vec<crate::validator::FailedCheck> {
+    let mut last: Vec<(&str, Vec<crate::validator::FailedCheck>)> = Vec::new();
+    // The action of the validator's step the lines that follow belong to, and its step.
+    let mut current: Option<(&str, &serde_json::Value)> = None;
+    for line in record {
+        if line["event"] == "step" {
+            current = None;
+            if line["by"] == "validator"
+                && let Some(action) = line["action"].as_str()
+            {
+                last.retain(|(seen, _)| *seen != action);
+                last.push((action, Vec::new()));
+                current = Some((action, &line["step"]));
+            }
+        } else if line["event"] == "evidence"
+            && let Some((action, step)) = current
+            && line["step"] == *step
+            && let Ok(checks) =
+                serde_json::from_value::<Vec<crate::validator::FailedCheck>>(line["failed"].clone())
+            && let Some((_, failed)) = last.iter_mut().find(|(seen, _)| *seen == action)
+        {
+            failed.extend(checks);
+        }
+    }
+    last.into_iter().flat_map(|(_, failed)| failed).collect()
 }
 
 /// The change the case at `case_dir` has made so far, as a judgement step is shown it
@@ -8642,8 +8816,8 @@ pub struct Run<'a> {
     /// The directories outside the tree the test command prepends to `PATH` and what its Python
     /// imports from there, which [`Outside`] snapshots beside what cargo and rustup read.
     outside_dirs: OutsideDirs,
-    /// The module names no step may put in an import directory, kept with the case
-    /// ([`Modules::of_case`]).
+    /// The module names no step may put in an import directory, kept with the case when a Python
+    /// answered ([`Modules::of_case`]).
     modules: Modules,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
@@ -8662,8 +8836,11 @@ pub struct Run<'a> {
     /// The author and committer of every commit the run makes, the case's
     /// ([`CaseDir::committer`]), read when the run is opened or resumed.
     committer: crate::git::CommitIdentity,
-    /// What the change so far passes before a prompt shows it: [`ChangeScan::from_env`] when
-    /// the run opens, unless [`Run::scan_change_with`] gives another.
+    /// The run's scan adapter ([`Scan`]), named on its `opened` line: [`Scan::from_env`] when
+    /// the run opens, unless [`Run::scan_with`] gives another.
+    scan: Scan,
+    /// What the change so far and each proposal pass: the scan adapter's
+    /// ([`Scan::change_scan`]), unless [`Run::scan_change_with`] gives another.
     change_scan: Option<ChangeScan>,
 }
 
@@ -8763,8 +8940,8 @@ impl<'a> Run<'a> {
             case.discard()?;
             return Err(error);
         }
-        // The module names the test command's Python imports from outside the tree, asked once
-        // and kept with the case.
+        // The module names the test command's Python imports from outside the tree, asked once;
+        // kept with the case when a Python answered, else the built-in lists stand in.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
         let modules = match Modules::of_case(&case.dir, &runs, tree) {
             Ok(modules) => modules,
@@ -8801,6 +8978,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
         })
     }
@@ -8998,9 +9176,19 @@ impl<'a> Run<'a> {
     }
 
     /// Scans the change so far with `scan` before a prompt shows it, or, given none, shows it
-    /// unscanned; the run opens with [`ChangeScan::from_env`].
+    /// unscanned; the run opens with [`ChangeScan::from_env`]. The run's scan adapter stays.
     pub fn scan_change_with(&mut self, scan: Option<ChangeScan>) {
         self.change_scan = scan;
+    }
+
+    /// Runs under the scan adapter `scan`: its scan ([`Scan::change_scan`]) for the change so
+    /// far and each proposal, and its name on the `opened` line. Under a declared `none`
+    /// ([`Scan::None`]) nothing is scanned, the proposal of a harness whose session may read
+    /// outside its copy is not refused as unscanned, and each is still checked for the shape of
+    /// a credential ([`credential_shape`]). The run opens under [`Scan::from_env`].
+    pub fn scan_with(&mut self, scan: Scan) {
+        self.change_scan = scan.change_scan();
+        self.scan = scan;
     }
 
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
@@ -9034,9 +9222,10 @@ impl<'a> Run<'a> {
         options.inputs = case.inputs();
         options.case_id = Some(id.to_owned());
         options.protocol = case.protocol.id.clone();
-        // A case opened before it kept its module names is asked now and keeps them from here.
+        // A case with no module file (none kept at open: no Python answered, or the case predates
+        // the file) is asked again for this run, and nothing is written.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
-        let modules = Modules::of_case(&case.dir, &runs, tree)?;
+        let modules = Modules::at_resume(&case.dir, &runs, tree);
         let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
         // The identity the case was opened with, whatever the repository configures by now.
         let committer = case.committer()?;
@@ -9067,6 +9256,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
         })
     }
@@ -9845,7 +10035,8 @@ impl<'a> Run<'a> {
     }
 
     /// The latest `test_result` pass record a validator of the case wrote that is about the
-    /// current revision of its subject: its path in the repository and its own `observed_at`.
+    /// current revision of its subject: the reference the store records for it (its path, sha256
+    /// and fields, [`crate::frontier::test_result_reference`]) and its own `observed_at`.
     /// A record counts only when an `evidence` line of the case's record, which the kernel
     /// writes and a step may not, names it under the case's `evidence/`: a record put there by
     /// any other hand is never one the run observed. `None` when there is none.
@@ -9866,20 +10057,24 @@ impl<'a> Run<'a> {
                 continue;
             }
             let full = self.tree.join(relative);
-            let text = std::fs::read_to_string(&full)
+            let bytes = std::fs::read(&full)
                 .with_context(|| format!("read the record {}", full.display()))?;
-            let record: serde_json::Value = serde_json::from_str(&text)
+            let record: serde_json::Value = serde_json::from_slice(&bytes)
                 .with_context(|| format!("read the record {}", full.display()))?;
             let current = record["subject"]
                 .as_str()
                 .and_then(|subject| self.case.revision(subject));
             if record["kind"] == TEST_RESULT
-                && record["result"] == "pass"
-                && current.is_some()
-                && record["subject_revision"].as_str() == current.as_deref()
+                && let Some(result) = record["result"].as_str().filter(|result| *result == "pass")
+                && let Some(revision) = record["subject_revision"].as_str()
+                && current.as_deref() == Some(revision)
+                && let Some(producer) = record["producer"].as_str()
                 && let Some(at) = record["observed_at"].as_str()
             {
-                return Ok(Some((path.to_owned(), at.to_owned())));
+                let reference = crate::frontier::test_result_reference(
+                    path, &bytes, result, revision, producer,
+                );
+                return Ok(Some((reference, at.to_owned())));
             }
         }
         Ok(None)
@@ -9954,22 +10149,59 @@ impl<'a> Run<'a> {
         events: &Events,
         transcript: Option<std::result::Result<String, String>>,
     ) -> Result<()> {
-        let Some(usage) = self.harness.last_usage() else {
+        if self.harness.last_usage().is_none() {
             return Ok(());
-        };
-        let tokens = usage.total();
-        self.tokens += tokens;
+        }
+        self.charge_failed(events, transcript, UNPROPOSED_SUMMARY)
+    }
+
+    /// Records try `tried` of a judgement step whose session ended without the line naming its
+    /// action ([`Judgement::NoAction`]): a harness step line with no action and
+    /// [`NO_ACTION_SUMMARY`], naming the try and the bound, charged the tokens its session
+    /// reported, as [`Run::charge_unproposed`] charges them. Nothing when the session reported
+    /// no tokens, as for any failed step: a harness step line without a count leaves the run's
+    /// tokens unknown to the scorecard, and one counting 0 would claim what nobody reported. Such
+    /// a try is still a step of the record, which its stop line counts and the next line's step
+    /// skips, with its transcript kept under its own step, and on the run's output. Written after
+    /// the step's change was put back.
+    fn charge_no_action(
+        &mut self,
+        events: &Events,
+        transcript: Option<std::result::Result<String, String>>,
+        tried: u32,
+    ) -> Result<()> {
+        if self.harness.last_usage().is_none() {
+            return Ok(());
+        }
+        let summary = format!("{NO_ACTION_SUMMARY} (try {tried} of {NO_ACTION_TRIES})");
+        self.charge_failed(events, transcript, &summary)
+    }
+
+    /// The harness step line of a step that failed and proposed nothing, with `summary`: the
+    /// tokens its session reported, when it reported any, charged to the run and carried with
+    /// their components and what the harness reported of the call.
+    fn charge_failed(
+        &mut self,
+        events: &Events,
+        transcript: Option<std::result::Result<String, String>>,
+        summary: &str,
+    ) -> Result<()> {
+        let usage = self.harness.last_usage();
+        let tokens = usage.map(|usage| usage.total());
+        if let Some(tokens) = tokens {
+            self.tokens += tokens;
+        }
         self.stepped(
             events,
             SteppedBy::Harness(
-                Some(tokens),
-                Some(usage),
+                tokens,
+                usage,
                 self.harness.last_call().map(Box::new),
                 transcript,
             ),
             self.harness.name(),
             "",
-            UNPROPOSED_SUMMARY,
+            summary,
         )
     }
 
@@ -10212,6 +10444,7 @@ impl<'a> Run<'a> {
         let observed = validator
             .observe_within(&self.tree, &revision, seq, self.deadline())
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+        let failed = validator.take_failed();
         let returned = Instant::now();
         // What the observation left running is killed before anything is looked at;
         // one that could not be killed is named with the rest of what it left.
@@ -10299,6 +10532,7 @@ impl<'a> Run<'a> {
         }
         outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
         if !foreign.is_empty() || !outside.is_empty() {
+            let lock_remedy = untracked_cargo_lock(&self.tree, &change.paths);
             let left = undo_step(&self.tree, &kept_all)?.left;
             foreign.extend(outside);
             foreign.extend(left.iter().map(|path| {
@@ -10309,6 +10543,9 @@ impl<'a> Run<'a> {
                 validator.action(),
                 foreign.join(", ")
             );
+            if lock_remedy {
+                why.push_str(&format!("; {CARGO_LOCK_REMEDY}"));
+            }
             if let Err(error) = &observed {
                 why.push_str(&format!("; the observation failed too: {error:#}"));
             }
@@ -10397,6 +10634,11 @@ impl<'a> Run<'a> {
                         .unwrap_or(&written)
                         .display()
                         .to_string(),
+                    failed: if record.result.as_deref() == Some("fail") {
+                        failed.clone()
+                    } else {
+                        Vec::new()
+                    },
                 },
             )?;
             writeln!(
@@ -10555,6 +10797,8 @@ impl<'a> Run<'a> {
                 confinement: Some(confinement.clone()),
                 // The endpoint the harness is pointed at, by reference: never a token.
                 endpoint: self.harness.endpoint_reference(),
+                // The scan adapter every proposal and the change so far pass.
+                scan: Some(self.scan.name().to_owned()),
             },
         )?;
         writeln!(
@@ -11011,6 +11255,7 @@ impl<'a> Run<'a> {
             self.change_scan.as_ref(),
             out,
         )?;
+        let failed = failed_checks(&events.read()?);
         let mut context = StepContext {
             tree: &self.tree,
             intent: &self.options.intent,
@@ -11022,6 +11267,7 @@ impl<'a> Run<'a> {
             step: self.steps as usize,
             time_left: None,
             change: &change,
+            failed: &failed,
             scope_revision: None,
         };
         // The step is judged by what it did to the tree, against a checkpoint taken just
@@ -11238,27 +11484,33 @@ impl<'a> Run<'a> {
         // step's change.
         //
         // Its content is read before that, whatever the guard says of it: each file and the
-        // summary checked for the shape of a credential and scanned under the gates policy
+        // summary checked for the shape of a credential and scanned by the run's scan adapter
         // ([`proposal_scan_refusal`]). One that does not pass is refused, and its summary is
-        // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first.
+        // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but
+        // after a path of the shape of a credential ([`proposed_path_refusal`]), since a
+        // refusal on its face names the path.
         let stepped = match stepped {
             Ok(report) => match self.harness.take_proposal() {
                 None => Ok(report),
                 Some(proposal) => {
                     let unscanned = proposal_scan_refusal(
                         &self.tree,
+                        &self.scan,
                         self.change_scan.as_ref(),
-                        self.harness.reads_outside_its_copy(),
+                        self.harness.reads_outside_its_copy() && !self.scan.declared_none(),
                         &proposal,
                     );
                     let summary = match unscanned {
                         Some(_) => PROPOSAL_NOT_RECORDED.to_owned(),
                         None => report.summary.clone(),
                     };
-                    match Self::proposal_refusal(
-                        &self.tree, &proposal, offered, approvals, &surface, shape,
-                    )
-                    .or(unscanned)
+                    match proposed_path_refusal(&proposal)
+                        .or_else(|| {
+                            Self::proposal_refusal(
+                                &self.tree, &proposal, offered, approvals, &surface, shape,
+                            )
+                        })
+                        .or(unscanned)
                     {
                         Some(why) => {
                             let moved = undo()?;
@@ -11398,7 +11650,22 @@ impl<'a> Run<'a> {
             Ok(report) => report,
             Err(error) => {
                 let _ = tell(out);
+                // A session that ended without the line naming its action, its change put back
+                // whole, is handed to the executor, which records the try and tries again
+                // ([`NO_ACTION_TRIES`]); one whose change could not be put back is not.
+                let no_action = error
+                    .downcast_ref::<crate::harness::NoActionLine>()
+                    .is_some();
                 return Err(match undo() {
+                    Ok(moved) if no_action => {
+                        return Ok(Judgement::NoAction {
+                            error: error.context(format!(
+                                "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
+                                self.steps
+                            )),
+                            transcript: transcript.clone(),
+                        });
+                    }
                     Ok(moved) => {
                         let error = error.context(format!(
                             "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
@@ -11932,6 +12199,7 @@ impl<'a> Run<'a> {
                             .unwrap_or(path)
                             .display()
                             .to_string(),
+                        failed: Vec::new(),
                     },
                 )?;
                 writeln!(out, "  evidence: {} -", record.kind)?;

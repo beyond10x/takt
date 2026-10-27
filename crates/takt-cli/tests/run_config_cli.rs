@@ -123,7 +123,9 @@ impl World {
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("B10X_GATES_POLICY")
+            // A harness run opens only under a policy or a declared `scan: none`
+            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
+            .env("B10X_GATES_POLICY", self.0.join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .output()
             .expect("takt runs")

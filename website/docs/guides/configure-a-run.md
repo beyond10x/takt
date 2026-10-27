@@ -1,16 +1,16 @@
 ---
 title: Configure a run
 sidebar_position: 2
-description: Put a run's harness, endpoint, forge, test command and budget in one file, take the API key from a variable, and read the refusals a wrong file gets.
+description: Put a run's harness, scan, endpoint, forge, test command and budget in one file, take the API key from a variable, and read the refusals a wrong file gets.
 lede: One file passed with --config holds what stays the same from run to run, flags hold what changes, and takt refuses a file it does not fully understand before it starts anything.
-source: takt run --help at 0.14.0; crates/takt/src/run_config.rs; crates/takt/src/harness.rs (EndpointFields); runs of takt 0.14.0 against the files on this page, 2026-10-26; CHANGELOG.md 0.12.0 to 0.14.0
+source: takt run --help at 0.14.0; crates/takt/src/run_config.rs; crates/takt/src/scan.rs; crates/takt/src/harness.rs (EndpointFields); runs of takt 0.14.0 against the files on this page, 2026-10-26; CHANGELOG.md 0.12.0 to 0.14.0
 ---
 
 # Configure a run
 
-Every setting is a `takt run` flag. The ones you repeat on every run can go in a file. The full
-list of keys and flags is in [Configuration](../reference/configuration.md). This page goes
-through the usual choices in order.
+Every setting but the scan adapter is a `takt run` flag. The ones you repeat on every run can go in
+a file. The full list of keys and flags is in [Configuration](../reference/configuration.md). This
+page goes through the usual choices in order.
 
 ## 1. Write the file
 
@@ -37,9 +37,10 @@ stopped: Iterations (1); steps 1, tokens 0, case ~/cfg-demo/.engineering/cases/t
 (The `case` and `frontier` lines are left out.) `--iterations 1` on the command line won over the
 file's `4`. A flag wins over the file, and the file wins over the default.
 
-The file holds eight keys: `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `forge`,
-`test_cmd` and `continue_past_red_base`. Everything else is a flag only. That includes the story
-(`--story`) and the key's variable (`--endpoint-token-env`).
+The file holds nine keys: `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `forge`,
+`test_cmd`, `continue_past_red_base` and `scan`. `scan` is the one key with no flag; everything
+else is a flag only. That includes the story (`--story`) and the key's variable
+(`--endpoint-token-env`).
 
 :::caution[Planned]
 
@@ -57,8 +58,24 @@ planned and not in 0.14.0. Pass them as flags today ([Known limitations](../know
 | `harness` | b10x-harness, talking to the LLM endpoint you name |
 | `none` | nothing: only the validators run, and the run stops at the first judgement step |
 
-`model` names the model for harnesses that take one. Codex and b10x-harness need
-`B10X_GATES_POLICY` before an edit is accepted ([Getting started](../getting-started.md#what-it-needs)).
+`model` names the model for harnesses that take one.
+
+Codex and b10x-harness sessions may read outside their copy, so what they propose is accepted
+only after a scan passed it. The scan is an adapter, `scan` in the file:
+
+| `scan` | what scans a proposal |
+|---|---|
+| `gates` (default) | `b10x-gates`, beyond10x's scanner, under the policy file `B10X_GATES_POLICY` names |
+| `none` | nothing; each proposal is still checked for the shape of a credential |
+
+```toml
+harness = "codex"
+scan = "none"
+```
+
+A Codex or b10x-harness run with neither the policy nor `scan = "none"` is refused before its case
+opens, and the refusal names both ways on. `scan = "none"` with `B10X_GATES_POLICY` set is refused
+too. Claude Code needs neither ([The scan](../reference/configuration.md#the-scan)).
 
 ## 3. Name the endpoint for b10x-harness
 
@@ -115,8 +132,8 @@ takt: the endpoint's credential variable LLM_API_KEY is empty; nothing was start
 | `forge` | what happens at the pull request |
 |---|---|
 | not set | `bot` for a github.com `origin`, `gitlab` for another host `glab` is logged in to, else `none` |
-| `bot` | `b10x-gates` pushes the branch and opens and merges the pull request; `gh` reads its checks |
-| `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request |
+| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its checks |
+| `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request, after the run's scan adapter scanned what it publishes |
 | `none` | no pull request: a story stops `Unperformable` at `pr.opened`, exit 7, and prints its candidate commit |
 
 How each forge is set up: [Configuration](../reference/configuration.md#the-forge).
@@ -150,7 +167,7 @@ opens, exit 1. The refusal names the line and never the value written there:
 
 ```console
 $ takt run --repo . --intent x --config story.toml
-takt: the run configuration file story.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, and `continue_past_red_base`, a boolean, each optional
+takt: the run configuration file story.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
 ```
 
 In YAML the line is where the mapping holding the duplicate starts, not the duplicate itself.

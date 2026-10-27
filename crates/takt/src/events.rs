@@ -82,6 +82,9 @@ pub enum Event {
     /// userinfo, query or fragment), wire and model, the token file's path (`~/…` under HOME)
     /// and pointer or the secret's namespace and name, never a token. Absent for a harness
     /// pointed at none (`claude`, `codex`, `none`) and on a line written before it.
+    /// The scan: the name of the run's scan adapter ([`crate::scan::Scan::name`]), `gates` or
+    /// `none`, the one every proposal and the change so far pass; absent on a line written
+    /// before it, which a reader reads as "scan not recorded".
     Opened {
         case: String,
         protocol: String,
@@ -98,6 +101,8 @@ pub enum Event {
         confinement: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<crate::harness::EndpointConfig>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scan: Option<String>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
@@ -157,13 +162,16 @@ pub enum Event {
         revision: Option<String>,
     },
     /// An evidence record a validator wrote under the case: its id, kind and result, and its
-    /// path relative to the tree.
+    /// path relative to the tree; and, when the observation failed checks, what each printed
+    /// that names what failed ([`crate::validator::FailedCheck`]), absent when none did.
     Evidence {
         id: String,
         kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
         path: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failed: Vec<crate::validator::FailedCheck>,
     },
     /// An evidence record written on the story in the planning store: the kind, the reference
     /// and the instant given to the store (the case's record's own `observed_at`), and the

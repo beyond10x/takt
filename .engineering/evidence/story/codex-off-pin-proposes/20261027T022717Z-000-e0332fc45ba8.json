@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T02:27:17Z",
+  "actor": "human:timo",
+  "artifact": "story:codex-off-pin-proposes",
+  "kind": "story",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "approval-record:codex-off-pin-proposes"
+  }
+}

@@ -339,6 +339,41 @@ fn a_run_goes_on_past_a_red_base_by_flag_or_configuration() {
     }
 }
 
+/// story:scenario-run-takes-config: `takt scenario run` takes the opt-out as `takt run` does, by
+/// its flag or by its `--config` file's `continue_past_red_base`: the red base is recorded, and the
+/// run goes on to the harness.
+#[test]
+fn a_scenario_run_goes_on_past_a_red_base_by_flag_or_configuration() {
+    let files = scenario_1(&broken_todo());
+    for by in ["flag", "toml", "yaml"] {
+        let world = world(&format!("scenario-red-base-{by}"), &borrowed(&files));
+        let config = world.state.join(format!("run.{by}"));
+        let extra: Vec<String> = match by {
+            "flag" => vec!["--continue-past-red-base".to_owned()],
+            "toml" => {
+                fs::write(&config, "continue_past_red_base = true\n").expect("a file");
+                vec!["--config".to_owned(), config.display().to_string()]
+            }
+            _ => {
+                fs::write(
+                    &config,
+                    "format: loom.agent/1\ntakt:\n  continue_past_red_base: true\n",
+                )
+                .expect("a file");
+                vec!["--config".to_owned(), config.display().to_string()]
+            }
+        };
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        let (_, out, err) = world.scenario_with("./check.sh", "3", &extra);
+        assert!(
+            out.contains("evidence: test_result fail"),
+            "{by}: stdout {out} stderr {err}"
+        );
+        assert!(!out.contains("RedBase"), "{by}: {out}");
+        assert!(world.calls() >= 1, "{by}: no harness call: {out} {err}");
+    }
+}
+
 /// On the unbroken seed the first `tests.run` passes and the run goes on to the harness.
 #[test]
 fn the_unbroken_seed_goes_on_to_the_harness() {

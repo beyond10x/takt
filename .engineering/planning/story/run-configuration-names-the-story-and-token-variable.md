@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-configuration-names-the-story-and-token-variable
 kind: story
-status: active
+status: implemented
 title: The run configuration names the story and the endpoint's token variable
 summary: story and endpoint_token_env in the run configuration file, so a deployment needs no flags (second kind-cluster trial)
 tags:
@@ -15,10 +15,11 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T20:53:20Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:55Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-27T02:43:56Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1},"asserted":{"test_result":1,"review_outcome":1}}}
 ---
 ## Outcome
 

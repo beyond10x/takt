@@ -137,7 +137,9 @@ impl World {
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
-            .env_remove("B10X_GATES_POLICY")
+            // A harness run opens only under a policy or a declared `scan: none`
+            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
+            .env("B10X_GATES_POLICY", self.outer().join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove(VARIABLE);
         if let Some(value) = value {
@@ -413,7 +415,8 @@ fn the_endpoint_file_names_the_variable_and_the_case_records_its_name() {
 /// variable nor its value; b10x-harness (step 2) sees neither in its environment and is handed
 /// the staged file under the runtime directory, which holds the value; no case file and no
 /// output holds the value; and once the run has ended, on the harness's error, the staged
-/// directory is gone.
+/// directory is gone. The double names no action, so the step is tried
+/// [`takt::run::NO_ACTION_TRIES`] times (steps 2 to 4) before the run ends on the error.
 #[test]
 fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() {
     let world = World::new("flag");
@@ -429,7 +432,7 @@ fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() 
             "--endpoint-token-env",
             VARIABLE,
             "--iterations",
-            "3",
+            "4",
             "--test-cmd",
             "sh probe.sh",
         ],
@@ -491,5 +494,192 @@ fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() 
         world.staged(),
         Vec::<PathBuf>::new(),
         "the staged directory is gone"
+    );
+}
+
+// story:run-configuration-names-the-story-and-token-variable: the run configuration file's
+// `endpoint_token_env` names the variable as `--endpoint-token-env` does.
+
+/// A run configuration file in the world, out of its repository, holding `text`.
+fn config(world: &World, text: &str) -> String {
+    let path = world.outer().join("run.toml");
+    fs::write(&path, text).expect("a run configuration file");
+    path.to_str().expect("utf-8").to_owned()
+}
+
+/// The endpoint flags of these runs but the credential's.
+const ENDPOINT: [&str; 6] = [
+    "--harness",
+    "harness",
+    "--endpoint-base-url",
+    "https://endpoint.invalid/v1",
+    "--endpoint-wire",
+    "openai-responses",
+];
+
+/// Acceptance 2: `endpoint_token_env` in `--config`'s file stages the variable as the flag
+/// does: the test command and b10x-harness see neither the variable nor its value, b10x-harness
+/// is handed the staged file, no case file and no output holds the value, the `opened` line
+/// names the variable, and the staged directory is gone once the run has ended.
+#[test]
+fn the_configurations_token_variable_is_staged_as_the_flags_is() {
+    let world = World::new("config-env");
+    let config = config(&world, &format!("endpoint_token_env = \"{VARIABLE}\"\n"));
+    let mut args = ENDPOINT.to_vec();
+    args.extend([
+        "--config",
+        &config,
+        "--iterations",
+        "3",
+        "--test-cmd",
+        "sh probe.sh",
+    ]);
+    let output = world.run(Some(MARKER), &args);
+    let (stdout, stderr) = text(&output);
+    let seen = fs::read_to_string(world.seen())
+        .unwrap_or_else(|error| panic!("the probe ran ({error}): {stdout}\n{stderr}"));
+    assert!(
+        !seen.contains(VARIABLE) && !seen.contains(MARKER),
+        "the test command saw the variable:\n{seen}"
+    );
+    let harness = fs::read_to_string(world.started())
+        .unwrap_or_else(|error| panic!("b10x-harness ran ({error}): {stdout}\n{stderr}"));
+    let (environment, rest) = harness
+        .split_once("-- args\n")
+        .expect("the double listed its arguments");
+    let (args, staged) = rest
+        .split_once("-- staged\n")
+        .expect("the double read the runtime directory");
+    assert!(
+        !environment.contains(VARIABLE) && !environment.contains(MARKER),
+        "b10x-harness saw the variable:\n{environment}"
+    );
+    assert!(
+        args.contains("--oauth-token-file"),
+        "b10x-harness was handed a token file:\n{args}"
+    );
+    assert!(!args.contains(MARKER), "the value is no argument:\n{args}");
+    assert_eq!(
+        staged.lines().next(),
+        Some(MARKER),
+        "the staged file holds the value"
+    );
+    assert!(
+        !stdout.contains(MARKER) && !stderr.contains(MARKER),
+        "{stdout}\n{stderr}"
+    );
+    for path in files_under(&world.cases()) {
+        let bytes = fs::read(&path).expect("a case file");
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(MARKER),
+            "the value reached {}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        opened_lines(&world.cases())[0]["endpoint"]["credential"],
+        serde_json::json!({"kind": "environment", "name": VARIABLE})
+    );
+    assert_eq!(
+        world.staged(),
+        Vec::<PathBuf>::new(),
+        "the staged directory is gone"
+    );
+}
+
+/// Acceptance 2: the file's variable is refused as the flag's is: unset, before any case,
+/// naming it; and a name that is no variable's.
+#[test]
+fn the_configurations_token_variable_is_refused_as_the_flags_is() {
+    let world = World::new("config-env-unset");
+    let config_path = config(&world, &format!("endpoint_token_env = \"{VARIABLE}\"\n"));
+    let mut args = ENDPOINT.to_vec();
+    args.extend(["--config", &config_path]);
+    let output = world.run(None, &args);
+    refused_before_any_case(&world, &output, &[VARIABLE, "is not set"]);
+
+    let world = World::new("config-env-bad-name");
+    let config_path = config(&world, "endpoint_token_env = \"A-KEY\"\n");
+    let mut args = ENDPOINT.to_vec();
+    args.extend(["--config", &config_path]);
+    let output = world.run(Some(MARKER), &args);
+    refused_before_any_case(&world, &output, &["no environment variable's name"]);
+}
+
+/// An `--endpoint-file` on the command line that names no credential names no credential
+/// source: the configuration file's variable is the credential.
+#[test]
+fn a_command_line_endpoint_file_without_a_credential_takes_the_configurations_variable() {
+    let world = World::new("config-env-bare-endpoint");
+    let endpoint = world.outer().join("endpoint.toml");
+    fs::write(
+        &endpoint,
+        "base_url = \"https://endpoint.invalid/v1\"\nwire = \"openai-responses\"\nmodel = \"m\"\n",
+    )
+    .expect("an endpoint file");
+    let config_path = config(
+        &world,
+        &format!("harness = \"harness\"\nendpoint_token_env = \"{VARIABLE}\"\n"),
+    );
+    let output = world.run(
+        Some(MARKER),
+        &[
+            "--config",
+            &config_path,
+            "--endpoint-file",
+            endpoint.to_str().expect("utf-8"),
+            "--iterations",
+            "0",
+        ],
+    );
+    let (stdout, stderr) = text(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
+    assert_eq!(
+        opened_lines(&world.cases())[0]["endpoint"]["credential"],
+        serde_json::json!({"kind": "environment", "name": VARIABLE})
+    );
+}
+
+/// Acceptance 2: a credential flag on the command line wins over the file's variable: the
+/// flag's variable is the one named, and a secret flag is taken where the file's variable would
+/// have been refused beside it.
+#[test]
+fn a_credential_flag_wins_over_the_configurations_token_variable() {
+    let world = World::new("config-env-flag");
+    let config_path = config(&world, "endpoint_token_env = \"TAKT_TEST_UNSET_OTHER\"\n");
+    let mut args = ENDPOINT.to_vec();
+    args.extend([
+        "--config",
+        &config_path,
+        "--endpoint-token-env",
+        VARIABLE,
+        "--iterations",
+        "0",
+    ]);
+    let output = world.run(Some(MARKER), &args);
+    let (stdout, stderr) = text(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
+    assert_eq!(
+        opened_lines(&world.cases())[0]["endpoint"]["credential"],
+        serde_json::json!({"kind": "environment", "name": VARIABLE})
+    );
+
+    let world = World::new("config-env-secret");
+    let config_path = config(&world, &format!("endpoint_token_env = \"{VARIABLE}\"\n"));
+    let mut args = ENDPOINT.to_vec();
+    args.extend([
+        "--config",
+        &config_path,
+        "--endpoint-secret",
+        "llm/key",
+        "--iterations",
+        "0",
+    ]);
+    let output = world.run(Some(MARKER), &args);
+    let (stdout, stderr) = text(&output);
+    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
+    assert_eq!(
+        opened_lines(&world.cases())[0]["endpoint"]["credential"],
+        serde_json::json!({"kind": "secret", "namespace": "llm", "name": "key"})
     );
 }

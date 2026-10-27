@@ -3,7 +3,7 @@ title: Run a story
 sidebar_position: 3
 description: Prepare a repository for story delivery, let takt take the next ready story or the one you name, follow its steps to a pull request, and grant the merge.
 lede: takt delivers one story of the planning store per case, through tests and gates it runs itself, and the merge waits for your grant.
-source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; docs/design/takt.md § 4
+source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; the aep commands of step 1 run with aep 0.78.0 in a fresh repository, 2026-10-27; docs/design/takt.md § 4
 ---
 
 # Run a story
@@ -17,7 +17,7 @@ stories; AEP keeps them, and `aep` is the tool you use to add one.
 
 | file | what it is for |
 |---|---|
-| `.engineering/project.yaml` and `.engineering/planning/` | the planning store, made with `aep` |
+| `.engineering/project.yaml` and `.engineering/planning/` | the planning store: `aep plan reverse init` writes the first, `aep plan artifact new` the second |
 | `.engineering/gates.yaml` | the gates document the gate step runs |
 | `.engineering/assertions-project.yaml` | the commands the gates may start |
 | `.engineering/commit-identity.conf` | the author of takt's commits |
@@ -28,7 +28,7 @@ Without a gates document, a story cannot get past the gate: the run stops `Unper
 so name the executable by its absolute path and give it a `PATH` yourself. This one checks the
 formatting:
 
-```yaml
+```yaml title=".engineering/gates.yaml"
 format: engineering-gates/1
 language: canon-expr/1
 gates:
@@ -38,7 +38,7 @@ gates:
       - 'process.succeeded("format")'
 ```
 
-```yaml
+```yaml title=".engineering/assertions-project.yaml"
 format: engineering-assertions-project/1
 timeout_seconds: 300
 commands:
@@ -53,18 +53,28 @@ commands:
 
 The commit identity is git-config format:
 
-```ini
+```ini title=".engineering/commit-identity.conf"
 [identity]
 	name = Demo Bot
 	email = demo-bot@example.com
 ```
 
-Then add a story and make it ready. A story is ready when it is `proposed`, nothing blocks it and
-its dependencies are done:
+Then make the repository an AEP project, add a story and make it ready. `aep plan reverse init`
+writes `.engineering/project.yaml`; `--protocols` is a pinned source of the governing documents,
+here the one takt's own store names. A story is ready when it is `proposed`, nothing blocks it
+and its dependencies are done. Its body is a Markdown file of your own:
+
+```md title="story-body.md"
+## Acceptance
+
+- `sub(5, 2)` returns 3, and a test says so.
+```
 
 ```sh
+aep plan reverse init --profile development.standard --planning-scope my-repo \
+  --protocols 'git+https://github.com/beyond10x/aep#6d7a44d3607d2d9a6ffdf0a165993c546c43d0db'
 aep plan artifact new story add-sub --title "Add a subtraction" --summary "sub(left, right) subtracts right from left"
-aep plan artifact body story:add-sub --from story-body.md
+aep plan artifact body story:add-sub --from story-body.md && rm story-body.md
 aep plan artifact move story:add-sub --to proposed
 git add -A
 git commit -m "my-repo: a crate, its gates and its first story"
@@ -175,7 +185,7 @@ refused ([Approve a capability](./approve-a-capability.md)).
 |---|---|---|
 | `ApprovalRequired` | 4 | merges once a grant is recorded |
 | `Waiting` | 6 | reads the forge again |
-| an error once the case was open | 5 | resumes the case |
+| an error once the case was open; a judgement step whose session ends without the line naming its action is tried 3 times first, each try a step that `--iterations` counts (a budget a try spent is exit 3) | 5 | resumes the case |
 | `Unperformable` | 7 | resumes the case; give it what was missing (a forge, a gates document) |
 | a budget, `StepRefused`, `NoProgress`, `NothingAdmissible` | 3 | resumes the case |
 | `RedBase`, `RepeatedTestFailure` | 3 | runs the tests again first and stops again while they fail the same way |

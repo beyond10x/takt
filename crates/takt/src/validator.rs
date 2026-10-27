@@ -122,6 +122,143 @@ pub trait Validator {
     fn runs(&self) -> Vec<String> {
         Vec::new()
     }
+    /// What the checks of the last observation that failed printed that names what failed
+    /// ([`FailedCheck`]), taken once: the run keeps it on the run record's evidence line of the
+    /// observation's record and shows it to the next judgement step. None by default.
+    fn take_failed(&self) -> Vec<FailedCheck> {
+        Vec::new()
+    }
+}
+
+/// The most bytes [`failing_lines`] keeps of one failed check's output, 4 KiB, each kept line
+/// counted with its line end.
+pub const FAILED_LINES_PER_CHECK: usize = 4 << 10;
+
+/// The most bytes one observation keeps of its failed checks' lines over all of them, 8 KiB: a
+/// check keeps the smaller of [`FAILED_LINES_PER_CHECK`] and what the checks before it left.
+pub const FAILED_LINES_TOTAL: usize = 8 << 10;
+
+/// The most bytes of one kept line: a longer one is cut there and ends in `…`.
+const FAILED_LINE_BYTES: usize = 512;
+
+/// What a check that failed printed that names what failed: the check's id (a gate's), the
+/// lines kept of its output ([`failing_lines`]), and how many of its non-blank lines were left
+/// out.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FailedCheck {
+    pub id: String,
+    pub lines: Vec<String>,
+    pub omitted: u64,
+}
+
+/// `line` without its terminal escape sequences (CSI, such as a colour, `ESC [ … <final>`; OSC,
+/// `ESC ] … BEL` or `ESC ] … ESC \`; any other `ESC <char>`) and without any other control
+/// character but a tab, so a colour code before a token cannot hide its shape.
+fn plain(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            match chars.next() {
+                Some('[') => {
+                    for c in chars.by_ref() {
+                        if ('\u{40}'..='\u{7e}').contains(&c) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    while let Some(c) = chars.next() {
+                        if c == '\u{7}' || (c == '\u{1b}' && chars.next_if_eq(&'\\').is_some()) {
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else if c == '\t' || !c.is_control() {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The lines of a failed command's output `printed` that name what failed, within `budget`
+/// bytes (each line counted with its line end), and how many non-blank lines were left out.
+/// Every non-blank line, its terminal escape sequences and every other control character but a
+/// tab taken out ([`plain`]), its trailing white space cut, a line past 512 bytes cut there and
+/// ended in `…`. Whatever the room, so none reaches a record or a prompt, a line of a
+/// credential's shape ([`crate::run::credential_shape`], read on the line so cleaned) is left
+/// out, and so is a private key's block, from a `-----BEGIN … PRIVATE KEY-----` line through
+/// its `-----END` line, or to the end without one; each counted as left out. When they do not
+/// all fit: the last line first (a checker's summary), then the
+/// lines that do not start with white space, from the start in order until one does not fit,
+/// and, once all of those fit, the indented detail lines the same way; kept lines stay in their
+/// order. No rule of any one command's: `<document>:<line>: unresolved: <cited>` lines of a
+/// citation checker and `error:`/`warning:` lines of a compiler are kept before their indented
+/// detail alike.
+#[must_use]
+pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
+    let mut withheld = 0u64;
+    let mut in_key = false;
+    let mut lines: Vec<String> = Vec::new();
+    for line in printed.lines() {
+        let line = plain(line);
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        // A private key's block, from its `BEGIN` line through its `END` line or the end.
+        if line.contains("-----BEGIN ") && line.contains("PRIVATE KEY-----") {
+            in_key = true;
+        }
+        if in_key || crate::run::credential_shape(line).is_some() {
+            in_key = in_key && !line.contains("-----END ");
+            withheld += 1;
+            continue;
+        }
+        if line.len() <= FAILED_LINE_BYTES {
+            lines.push(line.to_owned());
+            continue;
+        }
+        let mut end = FAILED_LINE_BYTES - '…'.len_utf8();
+        while !line.is_char_boundary(end) {
+            end -= 1;
+        }
+        lines.push(format!("{}…", &line[..end]));
+    }
+    let cost = |line: &String| line.len() + 1;
+    if lines.iter().map(cost).sum::<usize>() <= budget {
+        return (lines, withheld);
+    }
+    let mut keep = vec![false; lines.len()];
+    let mut left = budget;
+    if let Some(last) = lines.last()
+        && cost(last) <= left
+    {
+        keep[lines.len() - 1] = true;
+        left -= cost(last);
+    }
+    let body = lines.len().saturating_sub(1);
+    'passes: for detail in [false, true] {
+        for (index, line) in lines[..body].iter().enumerate() {
+            if line.starts_with(char::is_whitespace) != detail {
+                continue;
+            }
+            if cost(line) > left {
+                break 'passes;
+            }
+            keep[index] = true;
+            left -= cost(line);
+        }
+    }
+    let omitted = keep.iter().filter(|kept| !**kept).count() as u64 + withheld;
+    let kept = lines
+        .into_iter()
+        .zip(keep)
+        .filter_map(|(line, kept)| kept.then_some(line))
+        .collect();
+    (kept, omitted)
 }
 
 /// How an effect performs the request it was handed: the validator's observation, taken where
@@ -1208,6 +1345,14 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// retains the bundle the library evaluated, `engineering-gate-evidence/1`, as
 /// `<record-id>.bundle.json`.
 ///
+/// A false evaluation keeps, for each gate with a false assertion, what the commands that
+/// assertion names printed that names what failed ([`FailedCheck`], [`failing_lines`]), taken
+/// once with [`Validator::take_failed`]: the output the observation kept (`process.run`,
+/// `ess.run`), or, for `process.succeeded`, which keeps only whether the command exited 0, the
+/// command run again once, only when it failed, as the library ran it, after the evaluation,
+/// held to the project file's timeout and output bound and to `deadline`; a run again that
+/// passes keeps one line saying so ([`PASSED_AGAIN`]) and none of its output ([`printed_by`]).
+///
 /// The gates document and the project file are read from the case's base revision, the tip of
 /// the branch in `branch.yaml`, never from the tree: the tree is the case's branch, which a
 /// model edits, and a gate it rewrote would decide its own verdict. What the gates observe is
@@ -1236,6 +1381,8 @@ pub struct GateRun {
     /// providers, relative to the tree; `None` takes [`DEFAULT_PROJECT`] when the base
     /// revision has it.
     pub project: Option<PathBuf>,
+    /// The failed gates of the last observation ([`Validator::take_failed`]).
+    failed: RefCell<Vec<FailedCheck>>,
 }
 
 /// The directory under the case's that holds the base revision's gate inputs while the gate
@@ -1918,6 +2065,7 @@ impl GateRun {
         Self {
             gates: gates.into(),
             project: None,
+            failed: RefCell::new(Vec::new()),
         }
     }
 
@@ -1960,6 +2108,105 @@ impl Validator for GateRun {
         let observed = self.observe_by(tree, revision, seq, deadline);
         Ok((ended_by(deadline, self.action(), observed)?, false))
     }
+
+    fn take_failed(&self) -> Vec<FailedCheck> {
+        self.failed.take()
+    }
+}
+
+/// The admitted command bindings a failed assertion of a gate names: each request of the plan
+/// that runs one (`process.succeeded`, `process.run`, `ess.run`) whose `binding` the assertion's
+/// expression names as a quoted string, with the outcome observed for it.
+fn bound_requests<'b>(
+    bundle: &'b canon_engineering_assertions::Bundle,
+    expression: &str,
+) -> Vec<(&'b str, &'b str, Option<&'b canon_expr::Outcome>)> {
+    bundle
+        .plan
+        .requests
+        .iter()
+        .filter(|request| {
+            matches!(
+                request.operation.as_str(),
+                "process.succeeded" | "process.run" | "ess.run"
+            )
+        })
+        .filter_map(|request| match request.arguments.get("binding") {
+            Some(canon_expr::Value::String(binding))
+                if expression.contains(&format!("\"{binding}\"")) =>
+            {
+                let outcome = bundle
+                    .observations
+                    .iter()
+                    .find(|observation| observation.request_id == request.id)
+                    .map(|observation| &observation.outcome);
+                Some((request.operation.as_str(), binding.as_str(), outcome))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a failed `process.succeeded` command keeps when, run again once, it exits 0: the
+/// failure did not repeat (a flaky command), so what failed is not known.
+pub const PASSED_AGAIN: &str =
+    "the command passed when run again (flaky): what failed the first time is not known";
+
+/// An admitted command as the project file binds it, after the library resolved its executable.
+struct Bound {
+    executable: PathBuf,
+    args: Vec<String>,
+    env: std::collections::BTreeMap<String, String>,
+}
+
+/// What `binding`'s command printed, standard output then standard error: from the observation
+/// when it kept them (`process.run`, `ess.run`), or the reason it was not observed; for
+/// `process.succeeded`, which keeps only whether it exited 0, from running it again once, only
+/// on its failure, as the library ran it (no inherited environment, the binding's own, in
+/// `tree`), held to `limits`; when that run exits 0 its output names nothing that failed, so
+/// the one line [`PASSED_AGAIN`] stands for it. None for an outcome that failed nothing: a
+/// `process.succeeded` that is not false.
+fn printed_by(
+    operation: &str,
+    binding: &str,
+    outcome: Option<&canon_expr::Outcome>,
+    bound: &std::collections::BTreeMap<String, Bound>,
+    tree: &Path,
+    limits: Limits,
+) -> Option<String> {
+    fn field(fields: &std::collections::BTreeMap<String, canon_expr::Value>, name: &str) -> String {
+        match fields.get(name) {
+            Some(canon_expr::Value::String(text)) => text.clone(),
+            _ => String::new(),
+        }
+    }
+    match (operation, outcome) {
+        ("process.succeeded", Some(canon_expr::Outcome::Known(canon_expr::Value::Bool(false)))) => {
+        }
+        ("process.succeeded", _) => return None,
+        (_, Some(canon_expr::Outcome::Known(canon_expr::Value::Record(fields)))) => {
+            return Some(field(fields, "stdout") + &field(fields, "stderr"));
+        }
+        (_, Some(canon_expr::Outcome::Unavailable(why))) => return Some(why.clone()),
+        _ => return None,
+    }
+    let command = bound.get(binding)?;
+    if limits.timeout.is_zero() {
+        return None;
+    }
+    let mut run = crate::confinement::Command::new(&command.executable);
+    run.args(&command.args)
+        .env_clear()
+        .envs(&command.env)
+        .current_dir(tree);
+    Some(match crate::forge::run_child(&mut run, limits) {
+        Ok(output) if output.code == Some(0) => PASSED_AGAIN.to_owned(),
+        Ok(output) => {
+            String::from_utf8_lossy(&output.stdout).into_owned()
+                + &String::from_utf8_lossy(&output.stderr)
+        }
+        Err(error) => format!("(what it printed could not be read again: {error:#})"),
+    })
 }
 
 impl GateRun {
@@ -1972,6 +2219,7 @@ impl GateRun {
         seq: usize,
         deadline: Option<std::time::Instant>,
     ) -> Result<Observation> {
+        self.failed.take();
         let dir = current(tree)?;
         let unpinned = || {
             Ok(nothing_recorded(format!(
@@ -2162,20 +2410,86 @@ impl GateRun {
                     .admit_delegated(executable.as_os_str())
                     .with_context(|| format!("start the commands of {document}"))?;
             }
+            // What a failed gate's command printed is read again from these
+            // ([`printed_by`]), held as the library held them.
+            let bound: std::collections::BTreeMap<String, Bound> = prepared
+                .context
+                .commands
+                .iter()
+                .map(|(name, binding)| {
+                    let bound = Bound {
+                        executable: binding.executable.clone(),
+                        args: binding.args.clone(),
+                        env: binding.env.clone(),
+                    };
+                    (name.clone(), bound)
+                })
+                .collect();
+            let limits = Limits {
+                timeout: prepared.context.timeout,
+                output: prepared.context.max_output_bytes,
+            };
             // The provider starts the gate's commands in process groups of their own and waits
             // on them itself: no sweep on another thread may take one meanwhile.
             let held = crate::forge::hold_sweeps();
             let collected = canon_engineering_assertions::collect(prepared, now)
                 .with_context(|| format!("collect the observations of {document}"));
             drop(held);
-            collected
+            collected.map(|bundle| (bundle, bound, limits))
         })();
-        drop(home);
         let cleared = clear();
-        let bundle = collected?;
+        let (bundle, bound, limits) = collected?;
         cleared?;
         let report = canon_engineering_assertions::evaluate(&bundle, now, None, None)
             .with_context(|| format!("evaluate {document}"))?;
+        // Each gate with a false assertion keeps what the commands that assertion names printed
+        // that names what failed ([`failing_lines`]), within [`FAILED_LINES_TOTAL`] over all of
+        // them; the run keeps it on the record's evidence line and shows it to the next step.
+        let mut failed = Vec::new();
+        if report.truth == canon_expr::Truth::False {
+            let mut left = FAILED_LINES_TOTAL;
+            let mut evaluations = report.assertions.iter();
+            for gate in &bundle.document.gates {
+                let mut printed = String::new();
+                let mut seen = std::collections::BTreeSet::new();
+                for evaluation in evaluations.by_ref().take(gate.assertions.len()) {
+                    if evaluation.truth != canon_expr::Truth::False {
+                        continue;
+                    }
+                    for (operation, binding, outcome) in
+                        bound_requests(&bundle, &evaluation.expression)
+                    {
+                        if !seen.insert(binding) {
+                            continue;
+                        }
+                        let mut limits = limits;
+                        if let Some(deadline) = deadline {
+                            limits.timeout = limits
+                                .timeout
+                                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+                        }
+                        if let Some(text) =
+                            printed_by(operation, binding, outcome, &bound, tree, limits)
+                        {
+                            printed.push_str(&text);
+                            printed.push('\n');
+                        }
+                    }
+                }
+                if printed.trim().is_empty() {
+                    continue;
+                }
+                let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK.min(left));
+                left -= lines.iter().map(|line| line.len() + 1).sum::<usize>();
+                failed.push(FailedCheck {
+                    id: gate.id.clone(),
+                    lines,
+                    omitted,
+                });
+            }
+        }
+        drop(home);
+        *self.failed.borrow_mut() = failed;
         // The report holds the gates' assertions in declaration order; the gate that decided
         // is the first whose assertion shares the report's truth.
         let decided = bundle
@@ -2361,7 +2675,110 @@ fn claims_held(case_dir: &Path) -> Result<Vec<String>> {
         .unwrap_or_default())
 }
 
-/// The pull request's body: the intent, then the case, the revision and the claims that hold.
+/// The figure a body states as this when the case's record holds none of it.
+const NOT_STATED: &str = "not stated";
+/// The most bytes a pull request body takes; the forge's limit is 65,536 characters.
+const BODY_LIMIT: usize = 60_000;
+/// The most bytes of the intent a body carries; a longer one is cut, and the body says so.
+const INTENT_LIMIT: usize = 20_000;
+/// The most bytes of the evidence list; the records past it are left out, and the body counts them.
+const EVIDENCE_LIMIT: usize = 30_000;
+/// The bytes a body keeps back from its list for the heading and the count of records left out.
+const EVIDENCE_RESERVE: usize = 400;
+
+/// The longest prefix of `text` of at most `limit` bytes, cut on a character boundary.
+fn prefix_within(text: &str, limit: usize) -> &str {
+    let mut end = limit.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// The evidence records under the case's `evidence/`, each as JSON, in file-name order. A file
+/// that is not JSON reads as `null`, so its figures are [`NOT_STATED`].
+fn evidence_of(case_dir: &Path) -> Result<Vec<serde_json::Value>> {
+    let dir = case_dir.join("evidence");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", dir.display())),
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("read {}", dir.display()))?
+            .path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths
+        .iter()
+        .map(|path| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(serde_json::Value::Null)
+        })
+        .collect())
+}
+
+/// The steps and the tokens `events.jsonl` in the case directory states so far: the step lines
+/// counted, and the `tokens` they state summed. Each is [`NOT_STATED`] when the file is missing,
+/// and the tokens when no step line states any.
+fn run_figures_of(case_dir: &Path) -> (String, String) {
+    let Ok(text) = std::fs::read_to_string(case_dir.join(crate::events::EVENTS_FILE)) else {
+        return (NOT_STATED.to_owned(), NOT_STATED.to_owned());
+    };
+    let mut steps = 0u64;
+    let mut tokens: Option<u64> = None;
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event["event"] != "step" {
+            continue;
+        }
+        steps += 1;
+        if let Some(stated) = event["tokens"].as_u64() {
+            tokens = Some(tokens.unwrap_or(0).saturating_add(stated));
+        }
+    }
+    (
+        steps.to_string(),
+        tokens.map_or_else(|| NOT_STATED.to_owned(), |tokens| tokens.to_string()),
+    )
+}
+
+/// One evidence record as a body line: its kind, result, short revision and producer, each
+/// [`NOT_STATED`] when the record does not hold it.
+fn evidence_line(record: &serde_json::Value) -> String {
+    let figure = |name: &str| {
+        record[name]
+            .as_str()
+            .map_or_else(|| NOT_STATED.to_owned(), str::to_owned)
+    };
+    let revision = record["subject_revision"].as_str().map_or_else(
+        || NOT_STATED.to_owned(),
+        |revision| short(revision).to_owned(),
+    );
+    format!(
+        "- `{}`, result `{}`, revision `{revision}`, producer `{}`.\n",
+        figure("kind"),
+        figure("result"),
+        figure("producer")
+    )
+}
+
+/// The pull request's body: the intent, then the case, the revision and the claims that hold, the
+/// steps and tokens `events.jsonl` states, and the evidence records of the case. The body stays
+/// under [`BODY_LIMIT`] bytes: a longer intent is cut, and the records that do not fit are left
+/// out, the body saying how many.
 fn body_of(case_dir: &Path, intent: &str, revision: &str) -> Result<String> {
     let case = case_dir
         .file_name()
@@ -2373,10 +2790,47 @@ fn body_of(case_dir: &Path, intent: &str, revision: &str) -> Result<String> {
     } else {
         claims.join(", ")
     };
-    Ok(format!(
-        "{}\n\n---\n\nOpened by takt for the case `{case}` at `{revision}`. Claims that hold: {claims}.\n",
-        intent.trim()
-    ))
+    let intent = intent.trim();
+    let kept = prefix_within(intent, INTENT_LIMIT);
+    let cut = if kept.len() < intent.len() {
+        format!(
+            "\n\n(The intent is cut at {INTENT_LIMIT} bytes; the rest is left out of this body.)"
+        )
+    } else {
+        String::new()
+    };
+    let (steps, tokens) = run_figures_of(case_dir);
+    let head = format!(
+        "{kept}{cut}\n\n---\n\nOpened by takt for the case `{case}` at `{revision}`. Claims that hold: {claims}.\n\nSteps: {steps}. Tokens: {tokens}.\n"
+    );
+    let records = evidence_of(case_dir)?;
+    let budget = BODY_LIMIT
+        .saturating_sub(head.len())
+        .saturating_sub(EVIDENCE_RESERVE)
+        .min(EVIDENCE_LIMIT);
+    let mut listed = String::new();
+    let mut count = 0;
+    for record in &records {
+        let line = evidence_line(record);
+        if listed.len() + line.len() > budget {
+            break;
+        }
+        listed.push_str(&line);
+        count += 1;
+    }
+    let mut body = head;
+    body.push_str(&format!(
+        "\nEvidence: {} records in the case.\n\n{listed}",
+        records.len()
+    ));
+    if count < records.len() {
+        body.push_str(&format!(
+            "\n{} of {} evidence records are left out of this body, which is bounded at {BODY_LIMIT} bytes.\n",
+            records.len() - count,
+            records.len()
+        ));
+    }
+    Ok(body)
 }
 
 /// What `pr.open` does after the push: opens the case's pull request, or reads the one it has.

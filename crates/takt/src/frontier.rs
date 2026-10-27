@@ -24,6 +24,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow};
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 
 use crate::case::Approval;
 use crate::confinement::Command;
@@ -106,8 +107,9 @@ pub trait Frontier {
     /// never edited: the trail of the grant written into the case.
     fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()>;
     /// Records on the story `story` one [`TEST_RESULT`] evidence record, source [`SOURCE`],
-    /// referring to `reference`, the record's path in the repository, at `at`, that record's
-    /// `observed_at`; the store's refusal, verbatim, when it would not. An adapter that records
+    /// referring to `reference`, the record's path in the repository with its sha256 and fields
+    /// ([`test_result_reference`]), at `at`, that record's `observed_at`; the store's refusal,
+    /// verbatim, when it would not. An adapter that records
     /// none refuses.
     fn record_test_result(
         &self,
@@ -215,6 +217,24 @@ pub enum Written {
 #[must_use]
 pub fn test_result_subject(story: &str) -> String {
     format!("takt: {TEST_RESULT} {story}")
+}
+
+/// The reference the store records for a `test_result` pass record of the case: the record's
+/// path in the repository, then `#sha256=<hex>&result=<result>&revision=<revision>&producer=<producer>`,
+/// the sha256 lower-case hex of the record's `bytes` and the other three the record's own fields.
+/// A reader of the store's line finds the record's bytes and what they say without the case
+/// directory, which another clone does not hold.
+#[must_use]
+pub fn test_result_reference(
+    path: &str,
+    bytes: &[u8],
+    result: &str,
+    revision: &str,
+    producer: &str,
+) -> String {
+    let digest = Sha256::digest(bytes);
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{path}#sha256={hex}&result={result}&revision={revision}&producer={producer}")
 }
 
 /// The subject of the commit that holds a story's move to [`IMPLEMENTED`] on the case's branch:

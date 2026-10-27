@@ -49,8 +49,9 @@ For `story.delivery/1` and `software.change/1`:
 | `ci.read` | the forge reads the pull request's checks | `ci_result` pass or fail |
 | `repository.merge` | the forge merges, under a grant | `merge_observation` |
 
-The forge is the repository's bot route on github.com (`b10x-gates` pushes and opens, `gh` reads
-checks), `glab` on a GitLab host, or none (`--forge none`), when the last three have no
+The forge is an adapter ([The forge](../reference/configuration.md#the-forge)): `glab` on a GitLab
+host, beyond10x's bot route on github.com (`b10x-gates` pushes and opens, `gh` reads checks), or
+none (`--forge none`), when the last three have no
 performer. A failing `tests.run` names up to 64 failed tests (cargo, Python unittest, pytest)
 and cargo's rerun hint in its summary; the [two test stops](./how-a-run-ends.md#the-two-test-stops)
 read those names.
@@ -64,12 +65,12 @@ For an improvement turn (`self.improvement/1`) takt has validators of its own:
 A validator observes under the same guard as a judgement step, on a tree with nothing
 uncommitted outside the case. A test command that writes a grant, a record or the gates document,
 or any file its validator does not write, is refused and its writes are undone. A real refusal,
-from a repository whose `Cargo.lock` was not committed, so `cargo test` wrote one:
+from a repository whose `Cargo.lock` was not committed, so `cargo test` wrote one, and the refusal names the three ways out:
 
 ```console
 step 1: tests.run {}
-  refused: tests.run wrote what its validator does not: Cargo.lock; the cases directory was put back, the change discarded and nothing recorded
-stopped: StepRefused (tests.run wrote what its validator does not: Cargo.lock); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231059Z
+  refused: tests.run wrote what its validator does not: Cargo.lock; commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it; the cases directory was put back, the change discarded and nothing recorded
+stopped: StepRefused (tests.run wrote what its validator does not: Cargo.lock; commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231059Z
 ```
 
 The gates document and the assertions project file are read from the case's base revision, not
