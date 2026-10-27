@@ -8,10 +8,15 @@ takt's releases.
 
 ### Added
 
-- `forge: command` with a `forge_commands` section in the `takt run --config` file: the run's forge actions (`open`, `read`, `checks`, `merge`) are the exact argument lists the file names, run without a shell, with the placeholders `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
-- `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree) in the `takt run --config` file: the `gitlab` forge calls the GitLab REST API over HTTPS itself instead of `glab api`. The token is held in memory only, replaced where an answer of the host is quoted, and given to the push through a credential helper that reads it from that one command's environment. `glab` stays the default transport.
-- The run file takes `protocol`, the protocol a store story opens on, and `protocols`, the values of that protocol's declared inputs. Each input takes the first of `--input`, the story's tag `input:<name>=<value>`, the run file and takt's built-in default; a story's tag `protocol:<name>/<major>` chooses its protocol. A value the protocol does not list is refused at its line. `case.yaml` records each value with its source.
-- `takt protocol show <name/rev>` prints each case input a built-in protocol declares: its values, description, built-in default and the value the run file `--config` sets, with that file's path and line; `--format json` prints the same as data. An unknown protocol exits 1 and names the known ones.
+- `forge: command` with a `forge_commands` section in the `takt run --config` file: the forge actions `open`, `read`, `checks` and `merge` are the argument lists the file names, run without a shell.
+- Placeholders of `forge_commands`: `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
+- `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree): the `gitlab` forge calls the GitLab REST API over HTTPS. `glab` stays the default transport.
+- The `api` token is held in memory only, replaced where an answer of the host is quoted, and given to the push through a credential helper that reads it from that one command's environment.
+- The run file takes `protocol`, the protocol a store story opens on, and `protocols`, the values of that protocol's declared inputs. A value the protocol does not list is refused at its line.
+- Each protocol input takes the first of `--input`, the story's tag `input:<name>=<value>`, the run file and takt's built-in default; the tag `protocol:<name>/<major>` chooses a story's protocol.
+- `case.yaml` records each protocol input value with its source.
+- `takt protocol show <name/rev>` prints each case input a built-in protocol declares: values, description, built-in default and the run file's value with its path and line.
+- `takt protocol show --format json` prints the same as data; an unknown protocol exits 1 and names the known ones.
 - `examples/loom-agent/`: placeholder manifests that run takt as a Loom 0.44.0 `LoomAgent` on a kind cluster, read by a test through takt's own configuration reader.
 - Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
 - Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
