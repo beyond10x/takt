@@ -10,12 +10,32 @@
 //! them (`crates/takt-cli/src/main.rs`).
 
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 
 /// llm's parsed `llm.routes/1` document, the type a run file's `llm` member is validated as; its
 /// [`Routes::digest`] is the `llm_digest` a run records.
 pub use llm_models::routes::Routes;
+
+/// The `llm.routes/1` document a run file's `llm` member holds, parsed by llm and shared, so a run
+/// resolves its `model` against it. Two are equal when their digests are.
+#[derive(Debug, Clone)]
+pub struct LlmRoutes(Arc<Routes>);
+
+impl LlmRoutes {
+    /// The parsed document.
+    #[must_use]
+    pub fn routes(&self) -> &Routes {
+        &self.0
+    }
+}
+
+impl PartialEq for LlmRoutes {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.digest() == other.0.digest()
+    }
+}
 
 /// The `format` of the agent document Loom writes to `/config/agent.yaml`.
 pub const LOOM_AGENT_FORMAT: &str = "loom.agent/1";
@@ -116,6 +136,9 @@ pub struct RunConfig {
     /// [`RunConfig::read`], never read from the file.
     #[serde(skip)]
     pub llm_digest: Option<String>,
+    /// The document `llm` holds, parsed by llm. Set by [`RunConfig::read`], never read from the file.
+    #[serde(skip)]
+    pub llm_routes: Option<LlmRoutes>,
 }
 
 /// A present `llm` member, null included: serde reads a null as absent, so a bare `llm:` would
@@ -146,12 +169,12 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
     }
 }
 
-/// The digest of the `llm.routes/1` document `llm` holds, validated by llm. A mapping whose only
+/// The `llm.routes/1` document `llm` holds, validated by llm. A mapping whose only
 /// key is `path` names a file beside the run file, parsed by `Routes::parse_toml` when it ends in
 /// `.toml` and by `Routes::parse` when it ends in `.yaml` or `.yml`; any other mapping is the
 /// whole document, re-serialised to YAML text and parsed by `Routes::parse`. llm's refusal is
 /// relayed as it stands, and nothing here repeats a value written in the file.
-fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
+fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<Routes> {
     let shape = || {
         anyhow!(
             "the run configuration file {} is refused: its `llm` member is neither an \
@@ -233,7 +256,7 @@ fn llm_digest(path: &Path, llm: &serde_yaml_ng::Value) -> Result<String> {
         }
         None => return Err(shape()),
     };
-    Ok(routes.digest().to_owned())
+    Ok(routes)
 }
 
 /// The run configuration in `text`, TOML.
@@ -339,7 +362,9 @@ impl RunConfig {
             ));
         }
         if let Some(llm) = &config.llm {
-            config.llm_digest = Some(llm_digest(path, llm)?);
+            let routes = llm_document(path, llm)?;
+            config.llm_digest = Some(routes.digest().to_owned());
+            config.llm_routes = Some(LlmRoutes(Arc::new(routes)));
         }
         let beside = |file: PathBuf| match path.parent() {
             Some(dir) if file.is_relative() => dir.join(file),

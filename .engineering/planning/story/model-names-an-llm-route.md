@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:model-names-an-llm-route
 kind: story
-status: active
+status: implemented
 title: --model names an llm route; llm resolves endpoint, wire and model
 summary: a route or alias fills the session's endpoint; its credential reaches the session by reference only
 tags:
@@ -24,10 +24,11 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":5}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":5}}}
+- {from: "active", to: "implemented", at: "2026-10-27T08:29:26Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":5}}}
 ---
 # Story: model-names-an-llm-route
 

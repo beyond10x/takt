@@ -12,6 +12,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::case::Decision;
 use crate::confinement::Command;
 use crate::protocol::LoadedProtocol;
+use crate::run_config::Routes;
 
 /// What a step is given.
 #[derive(Debug)]
@@ -214,6 +215,10 @@ pub struct SessionHarness {
     /// which the endpoint's `token_file` names ([`Self::hold_staged`]); held as long as the
     /// harness, so the file and its directory are removed when the run that holds it ends.
     pub staged: Option<StagedToken>,
+    /// The credential the endpoint was pointed with ([`Self::point_at`]), recorded as it is when
+    /// it is a route's: a route's staged key is recorded by its endpoint and secret kind, not by a
+    /// variable's name it does not have.
+    pub credential: Option<Credential>,
     /// The user's HOME, under which the endpoint's token file is recorded as `~/…`
     /// ([`EndpointConfig::recorded`]); the session is given the path whole. None records it whole.
     pub home: Option<std::path::PathBuf>,
@@ -282,6 +287,7 @@ impl SessionHarness {
             endpoint: None,
             api_key_secret: None,
             staged: None,
+            credential: None,
             home: None,
             runner: None,
             reported: std::cell::Cell::new(None),
@@ -308,6 +314,7 @@ impl SessionHarness {
     pub fn point_at(&mut self, config: &EndpointConfig) {
         self.endpoint = Some(config.session_endpoint());
         self.api_key_secret = config.api_key_secret();
+        self.credential = Some(config.credential.clone());
     }
 
     /// Hands the session the file an environment variable's value is staged in, as its
@@ -511,8 +518,11 @@ impl Harness for SessionHarness {
         let endpoint = self.endpoint.as_ref().filter(|_| self.kind == Kind::B10x)?;
         let mut reference = EndpointConfig::of_session(endpoint, self.api_key_secret.as_deref());
         if let Some(staged) = &self.staged {
-            reference.credential = Credential::Environment {
-                name: staged.name().to_owned(),
+            reference.credential = match &self.credential {
+                Some(route @ Credential::Route { .. }) => route.clone(),
+                _ => Credential::Environment {
+                    name: staged.name().to_owned(),
+                },
             };
         }
         if let Some(model) = &self.model {
@@ -2174,6 +2184,34 @@ pub enum Credential {
     /// its environment before anything starts, stages it as a protected token file
     /// ([`StagedToken`]) handed to the session, and records the name alone.
     Environment { name: String },
+    /// The key of an `llm.routes/1` route's endpoint, resolved by llm inside takt and staged as
+    /// [`Credential::Environment`] is: recorded by the endpoint's name and the kind of secret
+    /// the document names, never the variable, path, keychain entry or value.
+    Route {
+        endpoint: String,
+        secret: RouteSecret,
+    },
+}
+
+/// The kind of source a route endpoint's `auth.secret` names, as llm reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RouteSecret {
+    Environment,
+    File,
+    Keychain,
+}
+
+impl RouteSecret {
+    /// The kind's name, as the record writes it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Environment => "environment",
+            Self::File => "file",
+            Self::Keychain => "keychain",
+        }
+    }
 }
 
 /// Whether `name` is a portable environment variable's name: ASCII letters, digits and `_`,
@@ -2671,6 +2709,12 @@ impl Credential {
             } => format!("subscription token file {}", path.display()),
             Self::Secret { namespace, name } => format!("secret {namespace}/{name}"),
             Self::Environment { name } => format!("environment variable {name}"),
+            Self::Route { endpoint, secret } => {
+                format!(
+                    "route endpoint {endpoint} with a {} secret",
+                    secret.as_str()
+                )
+            }
         }
     }
 
@@ -3023,9 +3067,9 @@ impl EndpointConfig {
     pub fn session_endpoint(&self) -> Endpoint {
         let (token_file, token_pointer) = match &self.credential {
             Credential::SubscriptionFile { path, pointer } => (path.clone(), pointer.clone()),
-            Credential::Secret { .. } | Credential::Environment { .. } => {
-                (std::path::PathBuf::new(), None)
-            }
+            Credential::Secret { .. }
+            | Credential::Environment { .. }
+            | Credential::Route { .. } => (std::path::PathBuf::new(), None),
         };
         Endpoint {
             base_url: self.base_url.clone(),
@@ -3043,8 +3087,162 @@ impl EndpointConfig {
     pub fn api_key_secret(&self) -> Option<String> {
         match &self.credential {
             Credential::Secret { namespace, name } => Some(format!("{namespace}/{name}")),
-            Credential::SubscriptionFile { .. } | Credential::Environment { .. } => None,
+            Credential::SubscriptionFile { .. }
+            | Credential::Environment { .. }
+            | Credential::Route { .. } => None,
         }
+    }
+}
+
+/// The protocols an `llm.routes/1` route may name, as the document writes them, for a refusal.
+fn protocol_name(protocol: llm_core::Protocol) -> &'static str {
+    use llm_core::Protocol;
+    match protocol {
+        Protocol::Messages => "messages",
+        Protocol::Responses => "responses",
+        Protocol::ChatCompletions => "chat-completions",
+        Protocol::BedrockConverse => "bedrock-converse",
+    }
+}
+
+/// The endpoint an `llm.routes/1` document's route reaches for `--model`, resolved by llm: its
+/// base URL, the wire its protocol maps to and the upstream model, as an [`EndpointConfig`] whose
+/// credential is [`Credential::Route`], and the key llm resolved for it, which is staged as the
+/// token file of [`Credential::Environment`] is and held as the value of a variable: it is
+/// never printed, and it is in no argument, environment or case file.
+pub struct RouteEndpoint {
+    pub config: EndpointConfig,
+    pub secret: Option<VariableValue>,
+}
+
+impl RouteEndpoint {
+    /// The route or alias `model` names in `routes`, or `<endpoint>/<model-id>`, as llm resolves it.
+    /// Refused, before any case opens and naming the route: a name llm does not know (llm's own
+    /// message), a protocol other than `messages` or `responses`, an endpoint with no credential,
+    /// a credential that is not admitted on the `openai-responses` wire (a staged key is read by
+    /// b10x-harness as a subscription token on the Messages wire), a base URL [`check_base_url`]
+    /// refuses, and a secret llm cannot resolve, with llm's reason. The secret is resolved at once
+    /// by llm's resolver; `home` is the directory a `file:~/` reference expands against.
+    ///
+    /// # Errors
+    /// As above, each refusal naming the route and why, and none of it repeating a value.
+    pub fn resolve(routes: &Routes, model: &str, home: Option<&Path>) -> Result<Self> {
+        use llm_core::Protocol;
+        use llm_credentials::SecretRef;
+        use llm_models::Resolvers as _;
+        use llm_models::routes::{SecretKind, SecretSources};
+
+        let target = routes
+            .target(model)
+            .map_err(|error| anyhow!("the run's model {model} is refused: {}", error.message))?;
+        let route = target.serving_model.as_str();
+        let wire = match target.protocol {
+            Protocol::Messages => EndpointConfig::WIRE,
+            Protocol::Responses => ENVIRONMENT_WIRE,
+            other => bail!(
+                "the route {route} is on the {} protocol, and takt points b10x-harness at `messages` and `responses` routes only; nothing was started",
+                protocol_name(other)
+            ),
+        };
+        let endpoint_name = target.endpoint.as_str();
+        let declared = routes
+            .endpoints()
+            .find(|declared| declared.name() == &target.endpoint)
+            .ok_or_else(|| {
+                anyhow!(
+                    "the route {route} reaches no endpoint takt can point b10x-harness at; nothing was started"
+                )
+            })?;
+        let base_url = declared.base_url().as_str();
+        check_base_url(base_url)?;
+        let Some(kind) = declared.secret_kind() else {
+            bail!(
+                "the route {route} reaches endpoint {endpoint_name}, which names no credential, and takt gives b10x-harness a credential only: give the endpoint an `auth.secret`; nothing was started"
+            );
+        };
+        let kind_name = match kind {
+            SecretKind::Environment => "environment",
+            SecretKind::File => "file",
+            SecretKind::Keychain => "keychain",
+        };
+        if wire != ENVIRONMENT_WIRE {
+            bail!(
+                "the route {route} takes its key from {kind_name} on the {wire} wire: only {ENVIRONMENT_WIRE} takes a staged key until the session executor can pass an API-key file; nothing was started"
+            );
+        }
+        let sources = match home {
+            Some(home) => SecretSources::new().with_home(home),
+            None => SecretSources::new(),
+        };
+        let resolvers = routes.resolvers(&sources).map_err(|error| {
+            anyhow!("the route {route}: {}; nothing was started", error.message)
+        })?;
+        let Some(resolver) = resolvers.resolver(&target.endpoint) else {
+            let why = resolvers
+                .unavailable(&target.endpoint)
+                .unwrap_or("no resolver was built");
+            bail!(
+                "the route {route} takes its key from {kind_name}, which is unavailable: {why}; nothing was started"
+            );
+        };
+        let reference = SecretRef::new(endpoint_name).map_err(|_| {
+            anyhow!("the route {route}: endpoint {endpoint_name} is no secret reference; nothing was started")
+        })?;
+        // llm's file source reads on a blocking thread of a Tokio runtime, so the key is resolved
+        // on a runtime of this call's own, dropped (its threads joined) before this returns.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .map_err(|error| {
+                anyhow!(
+                    "the route {route}: no runtime resolves its key ({error}); nothing was started"
+                )
+            })?;
+        let resolved = runtime.block_on(resolver.resolve(&reference));
+        drop(runtime);
+        let resolved = resolved.map_err(|error| {
+            anyhow!(
+                "the route {route} takes its key from {kind_name}: {error}; nothing was started"
+            )
+        })?;
+        let text = String::from_utf8(resolved.secret.expose().to_vec())
+            .map_err(|_| anyhow!("the route {route}: its key is not text; nothing was started"))?;
+        let config = EndpointConfig {
+            base_url: base_url.to_owned(),
+            wire: wire.to_owned(),
+            model: target.upstream_model.as_str().to_owned(),
+            credential: Credential::Route {
+                endpoint: endpoint_name.to_owned(),
+                secret: match kind {
+                    SecretKind::Environment => RouteSecret::Environment,
+                    SecretKind::File => RouteSecret::File,
+                    SecretKind::Keychain => RouteSecret::Keychain,
+                },
+            },
+        };
+        Ok(Self {
+            config,
+            secret: Some(VariableValue::new(std::ffi::OsString::from(text))),
+        })
+    }
+}
+
+/// Takes out of takt's environment every variable holding `value`, the key llm resolved for a
+/// route, so no process takt starts inherits it. llm names no variable of a route's secret, so
+/// the variables are found by their value; on Linux with glibc their values are overwritten as
+/// [`take_environment_variable`] does.
+///
+/// # Safety
+///
+/// No other thread may read or write the environment while it runs: call it before takt starts
+/// any thread.
+pub unsafe fn take_environment_holding(value: &VariableValue) {
+    let names: Vec<String> = std::env::vars_os()
+        .filter(|(_, held)| *held == value.0)
+        .filter_map(|(name, _)| name.into_string().ok())
+        .collect();
+    for name in names {
+        // SAFETY: the caller guarantees no other thread touches the environment.
+        unsafe { take_environment_variable(&name) };
     }
 }
 

@@ -34,7 +34,7 @@ for `_`; `scan` has no flag.
 | `iterations` | integer: stop after this many steps |
 | `hours` | number: stop after this many hours |
 | `harness` | string: `claude`, `codex`, `harness` or `none`; default `claude` |
-| `model` | string: the harness's model, when it takes one |
+| `model` | string: the harness's model, when it takes one; with an `llm` section under `--harness harness`, the route or alias of that section it names, whose endpoint, wire and upstream model the session uses |
 | `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
 | `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
 | `forge` | string: `bot`, `gitlab` or `none` |
@@ -43,7 +43,7 @@ for `_`; `scan` has no flag.
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
-| `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest` |
+| `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--endpoint-*`, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
 
 `takt scenario run --config <FILE>` reads the same file, without `story`.
 
