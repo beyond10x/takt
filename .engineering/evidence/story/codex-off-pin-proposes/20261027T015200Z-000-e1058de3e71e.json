@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T01:52:00Z",
+  "actor": "human:timo",
+  "artifact": "story:codex-off-pin-proposes",
+  "kind": "story",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "red, 2026-10-27: takt 0.7.0 and integration/takt (loom-sdk 0.43.0, metaharness 0.19.0), takt run --harness codex --forge none on a scratch crate: child codex 0.160.0 under takt 0.7.0 and 0.164.0 under integration/takt both stop 'H9 Gap ... the session proposed nothing', exit 5"
+  }
+}

@@ -422,8 +422,9 @@ pub fn rebuilt_prompt_line(
         gate,
     )?;
     let change = change_of(start, &start.case_dir, repo, &start.revision)?;
+    let failed = failed_of(start);
     // The scope files as the revision the step started at holds them, in the repository.
-    let context = context(start, repo, &offer, &change, Some(&start.revision));
+    let context = context(start, repo, &offer, &change, &failed, Some(&start.revision));
     let _ = probe.step(&context);
     let transcript = probe
         .last_transcript()
@@ -463,6 +464,7 @@ fn context<'a>(
     tree: &'a Path,
     offer: &'a crate::run::Offer,
     change: &'a ChangeSoFar,
+    failed: &'a [crate::validator::FailedCheck],
     scope_revision: Option<&'a str>,
 ) -> StepContext<'a> {
     StepContext {
@@ -477,7 +479,19 @@ fn context<'a>(
         step: usize::try_from(start.step).unwrap_or(usize::MAX),
         time_left: None,
         change,
+        failed,
     }
+}
+
+/// What the step `start` describes was shown of the checks that failed before it, read from its
+/// record up to the step as a run reads it ([`crate::run::failed_checks`]).
+fn failed_of(start: &Start) -> Vec<crate::validator::FailedCheck> {
+    let record: Vec<serde_json::Value> = start
+        .record
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
+        .collect();
+    crate::run::failed_checks(&record)
 }
 
 /// Writes the case directory as the step `start` describes found it under `tree`
@@ -682,7 +696,8 @@ pub fn replay_once(
     )?;
     let started_at = crate::events::instant();
     let change = change_of(start, &case_dir, &tree, &revision)?;
-    let stepped = harness.step(&context(start, &tree, &offer, &change, None));
+    let failed = failed_of(start);
+    let stepped = harness.step(&context(start, &tree, &offer, &change, &failed, None));
     let transcript = harness.last_transcript();
     if let Some(bytes) = &transcript {
         write_private(&dir.join("transcript.jsonl"), bytes)?;
