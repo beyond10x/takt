@@ -19,6 +19,7 @@ takt's releases.
 ### Changed
 
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
+- `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration); `--records trial` keeps every one, and scenario runs and improvement cases always keep every one.
 
 ### Changed
 

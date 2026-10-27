@@ -5052,6 +5052,7 @@ mod endpoint_tests {
             layers: None,
             confinement: None,
             endpoint,
+            records: None,
         })
         .expect("the opened line serializes")
     }

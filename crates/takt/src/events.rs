@@ -82,6 +82,10 @@ pub enum Event {
     /// userinfo, query or fragment), wire and model, the token file's path (`~/…` under HOME)
     /// and pointer or the secret's namespace and name, never a token. Absent for a harness
     /// pointed at none (`claude`, `codex`, `none`) and on a line written before it.
+    /// The records profile the case keeps its decisions under, `default` or `trial`
+    /// ([`crate::case::Records`]), as the case keeps them: a scenario run and an improvement
+    /// case keep every decision, so their line says `trial` whatever was asked. Absent on a
+    /// line written before it, which a reader reads as every decision kept.
     Opened {
         case: String,
         protocol: String,
@@ -98,6 +102,8 @@ pub enum Event {
         confinement: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<crate::harness::EndpointConfig>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        records: Option<String>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.

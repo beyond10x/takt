@@ -51,6 +51,7 @@ fn opened(case: &str) -> Event {
         layers: None,
         confinement: None,
         endpoint: None,
+        records: None,
     }
 }
 
