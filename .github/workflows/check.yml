@@ -119,6 +119,20 @@ jobs:
           fi
           bwrap --unshare-net --dev-bind / / true
 
+      - name: Start the runner's user systemd manager
+        run: |
+          set -euo pipefail
+          uid=$(id -u)
+          sudo loginctl enable-linger "$(id -un)"
+          for _ in $(seq 1 30); do
+            [ -S "/run/user/$uid/bus" ] && break
+            sleep 1
+          done
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            systemd-run --user --scope --quiet true
+
       - name: task ${{ matrix.part }}
         env:
           PART: ${{ matrix.part }}
