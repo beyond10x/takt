@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T06:35:50Z",
+  "actor": "human:timo",
+  "artifact": "story:llm-section-is-an-llm-routes-document",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked --no-fail-fast on integration/takt 453f759: 201 binaries, 1946 passed, 0 failed, 5 ignored; cargo test -p b10x-takt -p b10x-takt-cli --locked on integration/takt 03cc820: 204 binaries, 1961 passed, 0 failed, 5 ignored"
+  }
+}
