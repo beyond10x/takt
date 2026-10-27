@@ -167,7 +167,7 @@ opens, exit 1. The refusal names the line and never the value written there:
 
 ```console
 $ takt run --repo . --intent x --config story.toml
-takt: the run configuration file story.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
+takt: the run configuration file story.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
 ```
 
 In YAML the line is where the mapping holding the duplicate starts, not the duplicate itself.

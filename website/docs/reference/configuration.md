@@ -116,7 +116,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -306,8 +306,8 @@ Claude Code's file tools stay inside its copy, so a Claude Code run under `gates
 policy. Every proposal, from any harness and under either adapter, is checked in process for the
 shape of a credential, and scanned too under `gates` when a policy is set.
 
-A scenario run takes no run configuration file, so it cannot declare `none`: with a harness that
-may read outside its copy it needs `B10X_GATES_POLICY`.
+A scenario run cannot declare `none`: `takt scenario run --config` refuses a file that declares it,
+naming the file, and with a harness that may read outside its copy it needs `B10X_GATES_POLICY`.
 
 ## Every takt run flag
 

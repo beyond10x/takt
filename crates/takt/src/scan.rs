@@ -164,8 +164,8 @@ impl Scan {
 
     /// Why a run of `--harness <harness>`, whose session may read outside its copy, is refused
     /// before its case opens under this adapter: under `gates` with no policy, what it proposes
-    /// would not be scanned. `config` says whether the run takes a run configuration file, where
-    /// `scan: none` is declared (`takt run --config`); a scenario run takes none. None under a
+    /// would not be scanned. `config` says whether the run may declare `scan: none` in its run
+    /// configuration file (`takt run --config`); a scenario run may not. None under a
     /// policy or a declared `none`.
     #[must_use]
     pub fn refused_at_open(&self, harness: &str, config: bool) -> Option<String> {
@@ -179,7 +179,7 @@ impl Scan {
             )
         } else {
             format!(
-                "set {var} to a gates policy file: a scenario run takes no run configuration file, so it cannot declare `scan: none` as `takt run --config <file>` can; nothing was opened or changed"
+                "set {var} to a gates policy file: a scenario run cannot declare `scan: none`, as `takt run --config <file>` can; nothing was opened or changed"
             )
         };
         Some(format!(

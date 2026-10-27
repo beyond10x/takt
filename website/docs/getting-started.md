@@ -104,7 +104,7 @@ What differs from Linux:
 ## A run with no model
 
 Make a crate with one passing test and commit it, `Cargo.lock` included. A test run that writes a
-lock file the commit lacks is refused as a change the validator may not make.
+lock file the commit lacks is refused as a change the validator may not make; the refusal names the three ways out: commit `Cargo.lock`, ignore it in `.gitignore`, or give `--test-cmd` a command that does not write it.
 
 ```sh
 cargo new --lib takt-demo

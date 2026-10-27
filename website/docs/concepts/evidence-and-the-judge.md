@@ -65,12 +65,12 @@ For an improvement turn (`self.improvement/1`) takt has validators of its own:
 A validator observes under the same guard as a judgement step, on a tree with nothing
 uncommitted outside the case. A test command that writes a grant, a record or the gates document,
 or any file its validator does not write, is refused and its writes are undone. A real refusal,
-from a repository whose `Cargo.lock` was not committed, so `cargo test` wrote one:
+from a repository whose `Cargo.lock` was not committed, so `cargo test` wrote one, and the refusal names the three ways out:
 
 ```console
 step 1: tests.run {}
-  refused: tests.run wrote what its validator does not: Cargo.lock; the cases directory was put back, the change discarded and nothing recorded
-stopped: StepRefused (tests.run wrote what its validator does not: Cargo.lock); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231059Z
+  refused: tests.run wrote what its validator does not: Cargo.lock; commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it; the cases directory was put back, the change discarded and nothing recorded
+stopped: StepRefused (tests.run wrote what its validator does not: Cargo.lock; commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231059Z
 ```
 
 The gates document and the assertions project file are read from the case's base revision, not

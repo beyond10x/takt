@@ -162,13 +162,16 @@ pub enum Event {
         revision: Option<String>,
     },
     /// An evidence record a validator wrote under the case: its id, kind and result, and its
-    /// path relative to the tree.
+    /// path relative to the tree; and, when the observation failed checks, what each printed
+    /// that names what failed ([`crate::validator::FailedCheck`]), absent when none did.
     Evidence {
         id: String,
         kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
         path: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failed: Vec<crate::validator::FailedCheck>,
     },
     /// An evidence record written on the story in the planning store: the kind, the reference
     /// and the instant given to the store (the case's record's own `observed_at`), and the
