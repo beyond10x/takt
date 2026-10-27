@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:step-commits-follow-a-configurable-style
 kind: story
-status: draft
+status: active
 title: Step commits follow a configurable style, semantic by default, with the story in the trailer
 summary: 'commit section: semantic, repository or action; takt writes the trailer'
 tags:
@@ -24,7 +24,10 @@ scope:
   path: crates/takt/tests/commit_style.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:44Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:45Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":3}}}
 ---
 # Story: step-commits-follow-a-configurable-style
 

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:takt-lists-a-protocols-settings
 kind: story
-status: draft
+status: active
 title: takt protocol show lists a protocol's inputs, defaults and the repository's values
 summary: a listing, text and json
 tags:
@@ -21,7 +21,10 @@ scope:
   path: crates/takt/tests/protocol_show.rs
 - confidence: inferred
   path: website/docs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:45Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:45Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
 ---
 # Story: takt-lists-a-protocols-settings
 

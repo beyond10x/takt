@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-run-shows-each-repository-obligation
 kind: story
-status: draft
+status: active
 title: The prompt, the stop line and the report name each gate obligation and its status
 summary: change-aware gate context and a per-obligation table
 tags:
@@ -21,7 +21,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/obligations.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:46Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:46Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
 ---
 # Story: the-run-shows-each-repository-obligation
 

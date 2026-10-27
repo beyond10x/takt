@@ -2,13 +2,15 @@
 format: aep.planning-md/3
 id: dependency-blocker:scan-and-forge-adapters-not-on-integration
 kind: dependency-blocker
-status: open
+status: cleared
 title: The forge adapter seam is not on integration yet
 relations:
 - blocks: story:a-command-forge-runs-the-configured-commands
 - blocks: story:the-gitlab-forge-can-call-the-api-with-a-named-credential
 - blocks: story:a-connectors-forge-adapter
-revision: 1
+revision: 2
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-27T12:00:53Z", actor: "human:timo", revision: 2}
 ---
 # Dependency blocker: scan-and-forge-adapters-not-on-integration
 
