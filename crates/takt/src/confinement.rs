@@ -1371,12 +1371,26 @@ impl TestPlan {
         static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let target = tree.join(BUILD_DIRECTORY);
         std::fs::create_dir_all(&target).with_context(|| format!("create {}", target.display()))?;
+        if std::fs::symlink_metadata(&target).is_ok_and(|meta| !meta.file_type().is_dir()) {
+            bail!(
+                "{} is not a directory: a test command's scratch is made only in a real one",
+                target.display()
+            );
+        }
+        // An earlier command in this tree could write `target`, so the scratch is made anew
+        // where nothing is: a name it could not have guessed, and a path that already exists,
+        // a planted symlink included, is an error rather than a directory to make things in.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |elapsed| elapsed.subsec_nanos());
         let name = format!(
-            "takt-run-{}-{}",
+            "takt-run-{}-{}-{nanos:09}",
             std::process::id(),
             RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
-        let scratch = Scratch(target.join(&name));
+        let made = target.join(&name);
+        std::fs::create_dir(&made).with_context(|| format!("create {}", made.display()))?;
+        let scratch = Scratch(made);
         let cargo_home = scratch.0.join("cargo-home");
         std::fs::create_dir_all(&cargo_home)
             .with_context(|| format!("create {}", cargo_home.display()))?;
