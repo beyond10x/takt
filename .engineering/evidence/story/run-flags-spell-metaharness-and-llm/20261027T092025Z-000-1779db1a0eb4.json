@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T09:20:25Z",
+  "actor": "human:timo",
+  "artifact": "story:run-flags-spell-metaharness-and-llm",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test -p b10x-takt -p b10x-takt-cli on integration/takt 3584fb29: 211 binaries, 1990 passed, 2 load-timing failures in hours_bounds_the_run_end (passes 4 of 4 solo). Acceptance 1 to 3 tested by run_flags_spell_metaharness.rs; acceptance 4 (help text) tested for takt run; the generated CLI reference is not run (site build); the ESS conformance scenarios are not built."
+  }
+}

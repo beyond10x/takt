@@ -13,7 +13,8 @@ takt promote --repo <takt checkout> --scorecard <dir>/scorecard-<candidate sha>.
 
 ## What it reads
 
-Per run of a case under `.engineering/cases/`: its outcome, steps, tokens, refusals, `NoProgress`,
+Per run of a case under `.takt/cases/` (or `.engineering/cases/`, where an earlier takt opened it):
+its outcome, steps, tokens, refusals, `NoProgress`,
 errors and wall time, read from the case's `events.jsonl`; a scenario run's outcome comes from the
 held-out check's `held-out.txt` beside it. A case without a record is listed as `no record`.
 Tokens are never read from a file the candidate could plant. The binary a case's runs were made

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:takt-ships-default-protocol-settings
 kind: story
-status: draft
+status: implemented
 title: takt ships one defaults document for protocol settings
 summary: story.delivery/2, tests_first required, gate_on after_handover
 tags:
@@ -22,7 +22,11 @@ scope:
   path: crates/takt/tests/protocol_defaults.rs
 - confidence: inferred
   path: website/docs
-revision: 4
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:45Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:45Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-27T17:44:07Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: takt-ships-default-protocol-settings
 

@@ -1,19 +1,33 @@
 ---
 title: Case files
 sidebar_position: 4
-description: The layout of .engineering/cases/<case>/, which file takt or a command writes, and which are never edited by hand.
+description: The layout of .takt/cases/<case>/, which file takt or a command writes, and which are never edited by hand.
 lede: A case is a directory of files in the repository, and every file in it is written by takt, by one of its validators or by takt approve.
 source: crates/takt/src/case.rs (CaseDir, Branch, Authority, Records, the file constants), crates/takt/src/events.rs, crates/takt/src/evidence.rs, crates/takt/src/validator.rs, crates/takt/src/run.rs; a case from a takt 0.14.0 run on a scratch repository and one from a container run, read, not copied
 ---
 
 # Case files
 
-A run on a repository keeps its record in `.engineering/cases/<case>/`, where `<case>` is the
+A run on a repository keeps its record in `.takt/cases/<case>/`, where `<case>` is the
 case id (`--case-id`, or `takt-<UTC time>` when absent, and for a story `story-<name>-<UTC time>`).
 The directory is the case: a later run resumes it from these files, `takt approve` writes into it,
 and `takt trace`, `takt scorecard` and `takt replay` read it. How to read one after a run:
 [Read a case](../guides/read-a-case.md). What a case is:
 [Protocol and case](../concepts/protocol-and-case.md).
+
+### Where cases live, and git
+
+When takt creates `.takt/` and finds no `.takt/.gitignore`, it writes one holding `*`, and
+writes it again at a resume when it is gone, so `git status` shows none of a run's records. A
+test command or harness step that changes or removes `.takt/.gitignore`, or replaces `.takt`
+with a link, is refused and undone. A `.takt/.gitignore` already there is left alone: a
+repository that keeps its cases in version control commits its own, for example one holding
+`!cases/`, and takt never overwrites it. takt itself never commits a case.
+
+Earlier takt versions opened a case under `.engineering/cases/<case>/`. A case already there is
+still resumed, approved, traced, scored and replayed where it is, with `--case <case>` or as a
+story's open case, and takt does not move it; only a case that opens now goes under `.takt/cases`.
+Both roots are guarded alike: a step may write under neither, and a link at either is refused.
 
 takt also puts the repository on a branch `takt/<case id>` when the case opens, and
 `branch.yaml` records where it came from.
@@ -25,17 +39,17 @@ takt also puts the repository on a branch `takt/<case id>` when the case opens, 
 scratch repository:
 
 ```console
-$ find .engineering/cases -type f | sort
-.engineering/cases/<case>/authority.yaml
-.engineering/cases/<case>/branch.yaml
-.engineering/cases/<case>/case.yaml
-.engineering/cases/<case>/decisions/0002.json
-.engineering/cases/<case>/events.jsonl
-.engineering/cases/<case>/evidence/0001-test-result-1.json
-.engineering/cases/<case>/intent.md
-.engineering/cases/<case>/observations.json
-.engineering/cases/<case>/protocol.ir.json
-.engineering/cases/<case>/protocol.yaml
+$ find .takt/cases -type f | sort
+.takt/cases/<case>/authority.yaml
+.takt/cases/<case>/branch.yaml
+.takt/cases/<case>/case.yaml
+.takt/cases/<case>/decisions/0002.json
+.takt/cases/<case>/events.jsonl
+.takt/cases/<case>/evidence/0001-test-result-1.json
+.takt/cases/<case>/intent.md
+.takt/cases/<case>/observations.json
+.takt/cases/<case>/protocol.ir.json
+.takt/cases/<case>/protocol.yaml
 ```
 
 The run kept its latest decision alone, as the default records profile does for each run; `--records trial`
@@ -118,8 +132,8 @@ files scanned before each push.
 
 | what | where | why it is not in the case |
 |---|---|---|
-| a harness step's transcript | `$XDG_STATE_HOME/takt/transcripts/<repo>/<case>/run-<r>/step-<n>.jsonl` (`~/.local/state/takt/transcripts/...` without it), mode 0600 | it carries what the model read, and no step may reach it; `events.jsonl` names it relative to that directory |
-| files a discarded step rewrote inside an ignored directory | `$XDG_STATE_HOME/takt/set-aside` | they may be the operator's own |
+| a harness step's transcript | `$XDG_STATE_HOME/takt/transcripts/<repo>/<case>/run-<r>/step-<n>.jsonl` (`~/.local/state/takt/transcripts/...` without it), mode 0600; under `--state-dir`, `<state_dir>/transcripts/...` | it carries what the model read, and no step may reach it; `events.jsonl` names it relative to that directory |
+| files a discarded step rewrote inside an ignored directory | `$XDG_STATE_HOME/takt/set-aside`; under `--state-dir`, `<state_dir>/set-aside` | they may be the operator's own |
 | a replay | `$XDG_STATE_HOME/takt/replays` | `takt replay` only reads the case |
 | a promotion | `$XDG_STATE_HOME/takt/promotions` | it belongs to the binary, not the case |
 
@@ -129,9 +143,10 @@ Nothing in a case directory is edited by hand. The one thing an operator does to
 `takt approve`, which writes `authority.yaml`. A grant is bound to a revision, a record that
 changes after the fact changes what Canon reads, and takt checks it:
 
-- A step that proposes a path under `.engineering/cases` is refused, and one that changed the directory has it put back.
-- takt refuses a link at `.engineering/cases` or at `authority.yaml`, and does not read or write
-  through one.
+- A step that proposes a path under `.takt/cases` (or `.engineering/cases`) is refused, and one
+  that changed the directory has it put back.
+- takt refuses a link at `.takt/cases` (or `.engineering/cases`) or at `authority.yaml`, and does
+  not read or write through one.
 - `events.jsonl` is appended and never rewritten; a line cut short is skipped on read and named
   by a `skipped` line.
 - Only one run, resume or grant holds a case at a time (`run.lock`); a second is refused.

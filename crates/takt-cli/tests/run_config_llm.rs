@@ -62,7 +62,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(takt::case::CASES_DIR)
     }
 
     /// Writes `text` as `config/<name>` and returns its path.
@@ -253,6 +253,46 @@ fn llm_unknown_key_refused() {
     let all = text(&output);
     assert_eq!(output.status.code(), Some(1), "{all}");
     assert!(all.contains("invalid llm.routes/1 YAML document"), "{all}");
+    assert!(!all.contains(marker), "{all}");
+    assert!(!world.cases().exists(), "no case was opened");
+}
+
+/// Whether `all` holds `line` followed by a number, the way llm locates a refusal in a document.
+fn names_a_line(all: &str) -> bool {
+    all.match_indices("line ")
+        .any(|(at, _)| all[at + "line ".len()..].starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// An inline `llm` section is refused without a line or a column: they would locate takt's
+/// re-serialised copy of the section, not the run file. The refusal names the `llm` section and
+/// shows no value of the file, for an unknown key and for a literal secret alike.
+#[test]
+fn an_inline_llm_refusal_cites_no_line_of_the_copy() {
+    let world = World::new("inline-position");
+    let marker = "MARKER-inline-position";
+    let mut unknown = document();
+    unknown["token"] = serde_json::Value::String(marker.to_owned());
+    let config = world.file("run-unknown.yaml", &run_file(&format!("llm: {unknown}\n")));
+    let output = world.run_fresh(&config);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("`llm` section"), "{all}");
+    assert!(!names_a_line(&all), "{all}");
+    assert!(!all.contains(marker), "{all}");
+    assert!(!world.cases().exists(), "no case was opened");
+
+    let mut literal = document();
+    literal["endpoints"]["lab"] = serde_json::json!({
+        "base_url": "https://models.example/v1",
+        "protocol": "messages",
+        "auth": {"kind": "api-key", "header": "x-api-key", "secret": marker}
+    });
+    let config = world.file("run-literal.yaml", &run_file(&format!("llm: {literal}\n")));
+    let output = world.run_fresh(&config);
+    let all = text(&output);
+    assert_eq!(output.status.code(), Some(1), "{all}");
+    assert!(all.contains("auth.secret"), "{all}");
+    assert!(!names_a_line(&all), "{all}");
     assert!(!all.contains(marker), "{all}");
     assert!(!world.cases().exists(), "no case was opened");
 }

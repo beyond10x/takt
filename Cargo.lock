@@ -167,8 +167,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-assertion-providers"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.10.0#2a416427ec2502467248cf9a17a3a3b04322016f"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.11.0#de3df40554ffb5f9d8750cb8278acb8a0343c1db"
 dependencies = [
  "clap",
  "jsonschema 0.33.0",
@@ -205,11 +205,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-canon-engineering"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.10.0#2a416427ec2502467248cf9a17a3a3b04322016f"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.11.0#de3df40554ffb5f9d8750cb8278acb8a0343c1db"
 dependencies = [
  "b10x-canon",
- "b10x-canon-engineering-assertions 0.10.0",
+ "b10x-canon-engineering-assertions 0.11.0",
  "clap",
  "serde",
  "serde_yaml_ng",
@@ -233,11 +233,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-canon-engineering-assertions"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.10.0#2a416427ec2502467248cf9a17a3a3b04322016f"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.11.0#de3df40554ffb5f9d8750cb8278acb8a0343c1db"
 dependencies = [
  "anyhow",
- "b10x-assertion-providers 0.10.0",
+ "b10x-assertion-providers 0.11.0",
  "b10x-canon-expr",
  "clap",
  "rustix",
@@ -260,8 +260,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-harness-catalogue"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/harness?rev=684c99f5e8c7e1d22d7b29f717b71856db81766a#684c99f5e8c7e1d22d7b29f717b71856db81766a"
+version = "0.21.0"
+source = "git+https://github.com/beyond10x/harness?rev=ef6df52e015f986026fb1517c7880f9ebfa596d0#ef6df52e015f986026fb1517c7880f9ebfa596d0"
 dependencies = [
  "b10x-harness-wire",
  "b10x-tool-code-editor",
@@ -276,8 +276,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-harness-loop"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/harness?rev=684c99f5e8c7e1d22d7b29f717b71856db81766a#684c99f5e8c7e1d22d7b29f717b71856db81766a"
+version = "0.21.0"
+source = "git+https://github.com/beyond10x/harness?rev=ef6df52e015f986026fb1517c7880f9ebfa596d0#ef6df52e015f986026fb1517c7880f9ebfa596d0"
 dependencies = [
  "b10x-harness-wire",
  "jsonschema 0.52.1",
@@ -289,8 +289,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-harness-wire"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/harness?rev=684c99f5e8c7e1d22d7b29f717b71856db81766a#684c99f5e8c7e1d22d7b29f717b71856db81766a"
+version = "0.21.0"
+source = "git+https://github.com/beyond10x/harness?rev=ef6df52e015f986026fb1517c7880f9ebfa596d0#ef6df52e015f986026fb1517c7880f9ebfa596d0"
 dependencies = [
  "httpdate",
  "serde",
@@ -446,16 +446,16 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-commission"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "commission",
 ]
 
 [[package]]
 name = "b10x-loom-connectors"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-loom-commission",
  "connectors-client",
@@ -467,8 +467,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-executor"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-llm-core",
  "b10x-loom-commission",
@@ -483,8 +483,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-governor"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-canon",
  "b10x-canon-engineering 0.9.0",
@@ -498,16 +498,16 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-intake-references"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "b10x-loom-intake-router"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-canon-engineering 0.9.0",
  "b10x-llm-core",
@@ -518,8 +518,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-intake-slice"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-canon-engineering 0.9.0",
  "b10x-llm-core",
@@ -531,8 +531,8 @@ dependencies = [
  "b10x-loom-intake-references",
  "b10x-loom-intake-router",
  "b10x-loom-protocols",
- "b10x-substrate-host 0.10.0",
- "b10x-substrate-wire 0.10.0",
+ "b10x-substrate-host 0.13.0",
+ "b10x-substrate-wire 0.13.0",
  "chrono",
  "intake",
  "jiff",
@@ -548,8 +548,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-protocols"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-canon",
  "b10x-canon-engineering 0.9.0",
@@ -562,8 +562,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-sdk"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-llm-core",
  "b10x-llm-credentials",
@@ -588,8 +588,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-session-executor"
-version = "0.45.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+version = "0.46.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 dependencies = [
  "b10x-loom-commission",
  "loom",
@@ -601,26 +601,33 @@ dependencies = [
 
 [[package]]
 name = "b10x-substrate-host"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/substrate?rev=105cf718bc6a5314486c78f5fd93fabed290e30e#105cf718bc6a5314486c78f5fd93fabed290e30e"
+version = "0.13.0"
+source = "git+https://github.com/beyond10x/substrate?rev=c2b95f2882ec1e425459b23ed9e48dae121ae6d3#c2b95f2882ec1e425459b23ed9e48dae121ae6d3"
 dependencies = [
  "async-trait",
- "b10x-substrate-wire 0.10.0",
+ "b10x-substrate-wire 0.13.0",
  "base64 0.23.1",
+ "bytes",
  "chrono",
  "curl",
  "git2",
  "gix",
  "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "libc",
  "nix",
  "parking_lot",
+ "rustls",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "sha2 0.11.1",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "ulid",
  "url",
@@ -629,11 +636,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-substrate-host"
-version = "0.12.0"
-source = "git+https://github.com/beyond10x/substrate?rev=8a64f3840e9247a27a831da4f66955339d293e31#8a64f3840e9247a27a831da4f66955339d293e31"
+version = "0.14.0"
+source = "git+https://github.com/beyond10x/substrate?tag=0.14.0#0b9d50c6105cacc7f959eb41d5e65f252084a282"
 dependencies = [
  "async-trait",
- "b10x-substrate-wire 0.12.0",
+ "b10x-substrate-wire 0.14.0",
  "base64 0.23.1",
  "bytes",
  "chrono",
@@ -664,8 +671,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-substrate-wire"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/substrate?rev=105cf718bc6a5314486c78f5fd93fabed290e30e#105cf718bc6a5314486c78f5fd93fabed290e30e"
+version = "0.13.0"
+source = "git+https://github.com/beyond10x/substrate?rev=c2b95f2882ec1e425459b23ed9e48dae121ae6d3#c2b95f2882ec1e425459b23ed9e48dae121ae6d3"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -680,8 +687,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-substrate-wire"
-version = "0.12.0"
-source = "git+https://github.com/beyond10x/substrate?rev=8a64f3840e9247a27a831da4f66955339d293e31#8a64f3840e9247a27a831da4f66955339d293e31"
+version = "0.14.0"
+source = "git+https://github.com/beyond10x/substrate?tag=0.14.0#0b9d50c6105cacc7f959eb41d5e65f252084a282"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -696,20 +703,22 @@ dependencies = [
 
 [[package]]
 name = "b10x-takt"
-version = "0.14.0"
+version = "0.15.1"
 dependencies = [
  "anyhow",
  "b10x-canon",
- "b10x-canon-engineering 0.10.0",
- "b10x-canon-engineering-assertions 0.10.0",
+ "b10x-canon-engineering 0.11.0",
+ "b10x-canon-engineering-assertions 0.11.0",
  "b10x-canon-expr",
  "b10x-loom-sdk",
- "b10x-substrate-host 0.12.0",
+ "b10x-substrate-host 0.14.0",
  "libc",
  "llm-core",
  "llm-credentials",
  "llm-models",
  "proptest",
+ "regex",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -723,11 +732,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-takt-cli"
-version = "0.14.0"
+version = "0.15.1"
 dependencies = [
  "anyhow",
- "b10x-canon-engineering 0.10.0",
- "b10x-canon-engineering-assertions 0.10.0",
+ "b10x-canon-engineering 0.11.0",
+ "b10x-canon-engineering-assertions 0.11.0",
  "b10x-takt",
  "clap",
  "serde_json",
@@ -1041,7 +1050,7 @@ dependencies = [
 [[package]]
 name = "commission"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 
 [[package]]
 name = "connectors-client"
@@ -2737,7 +2746,7 @@ dependencies = [
 [[package]]
 name = "intake"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 
 [[package]]
 name = "ipnet"
@@ -3227,7 +3236,7 @@ dependencies = [
 [[package]]
 name = "loom"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.45.0#6165ff0ba82afa7098e7301463c875303b96ecce"
+source = "git+https://github.com/beyond10x/loom?tag=0.46.0#3d83843e3bd0ff3b38eb7477715d588541e71fb3"
 
 [[package]]
 name = "lru-slab"
@@ -3252,8 +3261,8 @@ dependencies = [
 
 [[package]]
 name = "metaharness"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.20.0#f982a69b39202b36ecff56f8a0118babe6324980"
+version = "0.22.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.22.0#fd8c9ab8a5954ee90cad2e149b37a1f2f7d1ceeb"
 dependencies = [
  "getrandom 0.4.3",
  "metaharness-b10x",
@@ -3270,8 +3279,8 @@ dependencies = [
 
 [[package]]
 name = "metaharness-b10x"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.20.0#f982a69b39202b36ecff56f8a0118babe6324980"
+version = "0.22.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.22.0#fd8c9ab8a5954ee90cad2e149b37a1f2f7d1ceeb"
 dependencies = [
  "b10x-harness-catalogue",
  "b10x-harness-loop",
@@ -3283,8 +3292,8 @@ dependencies = [
 
 [[package]]
 name = "metaharness-claude"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.20.0#f982a69b39202b36ecff56f8a0118babe6324980"
+version = "0.22.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.22.0#fd8c9ab8a5954ee90cad2e149b37a1f2f7d1ceeb"
 dependencies = [
  "metaharness-protocol",
  "serde",
@@ -3293,8 +3302,8 @@ dependencies = [
 
 [[package]]
 name = "metaharness-codex"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.20.0#f982a69b39202b36ecff56f8a0118babe6324980"
+version = "0.22.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.22.0#fd8c9ab8a5954ee90cad2e149b37a1f2f7d1ceeb"
 dependencies = [
  "metaharness-protocol",
  "serde_json",
@@ -3302,8 +3311,8 @@ dependencies = [
 
 [[package]]
 name = "metaharness-protocol"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.20.0#f982a69b39202b36ecff56f8a0118babe6324980"
+version = "0.22.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.22.0#fd8c9ab8a5954ee90cad2e149b37a1f2f7d1ceeb"
 dependencies = [
  "serde",
  "serde_json",
@@ -3312,8 +3321,8 @@ dependencies = [
 
 [[package]]
 name = "metaharness-tools"
-version = "0.20.0"
-source = "git+https://github.com/beyond10x/metaharness?tag=0.20.0#f982a69b39202b36ecff56f8a0118babe6324980"
+version = "0.22.0"
+source = "git+https://github.com/beyond10x/metaharness?tag=0.22.0#fd8c9ab8a5954ee90cad2e149b37a1f2f7d1ceeb"
 dependencies = [
  "b10x-harness-catalogue",
  "b10x-harness-wire",

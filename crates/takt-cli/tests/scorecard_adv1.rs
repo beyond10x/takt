@@ -81,6 +81,10 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         endpoint: None,
         records: None,
         scan: None,
+        protocol_source: None,
+        input_sources: None,
+        harness_program: None,
+        preflight: None,
     };
     let step = |tokens: u64| Event::Step {
         by: "harness".to_owned(),

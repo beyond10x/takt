@@ -565,7 +565,7 @@ fn a_discarded_case_leaves_no_directory_and_no_branch() {
     case.discard().expect("the case is discarded");
     assert_eq!(git(&tree, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
     assert_eq!(git(&tree, &["branch", "--list", "takt/discard"]), "");
-    assert!(!tree.join(".engineering/cases").exists());
+    assert!(!tree.join(".takt/cases").exists());
 }
 
 /// A runner that records every argument line it is given instead of running it, and answers
@@ -2578,7 +2578,7 @@ fn the_gitlab_adapter_runs_these_argument_lines() {
     let expected: Vec<(String, Vec<(String, String)>)> = vec![
         (
             format!(
-                "git -c credential.helper= -c credential.helper=!glab auth git-credential push https://gitlab.example/group/sub/repo.git {c1}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
+                "git -c core.hooksPath=/dev/null -c http.followRedirects=false -c credential.helper= -c credential.helper=!glab auth git-credential push https://gitlab.example/group/sub/repo.git {c1}:refs/heads/takt/c1 --no-verify --no-follow-tags --recurse-submodules=no"
             ),
             https.clone(),
         ),
@@ -2626,7 +2626,7 @@ fn the_gitlab_adapter_runs_these_argument_lines() {
         ),
         (
             format!(
-                "git -c credential.helper= -c credential.helper=!glab auth git-credential fetch https://gitlab.example/group/sub/repo.git {main} --no-write-fetch-head --no-tags --recurse-submodules=no"
+                "git -c core.hooksPath=/dev/null -c http.followRedirects=false -c credential.helper= -c credential.helper=!glab auth git-credential fetch https://gitlab.example/group/sub/repo.git {main} --no-write-fetch-head --no-tags --recurse-submodules=no"
             ),
             https,
         ),
@@ -3057,7 +3057,7 @@ fn an_https_origin_keeps_its_port() {
     assert_eq!(
         pushed,
         [format!(
-            "git -c credential.helper= -c credential.helper=!glab auth git-credential push https://gitlab.example:8443/group/repo.git {head}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
+            "git -c core.hooksPath=/dev/null -c http.followRedirects=false -c credential.helper= -c credential.helper=!glab auth git-credential push https://gitlab.example:8443/group/repo.git {head}:refs/heads/takt/c1 --no-verify --no-follow-tags --recurse-submodules=no"
         )],
         "{ran:?}"
     );

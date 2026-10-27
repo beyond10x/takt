@@ -228,15 +228,11 @@ fn run(
 
 /// The case's run record, one JSON object per line.
 fn events(tree: &Path, id: &str) -> Vec<serde_json::Value> {
-    fs::read_to_string(
-        tree.join(".engineering/cases")
-            .join(id)
-            .join("events.jsonl"),
-    )
-    .expect("events.jsonl")
-    .lines()
-    .map(|line| serde_json::from_str(line).expect("a JSON line"))
-    .collect()
+    fs::read_to_string(tree.join(".takt/cases").join(id).join("events.jsonl"))
+        .expect("events.jsonl")
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a JSON line"))
+        .collect()
 }
 
 /// The harness step lines of the run record.

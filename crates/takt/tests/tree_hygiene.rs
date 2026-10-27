@@ -204,7 +204,7 @@ fn dirty(tree: &Path) -> Vec<String> {
     git(tree, &["status", "--porcelain", "--untracked-files=all"])
         .lines()
         .map(|line| line[3..].to_owned())
-        .filter(|path| !path.starts_with(CASES_DIR) && !path.starts_with("\".engineering/cases"))
+        .filter(|path| !path.starts_with(CASES_DIR) && !path.starts_with("\".takt/cases"))
         .collect()
 }
 
@@ -554,7 +554,7 @@ fn porcelain_paths_are_read_exactly() {
 #[test]
 fn a_failed_open_leaves_no_case_no_branch_and_the_tree_where_it_was() {
     let tree = repository("failed-open");
-    fs::create_dir_all(tree.join(".engineering")).expect("a dir");
+    fs::create_dir_all(tree.join(".takt")).expect("a dir");
     fs::write(tree.join(CASES_DIR), "not a directory\n").expect("a file");
     git(&tree, &["add", "-A"]);
     git(&tree, &["commit", "-q", "-m", "the cases path is a file"]);

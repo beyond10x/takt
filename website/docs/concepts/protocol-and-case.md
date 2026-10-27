@@ -39,6 +39,7 @@ ml-experiment/1
 self-improvement/1
 software-change/1
 story-delivery/1
+story-delivery/2
 support-triage/1
 ```
 
@@ -48,7 +49,8 @@ takt's own until 0.13.0 moved them into engineering protocols 0.10.0.
 | protocol | a case is | opened by |
 |---|---|---|
 | `software.change/1` | one change for an intent | `--intent` (the default protocol) |
-| `story.delivery/1` | one story of the planning store, delivered to a merged pull request | a story the store gives (the default) |
+| `story.delivery/2` | one story of the planning store, delivered to a merged pull request, with the case inputs `tests_first` and `gate_on` | a story the store gives (the default; [defaults](../reference/protocol-defaults.md)) |
+| `story.delivery/1` | the same story delivery with no case input | `--protocol story.delivery/1` |
 | `self.improvement/1` | one improvement turn of takt itself | `--protocol self.improvement/1` |
 | `loop.improvement/1` | one change to the improvement loop | `--protocol loop.improvement/1` |
 
@@ -79,7 +81,7 @@ Opening a case does three things:
 
 1. It forks a branch for the case, `takt/<case>`, from the branch the tree is on, and records
    the base commit in `branch.yaml`. Every commit of the case lands there.
-2. It writes the case's directory, `.engineering/cases/<case>/`, with the case itself
+2. It writes the case's directory, `.takt/cases/<case>/`, with the case itself
    (`case.yaml`, a `canon-case/1` document of the artifacts and their revisions, and the inputs)
    and the protocol it runs on (`protocol.yaml`).
 3. It appends the run's `opened` line to `events.jsonl`, naming the case, the protocol, the
@@ -88,7 +90,7 @@ Opening a case does three things:
 The case directory of an intent run after three runs and one grant:
 
 ```console
-$ ls .engineering/cases/takt-20261026T231123Z
+$ ls .takt/cases/takt-20261026T231123Z
 authority.yaml
 branch.yaml
 case.yaml
@@ -117,7 +119,8 @@ A story's case also holds `story.yaml`; every file is described in
 A case outlives the run that opened it. `takt run --case <case>` resumes it by id, and a run with
 neither `--intent` nor `--case` resumes the open case of a story being worked before it takes a
 new one. A resumed case keeps its protocol and the inputs it was opened with: another protocol or
-any `--input` is refused before the run.
+any `--input` is refused before the run. A case an earlier takt opened under `.engineering/cases`
+is resumed where it is ([Case files](../reference/case-files.md#where-cases-live-and-git)).
 
 Neither a judgement step nor a validator's command may write into a case's directory, so every
 file in it was written by takt. From the same files `takt replay` rebuilds the prompt one

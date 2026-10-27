@@ -30,7 +30,7 @@ takt run --repo ~/demo --intent "make the failing test pass" --iterations 1
 | One case, driven to a computed outcome | A run opens or resumes one case on one protocol and steps it until an outcome is legitimate or a stop is reached. |
 | Evidence bound to a revision | Its validators run the tests, the gates, open the pull request, read CI and merge; each writes a `canon-evidence/1` record naming the commit it observed. |
 | Grants | An action that requires a capability, such as `repository.merge`, waits for a grant `takt approve` records for that revision. |
-| The case record | Every decision, evidence record and event is a file under `.engineering/cases/<case>/` in the repository; a later run resumes from it. |
+| The case record | Every decision, evidence record and event is a file under `.takt/cases/<case>/` in the repository; a later run resumes from it. |
 | Named stops | Every run ends on a named stop with its own exit code, so a script or an orchestrator can drive it. |
 
 ## What takt is not

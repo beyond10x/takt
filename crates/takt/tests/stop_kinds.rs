@@ -61,6 +61,15 @@ stops! {
         };
     Stop::RepeatedTestFailure { .. } => Some(STOP_KINDS[12]),
         Stop::RepeatedTestFailure { tests: vec!["a::two".to_owned()], count: 3 };
+    Stop::HarnessUnqualified { .. } => Some(STOP_KINDS[13]),
+        Stop::HarnessUnqualified {
+            kind: "claude".to_owned(),
+            version: Some("2.1.311".to_owned()),
+            rows: vec!["H11 unk: no memory canary".to_owned()],
+            qualified: vec!["2.1.309".to_owned()],
+        };
+    Stop::SetupFailed { .. } => Some(STOP_KINDS[14]),
+        Stop::SetupFailed { name: "deps".to_owned(), exit: Some(3) };
 }
 
 /// A stop of every variant, one per row and each of its own row's variant; each display opens

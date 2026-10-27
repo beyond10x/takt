@@ -46,6 +46,7 @@ fn executable(path: &Path, text: &str) {
 /// test file, the result event naming `tests.write`. What it printed is copied to `printed`.
 fn fake_claude(at: &Path, printed: &Path) {
     let script = r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 tools=''
 prev=''
 for a in "$@"; do
@@ -134,7 +135,7 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let said = format!("{stdout}\n{stderr}");
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();
@@ -271,7 +272,7 @@ fn takt_run_on_an_empty_home_keeps_the_transcript_and_refuses_no_step() {
         !stdout.contains("refused:") && !stdout.contains("StepRefused"),
         "no step is refused on an empty home\n{said}"
     );
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();
@@ -408,7 +409,7 @@ impl Home {
     /// The transcript of step `step` of the first run of the repository's one case, under
     /// `root`, the transcripts directory.
     fn transcript(&self, root: &Path, step: u64) -> PathBuf {
-        let cases: Vec<PathBuf> = fs::read_dir(self.repo.join(".engineering/cases"))
+        let cases: Vec<PathBuf> = fs::read_dir(self.repo.join(".takt/cases"))
             .expect("the cases directory")
             .map(|entry| entry.expect("an entry").path())
             .collect();
@@ -554,7 +555,7 @@ fn a_module_written_beside_the_transcripts_is_still_refused() {
     let home = Home::new("python-module");
     let module = home.home.join(".local/planted.py");
     let script = format!(
-        "#!/bin/sh\nprintf 'x = 1\\n' > '{}'\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{}'\n",
+        "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nprintf 'x = 1\\n' > '{}'\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{}'\n",
         module.display(),
         r#"{"type":"result","subtype":"success","result":"{\"action\": \"tests.write\", \"summary\": \"wrote a test\"}","usage":{"input_tokens":3,"output_tokens":4}}"#
     );

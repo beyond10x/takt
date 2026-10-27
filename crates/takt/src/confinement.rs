@@ -27,8 +27,9 @@ use serde::{Deserialize, Serialize};
 use substrate_host::confinement::{
     self as substrate, AdapterFacts, AdapterRequest, AdmittedProfile, ConfinementAdapter,
     ConfinementError, ConfinementProfile, ContractFamily, DeclaredWritableRoot, FACT_ORDER,
-    FAMILY_ORDER, Fact, HostConfig, InnerAdapter, Network, ProcessBounds, ReadOnlyRoot, RunExit,
-    RunId, RunObservation, RunOutput, RunState, Signal, WritableHostRoot,
+    FAMILY_ORDER, Fact, HostConfig, InnerAdapter, Network, OutputRetention, ProcessBounds,
+    ReadOnlyRoot, Retention, RunExit, RunId, RunObservation, RunOutput, RunState, Signal,
+    WorkspaceAccess, WritableHostRoot,
 };
 
 use crate::forge::{Finished, Limits, TimedOut};
@@ -369,8 +370,17 @@ fn local() -> anyhow::Result<Arc<dyn ConfinementAdapter>> {
         .map_err(|error| anyhow!("Substrate's local adapter did not open: {error}"))
 }
 
+/// What a test command's run keeps of each output stream within Substrate's bound: the last
+/// bytes, where cargo's `test result:` lines and the failed tests' names are, so a run that
+/// printed more than the bound is still summarised from its end.
+const KEEP_TAIL: OutputRetention = OutputRetention {
+    stdout: Retention::Tail,
+    stderr: Retention::Tail,
+};
+
 /// The profile a `none` run asks of `local`: the families every test command needs and those
-/// `needs` names, the facts it names, `tree` the workspace, and [`LOCAL_REASON`].
+/// `needs` names, the facts it names, `tree` the workspace, [`LOCAL_REASON`], and the tail of
+/// its output kept ([`KEEP_TAIL`]).
 fn local_profile(tree: &Path, needs: &Needs) -> ConfinementProfile {
     let mut families = RUN_FAMILIES.to_vec();
     families.extend(needs.families.iter().cloned());
@@ -379,6 +389,7 @@ fn local_profile(tree: &Path, needs: &Needs) -> ConfinementProfile {
         facts: needs.facts.clone(),
         local_reason: Some(LOCAL_REASON.to_owned()),
         workspace: Some(tree.to_path_buf()),
+        output_retention: KEEP_TAIL,
         ..ConfinementProfile::default()
     }
 }
@@ -735,7 +746,26 @@ impl Candidate {
     fn paths_are_host_paths(self) -> bool {
         self == Self::Macos
     }
+
+    /// What a test command may write of its tree, the workspace: on `linux` and `systemd`
+    /// around it only [`BUILD_DIRECTORY`], so a write elsewhere in the tree and every write to
+    /// its `.git` fails inside the run; a host that has not proved Substrate's
+    /// `exec.workspace-scoped-write` refuses the run by that name. `macos` serves no scoped
+    /// workspace: the tree stays writable there and its `.git` is sealed where the adapter
+    /// proves `sealed_paths`.
+    fn test_access(self) -> WorkspaceAccess {
+        match self {
+            Self::SystemdLinux | Self::Linux => WorkspaceAccess::Scoped {
+                writable_subtrees: vec![BUILD_DIRECTORY.to_owned()],
+            },
+            Self::Macos => WorkspaceAccess::ReadWrite,
+        }
+    }
 }
+
+/// The one directory of a tree a test command writes under a Linux adapter: cargo's build
+/// directory, which holds the run's scratch `CARGO_HOME` too.
+const BUILD_DIRECTORY: &str = "target";
 
 /// A directory of this process's own under the system's temporary directory, readable by its
 /// owner alone, removed with what is in it when dropped.
@@ -850,13 +880,15 @@ fn open_candidate(
 
 /// The first of [`CANDIDATES`] that opens with `root` its workspace root and `writable`
 /// declared, admits the profile `profile` makes of its proof, and on Linux renders a run in
-/// `workspace`; with none, an error naming each candidate's refusal.
+/// `workspace`; with none, an error naming each candidate's refusal. For a test command
+/// (`test`), the profile asks the candidate's [`Candidate::test_access`].
 fn select(
     root: &Path,
     workspace: &Path,
     writable: &[DeclaredWritableRoot],
     options: &Options,
     needs: &Needs,
+    test: bool,
 ) -> anyhow::Result<Opened> {
     let state = Private::new("substrate")?;
     let mut refusals = Vec::new();
@@ -868,7 +900,10 @@ fn select(
                 continue;
             }
         };
-        let probe = base_profile(candidate, workspace, needs);
+        let mut probe = base_profile(candidate, workspace, needs);
+        if test {
+            probe.workspace_access = candidate.test_access();
+        }
         let admitted = match adapter.admit(&probe) {
             Ok(admitted) => admitted,
             Err(error) => {
@@ -908,12 +943,16 @@ pub struct Ran {
     pub code: Option<i32>,
     /// The signal that ended it, when one did.
     pub signal: Option<i32>,
-    /// Its standard output, the first bytes the adapter kept.
+    /// Its standard output, the bytes the adapter kept within its bound: the first of a
+    /// promotion's build, the last of a test command ([`KEEP_TAIL`]).
     pub stdout: Vec<u8>,
-    /// Its standard error, the first bytes the adapter kept.
+    /// Its standard error, kept as its standard output is.
     pub stderr: Vec<u8>,
     /// Whether standard output was longer than the adapter kept.
     pub stdout_truncated: bool,
+    /// How many bytes standard output carried in all, where the adapter read it to its end;
+    /// else how many it kept.
+    pub stdout_len: u64,
     /// Whether it was killed at its timeout.
     pub timed_out: bool,
 }
@@ -999,6 +1038,10 @@ impl Opened {
             Ok(Ran {
                 code: seen.exit.and_then(|exit| exit.code),
                 signal: seen.exit.and_then(|exit| exit.signal),
+                stdout_len: output
+                    .stdout_kept
+                    .observed_bytes
+                    .unwrap_or_else(|| u64::try_from(output.stdout.len()).unwrap_or(u64::MAX)),
                 stdout: output.stdout,
                 stderr: output.stderr,
                 stdout_truncated: output.stdout_truncated,
@@ -1120,12 +1163,16 @@ impl Substrate {
     }
 }
 
-/// [`select`] for test commands in `tree`, its parent the workspace root.
+/// [`select`] for test commands in `tree`, its parent the workspace root. The build directory
+/// is made first: a Linux adapter renders a run only when the subtree it may write is there,
+/// a directory and no symlink.
 fn open_for_tree(tree: &Path, options: &Options, needs: &Needs) -> anyhow::Result<Opened> {
     let root = tree
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent directory", tree.display()))?;
-    select(root, tree, &[], options, needs)
+    let build = tree.join(BUILD_DIRECTORY);
+    std::fs::create_dir_all(&build).with_context(|| format!("create {}", build.display()))?;
+    select(root, tree, &[], options, needs, true)
 }
 
 /// Why Substrate does not serve the test command `program`, naming its toolchain.
@@ -1221,17 +1268,12 @@ impl Confinement for Substrate {
                 )
             })?;
         drop(plan);
-        let output = finished(
-            Some(RunExit {
-                code: ran.code,
-                signal: ran.signal,
-            }),
-            RunOutput {
-                stdout: ran.stdout,
-                stderr: ran.stderr,
-                stdout_truncated: ran.stdout_truncated,
-                stderr_truncated: false,
-            },
+        let output = kept(
+            ran.code,
+            ran.stdout,
+            ran.stderr,
+            ran.stdout_truncated,
+            ran.stdout_len,
             test.limits.output,
         );
         if ran.timed_out {
@@ -1327,7 +1369,7 @@ impl TestPlan {
         timeout: Duration,
     ) -> anyhow::Result<Self> {
         static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let target = tree.join("target");
+        let target = tree.join(BUILD_DIRECTORY);
         std::fs::create_dir_all(&target).with_context(|| format!("create {}", target.display()))?;
         let name = format!(
             "takt-run-{}-{}",
@@ -1339,6 +1381,8 @@ impl TestPlan {
         std::fs::create_dir_all(&cargo_home)
             .with_context(|| format!("create {}", cargo_home.display()))?;
         let mut profile = opened.profile(tree, needs, test_bounds(timeout));
+        profile.workspace_access = opened.candidate.test_access();
+        profile.output_retention = KEEP_TAIL;
         let mut env = BTreeMap::from([
             ("CARGO_NET_OFFLINE".to_owned(), "true".to_owned()),
             ("RUSTUP_AUTO_INSTALL".to_owned(), "0".to_owned()),
@@ -1485,7 +1529,7 @@ impl Confined {
             }],
             None => Vec::new(),
         };
-        let opened = select(root, &workspace, &declared, options, &needs)?;
+        let opened = select(root, &workspace, &declared, options, &needs, false)?;
         Ok(Self { opened, needs })
     }
 
@@ -1815,12 +1859,34 @@ fn known(seen: &RunObservation, program: &str) -> anyhow::Result<()> {
 }
 
 /// A run's end as a [`Finished`]: the exit code, and of each stream what the adapter kept, its
-/// last `keep` bytes; standard output cut when the adapter truncated it or it was longer.
+/// last `keep` bytes; standard output cut when the adapter truncated it or it was longer, and
+/// its length every byte it carried where the adapter read it to its end.
 fn finished(exit: Option<RunExit>, output: RunOutput, keep: usize) -> Finished {
-    let mut stdout = output.stdout;
-    let mut stderr = output.stderr;
-    let stdout_len = u64::try_from(stdout.len()).unwrap_or(u64::MAX);
-    let stdout_cut = output.stdout_truncated || stdout.len() > keep;
+    let stdout_len = output
+        .stdout_kept
+        .observed_bytes
+        .unwrap_or_else(|| u64::try_from(output.stdout.len()).unwrap_or(u64::MAX));
+    kept(
+        exit.and_then(|exit| exit.code),
+        output.stdout,
+        output.stderr,
+        output.stdout_truncated,
+        stdout_len,
+        keep,
+    )
+}
+
+/// A [`Finished`] of `code` and the last `keep` bytes of `stdout` and `stderr`; standard output
+/// cut when `truncated` says the adapter dropped some of it or it is longer than `keep`.
+fn kept(
+    code: Option<i32>,
+    mut stdout: Vec<u8>,
+    mut stderr: Vec<u8>,
+    truncated: bool,
+    stdout_len: u64,
+    keep: usize,
+) -> Finished {
+    let stdout_cut = truncated || stdout.len() > keep;
     if stdout.len() > keep {
         stdout.drain(..stdout.len() - keep);
     }
@@ -1828,7 +1894,7 @@ fn finished(exit: Option<RunExit>, output: RunOutput, keep: usize) -> Finished {
         stderr.drain(..stderr.len() - keep);
     }
     Finished {
-        code: exit.and_then(|exit| exit.code),
+        code,
         stdout,
         stderr,
         stdout_cut,

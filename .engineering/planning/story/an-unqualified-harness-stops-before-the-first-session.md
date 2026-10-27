@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:an-unqualified-harness-stops-before-the-first-session
 kind: story
-status: draft
+status: implemented
 title: An unqualified harness binary stops the run before its first model call
 summary: preflight through metaharness qualify, no model call
 tags:
@@ -22,7 +22,11 @@ scope:
   path: crates/takt/tests/harness_preflight.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "active", to: "implemented", at: "2026-10-27T15:59:15Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: an-unqualified-harness-stops-before-the-first-session
 

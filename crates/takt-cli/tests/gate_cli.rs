@@ -170,7 +170,7 @@ fn an_explicit_gates_path_that_is_not_a_file_is_refused_before_the_run() {
             "--gates {gates}: a case was opened: stdout {out} stderr {err}"
         );
         assert!(
-            !repo.join(".engineering/cases").exists(),
+            !repo.join(".takt/cases").exists(),
             "--gates {gates}: a case directory exists"
         );
     }
@@ -273,7 +273,7 @@ fn a_project_file_outside_the_repository_is_refused_before_the_run() {
             "--project {project}: a case was opened: stdout {out} stderr {err}"
         );
         assert!(
-            !repo.join(".engineering/cases").exists(),
+            !repo.join(".takt/cases").exists(),
             "--project {project}: a case directory exists"
         );
     }
@@ -299,7 +299,7 @@ fn an_explicit_project_path_that_names_a_directory_is_refused_before_the_run() {
         "a case was opened: stdout {out} stderr {err}"
     );
     assert!(
-        !repo.join(".engineering/cases").exists(),
+        !repo.join(".takt/cases").exists(),
         "a case directory exists"
     );
 }
@@ -333,7 +333,7 @@ fn a_relative_gates_path_through_a_symlink_outside_the_repository_is_refused_bef
         "a case was opened: stdout {out} stderr {err}"
     );
     assert!(
-        !repo.join(".engineering/cases").exists(),
+        !repo.join(".takt/cases").exists(),
         "a case directory exists: stdout {out} stderr {err}"
     );
 }
@@ -363,7 +363,7 @@ fn an_explicit_project_path_that_does_not_exist_is_refused_not_replaced_by_the_d
         "the gate passed on a project file the flag did not name: stdout {out} stderr {err}"
     );
     assert!(
-        !repo.join(".engineering/cases").exists(),
+        !repo.join(".takt/cases").exists(),
         "a case directory exists: stdout {out} stderr {err}"
     );
 }

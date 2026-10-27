@@ -6,7 +6,7 @@ description: The protocols takt runs and the ones it holds for its own improveme
 
 # Protocols
 
-The [protocol viewer](pathname:///takt/protocols/) shows all eight protocols `takt protocols`
+The [protocol viewer](pathname:///takt/protocols/) shows all nine protocols `takt protocols`
 lists, `software.change/1` first: their actions, evidence kinds, claims, obligations and outcomes
 as tables, and as one graph of how they connect. It is built on every site build from the documents of the
 `b10x-canon-engineering` release takt pins.
@@ -17,7 +17,8 @@ as tables, and as one graph of how they connect. It is built on every site build
 
 | id | from | a case is |
 |---|---|---|
-| `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story |
+| `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store story, the default; its inputs and [their defaults](protocol-defaults.md) |
+| `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story, no case input |
 | `self.improvement/1` (listed as `self-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |
 | `loop.improvement/1` (listed as `loop-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one turn on the improvement loop itself |
@@ -27,6 +28,27 @@ as tables, and as one graph of how they connect. It is built on every site build
 a protocol by its directory, and a protocol's own id has a dot (and for `eval-gated-change`, an
 underscore: `eval.gated_change`). `--protocol` also takes the path of a `protocol/1` file, which
 wins over a built-in of the same name; a path is read against the directory `takt` runs in.
+
+## Settings of a protocol
+
+`takt protocol show <name/rev> [--config <FILE>] [--format text|json]` prints each case input the
+built-in protocol declares: its values and description, takt's built-in default (`none` when takt
+ships none) and the value the run file sets for it, with the file's path and line (`unset` when it
+sets none). `--format json` prints the same as one JSON document. A protocol takt does not know
+exits 1 and names the ones it knows.
+
+```console
+$ takt protocol show software.change/1 --config run.yaml
+protocol software.change/1
+input risk
+  values: trivial, standard, elevated, critical
+  description: ...
+  default: standard
+  run file: elevated (run.yaml:3)
+```
+
+The run file is the one `takt run --config` reads: its [`protocols` section](configuration.md)
+sets the values. Without `--config` every input lists `run file: unset`.
 
 ## For takt's own improvement
 

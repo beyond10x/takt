@@ -1,5 +1,5 @@
 //! The loop scorecard (design:recursive-self-improvement § Improving the loop): one row per
-//! improvement turn, a `self.improvement` case under `.engineering/cases/`, read from the
+//! improvement turn, a `self.improvement` case under `.takt/cases/` (legacy `.engineering/cases/`), read from the
 //! case's own records, and figures computed from the rows each time they are asked for, never
 //! kept apart from them. The metric definitions are data, [`DEFINITIONS`], read at a revision
 //! through git and never from the working tree; the baseline's are snapshotted into the loop
@@ -21,7 +21,7 @@ use std::path::Path;
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::case::{CASES_DIR, CaseDir, Decision};
+use crate::case::{CASES_DIR, CaseDir, Decision, LEGACY_CASES_DIR, case_dirs};
 use crate::evidence::Record;
 use crate::validator::{Artifact, Observation, Validator};
 
@@ -947,21 +947,7 @@ impl LoopScorecard {
             Some(_) => Some(History::open(repo, until)?),
             None => None,
         };
-        let cases = repo.join(CASES_DIR);
-        let mut names: Vec<String> = Vec::new();
-        match std::fs::read_dir(&cases) {
-            Ok(entries) => {
-                for entry in entries {
-                    let entry = entry.with_context(|| format!("read {}", cases.display()))?;
-                    if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-                        names.push(entry.file_name().to_string_lossy().into_owned());
-                    }
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => return Err(error).with_context(|| format!("read {}", cases.display())),
-        }
-        names.sort();
+        let cases = case_dirs(repo)?;
         let spent: BTreeMap<String, crate::scorecard::Case> =
             crate::scorecard::Scorecard::read(repo)?
                 .cases()
@@ -969,8 +955,7 @@ impl LoopScorecard {
                 .map(|case| (case.case.clone(), case))
                 .collect();
         let mut rows = Vec::new();
-        for name in names {
-            let dir = cases.join(&name);
+        for (name, dir) in cases {
             if !dir.join("case.yaml").is_file() {
                 continue;
             }
@@ -1268,7 +1253,7 @@ impl Validator for LoopMeasure {
             let card = LoopScorecard::read_within(tree, Some(revision), deadline)?;
             if card.rows.len() < MIN_TURNS {
                 return Ok(nothing(format!(
-                    "{} turns recorded under {CASES_DIR}, at least {MIN_TURNS} needed; nothing recorded",
+                    "{} turns recorded under {CASES_DIR} and {LEGACY_CASES_DIR}, at least {MIN_TURNS} needed; nothing recorded",
                     card.rows.len()
                 )));
             }

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-command-forge-runs-the-configured-commands
 kind: story
-status: draft
+status: implemented
 title: A forge that runs the exact commands the run file names, as argv
 summary: 'forge: command, placeholders per argv element, typed exits'
 tags:
@@ -10,6 +10,7 @@ tags:
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:downstream-story-delivery
+- depends_on: story:scan-and-forge-are-adapters
 scope:
 - confidence: inferred
   path: crates/takt-cli/src/main.rs
@@ -23,7 +24,11 @@ scope:
   path: crates/takt/tests/command_forge.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-27T15:59:14Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: a-command-forge-runs-the-configured-commands
 

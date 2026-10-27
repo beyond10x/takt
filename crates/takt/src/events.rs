@@ -94,6 +94,19 @@ pub enum Event {
     /// The scan: the name of the run's scan adapter ([`crate::scan::Scan::name`]), `gates` or
     /// `none`, the one every proposal and the change so far pass; absent on a line written
     /// before it, which a reader reads as "scan not recorded".
+    ///
+    /// Where the protocol was chosen from (`protocol_source`) and where each input's value came
+    /// from (`input_sources`, input name to `flag`, `tag`, `run-file` or `default`), as the case
+    /// record holds them; absent on a line written before, and for a case that records none.
+    ///
+    /// The harness program (`harness_program`): the absolute path the sessions start it by, the
+    /// sha256 of its bytes and the first line its `--version` printed ([`crate::harness::ProgramRecord`]);
+    /// absent for a harness that starts none, a name found nowhere and on a line written before.
+    ///
+    /// The preflight: what metaharness read of the harness binary before the first session, its
+    /// kind, its version and the rows that were not `ok` and did not stop the run, as advisory
+    /// ([`crate::harness::Preflight`]); absent for a harness that starts no program of its own
+    /// and on a line written before it.
     Opened {
         case: String,
         protocol: String,
@@ -109,13 +122,21 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         confinement: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        substrate: Option<crate::confinement::AdapterRecord>,
+        substrate: Option<Box<crate::confinement::AdapterRecord>>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<crate::harness::EndpointConfig>,
         #[serde(skip_serializing_if = "Option::is_none")]
         records: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         scan: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_sources: Option<BTreeMap<String, String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        harness_program: Option<crate::harness::ProgramRecord>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preflight: Option<Box<crate::harness::Preflight>>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
@@ -174,6 +195,12 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         revision: Option<String>,
     },
+    /// A step commit's message is not the harness's: its reply held no `commit`, or one that
+    /// failed the check of its shape ([`crate::commit_style::message`]), so the message is the
+    /// fallback. The reason names the check, never the reply's text. Written before the step's
+    /// `effect` line.
+    #[serde(rename = "commit.fallback")]
+    CommitFallback { reason: String },
     /// An evidence record a validator wrote under the case: its id, kind and result, and its
     /// path relative to the tree; and, when the observation failed checks, what each printed
     /// that names what failed ([`crate::validator::FailedCheck`]), absent when none did.
@@ -206,11 +233,34 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         commit: Option<String>,
     },
+    /// The repository's obligations at a revision: each gate of the gates document at the case's
+    /// base with its text and its status ([`crate::obligations::Status`]), written after a gate
+    /// observation and when the run stops. The last line of the record is the table `takt
+    /// report` prints.
+    Obligations {
+        revision: String,
+        obligations: Vec<crate::obligations::Obligation>,
+    },
     /// A refusal: by the kernel ([`BY_TAKT`]: a step it discarded, a write it would not make)
     /// or by the planning store ([`BY_STORE`]), the reason verbatim.
     Refusal { by: String, reason: String },
     /// The run pauses on the forge for `seconds`, then observes the actions `on` again.
     Waiting { on: Vec<String>, seconds: f64 },
+    /// A declared setup command ran when the case opened, before the red-base check: its name,
+    /// its argument list, the case's base commit it ran at, the code it ended with (none when a
+    /// signal ended it, it could not be started or its time ran out), its duration in
+    /// milliseconds, and where its output was kept, relative to the transcripts directory.
+    Setup {
+        name: String,
+        argv: Vec<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exit: Option<i32>,
+        duration_ms: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output: Option<String>,
+    },
     /// An error, as it was reported: the one a run ended on, or one met while recording an
     /// accepted case in the store, after which the run keeps its stop.
     Error { error: String },
@@ -241,6 +291,8 @@ struct Line<'a> {
     event: &'a Event,
     #[serde(skip_serializing_if = "Option::is_none")]
     llm_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<&'a serde_json::Value>,
 }
 
 /// The run record of one case.
@@ -271,19 +323,37 @@ impl Events {
     /// the reader knows the torn one was skipped. A symbolic link at the path is refused, never
     /// written through ([`Events::open`]).
     pub fn emit(&self, step: u64, event: &Event) -> Result<()> {
-        self.append(step, event, None)
+        self.append(step, event, None, None)
     }
 
     /// Appends the `opened` line of a run: `event` as [`Events::emit`] appends it, with the digest
     /// of the `llm.routes/1` document the run ran under as its `llm_digest` member; no member when
     /// the run had no such document.
     pub fn emit_opened(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
-        self.append(step, event, llm_digest)
+        self.append(step, event, llm_digest, None)
+    }
+
+    /// [`Events::emit_opened`], the line also carrying `commit`, the commit style in effect
+    /// ([`crate::commit_style::Plan::record`]) as its `commit` member.
+    pub fn emit_opened_with(
+        &self,
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: &serde_json::Value,
+    ) -> Result<()> {
+        self.append(step, event, llm_digest, Some(commit))
     }
 
     /// The write [`Events::emit`] and [`Events::emit_opened`] make: `event` at `step`, after the
     /// torn line ends when there is one.
-    fn append(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
+    fn append(
+        &self,
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: Option<&serde_json::Value>,
+    ) -> Result<()> {
         let mut file = self
             .open(
                 std::fs::OpenOptions::new()
@@ -305,9 +375,10 @@ impl Events {
                     reason: "the line was cut short, without its end, and is skipped".to_owned(),
                 },
                 None,
+                None,
             )?);
         }
-        text.push_str(&Self::line(step, event, llm_digest)?);
+        text.push_str(&Self::line(step, event, llm_digest, commit)?);
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", self.path.display()))
     }
@@ -331,12 +402,18 @@ impl Events {
     }
 
     /// `event` at `step`, the instant now, as one line with its end.
-    fn line(step: u64, event: &Event, llm_digest: Option<&str>) -> Result<String> {
+    fn line(
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: Option<&serde_json::Value>,
+    ) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
             at: instant(),
             step,
             event,
             llm_digest,
+            commit,
         })
         .context("write an event")?;
         line.push('\n');

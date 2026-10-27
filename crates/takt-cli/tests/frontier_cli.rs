@@ -127,10 +127,7 @@ fn a_run_that_fails_after_the_take_leaves_the_story_proposed_and_opens_no_case()
         err.contains("no-such/1"),
         "the error names the protocol: {err}"
     );
-    assert!(
-        !repo.join(".engineering/cases").exists(),
-        "no case was opened"
-    );
+    assert!(!repo.join(".takt/cases").exists(), "no case was opened");
     assert_eq!(
         status(&repo, "story:ready-one"),
         "proposed",
@@ -182,12 +179,12 @@ fn nothing_ready_exits_zero_from_the_binary() {
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert_eq!(out, "frontier: nothing ready\n");
     assert_eq!(err, "");
-    assert!(!repo.join(".engineering/cases").exists());
+    assert!(!repo.join(".takt/cases").exists());
 }
 
-/// The names under `<repo>/.engineering/cases`, sorted; `None` when the directory is absent.
+/// The names under `<repo>/.takt/cases`, sorted; `None` when the directory is absent.
 fn case_names(repo: &Path) -> Option<Vec<String>> {
-    let dir = repo.join(".engineering/cases");
+    let dir = repo.join(".takt/cases");
     if !dir.exists() {
         return None;
     }
@@ -318,6 +315,8 @@ fn a_given_case_id_names_the_story_case_from_the_binary() {
         "1",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
         "--case-id",
         "given",
     ]);
@@ -330,8 +329,7 @@ fn a_given_case_id_names_the_story_case_from_the_binary() {
         "{out}"
     );
     assert_eq!(case_names(&repo), Some(vec!["given".to_owned()]));
-    let intent =
-        fs::read_to_string(repo.join(".engineering/cases/given/intent.md")).expect("intent.md");
+    let intent = fs::read_to_string(repo.join(".takt/cases/given/intent.md")).expect("intent.md");
     assert!(
         intent.starts_with("Make the check pass\n\n# Story: ready-one\n"),
         "{intent}"

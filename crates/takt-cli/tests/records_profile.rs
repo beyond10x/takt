@@ -31,7 +31,7 @@ fn executable(path: &Path, text: &str) {
 }
 
 /// The `claude` double: it writes a file and answers `tests.write`, each call.
-const CLAUDE: &str = "#!/bin/sh\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{\\\"action\\\": \\\"tests.write\\\", \\\"summary\\\": \\\"wrote a test\\\"}\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}'\n";
+const CLAUDE: &str = "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{\\\"action\\\": \\\"tests.write\\\", \\\"summary\\\": \\\"wrote a test\\\"}\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}'\n";
 
 /// A scratch world under this crate's build directory, removed on drop: a repository with one
 /// commit, a program directory holding the `claude` double, a `config` directory and an
@@ -122,7 +122,7 @@ impl World {
 
     /// The one case directory the repository holds.
     fn case(&self) -> PathBuf {
-        let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(".engineering/cases"))
+        let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(".takt/cases"))
             .expect("the cases directory")
             .map(|entry| entry.expect("an entry").path())
             .collect();
@@ -279,7 +279,7 @@ fn config_key_and_flag() {
     assert!(said.contains("`records`"), "{said}");
     assert!(!said.contains("sometimes"), "{said}");
     assert!(
-        !world.repo().join(".engineering/cases").exists(),
+        !world.repo().join(".takt/cases").exists(),
         "no case was opened\n{said}"
     );
 
@@ -288,7 +288,7 @@ fn config_key_and_flag() {
     let said = text(&output);
     assert_eq!(output.status.code(), Some(2), "{said}");
     assert!(
-        !world.repo().join(".engineering/cases").exists(),
+        !world.repo().join(".takt/cases").exists(),
         "no case was opened\n{said}"
     );
 }
@@ -397,7 +397,7 @@ fn scenario_and_improvement_cases_keep_every_decision() {
         .output()
         .expect("takt runs");
     let said = text(&output);
-    let turn = turns.join(".engineering/cases/loop-1");
+    let turn = turns.join(".takt/cases/loop-1");
     let evaluated_there = evaluated(&events_of(&turn));
     assert!(evaluated_there >= 1, "{said}");
     assert_eq!(decisions_of(&turn).len(), evaluated_there, "{said}");
@@ -406,7 +406,7 @@ fn scenario_and_improvement_cases_keep_every_decision() {
 
 /// The one case directory under `repo`.
 fn only_case(repo: &Path) -> PathBuf {
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();

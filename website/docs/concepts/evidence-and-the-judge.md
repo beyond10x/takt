@@ -70,7 +70,7 @@ from a repository whose `Cargo.lock` was not committed, so `cargo test` wrote on
 ```console
 step 1: tests.run {}
   refused: tests.run wrote what its validator does not: Cargo.lock; commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it; the cases directory was put back, the change discarded and nothing recorded
-stopped: StepRefused (tests.run wrote what its validator does not: Cargo.lock; commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231059Z
+stopped: StepRefused (tests.run wrote what its validator does not: Cargo.lock; commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it); steps 1, tokens 0, case ~/demo/.takt/cases/takt-20261026T231059Z
 ```
 
 The gates document and the assertions project file are read from the case's base revision, not

@@ -134,7 +134,7 @@ fn world(name: &str, identity: Option<&str>) -> World {
     fs::create_dir_all(&bin).expect("a stub directory");
     fs::write(
         bin.join("claude"),
-        "#!/bin/sh\necho \"the work\" >> work.txt\nprintf '{\"result\":\"{\\\\\"action\\\\\": \\\\\"implementation.edit\\\\\", \\\\\"summary\\\\\": \\\\\"the double\\\\\"}\",\"usage\":{\"input_tokens\":1}}'\n",
+        "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\necho \"the work\" >> work.txt\nprintf '{\"result\":\"{\\\\\"action\\\\\": \\\\\"implementation.edit\\\\\", \\\\\"summary\\\\\": \\\\\"the double\\\\\"}\",\"usage\":{\"input_tokens\":1}}'\n",
     )
     .expect("the double is written");
     // The bot route's programs: each call logged and failed, so nothing reaches a network.
@@ -194,6 +194,9 @@ impl World {
     fn run(&self, extra: &[&str]) -> (i32, String, String) {
         let repo = self.repo.to_str().expect("utf-8");
         let mut args = vec!["run", "--repo", repo, "--test-cmd", "true"];
+        if !extra.contains(&"--protocol") {
+            args.extend(["--protocol", "story.delivery/1"]);
+        }
         args.extend_from_slice(extra);
         self.takt(&args)
     }
@@ -388,7 +391,7 @@ fn a_case_opened_with_no_identity_is_not_resumed_through_the_bot_route() {
         for named in [
             "the case local was opened with none",
             "--forge none",
-            ".engineering/cases/local",
+            ".takt/cases/local",
             "branch -D takt/local",
             IDENTITY_FILE,
             "--commit-identity",
@@ -427,7 +430,7 @@ fn a_pushing_run_with_no_identity_is_refused_before_its_case_opens() {
         ] {
             assert!(err.contains(named), "{named}: {said}");
         }
-        assert!(!world.repo.join(".engineering/cases").exists(), "{said}");
+        assert!(!world.repo.join(".takt/cases").exists(), "{said}");
         assert_eq!(git(&world.repo, &["rev-parse", "HEAD"]), start, "{said}");
         assert_eq!(
             git(&world.repo, &["branch", "--show-current"]),
@@ -502,7 +505,7 @@ fn a_scenario_run_through_the_bot_route_with_no_identity_is_refused_before_anyth
         "",
         "{said}"
     );
-    assert!(!world.repo.join(".engineering/cases").exists(), "{said}");
+    assert!(!world.repo.join(".takt/cases").exists(), "{said}");
     assert_eq!(world.route_calls(), "", "{said}");
 }
 
@@ -625,7 +628,7 @@ impl World {
             "{said}"
         );
         assert_eq!(git(&self.repo, &["status", "--porcelain"]), "", "{said}");
-        assert!(!self.repo.join(".engineering/cases").exists(), "{said}");
+        assert!(!self.repo.join(".takt/cases").exists(), "{said}");
         assert!(!self.repo.join("work.txt").exists(), "{said}");
         let calls = self.route_calls();
         let scans: Vec<&str> = calls

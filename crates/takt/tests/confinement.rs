@@ -11,10 +11,10 @@
 //!   record and stops with the refusal named; the harness's program is refused at its own spawn.
 //! - Under Substrate the test command of a scratch crate writes the record it writes under
 //!   `none`; a test that writes outside the build directory (M19) reaches no host path outside
-//!   the tree, the tree being the adapter's workspace; one that writes over the object store
-//!   (M20) is refused the write where the adapter proves `sealed_paths`, and elsewhere the
-//!   `opened` event's facts lack it; and a Python test command is refused by its toolchain's
-//!   name with no child started unconfined.
+//!   the tree, the tree being the adapter's workspace, and under a Linux adapter no path of the
+//!   tree but its `target`; one that writes over the object store (M20) is refused the write,
+//!   by `sealed_paths` on `macos` and by the scoped workspace on Linux; and a Python test
+//!   command is refused by its toolchain's name with no child started unconfined.
 //! - The first line a run prints and its `opened` event name the adapter, and under `none` the
 //!   reason it is declared insecure.
 //!
@@ -421,7 +421,7 @@ impl Ran {
 
 /// Every evidence record under `tree`'s cases, whichever case wrote it.
 fn evidence(tree: &Path) -> Vec<serde_json::Value> {
-    let Ok(cases) = fs::read_dir(tree.join(".engineering/cases")) else {
+    let Ok(cases) = fs::read_dir(tree.join(".takt/cases")) else {
         return Vec::new();
     };
     let mut paths = Vec::new();
@@ -943,10 +943,13 @@ fn scanned(text: &str, excepted: bool) -> Result<Vec<usize>, String> {
 }
 
 /// Whether `file` is one whose test module the scan does not read. The CLI's fixtures start
-/// `git` and `aep` to set up and read the repositories a test runs on; neither is a run's
-/// process. Everything else in the file is read.
+/// `git` and `aep` to set up and read the repositories a test runs on; the credential tests
+/// start `mkfifo` to make a pipe, and the GitLab API tests start `sh` to ask the credential
+/// helper. None is a run's process. Everything else in the file is read.
 fn excepted(file: &Path) -> bool {
     file.ends_with("takt-cli/src/main.rs")
+        || file.ends_with("takt/src/forge/credential.rs")
+        || file.ends_with("takt/src/forge/gitlab/api.rs")
 }
 
 /// Every source file the scan reads: each crate's `src/` under `crates`, the workspace's
@@ -1696,15 +1699,27 @@ fn under_substrate_a_test_cannot_write_outside_the_build_directory() {
                 observed.summary,
                 probed(&confined)
             );
-            // The tree is Substrate's workspace, which every adapter shows writable whole: the
-            // write beside `target` lands in the tree, never outside it.
+            let tree = probed(&confined)
+                .lines()
+                .find(|line| line.starts_with("tree "))
+                .map(str::to_owned);
             assert!(
-                probed(&confined)
-                    .lines()
-                    .any(|line| line.starts_with("tree ")),
+                tree.is_some(),
                 "story:confinement-through-substrate-on-linux-and-macos: the probe ran in the workspace: {}",
                 probed(&confined)
             );
+            // The tree is Substrate's workspace. A Linux adapter shows it read-only but its
+            // `target`, so the write beside `target` fails inside the run; `macos` shows it
+            // writable whole, so there it lands in the tree, never outside it.
+            if std::env::consts::OS == "linux" {
+                assert!(
+                    tree.as_deref()
+                        .is_some_and(|line| line.starts_with("tree Err("))
+                        && !confined.join("promotion.json").exists(),
+                    "story:confinement-through-substrate-on-linux-and-macos: under a Linux adapter the test wrote its tree outside the build directory: {}",
+                    probed(&confined)
+                );
+            }
         },
     );
 }
@@ -1749,9 +1764,9 @@ fn loose_objects(tree: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     found
 }
 
-/// M20 where the adapter proves `sealed_paths` (`macos`): the tree's `.git` is sealed and the
-/// write is refused. Where it does not (`linux`, `systemd` around `linux`), the workspace is
-/// writable whole, `.git` with it, and the `opened` event's facts say so: no `sealed_paths`.
+/// M20: the write is refused on every adapter. Where the adapter proves `sealed_paths`
+/// (`macos`), the tree's `.git` is sealed; under `linux` and `systemd` around it, which prove
+/// no `sealed_paths`, the workspace is read-only but its `target`, `.git` with the rest.
 #[test]
 fn under_substrate_a_test_cannot_write_the_object_store() {
     delegated(
@@ -1773,25 +1788,22 @@ fn under_substrate_a_test_cannot_write_the_object_store() {
             let sealed = proved().iter().any(|fact| fact == "sealed_paths");
             let observed = observe(&confined).expect("the test command runs under substrate");
             drop(held);
-            if sealed {
-                assert_eq!(
-                    loose_objects(&confined),
-                    before,
-                    "story:confinement-through-substrate-on-linux-and-macos: the confined test rewrote an object of a sealed .git: {}",
-                    observed.summary
-                );
-                assert!(
-                    probed(&confined).starts_with("Err("),
-                    "story:confinement-through-substrate-on-linux-and-macos: the write was refused: {}",
-                    probed(&confined)
-                );
-            } else {
-                assert_eq!(
-                    std::env::consts::OS,
-                    "linux",
-                    "story:confinement-through-substrate-on-linux-and-macos: only the Linux adapters leave .git unsealed"
-                );
-            }
+            assert!(
+                sealed || std::env::consts::OS == "linux",
+                "story:confinement-through-substrate-on-linux-and-macos: off Linux the adapter seals .git: {:?}",
+                proved()
+            );
+            assert_eq!(
+                loose_objects(&confined),
+                before,
+                "story:confinement-through-substrate-on-linux-and-macos: the confined test rewrote an object of .git: {}",
+                observed.summary
+            );
+            assert!(
+                probed(&confined).starts_with("Err("),
+                "story:confinement-through-substrate-on-linux-and-macos: the write was refused: {}",
+                probed(&confined)
+            );
         },
     );
 }

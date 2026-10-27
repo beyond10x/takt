@@ -16,7 +16,9 @@ shipped in 0.14.0.
 
 Fixed since 0.14.0, for the next release: the run configuration file takes `story`,
 `endpoint_token_env` and `state_dir`, and `takt scenario run` takes `--config`; `--state-dir` names
-where a run keeps its transcripts; a judgement step whose session names no action is tried again,
+where a run keeps its transcripts and what a discarded step sets aside, and a `loom.agent/1`
+document's `runtime.state_dir` is the default for it; a new case opens under `.takt/cases`, ignored
+by git, and a case under `.engineering/cases` is still resumed where it is; a judgement step whose session names no action is tried again,
 3 tries at most; the first `tests.run` in a fresh `HOME` is not refused for the cargo cache; the
 token-staging tests pass under a shared temporary directory; and the step after a failed gate is
 told the failing lines, unresolved citations included.
@@ -40,7 +42,7 @@ of mode 0700. The [deploy guide](./guides/deploy-on-kubernetes.md) uses all of t
 |---|---|
 | Loom renders every agent pod with `seccompProfile: RuntimeDefault` and has no field to change it; a Job's pod template cannot be patched once the Job exists. | takt runs the test command in a user and mount namespace of its own. Under `docker run`, both the default seccomp and the default AppArmor profile refused that namespace, and the run ended on the error (exit 5) at its first `tests.run`, before any model call. The same is expected under Loom; it was read from the rendered pod, not observed on a cluster ([deploy guide](./guides/deploy-on-kubernetes.md#what-still-stops-it)). |
 | Loom's agent document declares no `takt` member, and Loom refuses a member it does not declare. | The run's settings go in `spec.command.args` or in a file of `spec.configFiles`, not in `spec.agent`. |
-| `HOME` is an emptyDir. | A change to the resource replaces the pod and loses takt's state and transcripts (see above). |
+| `HOME` is an emptyDir. | A change to the resource replaces the pod and loses takt's state and transcripts (see above); a state directory on a kept volume holds them ([the state directory](./reference/configuration.md#the-state-directory)). |
 
 ## Not takt's to fix
 

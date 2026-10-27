@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-flags-spell-metaharness-and-llm
 kind: story
-status: active
+status: implemented
 title: takt's endpoint and llm flags spell metaharness's and llm's names
 summary: --model-endpoint, --model-wire, --subscription-token-file/-pointer, --api-key-secret, --llm-config; --endpoint-* stay as aliases
 tags:
@@ -20,10 +20,11 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":3}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:41Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "active", to: "implemented", at: "2026-10-27T09:20:25Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":3}}}
 ---
 # Story: run-flags-spell-metaharness-and-llm
 
@@ -84,3 +85,12 @@ against a loopback endpoint.
 
 - `crates/takt-cli/src/main.rs` (`LoopArgs`, `RunArgs`, `parsed`), `crates/takt-cli/tests/`,
   `website/docs/reference/configuration.md`, `ess/ess-inputs.yaml`.
+
+## Conformance acceptance
+
+This story's acceptance names conformance scenarios in `ess/ess-inputs.yaml`, run by `task check`. None is run: that file
+lists no scenarios (`scenarios: []`) and this repository has no conformance runner (`Taskfile.yml` names no conformance
+step). The behaviour is checked by the cargo tests in `crates/takt-cli/tests/run_config_llm*.rs`, `run_config_llm_env_scrub.rs`
+and the unit tests of `crates/takt/src/run_config.rs` and `crates/takt/src/harness.rs`, as the Status sections say. The
+conformance acceptance stays open under `approval-record:cfgproxy-end-wave-review-and-conformance` until a later wave builds the
+runner.

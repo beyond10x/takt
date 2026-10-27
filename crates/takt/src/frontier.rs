@@ -466,9 +466,8 @@ pub fn approve(
                     frontier.name()
                 )
             })?;
-        let identity =
-            crate::case::commit_identity_of(&tree.join(crate::case::CASES_DIR).join(case))?
-                .unwrap_or_else(crate::git::CommitIdentity::takt);
+        let identity = crate::case::commit_identity_of(&crate::case::CaseDir::locate(tree, case))?
+            .unwrap_or_else(crate::git::CommitIdentity::takt);
         commit_record(tree, &identity, &branch, story, capability)?;
     }
     let reference = pending.approval().reference();
@@ -603,6 +602,24 @@ impl Aep {
                 repo.display()
             ))
         }
+    }
+
+    /// The tags of the story `id`, as the store holds them: what a run reads `input:<name>=<value>`
+    /// and `protocol:<name>/<major>` from. Read on the tree as it stands; the caller has put it on
+    /// the base.
+    pub fn tags(&self, repo: &Path, id: &str) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Shown {
+            #[serde(default)]
+            tags: Vec<String>,
+        }
+        Self::store(repo)?;
+        let json = self
+            .plan(repo, &["show", id, "--format", "json"])?
+            .map_err(|refusal| anyhow!("aep plan artifact show {id}: {refusal}"))?;
+        let shown: Shown =
+            serde_json::from_str(&json).with_context(|| format!("read the tags of {id}"))?;
+        Ok(shown.tags)
     }
 
     /// Every artifact the store lists.

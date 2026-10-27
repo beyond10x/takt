@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-cases-root-survives-worktree-cleanup
 kind: story
-status: draft
+status: implemented
 title: takt marks its cases root as retained, so worktree cleanup keeps it
 summary: writes .takt/.worktreekeep beside .takt/.gitignore
 tags:
@@ -18,7 +18,11 @@ scope:
   path: crates/takt/tests/cases_kept.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-27T15:59:15Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: a-cases-root-survives-worktree-cleanup
 

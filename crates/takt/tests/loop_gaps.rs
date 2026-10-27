@@ -198,7 +198,7 @@ fn dirty(tree: &Path) -> Vec<String> {
     git(tree, &["status", "--porcelain", "--untracked-files=all"])
         .lines()
         .map(|line| line[3..].to_owned())
-        .filter(|path| !path.starts_with(".engineering/cases"))
+        .filter(|path| !path.starts_with(".takt/cases"))
         .collect()
 }
 

@@ -484,7 +484,7 @@ fn opening(world: &World) -> Vec<String> {
 
 /// The case's evidence records, each file's text, in the order they were written.
 fn records(repo: &Path) -> Vec<String> {
-    let dir = repo.join(".engineering/cases/turn-1/evidence");
+    let dir = repo.join(".takt/cases/turn-1/evidence");
     let mut paths: Vec<PathBuf> = fs::read_dir(&dir)
         .map(|entries| {
             entries
@@ -614,7 +614,7 @@ fn a_candidate_verified_by_the_validator_holds_passes_after_and_waits_for_the_me
         ),
         "{out}\n{err}"
     );
-    let case = world.repo.join(".engineering/cases/turn-1");
+    let case = world.repo.join(".takt/cases/turn-1");
     let decision = takt::case::latest_decision(&case)
         .expect("the decision reads")
         .expect("a decision");
@@ -661,10 +661,7 @@ fn a_run_on_another_protocol_needs_no_cache_or_state_directory() {
         .expect("takt runs");
     let err = String::from_utf8_lossy(&output.stderr);
     assert!(
-        world
-            .repo
-            .join(".engineering/cases/change-1/case.yaml")
-            .is_file(),
+        world.repo.join(".takt/cases/change-1/case.yaml").is_file(),
         "exit {:?}\n{}\n{err}",
         output.status.code(),
         String::from_utf8_lossy(&output.stdout)
@@ -709,7 +706,7 @@ fn a_turn_without_its_opening_values_is_refused_before_anything_is_written() {
         assert_eq!(code, 1, "{inputs:?}: {out}\n{err}");
         assert!(err.contains(named), "{inputs:?}: {err}");
         assert!(
-            !world.repo.join(".engineering/cases").exists(),
+            !world.repo.join(".takt/cases").exists(),
             "{inputs:?}: nothing was written"
         );
         assert_eq!(git(&world.repo, &["branch", "--list", "takt/*"]), "");
@@ -718,7 +715,7 @@ fn a_turn_without_its_opening_values_is_refused_before_anything_is_written() {
     let (code, out, err) = run(&world, &opening(&world));
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(err.contains("promotion"), "{err}");
-    assert!(!world.repo.join(".engineering/cases").exists());
+    assert!(!world.repo.join(".takt/cases").exists());
 }
 
 /// Asserts the turn was refused before anything was written, naming `named`.
@@ -726,7 +723,7 @@ fn refused(world: &World, (code, out, err): &(i32, String, String), named: &str)
     assert_eq!(*code, 1, "{out}\n{err}");
     assert!(err.contains(named), "{named}: {err}");
     assert!(
-        !world.repo.join(".engineering/cases").exists(),
+        !world.repo.join(".takt/cases").exists(),
         "nothing was written: {out}\n{err}"
     );
     assert_eq!(git(&world.repo, &["branch", "--list", "takt/*"]), "");
@@ -1535,7 +1532,7 @@ fn approve(world: &World, capability: &str) {
                 "--untracked-files=all",
                 "--",
                 ".",
-                ":!.engineering/cases"
+                ":!.takt/cases"
             ]
         ),
         "",
@@ -1631,7 +1628,7 @@ fn a_turn_under_forge_none_reaches_accepted_on_validators_records() {
             "{record}"
         );
     }
-    let artifacts = world.repo.join(".engineering/cases/turn-1/artifacts");
+    let artifacts = world.repo.join(".takt/cases/turn-1/artifacts");
     let retained: Vec<String> = fs::read_dir(&artifacts)
         .expect("the case's artifacts")
         .map(|entry| entry.expect("an entry").path())
@@ -1702,8 +1699,8 @@ fn the_surface_is_computed_at_open_and_a_disagreeing_one_is_refused() {
         out.contains("candidate.merge_judge_surface"),
         "{out}\n{err}"
     );
-    let case = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/case.yaml"))
-        .expect("case.yaml");
+    let case =
+        fs::read_to_string(world.repo.join(".takt/cases/turn-1/case.yaml")).expect("case.yaml");
     assert!(case.contains("surface: judge"), "{case}");
 }
 
@@ -1736,8 +1733,8 @@ fn a_turn_without_an_intent_opens_with_the_findings_title() {
     assert_eq!(code, 0, "{out}\n{err}");
     assert!(!out.contains("frontier: nothing ready"), "{out}\n{err}");
     assert!(out.contains("Completed (declined)"), "{out}\n{err}");
-    let intent = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/intent.md"))
-        .expect("intent.md");
+    let intent =
+        fs::read_to_string(world.repo.join(".takt/cases/turn-1/intent.md")).expect("intent.md");
     assert_eq!(intent, "The probe shows the defect");
 }
 
@@ -1784,7 +1781,7 @@ fn a_promotion_record_naming_no_installed_binary_is_not_promoted() {
 
 /// The turn's decision files and its run record's `decision` and `waiting` lines, counted.
 fn written(world: &World) -> (usize, usize, usize) {
-    let case = world.repo.join(".engineering/cases/turn-1");
+    let case = world.repo.join(".takt/cases/turn-1");
     let files = fs::read_dir(case.join("decisions"))
         .map(Iterator::count)
         .unwrap_or_default();
@@ -2145,7 +2142,7 @@ fn judge_turn_at_the_gate(name: &str) -> World {
 #[test]
 fn a_judge_surface_merge_after_the_owners_approval_is_recorded() {
     let world = judge_turn_at_the_gate("judge-after-approve");
-    let case = world.repo.join(".engineering/cases/turn-1");
+    let case = world.repo.join(".takt/cases/turn-1");
     let forge = fs::read_to_string(case.join("forge")).expect("the turn records its forge");
     assert_eq!(forge, "none\n");
     let main = git(&world.repo, &["rev-parse", "main"]);
@@ -2336,7 +2333,7 @@ fn the_install_root_is_recorded_canonical_and_fixed() {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let (code, out, err) = takt_plain(&world, &args);
     assert_eq!(code, 4, "{out}\n{err}");
-    let recorded = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/install-root"))
+    let recorded = fs::read_to_string(world.repo.join(".takt/cases/turn-1/install-root"))
         .expect("the recorded install root");
     let canonical = fs::canonicalize(&world.install).expect("the install root");
     assert_eq!(
@@ -2382,7 +2379,7 @@ fn a_resume_given_the_recorded_install_root_resumes_and_another_is_refused_namin
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let (code, out, err) = takt_plain(&world, &args);
     assert_eq!(code, 4, "{out}\n{err}");
-    let recorded_file = world.repo.join(".engineering/cases/turn-1/install-root");
+    let recorded_file = world.repo.join(".takt/cases/turn-1/install-root");
     let recorded = fs::read_to_string(&recorded_file).expect("the recorded install root");
     let canonical = fs::canonicalize(&world.install).expect("the install root");
     let link = dir.join("install-link");
@@ -2493,7 +2490,7 @@ fn a_resumed_turn_on_another_protocol_document_is_refused() {
     let world = world("resume-document", true, false);
     let (code, out, err) = run(&world, &opening(&world));
     assert_eq!(code, 4, "{out}\n{err}");
-    let path = world.repo.join(".engineering/cases/turn-1/protocol.yaml");
+    let path = world.repo.join(".takt/cases/turn-1/protocol.yaml");
     let text = fs::read_to_string(&path).expect("protocol.yaml");
     fs::write(
         &path,
@@ -2572,7 +2569,7 @@ fn turn_opened_under_forge_none(name: &str) -> World {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let (code, out, err) = takt_on_path(&world, &args, None);
     assert_eq!(code, 4, "{out}\n{err}");
-    let forge = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/forge"))
+    let forge = fs::read_to_string(world.repo.join(".takt/cases/turn-1/forge"))
         .expect("the turn records its forge");
     assert_eq!(forge, "none\n");
     world
@@ -2593,7 +2590,7 @@ fn state_of(repo: &Path) -> (Vec<(PathBuf, Vec<u8>)>, String, String) {
         }
     }
     let mut files = Vec::new();
-    walk(&repo.join(".engineering/cases"), &mut files);
+    walk(&repo.join(".takt/cases"), &mut files);
     files.sort();
     (
         files,
@@ -2670,7 +2667,7 @@ fn a_turn_resumed_through_another_forge_than_it_opened_with_is_refused() {
 #[test]
 fn a_turn_recorded_with_the_bot_route_resumed_under_forge_none_is_refused() {
     let world = turn_opened_under_forge_none("forge-switch-back");
-    fs::write(world.repo.join(".engineering/cases/turn-1/forge"), "bot\n").expect("written");
+    fs::write(world.repo.join(".takt/cases/turn-1/forge"), "bot\n").expect("written");
     let before = state_of(&world.repo);
     let (code, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
     assert_eq!(code, 1, "{out}\n{err}");
@@ -2686,7 +2683,7 @@ fn a_turn_recorded_with_the_bot_route_resumed_under_forge_none_is_refused() {
 #[test]
 fn a_turn_that_recorded_no_forge_resumes_under_any() {
     let world = turn_opened_under_forge_none("forge-unrecorded");
-    fs::remove_file(world.repo.join(".engineering/cases/turn-1/forge")).expect("removed");
+    fs::remove_file(world.repo.join(".takt/cases/turn-1/forge")).expect("removed");
     let (_, out, err) = takt_in(&world, &["run", "--case", "turn-1", "--hours", "0.001"]);
     assert!(!err.contains("recorded the forge"), "{err}");
     assert!(out.contains("stopped: "), "{out}\n{err}");

@@ -1,7 +1,7 @@
 ---
 title: Getting started
 sidebar_position: 2
-description: Install takt 0.14.0, run it once with no model and no credentials, then once with a model, and pick the guide for what comes next.
+description: Install takt 0.15.1, run it once with no model and no credentials, then once with a model, and pick the guide for what comes next.
 lede: One run needs nothing but git and cargo; the second adds a model, and both leave a case directory you can read.
 source: takt run --help and takt approve --help at 0.14.0; runs of takt 0.14.0 on fresh cargo crates, 2026-10-26; the install commands run against the 0.14.0 release assets
 ---
@@ -19,7 +19,7 @@ Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-
 needs no Rust toolchain to start, though a repository whose tests are cargo's needs one to test.
 
 ```sh
-version=0.14.0 target=x86_64-unknown-linux-gnu
+version=0.15.1 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
@@ -32,7 +32,7 @@ Put `takt` on your `PATH`. `takt --version` prints the version and the commit it
 
 ```console
 $ takt --version
-takt 0.14.0 (da165bb1383b30de345842c6e4c508e99bf38c4d)
+takt 0.15.1 (2a6c362a43d9e7499a8f95d75ac1f225f5a8f542)
 ```
 
 macOS, `cargo install` from the tag, and the container image are in [Install](./guides/install.md).
@@ -84,7 +84,11 @@ sandbox of its own:
   bounds processes, memory and CPU), then `linux` (bubblewrap through Substrate's host driver,
   bounded only in a cgroup root given with `--confinement-cgroup-root`), then `macos` (a Seatbelt
   profile Substrate renders). The profile: the tree as the workspace, its `target/` written, the
-  toolchain and the cargo caches read-only, no network. What no adapter serves, a family or fact
+  toolchain and the cargo caches read-only, no network. Under `linux` and `systemd` around it
+  `target/` is the only path of the tree the test command writes: the rest, `.git` with it, is
+  read-only in the run, and a host whose Substrate probe did not prove
+  `exec.workspace-scoped-write` is refused by that name. On `macos` the tree stays writable and
+  its `.git` is sealed. What no adapter serves, a family or fact
   `--confinement-needs` names among them, is refused by name and never run unconfined. The first
   line and the `opened` event name the adapter and the facts it proved.
 - `--confinement none`, the default, starts the test command through Substrate's `local` adapter,
@@ -131,7 +135,7 @@ frontier: implementation.edit (admissible), release.rollback (approval-required)
 step 2: repository.merge (none)
   said: no harness: nothing but the approval is left; requesting it
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261026T234353Z
+stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-demo/.takt/cases/takt-20261026T234353Z
 ```
 
 What happened:
@@ -144,7 +148,8 @@ What happened:
 4. With the tests green, the merge became `approval-required`. No harness was there to do more,
    so the run stopped for a grant, exit 4.
 
-The case is a directory in the repository, `.engineering/cases/<case>/`, untracked so far.
+The case is a directory in the repository, `.takt/cases/<case>/`. takt wrote `.takt/.gitignore` holding `*`, so `git status` shows none of
+it.
 [Read a case](./guides/read-a-case.md) walks through it. `takt approve` grants the merge, as
 [Approve a capability](./guides/approve-a-capability.md) shows. Merging is a judgement step, so
 it needs a harness.
@@ -176,7 +181,7 @@ frontier: implementation.edit (admissible), release.rollback (approval-required)
 step 4: repository.merge (codex)
   said: Reviewed the diff: sub(left, right) subtracts right from left, with a test confirming sub(5, 2) equals 3. No further edits needed; requesting merge approval. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 4, tokens 75709, case ~/takt-demo2/.engineering/cases/takt-20261026T233005Z
+stopped: ApprovalRequired (repository.merge); steps 4, tokens 75709, case ~/takt-demo2/.takt/cases/takt-20261026T233005Z
 ```
 
 The model took two steps: the edit and the request for the merge. takt committed the edit, then
@@ -206,7 +211,7 @@ $ takt run --repo takt-demo --config run.toml --iterations 0 --intent "add a fun
 scan: none (declared in run.toml); what --harness codex proposes is accepted unscanned, checked only for the shape of a credential
 case takt-20261027T014116Z on software.change/1 in ~/takt-demo; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-stopped: Iterations (0); steps 0, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261027T014116Z
+stopped: Iterations (0); steps 0, tokens 0, case ~/takt-demo/.takt/cases/takt-20261027T014116Z
 ```
 
 The case's `opened` event records `"scan":"none"`.

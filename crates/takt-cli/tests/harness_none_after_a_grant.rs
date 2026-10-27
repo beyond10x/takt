@@ -237,6 +237,8 @@ fn delivery_at_the_gate(name: &str) -> (Scratch, Scratch, String, PathBuf) {
             "none",
             "--test-cmd",
             "true",
+            "--protocol",
+            "story.delivery/1",
             "--iterations",
             "0",
         ],
@@ -268,6 +270,8 @@ fn resume_args(repo: &Path) -> Vec<&str> {
         "none",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
     ]
 }
 
@@ -332,7 +336,7 @@ fn harness_none_takes_the_granted_merge() {
     assert_eq!(
         git_out(
             &repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"]
         ),
         ""
     );
@@ -365,7 +369,7 @@ fn harness_none_no_grant_unchanged() {
     );
     assert!(
         !repo
-            .join(".engineering/cases")
+            .join(takt::case::CASES_DIR)
             .join(&id)
             .join("authority.yaml")
             .exists(),
@@ -386,6 +390,8 @@ fn harness_none_no_grant_unchanged() {
         "none",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
         "--iterations",
         "0",
     ]);
@@ -400,6 +406,8 @@ fn harness_none_no_grant_unchanged() {
         "none",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
     ]);
     assert!(
         out.contains("change.handover (none)"),

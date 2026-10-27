@@ -1,14 +1,14 @@
 ---
 title: Install
 sidebar_position: 1
-description: Install takt 0.14.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build, and the tools each kind of run needs beside it.
+description: Install takt 0.15.1 from a release asset with its checksum, with cargo from the tag, or as a container image you build, and the tools each kind of run needs beside it.
 lede: takt is one binary; what else you install depends on the harness, the forge and whether you deliver stories.
 source: the release assets of 0.14.0 (checksum commands run); cargo install --git at the tag 0.14.0 (run, 3 min 27 s); docker build of the Dockerfile at 0.14.0 (run); takt run --help at 0.14.0; Dockerfile
 ---
 
 # Install
 
-Three ways to get takt 0.14.0. They give the same `takt` binary.
+Three ways to get takt 0.15.1. They give the same `takt` binary.
 
 | way | needs | gets you |
 |---|---|---|
@@ -19,7 +19,7 @@ Three ways to get takt 0.14.0. They give the same `takt` binary.
 ## From a release asset
 
 ```sh
-version=0.14.0 target=x86_64-unknown-linux-gnu
+version=0.15.1 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
@@ -44,7 +44,7 @@ The archive holds `takt`, `README.md`, `CHANGELOG.md` and `LICENSE` in the direc
 From the tag, without a checkout:
 
 ```sh
-cargo install --locked --git https://github.com/beyond10x/takt --tag 0.14.0 b10x-takt-cli
+cargo install --locked --git https://github.com/beyond10x/takt --tag 0.15.1 b10x-takt-cli
 ```
 
 The package is `b10x-takt-cli`, and the binary it installs is `takt`. A build took 3 minutes 27
@@ -57,7 +57,7 @@ cargo install --locked --path crates/takt-cli
 
 ```console
 $ takt --version
-takt 0.14.0 (da165bb1383b30de345842c6e4c508e99bf38c4d)
+takt 0.15.1 (2a6c362a43d9e7499a8f95d75ac1f225f5a8f542)
 ```
 
 ## As a container image
@@ -65,9 +65,9 @@ takt 0.14.0 (da165bb1383b30de345842c6e4c508e99bf38c4d)
 No takt image is published. Build one from a checkout of the tag:
 
 ```sh
-git clone --branch 0.14.0 https://github.com/beyond10x/takt
+git clone --branch 0.15.1 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.14.0 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.15.1 .
 ```
 
 The image is about 1.3 GB. It holds takt, `aep`, `b10x-harness`, `ess`, `b10x-gates` and a Rust

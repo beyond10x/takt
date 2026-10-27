@@ -51,4 +51,5 @@ COPY --from=build /src/target/release/takt /usr/local/bin/takt
 USER 10001:10001
 ENV HOME=/var/lib/takt
 WORKDIR /workspace
-ENTRYPOINT ["tini", "--", "takt", "run", "--repo", "/workspace", "--config", "/config/agent.yaml"]
+ENTRYPOINT ["tini", "--", "takt", "run", "--repo", "/workspace"]
+CMD ["--config", "/config/agent.yaml"]

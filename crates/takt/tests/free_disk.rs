@@ -126,12 +126,8 @@ fn run_with(tree: &Path, name: &str, prepare: impl FnOnce(&mut Run<'_>)) -> Ran 
     prepare(&mut run);
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops without an error");
-    let events = fs::read_to_string(
-        tree.join(".engineering/cases")
-            .join(name)
-            .join("events.jsonl"),
-    )
-    .expect("the record");
+    let events = fs::read_to_string(tree.join(".takt/cases").join(name).join("events.jsonl"))
+        .expect("the record");
     Ran {
         stop,
         steps: run.steps,
@@ -581,7 +577,7 @@ fn a_forge_none_case_at_ahead_stops_unperformable_with_its_hours_spent() {
 /// Writes the scenario trial `case` under `repo`: one run per stop line, each with whether it
 /// is a completion, and the held-out check's first line.
 fn trial(repo: &Path, case: &str, stops: &[(&str, bool)], held: &str) {
-    let dir = repo.join(".engineering/cases").join(case);
+    let dir = repo.join(".takt/cases").join(case);
     fs::create_dir_all(&dir).expect("a case directory");
     let mut text = String::new();
     for (n, (stop, completed)) in stops.iter().enumerate() {

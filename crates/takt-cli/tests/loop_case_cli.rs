@@ -79,7 +79,7 @@ fn repository(name: &str) -> (Scratch, String) {
         ("turn-b", "declined"),
         ("turn-c", "declined"),
     ] {
-        let case = dir.join(".engineering/cases").join(id);
+        let case = dir.join(".takt/cases").join(id);
         fs::create_dir_all(case.join("decisions")).expect("the case directory");
         fs::write(
             case.join("case.yaml"),
@@ -144,7 +144,7 @@ fn run(repo: &Path, value: Option<&str>) -> (i32, String, String) {
 
 /// The case directories under `repo`, by name.
 fn cases(repo: &Path) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+    let mut names: Vec<String> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| {
             entry
@@ -165,7 +165,7 @@ fn cases(repo: &Path) -> Vec<String> {
 fn takt_run_opens_a_loop_case_whose_measure_records_over_the_turns() {
     let (repo, head) = repository("opens");
     let (code, out, err) = run(&repo, Some(&head));
-    let case = repo.join(".engineering/cases/loop-1");
+    let case = repo.join(".takt/cases/loop-1");
     assert!(
         case.join("case.yaml").is_file(),
         "exit {code}\n{out}\n{err}"
@@ -362,7 +362,7 @@ fn a_definitions_object_an_earlier_test_command_planted_is_refused() {
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(err.contains(&blob), "the object is named: {err}");
     assert!(
-        !repo.join(".engineering/cases/loop-1").exists(),
+        !repo.join(".takt/cases/loop-1").exists(),
         "no loop case was written"
     );
 }
@@ -697,7 +697,7 @@ fn a_blob_missing_from_a_partial_clone_is_refused_without_fetching() {
     assert_eq!(code, Some(1), "{out}\n{err}");
     assert!(err.contains(&blob), "the blob is named: {err}");
     assert!(
-        !clone.join(".engineering/cases/loop-1").exists(),
+        !clone.join(".takt/cases/loop-1").exists(),
         "no loop case was written"
     );
     let marker = format!("127.0.0.1:{port}");

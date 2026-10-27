@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-takt-prefixed-base-is-named-as-reserved
 kind: story
-status: draft
+status: implemented
 title: A base branch under takt's reserved prefix is refused by name
 summary: the refusal names takt/ and a rename
 tags:
@@ -17,7 +17,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/reserved_prefix.rs
-revision: 4
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-27T15:59:14Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: a-takt-prefixed-base-is-named-as-reserved
 

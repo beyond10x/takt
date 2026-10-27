@@ -11,13 +11,13 @@ source: takt trace --help and takt report --help at 0.14.0; crates/takt/src/trac
 Every case keeps its run record in `events.jsonl`. Two commands read it back.
 
 ```sh
-takt trace --case .engineering/cases/<case> --out <case>.trace.jsonl
-takt report --case .engineering/cases/<case>
+takt trace --case .takt/cases/<case> --out <case>.trace.jsonl
+takt report --case .takt/cases/<case>
 takt report --trace a.trace.jsonl --trace b.trace.jsonl
 ```
 
 ```console
-$ takt trace --case .engineering/cases/story-add-sub-20261026T231852Z --out runs/add-sub.trace.jsonl
+$ takt trace --case .takt/cases/story-add-sub-20261026T231852Z --out runs/add-sub.trace.jsonl
 written: runs/add-sub.trace.jsonl (8 operations, takt-trace/1)
 ```
 

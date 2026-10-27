@@ -99,17 +99,20 @@ pub struct Start {
     pub action: String,
 }
 
-/// The tree a case directory lies in, `<tree>/.engineering/cases/<id>`; an error for a
-/// directory that does not lie so.
+/// The tree a case directory lies in, `<tree>/.takt/cases/<id>` or `<tree>/.engineering/cases/<id>`;
+/// an error for a directory that does not lie so.
 pub fn tree_of(case_dir: &Path) -> Result<PathBuf> {
     let dir = std::fs::canonicalize(case_dir)
         .with_context(|| format!("resolve the case directory {}", case_dir.display()))?;
     let cases = dir.parent().unwrap_or(&dir);
-    if !cases.ends_with(crate::case::CASES_DIR) {
+    if !crate::case::CASE_ROOTS
+        .iter()
+        .any(|root| cases.ends_with(root))
+    {
         bail!(
             "the case directory {} does not lie under a tree's {}; name the repository with --repo",
             case_dir.display(),
-            crate::case::CASES_DIR
+            crate::case::CASE_ROOTS.join(" or ")
         );
     }
     Ok(cases
@@ -441,7 +444,17 @@ pub fn rebuilt_prompt_line(
     let change = change_of(start, &start.case_dir, repo, &start.revision)?;
     let failed = failed_of(start);
     // The scope files as the revision the step started at holds them, in the repository.
-    let context = context(start, repo, &offer, &change, &failed, Some(&start.revision));
+    let ask = commit_ask(start);
+    let context = context(
+        start,
+        repo,
+        &offer,
+        &change,
+        &failed,
+        Some(&start.revision),
+        None,
+        ask.as_ref(),
+    );
     let _ = probe.step(&context);
     let transcript = probe
         .last_transcript()
@@ -476,6 +489,7 @@ fn change_of(start: &Start, case_dir: &Path, tree: &Path, revision: &str) -> Res
 /// The context the step `start` describes was given, in `tree`, with `offer` and the change so
 /// far ([`change_of`]), its scope files read at `scope_revision` when one is given, else in
 /// `tree` as it stands ([`crate::harness::scope_files`]).
+#[allow(clippy::too_many_arguments)]
 fn context<'a>(
     start: &'a Start,
     tree: &'a Path,
@@ -483,9 +497,13 @@ fn context<'a>(
     change: &'a ChangeSoFar,
     failed: &'a [crate::validator::FailedCheck],
     scope_revision: Option<&'a str>,
+    base_revision: Option<&'a str>,
+    commit: Option<&'a crate::commit_style::Ask>,
 ) -> StepContext<'a> {
     StepContext {
         scope_revision,
+        base_revision,
+        commit,
         tree,
         intent: &start.intent,
         offered: &offer.offered,
@@ -500,7 +518,20 @@ fn context<'a>(
         time_left: None,
         change,
         failed,
+        obligations: &[],
     }
+}
+
+/// What the step `start` describes was asked of the reply's `commit`: the `commit` member of the
+/// last `opened` line of its record ([`crate::commit_style::Ask::of_record`]); none for a record
+/// written before the member, whose prompt asked for none.
+fn commit_ask(start: &Start) -> Option<crate::commit_style::Ask> {
+    start
+        .record
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .rfind(|line| line["event"] == "opened")
+        .and_then(|line| crate::commit_style::Ask::of_record(&line["commit"]))
 }
 
 /// What the step `start` describes was shown of the checks that failed before it, read from its
@@ -528,7 +559,7 @@ fn failed_of(start: &Start) -> Vec<crate::validator::FailedCheck> {
 /// revision is the record's to name, and its tree could put a link anywhere.
 pub fn rebuild_case(start: &Start, tree: &Path, revision: &str) -> Result<PathBuf> {
     crate::case::refuse_link_on_the_way(tree, &start.case, "rebuilt for a replay")?;
-    let dir = tree.join(crate::case::CASES_DIR).join(&start.case);
+    let dir = crate::case::CaseDir::locate(tree, &start.case);
     std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
     plain_dir(&dir.join("evidence"))?;
     plain_dir(&dir.join("decisions"))?;
@@ -717,7 +748,21 @@ pub fn replay_once(
     let started_at = crate::events::instant();
     let change = change_of(start, &case_dir, &tree, &revision)?;
     let failed = failed_of(start);
-    let stepped = harness.step(&context(start, &tree, &offer, &change, &failed, None));
+    // The instruction files are read at the base the case pinned, as the run read them.
+    let base = crate::case::Branch::read(&start.case_dir)
+        .ok()
+        .and_then(|branch| branch.base_commit);
+    let ask = commit_ask(start);
+    let stepped = harness.step(&context(
+        start,
+        &tree,
+        &offer,
+        &change,
+        &failed,
+        None,
+        base.as_deref(),
+        ask.as_ref(),
+    ));
     let transcript = harness.last_transcript();
     if let Some(bytes) = &transcript {
         write_private(&dir.join("transcript.jsonl"), bytes)?;

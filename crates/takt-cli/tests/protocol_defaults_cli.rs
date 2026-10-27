@@ -139,7 +139,7 @@ fn status(repo: &Path, id: &str) -> String {
 
 /// The one case directory under `repo`, by name.
 fn the_case(repo: &Path) -> String {
-    let mut cases: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+    let mut cases: Vec<String> = fs::read_dir(repo.join(".takt/cases"))
         .expect("a cases directory")
         .map(|e| {
             e.expect("an entry")
@@ -197,7 +197,7 @@ fn no_steps(repo: &str) -> Vec<&str> {
 }
 
 /// A story the planning store gives, with no `--protocol`: its case opens on
-/// `story.delivery/1`, the protocol that opens a pull request, embedded in the binary so the
+/// `story.delivery/2`, the protocol that opens a pull request, embedded in the binary so the
 /// target repository need not carry it.
 #[test]
 fn a_store_story_without_a_protocol_opens_on_story_delivery() {
@@ -211,7 +211,7 @@ fn a_store_story_without_a_protocol_opens_on_story_delivery() {
     );
     let case = the_case(&repo);
     assert!(
-        out.contains(&format!("case {case} on story.delivery/1 in ")),
+        out.contains(&format!("case {case} on story.delivery/2 in ")),
         "stdout {out} stderr {err}"
     );
     assert!(
@@ -220,9 +220,10 @@ fn a_store_story_without_a_protocol_opens_on_story_delivery() {
     );
 }
 
-/// An input the protocol a case would open on does not declare: `story.delivery/1` declares
-/// none, so `--input risk=…` on a store story, kept by nothing, is refused before the story is
-/// taken, no case opened; on an intent, `software.change/1` declares `risk` and takes it.
+/// An input the protocol a case would open on does not declare: `story.delivery/2` declares
+/// `tests_first` and `gate_on` but no `risk`, so `--input risk=…` on a store story, kept by
+/// nothing, is refused before the story is taken, no case opened; on an intent,
+/// `software.change/1` declares `risk` and takes it.
 #[test]
 fn an_input_the_opening_protocol_does_not_declare_is_refused_before_anything_is_opened() {
     let (_outer, repo) = repository(Some("one-ready"), "undeclared-input");
@@ -233,7 +234,7 @@ fn an_input_the_opening_protocol_does_not_declare_is_refused_before_anything_is_
     let (code, out, err) = takt(&args);
     assert_eq!(code, 1, "stdout {out} stderr {err}");
     assert!(
-        err.contains("story.delivery/1 declares no input risk"),
+        err.contains("story.delivery/2 declares no input risk"),
         "stdout {out} stderr {err}"
     );
     assert_eq!(out, "", "{out}");

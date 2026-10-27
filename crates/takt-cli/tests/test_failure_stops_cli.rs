@@ -33,7 +33,8 @@ fn broken_todo() -> String {
     todo.replace(marked, "items[number - 1][\"done\"] = False")
 }
 
-/// A test script that passes until a harness step committed (the subject of `HEAD` opens with
+/// A test script that passes until a harness step committed (the run pins `--commit-style action`, so
+/// the subject of `HEAD` opens with
 /// `implementation.edit`; the script names no file the step writes, which would put it on the
 /// judge surface), then prints a cargo run whose failed tests are `failing` (none: a failure
 /// that names no test) and exits 101; `$n` is the number of commits.
@@ -144,6 +145,7 @@ fn world(name: &str, files: &[(&str, &str, bool)]) -> World {
         &path,
         format!(
             r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 echo call >> '{}'
 echo "the work" >> work.txt
 printf '{{"result":"{{\\"action\\": \\"implementation.edit\\", \\"summary\\": \\"the double\\"}}","usage":{{"input_tokens":1}}}}'
@@ -188,6 +190,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
             "--iterations",
             iterations,
         ];
@@ -208,6 +212,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
             "--iterations",
             iterations,
         ])

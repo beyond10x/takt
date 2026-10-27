@@ -70,7 +70,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(takt::case::CASES_DIR)
     }
 
     /// The absolute path of the key file, written once with [`KEY`] at mode 0600.
@@ -192,7 +192,42 @@ fn unknown_model_name_refused() {
     let key = world.key_file();
     let config = world.file("run.yaml", &llm_file("nosuch", &document(&key)));
     let output = world.run(&config, &[]);
-    assert_refused(&world, &output, &["nosuch", "neither a route nor"]);
+    assert_refused(&world, &output, &["neither a route nor"]);
+    assert!(
+        !text(&output).contains("nosuch"),
+        "the name is not repeated"
+    );
+}
+
+/// A `model` that names no route, alias or endpoint model exits 1 before any case opens, and the
+/// name is not repeated: it may be a value written in the run file or given on the command line.
+#[test]
+fn a_model_naming_no_route_is_refused_without_repeating_it() {
+    let world = World::new("model-name");
+    let key = world.key_file();
+    let config = world.file("run.yaml", &llm_file("MARKER-model-name", &document(&key)));
+    let output = world.run(&config, &[]);
+    assert_refused(&world, &output, &["neither a route nor"]);
+    assert!(
+        !text(&output).contains("MARKER-model-name"),
+        "{}",
+        text(&output)
+    );
+
+    let flag = world.file(
+        "flag.yaml",
+        &format!(
+            "iterations: 0\nharness: harness\nforge: none\nllm: {}\n",
+            document(&key)
+        ),
+    );
+    let output = world.run(&flag, &["--model", "MARKER-model-name"]);
+    assert_refused(&world, &output, &["neither a route nor"]);
+    assert!(
+        !text(&output).contains("MARKER-model-name"),
+        "{}",
+        text(&output)
+    );
 }
 
 /// Acceptance 3: a route on `chat-completions` exits 1 before any case opens, naming the route and the
@@ -290,6 +325,9 @@ fn llm_section_without_model_refused() {
 /// Acceptance 1, at the function level: the alias `fast` of route `small` on endpoint `e` resolves to
 /// `e`'s base URL, the `openai-responses` wire its `responses` protocol maps to, and the upstream
 /// model, with the credential by reference: the key read from its file, never recorded.
+/// Linux only: llm 0.16.0 reads a `{file: ...}` key on Linux alone and refuses it elsewhere
+/// (`llm-credentials` `file.rs`, `SecretError::UnsupportedPlatform`).
+#[cfg(target_os = "linux")]
 #[test]
 fn route_resolves_to_endpoint_values() {
     let world = World::new("resolve");

@@ -4,16 +4,16 @@ metadata:
   name: takt-demo
   namespace: agents
 spec:
-  image: {repository: registry.example/takt, tag: "0.14.0"}
+  image: {repository: registry.example/takt, tag: "0.15.1"}
   command:
     entrypoint:
       - tini
       - --
       - /bin/sh
       - -c
-      - mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace --config /config/takt.yaml "$@"
+      - mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace "$@"
       - takt
-    args: [--story, story:add-sub]
+    args: [--config, /config/takt.yaml]
   secretRef: {name: takt-demo-env}
   secretFiles: {name: takt-demo-files, mountPath: /var/run/secrets/takt}
   env:
@@ -22,19 +22,23 @@ spec:
   configFiles:
     - name: takt.yaml
       content: |
+        story: story:add-sub
         hours: 1
         harness: harness
-        endpoint_file: endpoint.toml
+        model: agent
+        llm: {path: llm.yaml}
         forge: none
         test_cmd: cargo test --quiet --locked
-    - name: endpoint.toml
+    - name: llm.yaml
       content: |
-        base_url = "https://llm.example.com/v1"
-        wire = "openai-responses"
-        model = "example-model"
-
-        [credential]
-        env = "LLM_API_KEY"
+        format: llm.routes/1
+        endpoints:
+          llm:
+            base_url: https://llm.example.com/v1
+            protocol: responses
+            auth: {kind: bearer, secret: env:LLM_API_KEY}
+        routes:
+          agent: llm/example-model
   agent:
     format: loom.agent/1
     agent:

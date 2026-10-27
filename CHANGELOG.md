@@ -8,34 +8,22 @@ takt's releases.
 
 ### Added
 
-- `examples/loom-agent/`: placeholder manifests that run takt as a Loom 0.44.0 `LoomAgent` on a kind cluster, read by a test through takt's own configuration reader.
-- Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
-- Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
-- A failed `gate.run` shows the next judgement step what each failed gate printed, at most 4 KiB per gate and 8 KiB in total.
-- That output has terminal escape codes stripped and credentials withheld, and passes the secret scan when a policy is set.
-- `takt run --config` takes `story`, `endpoint_token_env` and `state_dir`; `--state-dir` puts transcripts under `<state_dir>/transcripts`.
-- `takt scenario run` takes `--config`.
-- `scan` in the `takt run --config` file, the run's scan adapter: `gates`, the default, scans proposals with `b10x-gates` under `B10X_GATES_POLICY`; `none` scans nothing.
-- `scan = "none"` is accepted only in that file, never as a flag; the run says so before its first step, and the case's `opened` event records the adapter as `scan`.
+- `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
+- A run lists each gate of the repository's gates document with its status in the prompt, the last line of the run and `takt report` (`--format json`); the gate runner is told base, subject and story.
+- `forge: connectors` with `forge_instance` goes through `connectors operations invoke`; its preflight exits 1 naming a missing operation, and it is never a default.
+- The Workspace seam and a minimal `case.dispatch`: a dispatched child gets a leased managed worktree through the `worktree` CLI, its records stay at the root, and leaving archives or finishes it.
 - `--confinement-needs <NAME>`: a Substrate family or fact the test command needs; an adapter that lacks it is not chosen, and with none left the run is refused before it starts.
 - `--confinement-cgroup-root <DIR>`: a delegated cgroup v2 root in which Substrate's `linux` adapter bounds each run without `systemd`.
 - The `opened` event records the Substrate adapter as `substrate`: its name, the one it wraps, its families, its proved facts and any declared-insecure reason.
 
 ### Changed
 
-- **Breaking:** `--harness codex` or `--harness harness` with neither `B10X_GATES_POLICY` nor `scan: none` is refused before the case opens, exit 1, naming the scan adapter; a resumed case too.
-- `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
-- `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
-- `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
-- `b10x-loom-sdk` moves from loom 0.43.0 to 0.45.0 with metaharness 0.20.0: a Codex step on a codex off metaharness's pin proposes its change, H9 advisory (story:codex-off-pin-proposes).
-- A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
-- `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
-- `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
-- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
-- The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
-- A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
-- `--harness none` takes a granted action, changing no file, not `stopped: error:` (exit 5); with `--forge none` the run then stops `NoProgress` (exit 3) (story:harness-none-takes-a-granted-action).
-- **Breaking:** takt confines through Substrate's confinement contract, `b10x-substrate-host` 0.12.0, on Linux and macOS (story:confinement-through-substrate-on-linux-and-macos).
+- Engineering protocols 0.11.0: `takt protocols` lists `story.delivery/2`, which declares the case inputs `tests_first` and `gate_on`; `story.delivery/1` is unchanged.
+- **Breaking:** takt ships one defaults document: a store story opens on `story.delivery/2` with `tests_first: required` and `gate_on: after_handover`; an `--intent` keeps `software.change/1`.
+- The `protocol-defaults` reference page is generated from that document and a test fails on drift; a case input nobody sets still refuses the case at open, naming it and its values.
+- **Breaking:** takt confines through Substrate's confinement contract, `b10x-substrate-host` 0.14.0, on Linux and macOS (story:confinement-through-substrate-on-linux-and-macos).
+- Under `linux` and `systemd` around it a test command writes only its tree's `target`; a host without `exec.workspace-scoped-write` refuses `--confinement substrate` by that name.
+- A test command's run keeps the last bytes of each output stream within Substrate's 1 MiB bound, so a run that printed more is still summarised from its `test result:` lines.
 - `--confinement substrate` runs the test command through the first of Substrate's `systemd` around `linux`, `linux` and `macos` adapters that serves it, or refuses it by name.
 - The first line names the Substrate adapter and the facts it proved (`; proved: <facts>`); the `opened` event records both.
 - Where the adapter serves `limits`, a test command is held to 2048 processes, 8 GiB of memory and an hour of CPU time, as under loom-sdk 0.45.0.
@@ -52,6 +40,96 @@ takt's releases.
 
 ### Fixed
 
+- The command forge reads the merge target's tip through git (`ls-remote`, then a fetch into no ref), so `repository.merge` reaches the run file's `merge` entry instead of stopping unknown.
+- Without `id_pattern`, the command forge takes a request number only from a `merge_requests`, `pull` or `pulls` path segment; a URL naming no request gives none and `pr.open` refuses.
+- The command forge reads a request number back through `read` before `pr.open` records it; a request `read` does not confirm as open for the case's branch is refused.
+
+### Security
+
+- A `--confinement none` test command can read what its user can, the home, runtime sockets and `$CARGO_HOME/credentials.toml` included; use `substrate` for untrusted code.
+- On macOS a `--confinement none` test command no longer runs under takt's Seatbelt profile: its writes, the programs it starts, launchd and the keychain are no longer limited.
+
+## [0.15.1] - 2026-10-27
+
+0.15.0 with its macOS test jobs passing, and the first release of that code with binaries: the 0.15.0
+tag has no release, because its macOS jobs failed and nothing was published.
+
+### Changed
+
+- **Breaking:** Carried from 0.15.0, which has no release: a harness binary metaharness does not qualify stops the run `HarnessUnqualified`, exit 1.
+- **Breaking:** Carried from 0.15.0: `--harness codex` or `--harness harness` with neither `B10X_GATES_POLICY` nor `scan: none` is refused, exit 1.
+- Everything else 0.15.0 lists below ships for the first time in 0.15.1.
+- Known limit: an `llm` route whose key is `{file: ...}` is refused on macOS; llm 0.16.0 reads file credentials on Linux only. Its two tests run on Linux.
+- Known limit: the fresh-home step guard is unproven on macOS; its five cases run on Linux until story:the-fresh-home-cases-hold-on-macos.
+
+### Fixed
+
+- The darwin test job also runs on `integration/**` pushes, so a macOS failure is seen before a tag.
+
+## [0.15.0] - 2026-10-27
+
+A run names the Claude Code binary it starts and stops before the first session when metaharness
+does not qualify it, so a trial on a GitHub repository can end with its pull request merged.
+
+### Added
+
+- `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
+- `takt run` asks metaharness whether the harness binary qualifies before its first session, on open and on every resume: an unqualified binary stops `HarnessUnqualified`, exit 1, the case resumable.
+- `forge: command` with a `forge_commands` section in the `takt run --config` file: the forge actions `open`, `read`, `checks` and `merge` are the argument lists the file names, run without a shell.
+- Placeholders of `forge_commands`: `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
+- `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree): the `gitlab` forge calls the GitLab REST API over HTTPS. `glab` stays the default transport.
+- The `api` token is held in memory only, replaced where an answer of the host is quoted, and given to the push through a credential helper that reads it from that one command's environment.
+- The run file takes `protocol`, the protocol a store story opens on, and `protocols`, the values of that protocol's declared inputs. A value the protocol does not list is refused at its line.
+- Each protocol input takes the first of `--input`, the story's tag `input:<name>=<value>`, the run file and takt's built-in default; the tag `protocol:<name>/<major>` chooses a story's protocol.
+- `case.yaml` records each protocol input value with its source.
+- `takt protocol show <name/rev>` prints each case input a built-in protocol declares: values, description, built-in default and the run file's value with its path and line.
+- `takt protocol show --format json` prints the same as data; an unknown protocol exits 1 and names the known ones.
+- `examples/loom-agent/`: placeholder manifests that run takt as a Loom 0.44.0 `LoomAgent` on a kind cluster, read by a test through takt's own configuration reader.
+- Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
+- Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
+- A failed `gate.run` shows the next judgement step what each failed gate printed, at most 4 KiB per gate and 8 KiB in total.
+- That output has terminal escape codes stripped and credentials withheld, and passes the secret scan when a policy is set.
+- `takt run --config` takes `story`, `endpoint_token_env` and `state_dir`; `--state-dir` puts transcripts under `<state_dir>/transcripts`.
+- `takt scenario run` takes `--config`.
+- `scan` in the `takt run --config` file, the run's scan adapter: `gates`, the default, scans proposals with `b10x-gates` under `B10X_GATES_POLICY`; `none` scans nothing.
+- `scan = "none"` is accepted only in that file, never as a flag; the run says so before its first step, and the case's `opened` event records the adapter as `scan`.
+
+### Changed
+
+- Every harness kind is given the repository's `AGENTS.md` and `CLAUDE.md` before the prompt, each only when the case's base commit tracks it.
+- They are read as the base commit holds them, never from the step's copy; Claude Code and b10x-harness steps were given none, and a Codex step read the tree.
+- The step's opening record lists them in `instructions` with path, sha256 and revision; they count against the scope files' bound of 8 files and 64 KiB.
+- A tracked instruction file that cannot be given (past the bound, not text, of a credential's shape) stops the run with `StepRefused`, naming it, before the step starts.
+- **Breaking:** `--harness codex` or `--harness harness` with neither `B10X_GATES_POLICY` nor `scan: none` is refused before the case opens, exit 1, naming the scan adapter; a resumed case too.
+- `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
+- `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
+- `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
+- A step commit is a semantic message by default: a `<type>: <subject>` of at most 72 characters and a 3-4 line body from the harness, `Refs: <story id>` written by takt, never from the reply.
+- `--commit-style semantic|repository|action`, `--commit-trailer`, `--commit-types` and a `commit` run-file section; a commit rule in the repository's instruction files wins over the style.
+- A reply with a missing or ill-shaped `commit` falls back to `<type>: <story title>` and a `commit.fallback` event; `opened` records the style in effect as `commit`.
+- `b10x-loom-sdk` moves from loom 0.43.0 to 0.45.0 with metaharness 0.20.0: a Codex step on a codex off metaharness's pin proposes its change, H9 advisory (story:codex-off-pin-proposes).
+- `b10x-loom-sdk` moves to loom 0.46.0 with metaharness 0.22.0, whose `qualify` the harness preflight calls.
+- **Breaking:** a harness binary metaharness does not qualify stops the run `HarnessUnqualified` before the first session, exit 1; `--harness-program` names a qualified one.
+- A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
+- `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
+- `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
+- New cases open under `.takt/cases`, with a `.takt/.gitignore` of `*` when absent; a case already under `.engineering/cases` resumes where it is, and every guard covers both roots.
+- A new `.takt/` also gets `.takt/.worktreekeep` (`cases/`), so `worktree` 0.19.0 cleanup keeps every case and its archive holds them; an existing file is left alone.
+- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
+- The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
+- A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
+- The state directory holds discarded steps' set-aside files too; a `loom.agent/1` document's `runtime.state_dir` is the default when neither `--state-dir` nor `takt.state_dir` names one.
+- `--harness none` takes a granted action, changing no file, not `stopped: error:` (exit 5); with `--forge none` the run then stops `NoProgress` (exit 3) (story:harness-none-takes-a-granted-action).
+
+### Fixed
+
+- A commit body or summary line git reads as a trailer, `Key : value` included, is refused: a reply cannot add `Signed-off-by`; a fallback summary of that shape follows `reported - `.
+- A base branch `takt/<a>/<b>` is refused naming the reserved prefix and a rename, with the old "names no case" in front.
+- A Claude step whose intent names `AGENTS.md` or `CLAUDE.md` is given its bytes at the base once, with no `@` mention of the step's copy.
+- `opened` records `protocol_source` and `input_sources`, and the run's first line says each input's source after its value.
+- A resumed case and an intent run refuse a run file whose `protocols` or `protocol` names what takt does not know, at its line.
+- `takt protocol show` lists a run-file value that `takt run` refuses as `refused`, with the reason, never as set.
+- A base branch under takt's reserved prefix `takt/` that is no case's is refused before a case opens, exit 1, naming the prefix and a rename; it was refused as a case's branch with no base recorded.
 - A gate's command finds a bare program name on `/usr/local/bin:/usr/bin:/bin`, or on the `PATH` its `env` declares, never on the user's `PATH`; a name found nowhere refuses the gate.
 - A gate whose script holds the shell's `:` builtin is run and judged on its own exit; a path a gate names that starts with `:` is looked up literally.
 - The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.
@@ -61,12 +139,14 @@ takt's releases.
 - Each such try is charged the tokens its session reported; the run ends exit 5 after the third, or exit 3 if a try spent the budget.
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
 - The site says what runs under Seatbelt on macOS since 0.10.0, which scan and forge adapters a run can have, and that `bot` is beyond10x's github.com route.
+- The GitLab push and fetch run no hook the repository names (`core.hooksPath`, `--no-verify`) and follow no redirect; under `api` the credential helper answers only for the host named.
+- A variable named by `credential: {env: NAME}` is removed from every child takt starts, whatever its name; a `{file: PATH}` credential is read through one open that follows no symlink.
+- `{body_file}` of `forge: command` is a file in the case's own artifacts, so a run opening meanwhile cannot change what a case publishes; without `--state-dir` each run keeps its stderr files apart.
+- `forge_commands` refuses a placeholder its entry does not take and a placeholder as the program, before the case opens; `--forge` with an unknown name lists `command` among the forges.
 
 ### Security
 
 - A proposal is refused when a path it names holds text of the shape of a credential, as its content and summary already were, before any refusal that would name the path.
-- A `--confinement none` test command can read what its user can, the home, runtime sockets and `$CARGO_HOME/credentials.toml` included; use `substrate` for untrusted code.
-- On macOS a `--confinement none` test command no longer runs under takt's Seatbelt profile: its writes, the programs it starts, launchd and the keychain are no longer limited.
 
 ## [0.14.0] - 2026-10-26
 
@@ -603,7 +683,9 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.14.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.15.1...HEAD
+[0.15.1]: https://github.com/beyond10x/takt/compare/0.15.0...0.15.1
+[0.15.0]: https://github.com/beyond10x/takt/compare/0.14.0...0.15.0
 [0.14.0]: https://github.com/beyond10x/takt/compare/0.13.1...0.14.0
 [0.13.1]: https://github.com/beyond10x/takt/compare/0.13.0...0.13.1
 [0.13.0]: https://github.com/beyond10x/takt/compare/0.12.0...0.13.0

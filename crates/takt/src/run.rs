@@ -36,7 +36,8 @@ use loom_sdk::commission::ports::executor::AgentExecutor;
 use loom_sdk::{CanonGovernor, EffectPort, LoopContext, run_until_blocked};
 
 use crate::case::{
-    CASES_DIR, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT, Records,
+    CASE_ROOTS, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT, Records,
+    is_under_cases,
 };
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::evidence::{CaseEvidence, uuid_from};
@@ -167,6 +168,28 @@ pub enum Stop {
         /// The results in a row.
         count: u64,
     },
+    /// The harness binary the run would start does not qualify under the run's hermetic mode:
+    /// asked of metaharness before the first session, on open and on every resume, with no model
+    /// call ([`Harness::preflight`]). The case stays open, and the next run asks again.
+    HarnessUnqualified {
+        /// The harness as `--harness` names it.
+        kind: String,
+        /// The version its `--version` printed, when it printed one that reads as one.
+        version: Option<String>,
+        /// Each row that stops the run, as `<row> <verdict>: <what was read>`.
+        rows: Vec<String>,
+        /// The versions that qualify: the ones the adapter is pinned to.
+        qualified: Vec<String>,
+    },
+    /// A command of the run file's `setup` list did not end 0 when the case opened: before the
+    /// red-base check, before any model call, the case stays open. `exit` is the code it ended
+    /// with; none when a signal ended it, it could not be started or its time ran out.
+    SetupFailed {
+        /// The command's name in the `setup` list.
+        name: String,
+        /// The code it ended with.
+        exit: Option<i32>,
+    },
 }
 
 /// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
@@ -176,7 +199,7 @@ pub const REPEATED_FAILURES: u64 = 2;
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 13] = [
+pub const STOP_KINDS: [&str; 15] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -190,6 +213,8 @@ pub const STOP_KINDS: [&str; 13] = [
     "ActiveTime",
     "RedBase",
     "RepeatedTestFailure",
+    "HarnessUnqualified",
+    "SetupFailed",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -273,6 +298,25 @@ impl std::fmt::Display for Stop {
                 "RepeatedTestFailure ({count} tests.run results in a row, each at a new revision, failed the same tests: {})",
                 tests.join(", ")
             ),
+            Stop::HarnessUnqualified {
+                kind,
+                version,
+                rows,
+                qualified,
+            } => write!(
+                f,
+                "HarnessUnqualified ({kind} {}: {}; qualified versions: {}; select another binary with --harness-program)",
+                version.as_deref().unwrap_or("with no readable version"),
+                rows.join("; "),
+                qualified.join(", ")
+            ),
+            Stop::SetupFailed { name, exit } => match exit {
+                Some(exit) => write!(f, "SetupFailed ({name} exited {exit})"),
+                None => write!(
+                    f,
+                    "SetupFailed ({name} did not end: a signal, no start or its time ran out)"
+                ),
+            },
         }
     }
 }
@@ -313,14 +357,6 @@ pub const ACCEPTED: &str = "accepted";
 /// The producer of a record takt writes from a judgement step that records a choice: the
 /// record attests the harness's choice, not an observation's outcome.
 pub const CHOICE_PRODUCER: &str = "takt.choice";
-
-/// `text` on one line: every run of white space, line breaks among them, as one space. A
-/// judgement step's commit message is `<action>: <summary>`, the summary the harness reported;
-/// a line of its own there could read as one of takt's (`takt: take`, `takt: approve`) to what
-/// reads commit messages.
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
 
 /// The first eight characters of a revision, as the loop prints one.
 fn short(revision: &str) -> &str {
@@ -556,7 +592,7 @@ struct Proposed {
 /// ([`Kept`] borrows it).
 struct StepKept {
     checkpoint: crate::git::Checkpoint,
-    cases: PathBuf,
+    tree: PathBuf,
     cases_kept: BTreeMap<PathBuf, Entry>,
     surface: JudgeSurface,
     surface_kept: BTreeMap<PathBuf, Entry>,
@@ -568,7 +604,7 @@ impl StepKept {
     fn kept(&self) -> Kept<'_> {
         Kept {
             checkpoint: &self.checkpoint,
-            cases: &self.cases,
+            tree: &self.tree,
             cases_kept: &self.cases_kept,
             surface: &self.surface,
             surface_kept: &self.surface_kept,
@@ -1784,6 +1820,32 @@ fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
     snapshot_without(dir, None)
 }
 
+/// Whether `path`, relative to the tree and as git names it, is the directory that holds the cases
+/// root (`.takt`) or the ignore file that keeps it out of version control (`.takt/.gitignore`).
+/// An observation may not change either, whatever the judge surface: git ignores what they keep,
+/// so the surface does not show a change to them.
+fn takt_guard(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    path == crate::case::TAKT_DIR
+        || path
+            .strip_prefix(crate::case::TAKT_DIR)
+            .and_then(|rest| rest.strip_prefix('/'))
+            == Some(crate::case::TAKT_GITIGNORE)
+}
+
+/// [`snapshot`] of both cases roots under `tree` ([`CASE_ROOTS`]), each entry keyed by its path
+/// relative to `tree`: one map holds a case under either root, and [`restore`] puts it back from
+/// `tree`. A root that is absent contributes nothing.
+fn snapshot_cases(tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+    let mut entries = BTreeMap::new();
+    for root in CASE_ROOTS {
+        for (path, entry) in snapshot(&tree.join(root))? {
+            entries.insert(Path::new(root).join(path), entry);
+        }
+    }
+    Ok(entries)
+}
+
 /// [`snapshot`] of `dir` without what lies under `without`, a path relative to it.
 fn snapshot_without(dir: &Path, without: Option<&Path>) -> Result<BTreeMap<PathBuf, Entry>> {
     fn walk(
@@ -1900,16 +1962,26 @@ fn restore(
     changed: &[PathBuf],
 ) -> Result<()> {
     no_link_on_the_way(root, dir)?;
-    let all: Vec<PathBuf>;
-    let changed = match std::fs::symlink_metadata(dir) {
-        Ok(meta) if !meta.is_dir() => {
-            std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
-            all = before.keys().cloned().collect();
-            &all
+    let mut changed = changed.to_vec();
+    if std::fs::symlink_metadata(dir).is_ok_and(|meta| !meta.is_dir()) {
+        std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
+        changed = before.keys().cloned().collect();
+    }
+    // A cases root that is no longer a directory (a file, a link, another kind) is removed, and
+    // every path of `before` under it put back, whichever root the step replaced.
+    for case_root in CASE_ROOTS {
+        let at = dir.join(case_root);
+        if std::fs::symlink_metadata(&at).is_ok_and(|meta| !meta.is_dir()) {
+            no_link_on_the_way(root, &at)?;
+            std::fs::remove_file(&at).with_context(|| format!("remove {}", at.display()))?;
+            for path in before.keys().filter(|path| path.starts_with(case_root)) {
+                if !changed.contains(path) {
+                    changed.push(path.clone());
+                }
+            }
         }
-        _ => changed,
-    };
-    for path in changed {
+    }
+    for path in &changed {
         let full = dir.join(path);
         no_link_on_the_way(root, &full)?;
         if let Ok(meta) = std::fs::symlink_metadata(&full) {
@@ -7844,11 +7916,11 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
 }
 
 /// What a judgement step or an observation is checked against and put back to when it is
-/// discarded: the checkpoint, the cases directory, the judge surface and what lies outside the
-/// tree, each as it was just before.
+/// discarded: the checkpoint, the cases roots (`cases_kept`, keyed relative to `tree`), the judge
+/// surface and what lies outside the tree, each as it was just before.
 struct Kept<'k> {
     checkpoint: &'k crate::git::Checkpoint,
-    cases: &'k Path,
+    tree: &'k Path,
     cases_kept: &'k BTreeMap<PathBuf, Entry>,
     surface: &'k JudgeSurface,
     surface_kept: &'k BTreeMap<PathBuf, Entry>,
@@ -7881,12 +7953,12 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
         .restore(tree)
         .context("discard the step's change");
     let surface = kept.surface.put_back(tree, kept.surface_kept);
-    let cases = snapshot(kept.cases).and_then(|now| {
+    let cases = snapshot_cases(kept.tree).and_then(|now| {
         let again = differing(kept.cases_kept, &now);
         if again.is_empty() {
             Ok(())
         } else {
-            restore(tree, kept.cases, kept.cases_kept, &again)
+            restore(tree, kept.tree, kept.cases_kept, &again)
         }
     });
     let outside = kept.outside.put_back(tree, kept.outside_dirs);
@@ -7907,7 +7979,7 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
         // The way to the cases directory and to every case is read again first, as a run reads
         // it before it writes there ([`crate::case::CaseDir::check_way`]): past a link or a part that
         // is not a directory, nothing is moved out of the tree, and each file is named with why.
-        let aside = match cases_way(tree, kept.cases, kept.cases_kept) {
+        let aside = match cases_way(tree, kept.cases_kept) {
             Ok(()) => kept.checkpoint.set_aside(tree, &due),
             Err(way) => crate::git::SetAside::not_moved(
                 &due,
@@ -7952,37 +8024,40 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
     }
 }
 
-/// That every part of the way from `tree` down to the cases directory `cases`, and down to each
+/// That every part of the way from `tree` down to each cases root that is there, and down to each
 /// directory a file of `kept` lies in, is a real directory, none a link, each read with
-/// `symlink_metadata` and never followed; the error names the first that is not.
-fn cases_way(tree: &Path, cases: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
-    let mut dirs = BTreeSet::from([cases.to_path_buf()]);
+/// `symlink_metadata` and never followed; the error names the first that is not. The keys of
+/// `kept` are relative to `tree` ([`snapshot_cases`]).
+fn cases_way(tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+    let mut dirs: BTreeSet<PathBuf> = CASE_ROOTS
+        .iter()
+        .filter(|root| std::fs::symlink_metadata(tree.join(root)).is_ok())
+        .map(PathBuf::from)
+        .collect();
     for path in kept.keys() {
         let mut at = path.parent();
         while let Some(dir) = at.filter(|dir| !dir.as_os_str().is_empty()) {
-            dirs.insert(cases.join(dir));
+            dirs.insert(dir.to_path_buf());
             at = dir.parent();
         }
     }
     for dir in &dirs {
-        no_link_on_the_way(tree, dir)?;
+        let full = tree.join(dir);
+        no_link_on_the_way(tree, &full)?;
         let meta =
-            std::fs::symlink_metadata(dir).with_context(|| format!("read {}", dir.display()))?;
+            std::fs::symlink_metadata(&full).with_context(|| format!("read {}", full.display()))?;
         if !meta.is_dir() {
-            bail!(
-                "{} is not a directory",
-                dir.strip_prefix(tree).unwrap_or(dir).display()
-            );
+            bail!("{} is not a directory", dir.display());
         }
     }
     Ok(())
 }
 
-/// The paths of the cases directory `cases` a step or an observation changed, as a refusal names
-/// them, under [`CASES_DIR`]: the directory itself first when something else stands in its
-/// place (a link, with where it leads), then each of `paths`, one that is a link now with where
-/// it leads. Read before the directory is put back.
-fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
+/// The paths under the cases roots of `tree` that a step or an observation changed, as a refusal
+/// names them: each root that is not a directory first (a link, with where it leads, or a file),
+/// then each of `paths`, relative to `tree`, one that is a link now with where it leads. Read
+/// before the roots are put back.
+fn cases_named<'p>(tree: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
     let link = |at: &Path| {
         std::fs::symlink_metadata(at)
             .ok()
@@ -7993,19 +8068,23 @@ fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -
             })
     };
     let mut named = Vec::new();
-    let replaced = match std::fs::symlink_metadata(cases) {
-        Ok(meta) if !meta.is_dir() => {
+    let mut replaced: Vec<&str> = Vec::new();
+    for root in CASE_ROOTS {
+        let at = tree.join(root);
+        if let Ok(meta) = std::fs::symlink_metadata(&at)
+            && !meta.is_dir()
+        {
             named.push(format!(
-                "{CASES_DIR}{}",
-                link(cases).unwrap_or_else(|| ", replaced by a file".to_owned())
+                "{root}{}",
+                link(&at).unwrap_or_else(|| ", replaced by a file".to_owned())
             ));
-            true
+            replaced.push(root);
         }
-        _ => false,
-    };
+    }
     named.extend(paths.into_iter().map(|path| {
-        let shown = Path::new(CASES_DIR).join(path).display().to_string();
-        match (!replaced).then(|| link(&cases.join(path))).flatten() {
+        let shown = path.display().to_string();
+        let under_replaced = replaced.iter().any(|root| path.starts_with(root));
+        match (!under_replaced).then(|| link(&tree.join(path))).flatten() {
             Some(link) => format!("{shown}{link}"),
             None => shown,
         }
@@ -8049,6 +8128,18 @@ fn opening_set_aside(tree: &Path) -> Result<Option<PathBuf>> {
     default_set_aside()
         .map(|dir| crate::git::set_aside_root(&dir, tree).context("the run does not start"))
         .transpose()
+}
+
+/// The set-aside root a run on `tree` opens with: the directory `given` names, checked as
+/// [`opening_set_aside`] checks the default, when the caller gives one; the default otherwise.
+/// A run given a directory reads neither `XDG_STATE_HOME` nor `HOME`.
+fn opening_set_aside_given(tree: &Path, given: Option<&Path>) -> Result<Option<PathBuf>> {
+    match given {
+        Some(dir) => crate::git::set_aside_root(dir, tree)
+            .context("the run does not start")
+            .map(Some),
+        None => opening_set_aside(tree),
+    }
 }
 
 /// Where discarding a harness step moves the files inside an ignored directory it rewrote,
@@ -8159,40 +8250,31 @@ fn taken_on_case_branches(tree: &Path) -> Result<Vec<String>> {
 
 /// Every case under `tree` that records a story, as `(case id, story id)` in case order.
 fn cases_with_story(tree: &Path) -> Result<Vec<(String, String)>> {
-    let cases = tree.join(CASES_DIR);
-    if !cases.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&cases)
-        .with_context(|| format!("read {}", cases.display()))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    dirs.sort();
     let mut found = Vec::new();
-    for dir in dirs {
+    for (id, dir) in crate::case::case_dirs(tree)? {
         if !dir.join("case.yaml").is_file() {
             continue;
         }
         if let Some(story) = crate::case::story_of(&dir)? {
-            let id = dir
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
             found.push((id, story));
         }
     }
     Ok(found)
 }
 
-/// Whether the tree is on a case's branch, `takt/<id>`: where [`to_base`] moves it, or refuses.
+/// Whether the tree is on a case's branch, `takt/<id>` of an existing case: where [`to_base`]
+/// moves it, or refuses. A branch under the prefix that is no case's is refused by name.
 fn on_a_case_branch(tree: &Path) -> Result<bool> {
-    Ok(crate::git::current_branch(tree)?
-        .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX)))
+    let Some(branch) = crate::git::current_branch(tree)? else {
+        return Ok(false);
+    };
+    Ok(crate::case::case_of_branch(tree, &branch)?.is_some())
 }
 
 /// Puts the tree on the base of the case whose branch it is on, so that the store is read as
 /// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
-/// on any other branch, or detached, stays where it is. Refused when the branch names no case
+/// on any other branch, or detached, stays where it is. Refused when the branch is under takt's
+/// reserved prefix and is no case's ([`crate::case::case_of_branch`]), when it names no case
 /// ([`crate::case::check_id`], checked before the name is joined to a path), when the case's
 /// base is not known, or when the tree has uncommitted work, which the checkout would carry
 /// along.
@@ -8200,13 +8282,10 @@ fn to_base(tree: &Path) -> Result<()> {
     let Some(branch) = crate::git::current_branch(tree)? else {
         return Ok(());
     };
-    let Some(case) = branch.strip_prefix(crate::case::BRANCH_PREFIX) else {
+    let Some(case) = crate::case::case_of_branch(tree, &branch)? else {
         return Ok(());
     };
-    // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
-    crate::case::check_id(case)
-        .with_context(|| format!("the branch {} names no case", crate::case::shown(&branch)))?;
-    let Some(base) = crate::case::Branch::read(&tree.join(CASES_DIR).join(case))
+    let Some(base) = crate::case::Branch::read(&CaseDir::locate(tree, case))
         .ok()
         .and_then(|recorded| recorded.base)
     else {
@@ -8763,6 +8842,13 @@ pub fn change_so_far(
     })
 }
 
+/// The managed worktree a dispatched run works in, with the Workspace seam that made it: the
+/// run leaves it when it ends ([`Run::run`]).
+struct Attached {
+    workspace: crate::workspace::Workspace,
+    tree: crate::workspace::Tree,
+}
+
 /// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
 /// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
 /// every run in its `finish`, so the library's default is not the product's behaviour.
@@ -8830,6 +8916,11 @@ pub struct Run<'a> {
     stops_unperformable: bool,
     /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
     stops_red_base: bool,
+    /// The run file's `setup` commands, run when the case opens ([`Run::declare_setup`]).
+    setup: Vec<crate::run_config::SetupCommand>,
+    /// The managed tree of a dispatched child and the seam that leaves it when the run ends
+    /// ([`Run::dispatch`]); none for a run no dispatcher opened.
+    workspace: Option<Attached>,
     /// The records profile the case keeps its decisions under ([`Records`]): the profile the
     /// case was opened under on a resume ([`CaseDir::opened_profile`]), `trial` on a new run,
     /// until [`Run::keep_records`]; what the case keeps is [`Records::for_case`] of it. The CLI
@@ -8854,6 +8945,10 @@ pub struct Run<'a> {
     /// What the change so far and each proposal pass: the scan adapter's
     /// ([`Scan::change_scan`]), unless [`Run::scan_change_with`] gives another.
     change_scan: Option<ChangeScan>,
+    /// What the run is configured to write as a step commit's message ([`Run::commit_settings`]).
+    commit_settings: crate::commit_style::Settings,
+    /// The commit style in effect, decided when the run starts ([`Run::commit_plan_now`]).
+    commit_plan: Option<crate::commit_style::Plan>,
 }
 
 impl<'a> Run<'a> {
@@ -8889,9 +8984,122 @@ impl<'a> Run<'a> {
     /// anything is written.
     pub fn open_unit_as(
         tree: &Path,
+        options: RunOptions,
+        unit: Unit,
+        commit_as: &CommitAs,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        Self::open_unit_in(tree, options, unit, commit_as, None, harness, validators)
+    }
+
+    /// [`Run::open_unit_as`], the discarded steps' set-aside directory given as `set_aside`
+    /// (checked as [`Run::set_aside_in`] checks one) in place of the default
+    /// ([`opening_set_aside`]), which is then not read. None is the default.
+    pub fn open_unit_in(
+        tree: &Path,
+        options: RunOptions,
+        unit: Unit,
+        commit_as: &CommitAs,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        Self::open_unit_placed(
+            None, tree, options, unit, commit_as, set_aside, harness, validators,
+        )
+    }
+
+    /// `case.dispatch`, the minimal form: opens the child case `options.case_id` on the intent in
+    /// `options` for the case `parent`, in a managed worktree of its own that `workspace` makes
+    /// and leases, and prepares the run. The child works in that tree and writes its records to
+    /// the cases directory of `root`, the checkout that dispatches it, never into the tree:
+    /// its `case.yaml` records `parent` and `worktree`. A case already under `root` is resumed
+    /// in the tree its `case.yaml` names, which the seam enters again without making a second;
+    /// the options give it no protocol or input then, as for [`Run::resume`]. When the run
+    /// ends, [`Run::run`] leaves the tree: archived and released after a stop that is not
+    /// terminal, released and finished after [`Stop::Completed`]; dispatch the case again to
+    /// resume it. The child's commits are takt's own; the declared setup runs in its tree
+    /// ([`Run::declare_setup`]).
+    pub fn dispatch(
+        root: &Path,
+        workspace: &crate::workspace::Workspace,
+        parent: &str,
+        options: RunOptions,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        let id = options
+            .case_id
+            .clone()
+            .ok_or_else(|| anyhow!("a dispatched case needs a case id"))?;
+        crate::case::check_id(&id)?;
+        let existing = CaseDir::locate(root, &id);
+        let recorded = if existing.join("case.yaml").is_file() {
+            Some(crate::case::worktree_of(&existing)?.ok_or_else(|| {
+                anyhow!(
+                    "the case {id} at {} was not dispatched: it records no worktree",
+                    existing.display()
+                )
+            })?)
+        } else {
+            None
+        };
+        let tree = workspace.enter(root, &id, recorded.as_deref())?;
+        let opened = match &recorded {
+            Some(_) => crate::case::link_tree(&tree.path, root)
+                .and_then(|()| Self::resume(&tree.path, options, &id, harness, validators)),
+            None => {
+                let unit = Unit::Intent(options.intent.clone());
+                Self::open_unit_placed(
+                    Some(crate::case::Dispatched { root, parent }),
+                    &tree.path,
+                    options,
+                    unit,
+                    &CommitAs::Takt,
+                    None,
+                    harness,
+                    validators,
+                )
+            }
+        };
+        match opened {
+            Ok(mut run) => {
+                run.workspace = Some(Attached {
+                    workspace: workspace.clone(),
+                    tree,
+                });
+                Ok(run)
+            }
+            Err(error) => {
+                // A case that was not opened leaves no tree in use: one this call made is
+                // finished, empty; one it resumed is archived and released, resumable still.
+                let how = if recorded.is_some() {
+                    crate::workspace::Leave::Stopped
+                } else {
+                    crate::workspace::Leave::Terminal
+                };
+                match workspace.leave(&tree, how) {
+                    Ok(()) => Err(error),
+                    Err(left) => Err(error.context(format!(
+                        "and the tree {} could not be left: {left:#}",
+                        tree.path.display()
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// [`Run::open_unit_in`] for a case a dispatcher opens when `placed` says so
+    /// ([`CaseDir::open_in`]).
+    #[allow(clippy::too_many_arguments)]
+    fn open_unit_placed(
+        placed: Option<crate::case::Dispatched<'_>>,
+        tree: &Path,
         mut options: RunOptions,
         unit: Unit,
         commit_as: &CommitAs,
+        set_aside: Option<&Path>,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
@@ -8913,12 +9121,13 @@ impl<'a> Run<'a> {
         // branch exists for it.
         Shape::of(&protocol, &options.inputs)?;
         // Nor does a run start that a harness step's rewrite could not be moved out of.
-        let set_aside = opening_set_aside(tree)?;
+        let set_aside = opening_set_aside_given(tree, set_aside)?;
         let id = options
             .case_id
             .clone()
             .unwrap_or_else(|| format!("takt-{}", crate::now().replace([':', '-'], "")));
-        let case = CaseDir::open_as(
+        let case = CaseDir::open_in(
+            placed,
             tree,
             protocol,
             &id,
@@ -8986,6 +9195,8 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            setup: Vec::new(),
+            workspace: None,
             records: Records::Trial,
             min_free: 0,
             build_dir: None,
@@ -8994,6 +9205,8 @@ impl<'a> Run<'a> {
             committer,
             scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
+            commit_settings: crate::commit_style::Settings::default(),
+            commit_plan: None,
         })
     }
 
@@ -9212,12 +9425,26 @@ impl<'a> Run<'a> {
     /// are not read: the case's own rule.
     pub fn resume(
         tree: &Path,
-        mut options: RunOptions,
+        options: RunOptions,
         id: &str,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
-        let set_aside = opening_set_aside(tree)?;
+        Self::resume_in(tree, options, id, None, harness, validators)
+    }
+
+    /// [`Run::resume`], the discarded steps' set-aside directory given as `set_aside` (checked as
+    /// [`Run::set_aside_in`] checks one) in place of the default ([`opening_set_aside`]), which
+    /// is then not read. None is the default.
+    pub fn resume_in(
+        tree: &Path,
+        mut options: RunOptions,
+        id: &str,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        let set_aside = opening_set_aside_given(tree, set_aside)?;
         let case = CaseDir::resume(tree, id)?;
         let intent = case.intent()?;
         let unit = match case.story()? {
@@ -9269,6 +9496,8 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            setup: Vec::new(),
+            workspace: None,
             records,
             min_free: 0,
             build_dir: None,
@@ -9277,6 +9506,8 @@ impl<'a> Run<'a> {
             committer,
             scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
+            commit_settings: crate::commit_style::Settings::default(),
+            commit_plan: None,
         })
     }
 
@@ -9291,11 +9522,37 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        Self::open_next_in(tree, options, frontier, None, harness, validators, out)
+    }
+
+    /// [`Run::open_next`], the discarded steps' set-aside directory given as `set_aside` (checked
+    /// as [`Run::set_aside_in`] checks one) in place of the default, for the case it resumes or
+    /// opens ([`Run::open_unit_in`]). None is the default.
+    pub fn open_next_in(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
         if let Some((case_id, story_id)) = Self::next_to_resume(tree, frontier, out)? {
-            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
-                .map(Some);
+            return Self::resumed(
+                tree, options, &case_id, &story_id, set_aside, harness, validators, out,
+            )
+            .map(Some);
         }
-        Self::take_next(tree, options, frontier, harness, validators, out)
+        Self::take_next_as_in(
+            tree,
+            options,
+            frontier,
+            &CommitAs::Takt,
+            set_aside,
+            harness,
+            validators,
+            out,
+        )
     }
 
     /// The open case [`Run::open_next`] resumes, as `(case id, story id)`, answered with nothing
@@ -9371,6 +9628,24 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        Self::take_next_as_in(
+            tree, options, frontier, commit_as, None, harness, validators, out,
+        )
+    }
+
+    /// [`Run::take_next_as`], each case opened with the discarded steps' set-aside directory
+    /// `set_aside` ([`Run::open_unit_in`]); None is the default.
+    #[allow(clippy::too_many_arguments)]
+    pub fn take_next_as_in(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        commit_as: &CommitAs,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
         to_base(tree)?;
         let cased = cases_with_story(tree)?;
         for id in frontier.candidates(tree)? {
@@ -9395,11 +9670,12 @@ impl<'a> Run<'a> {
                 }
                 options.case_id = Some(minted);
             }
-            let mut run = Self::open_unit_as(
+            let mut run = Self::open_unit_in(
                 tree,
                 options,
                 Unit::Story(story),
                 commit_as,
+                set_aside,
                 harness,
                 validators,
             )?;
@@ -9443,16 +9719,18 @@ impl<'a> Run<'a> {
     }
 
     /// Resumes the case `case_id` of the story `story_id` and says so on `out`.
+    #[allow(clippy::too_many_arguments)]
     fn resumed(
         tree: &Path,
         options: RunOptions,
         case_id: &str,
         story_id: &str,
+        set_aside: Option<&Path>,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Self> {
-        let run = Self::resume(tree, options, case_id, harness, validators)?;
+        let run = Self::resume_in(tree, options, case_id, set_aside, harness, validators)?;
         let title = match &run.unit {
             Unit::Story(story) => story.title.clone(),
             Unit::Intent(intent) => intent.clone(),
@@ -9602,6 +9880,197 @@ impl<'a> Run<'a> {
         self.stops_red_base = false;
     }
 
+    /// Runs `commands` when a case opens, each once and in order, before the red-base check and
+    /// before any model call ([`Run::run_setup`]): the run file's `setup`. A command is one
+    /// argument list started as a process, never read by a shell. Without this call a run has
+    /// no setup.
+    pub fn declare_setup(&mut self, commands: Vec<crate::run_config::SetupCommand>) {
+        self.setup = commands;
+    }
+
+    /// Whether the record already holds every declared setup command ended 0 at `base`, each
+    /// with the argument list now declared: the latest `setup` line of each name decides. A
+    /// resumed case on the base its setup ran at runs none again.
+    fn setup_is_current(&self, events: &Events, base: &str) -> bool {
+        let Ok(text) = std::fs::read_to_string(events.path()) else {
+            return false;
+        };
+        let mut latest: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        for line in text.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if value["event"] == "setup"
+                && let Some(name) = value["name"].as_str()
+            {
+                latest.insert(name.to_owned(), value);
+            }
+        }
+        self.setup.iter().all(|command| {
+            latest.get(&command.name).is_some_and(|line| {
+                line["exit"] == 0
+                    && line["base"] == base
+                    && line["argv"] == serde_json::json!(command.argv)
+            })
+        })
+    }
+
+    /// The declared setup commands, run in the tree before the loop's first evaluation: under
+    /// the test command's environment and confinement ([`crate::confinement`]), held to the
+    /// test command's limits, each argument one argument. Each is recorded as a `setup` line
+    /// with its duration and exit, its output kept under the state directory beside the
+    /// transcripts; the first that does not end 0 is [`Stop::SetupFailed`]. A resumed case whose
+    /// base is the one every command last ended 0 at runs none ([`Run::setup_is_current`]).
+    fn run_setup(
+        &mut self,
+        events: &Events,
+        run_number: u64,
+        out: &mut dyn Write,
+    ) -> Result<Option<Stop>> {
+        if self.setup.is_empty() {
+            return Ok(None);
+        }
+        let base = crate::case::Branch::read(&self.case.dir)
+            .ok()
+            .and_then(|branch| branch.base_commit);
+        if let Some(base) = &base
+            && self.setup_is_current(events, base)
+        {
+            writeln!(
+                out,
+                "setup: not run again, every command ended 0 at the base {}",
+                short(base)
+            )?;
+            return Ok(None);
+        }
+        let commands = self.setup.clone();
+        for command in &commands {
+            let started = Instant::now();
+            let finished = crate::confinement::current().run_test(&crate::confinement::TestRun {
+                argv: &command.argv,
+                tree: &self.tree,
+                limits: crate::validator::TestsRun::LIMITS,
+            });
+            let duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+            let (exit, bytes) = match &finished {
+                Ok(finished) => {
+                    let mut bytes = finished.stdout.clone();
+                    if !finished.stderr.is_empty() {
+                        bytes.extend_from_slice(b"\n--- standard error ---\n");
+                        bytes.extend_from_slice(&finished.stderr);
+                    }
+                    (finished.code, bytes)
+                }
+                Err(error) => (None, format!("{error:#}\n").into_bytes()),
+            };
+            let mut made = Vec::new();
+            let kept = self.transcripts.as_ref().map(|(root, key)| {
+                crate::harness::keep_setup_output(
+                    root,
+                    key,
+                    &self.case.id,
+                    run_number,
+                    &command.name,
+                    &bytes,
+                    &mut made,
+                )
+                .map(|path| (root.clone(), path))
+            });
+            let outside_dirs = self.outside_dirs.clone();
+            self.outside.took(&made, &self.tree, &outside_dirs);
+            let output = match kept {
+                Some(Ok((root, path))) => Some(
+                    path.strip_prefix(&root)
+                        .unwrap_or(&path)
+                        .display()
+                        .to_string(),
+                ),
+                Some(Err(error)) => {
+                    eprintln!("setup {}: its output was not kept: {error:#}", command.name);
+                    None
+                }
+                None => None,
+            };
+            events.emit(
+                self.steps,
+                &Event::Setup {
+                    name: command.name.clone(),
+                    argv: command.argv.clone(),
+                    base: base.clone(),
+                    exit,
+                    duration_ms,
+                    output: output.clone(),
+                },
+            )?;
+            writeln!(
+                out,
+                "setup {}: {} in {duration_ms} ms{}",
+                command.name,
+                match exit {
+                    Some(code) => format!("exited {code}"),
+                    None => "did not end".to_owned(),
+                },
+                output
+                    .as_deref()
+                    .map_or(String::new(), |path| format!("; output {path}"))
+            )?;
+            if exit != Some(0) {
+                if let Err(error) = &finished {
+                    writeln!(
+                        out,
+                        "setup {}: {}",
+                        command.name,
+                        crate::git::shown(std::ffi::OsStr::new(&format!("{error:#}")))
+                    )?;
+                }
+                return Ok(Some(Stop::SetupFailed {
+                    name: command.name.clone(),
+                    exit,
+                }));
+            }
+        }
+        // What setup wrote outside the tree is the operator's, declared: the run's baseline
+        // is taken after it, so no step is charged with it.
+        self.outside = Outside::read(&self.tree, &self.outside_dirs)?;
+        Ok(None)
+    }
+
+    /// Writes each step commit's message as `settings` say ([`crate::commit_style`]); without
+    /// this call, `semantic` with the trailer `Refs`. The repository's own commit rule, read at
+    /// the case's base, wins over the style given here.
+    pub fn commit_settings(&mut self, settings: crate::commit_style::Settings) {
+        self.commit_settings = settings;
+        self.commit_plan = None;
+    }
+
+    /// The commit style in effect for this run, decided on first use from the settings, the
+    /// instruction files at the case's base and the story's tags there, and kept.
+    fn commit_plan_now(&mut self) -> crate::commit_style::Plan {
+        if let Some(plan) = &self.commit_plan {
+            return plan.clone();
+        }
+        let base = crate::case::Branch::read(&self.case.dir)
+            .ok()
+            .and_then(|branch| branch.base_commit);
+        let rule = base.as_deref().and_then(|base| {
+            crate::commit_style::rule_in(&self.tree, base, &self.harness.instruction_paths())
+        });
+        let bug = self.case.story().ok().flatten().is_some_and(|story| {
+            crate::case::story_front_at(&self.tree, base.as_deref().unwrap_or("HEAD"), &story)
+                .ok()
+                .flatten()
+                .is_some_and(|front| {
+                    front["tags"].as_sequence().is_some_and(|tags| {
+                        tags.iter()
+                            .any(|tag| tag.as_str() == Some(crate::commit_style::BUG_TAG))
+                    })
+                })
+        });
+        let plan = crate::commit_style::Plan::new(&self.commit_settings, rule, bug);
+        self.commit_plan = Some(plan.clone());
+        plan
+    }
+
     /// Asks for the records profile the case keeps its decisions under: `default` keeps the
     /// latest decision alone, after each decision is written; `trial` keeps every one. A scenario
     /// case or an improvement case keeps every one whatever is asked ([`Records::for_case`]).
@@ -9742,6 +10211,7 @@ impl<'a> Run<'a> {
                     Ok(()) => {
                         let _ = events.emit(self.steps, &Event::Error { error });
                         let _ = self.case.release();
+                        let _ = self.leave_workspace(crate::workspace::Leave::Stopped);
                     }
                     Err(way) => self.unrecorded(&error, &way),
                 }
@@ -9773,9 +10243,23 @@ impl<'a> Run<'a> {
             }
         };
         let released = self.case.release();
+        let left = self.leave_workspace(match &outcome {
+            Ok(Stop::Completed(_)) => crate::workspace::Leave::Terminal,
+            _ => crate::workspace::Leave::Stopped,
+        });
         let stop = outcome?;
         released?;
+        left?;
         Ok(stop)
+    }
+
+    /// Leaves the managed worktree a dispatched run works in ([`Run::dispatch`]), once: a run
+    /// that works in no such tree has nothing to leave.
+    fn leave_workspace(&mut self, how: crate::workspace::Leave) -> Result<()> {
+        match self.workspace.take() {
+            Some(attached) => attached.workspace.leave(&attached.tree, how),
+            None => Ok(()),
+        }
     }
 
     /// Says on standard error what a run that ended on `error` did not record because the way to
@@ -9816,6 +10300,7 @@ impl<'a> Run<'a> {
                 Err(why) => writeln!(out, "candidate: none: {why:#}")?,
             }
         }
+        self.close_obligations(events, stop, out)?;
         events.emit(
             self.steps,
             &Event::Stop {
@@ -9825,6 +10310,34 @@ impl<'a> Run<'a> {
                 completed: Some(matches!(stop, Stop::Completed(_))),
             },
         )
+    }
+
+    /// The repository's obligations at the stop ([`crate::obligations`]): the table recorded as
+    /// the run's last, and a line naming the ones not met. Nothing for a run with no gates
+    /// document; a table that cannot be read is left out, and the stop stays the one reached.
+    fn close_obligations(&self, events: &Events, stop: &Stop, out: &mut dyn Write) -> Result<()> {
+        let Ok(record) = events.read() else {
+            return Ok(());
+        };
+        let Ok(obligations) = crate::obligations::of_run(self, &record) else {
+            return Ok(());
+        };
+        if obligations.is_empty() {
+            return Ok(());
+        }
+        if let Ok(revision) = crate::git::head(&self.tree) {
+            events.emit(
+                self.steps,
+                &Event::Obligations {
+                    revision,
+                    obligations: obligations.clone(),
+                },
+            )?;
+        }
+        if let Some(line) = crate::obligations::summary(&obligations, stop.hands_over()) {
+            writeln!(out, "obligations: {line}")?;
+        }
+        Ok(())
     }
 
     /// Records the case's story in `store`, before the step the grant authorises or once the
@@ -10076,7 +10589,12 @@ impl<'a> Run<'a> {
     /// writes and a step may not, names it under the case's `evidence/`: a record put there by
     /// any other hand is never one the run observed. `None` when there is none.
     fn observed_pass(&self, recorded: &[serde_json::Value]) -> Result<Option<(String, String)>> {
-        let mine = Path::new(CASES_DIR).join(&self.case.id).join("evidence");
+        let mine = self
+            .case
+            .dir
+            .strip_prefix(&self.tree)
+            .with_context(|| format!("locate the case {}", self.case.id))?
+            .join("evidence");
         for line in recorded.iter().rev() {
             if line["event"] != "evidence"
                 || line["kind"] != TEST_RESULT
@@ -10283,7 +10801,6 @@ impl<'a> Run<'a> {
                 crate::git::paths_named(&named)
             ));
         }
-        let cases = format!("{CASES_DIR}/");
         for file in &proposal.files {
             let path = file.path.as_str();
             if !loom_sdk::session::plain_relative(path) {
@@ -10291,7 +10808,7 @@ impl<'a> Run<'a> {
                     "{action} proposes {path:?}, which is no plain path of the tree"
                 ));
             }
-            if path == CASES_DIR || path.starts_with(&cases) {
+            if is_under_cases(path) {
                 return Some(format!(
                     "{action} proposes a path in the cases directory: {path}"
                 ));
@@ -10471,8 +10988,7 @@ impl<'a> Run<'a> {
             return Ok(Taken::Stop(Stop::StepRefused(why)));
         }
         let checkpoint = self.checkpoint(false)?;
-        let cases = self.tree.join(CASES_DIR);
-        let kept = snapshot(&cases)?;
+        let kept = snapshot_cases(&self.tree)?;
         let globs = self.judge_list()?.unwrap_or_default();
         let (surface, surface_kept) =
             JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
@@ -10480,7 +10996,11 @@ impl<'a> Run<'a> {
             .observe_within(&self.tree, &revision, seq, self.deadline())
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
         let failed = validator.take_failed();
+        let gates = validator.take_obligations();
         let returned = Instant::now();
+        // The way to the case's directory is read before anything is written under it: a test
+        // command that put a link on it (`.takt`, a cases root) is refused and undone below.
+        let way = self.case.check_way().err();
         // What the observation left running is killed before anything is looked at;
         // one that could not be killed is named with the rest of what it left.
         let swept = crate::forge::sweep_left();
@@ -10501,7 +11021,7 @@ impl<'a> Run<'a> {
         // error.
         let kept_all = Kept {
             checkpoint: &checkpoint,
-            cases: &cases,
+            tree: &self.tree,
             cases_kept: &kept,
             surface: &surface,
             surface_kept: &surface_kept,
@@ -10510,7 +11030,7 @@ impl<'a> Run<'a> {
         };
         let seen = (|| -> Result<_> {
             let on_surface = differing(&surface_kept, &surface.snapshot(&self.tree)?);
-            let touched = differing(&kept, &snapshot(&cases)?);
+            let touched = differing(&kept, &snapshot_cases(&self.tree)?);
             let change = checkpoint.change(&self.tree)?;
             let moved = outside_kept.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
             Ok((on_surface, touched, change, moved))
@@ -10530,15 +11050,18 @@ impl<'a> Run<'a> {
                 });
             }
         };
-        let own: Vec<PathBuf> = match self.case.dir.file_name() {
-            Some(id) => validator
+        let own: Vec<PathBuf> = match self.case.dir.strip_prefix(&self.tree) {
+            Ok(case) => validator
                 .writes()
                 .iter()
-                .map(|path| Path::new(id).join(path))
+                .map(|path| case.join(path))
                 .collect(),
-            None => Vec::new(),
+            Err(_) => Vec::new(),
         };
-        let mut foreign = cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
+        let mut foreign = cases_named(
+            &self.tree,
+            touched.iter().filter(|path| !own.contains(path)),
+        );
         let mut outside: Vec<String> = planted;
         outside.extend(change.paths.iter().cloned());
         if change.staged {
@@ -10557,7 +11080,10 @@ impl<'a> Run<'a> {
                     .iter()
                     .chain(&change.ignored_changed)
                     .chain(&change.ignored_removed)
-                    .filter(|path| surface.contains(&path.to_string_lossy()))
+                    .filter(|path| {
+                        let text = path.to_string_lossy();
+                        surface.contains(&text) || takt_guard(&text)
+                    })
                     .map(|path| crate::git::shown(path)),
             )
         {
@@ -10566,6 +11092,9 @@ impl<'a> Run<'a> {
             }
         }
         outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
+        if let Some(way) = &way {
+            outside.push(format!("{way:#}"));
+        }
         if !foreign.is_empty() || !outside.is_empty() {
             let lock_remedy = untracked_cargo_lock(&self.tree, &change.paths);
             let left = undo_step(&self.tree, &kept_all)?.left;
@@ -10607,7 +11136,7 @@ impl<'a> Run<'a> {
             && self.deadline().is_some_and(|deadline| returned >= deadline)
             && let Some(h) = self.options.hours
         {
-            restore(&self.tree, &cases, &kept, &touched)?;
+            restore(&self.tree, &self.tree, &kept, &touched)?;
             let why = format!(
                 "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
                 self.steps,
@@ -10625,7 +11154,21 @@ impl<'a> Run<'a> {
             writeln!(out, "  {why}")?;
             return Ok(Taken::Stop(Stop::Hours(h)));
         }
+        // A test command that changed or removed `.takt/.gitignore` or `.takt` was refused and
+        // undone above, so this writes the ignore file only when it is absent, as at open, which
+        // keeps the case out of `git status`; an observation that failed is written the same way
+        // before its error ends the run.
+        let ignore = if self
+            .case
+            .dir
+            .starts_with(self.tree.join(crate::case::CASES_DIR))
+        {
+            crate::case::write_takt_files(&self.tree)
+        } else {
+            Ok(())
+        };
         let (observation, waits) = observed?;
+        ignore?;
         self.stepped(
             events,
             SteppedBy::Validator(Some(&revision)),
@@ -10681,6 +11224,15 @@ impl<'a> Run<'a> {
                 "  evidence: {} {}",
                 record.kind,
                 record.result.as_deref().unwrap_or("-")
+            )?;
+        }
+        if let Some(obligations) = gates {
+            events.emit(
+                self.steps,
+                &Event::Obligations {
+                    revision: revision.to_string(),
+                    obligations,
+                },
             )?;
         }
         Ok(Taken::Observed {
@@ -10805,8 +11357,8 @@ impl<'a> Run<'a> {
         }
         // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
         // revision as the caller gave it. The harness's version and the model are read from
-        // the harness's stream at each step, so their layers are on the step lines: takt runs
-        // the harness program in a judgement step and nowhere else, never for its version.
+        // the harness's stream at each step, so their layers are on the step lines; the program's
+        // own path, hash and version are recorded beside them as `harness_program`.
         let mut layers = std::collections::BTreeMap::new();
         if let Some(binary) = &self.binary {
             layers.insert("takt".to_owned(), binary.clone());
@@ -10822,7 +11374,25 @@ impl<'a> Run<'a> {
             .as_ref()
             .map(|record| format!(": {}", record.describe()))
             .unwrap_or_default();
-        events.emit_opened(
+        // Before the first session, on open and on every resume: the harness binary asked of
+        // metaharness, with no model call (`Harness::preflight`).
+        let preflight = self.harness.preflight()?;
+        let commit_record = self.commit_plan_now().record();
+        let harness_program = self.harness.program_record()?;
+        let input_sources = self.case.input_sources();
+        let shown_inputs: Vec<String> = inputs
+            .iter()
+            .map(|input| {
+                let source = input
+                    .split_once('=')
+                    .and_then(|(name, _)| input_sources.iter().find(|(held, _)| held == name));
+                match source {
+                    Some((_, source)) => format!("{input}({source})"),
+                    None => input.clone(),
+                }
+            })
+            .collect();
+        events.emit_opened_with(
             self.steps,
             &Event::Opened {
                 case: self.case.id.clone(),
@@ -10838,14 +11408,20 @@ impl<'a> Run<'a> {
                 binary: self.binary.clone(),
                 layers: Some(layers),
                 confinement: Some(confinement.clone()),
-                substrate,
+                substrate: substrate.map(Box::new),
                 // The endpoint the harness is pointed at, by reference: never a token.
                 endpoint: self.harness.endpoint_reference(),
                 records: Some(self.kept_records().name().to_owned()),
                 // The scan adapter every proposal and the change so far pass.
                 scan: Some(self.scan.name().to_owned()),
+                protocol_source: self.case.protocol_source(),
+                input_sources: (!input_sources.is_empty())
+                    .then(|| input_sources.iter().cloned().collect()),
+                harness_program,
+                preflight: preflight.clone().map(Box::new),
             },
             self.llm_digest.as_deref(),
+            &commit_record,
         )?;
         writeln!(
             out,
@@ -10853,12 +11429,38 @@ impl<'a> Run<'a> {
             self.case.id,
             self.case.protocol.id,
             self.tree.display(),
-            if inputs.is_empty() {
+            if shown_inputs.is_empty() {
                 "none".to_owned()
             } else {
-                inputs.join(" ")
+                shown_inputs.join(" ")
             }
         )?;
+        if let Some(preflight) = &preflight {
+            if preflight.failing.is_empty() {
+                if !preflight.advisory.is_empty() {
+                    writeln!(
+                        out,
+                        "harness: {} {}; advisory: {}",
+                        preflight.kind,
+                        preflight
+                            .version
+                            .as_deref()
+                            .unwrap_or("with no readable version"),
+                        preflight.advisory.join("; ")
+                    )?;
+                }
+            } else {
+                return Ok(Stop::HarnessUnqualified {
+                    kind: preflight.kind.clone(),
+                    version: preflight.version.clone(),
+                    rows: preflight.failing.clone(),
+                    qualified: preflight.qualified.clone(),
+                });
+            }
+        }
+        if let Some(stop) = self.run_setup(events, run_number, out)? {
+            return Ok(stop);
+        }
         // One sequence per case, continued across its runs: no decision file is overwritten,
         // so the latest by name is the latest written, and a record id, numbered by the same
         // sequence, never repeats.
@@ -11318,7 +11920,12 @@ impl<'a> Run<'a> {
             self.change_scan.as_ref(),
             out,
         )?;
-        let failed = failed_checks(&events.read()?);
+        let record = events.read()?;
+        let failed = failed_checks(&record);
+        let obligations = crate::obligations::of_run(self, &record).unwrap_or_default();
+        // The repository's instruction files are read at the commit the case forked from.
+        let base = crate::case::Branch::read(&self.case.dir)?.base_commit;
+        let ask = self.commit_plan_now().ask();
         let mut context = StepContext {
             tree: &self.tree,
             intent: &self.options.intent,
@@ -11333,6 +11940,9 @@ impl<'a> Run<'a> {
             change: &change,
             failed: &failed,
             scope_revision: None,
+            base_revision: base.as_deref(),
+            commit: ask.as_ref(),
+            obligations: &obligations,
         };
         // The step is judged by what it did to the tree, against a checkpoint taken just
         // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -11346,8 +11956,7 @@ impl<'a> Run<'a> {
         // would decide what only a validator or the operator decides. It is snapshotted
         // before the step and put back after, whatever the step reported and however it
         // ended; a step that touched it is refused.
-        let cases = self.tree.join(CASES_DIR);
-        let kept = snapshot(&cases)?;
+        let kept = snapshot_cases(&self.tree)?;
         // The judge surface likewise ([`JudgeSurface`]): the planning store and everything
         // else under `.engineering/` but the cases (the project file that says where the
         // store is kept, the gates and the assertions project file among it), whose
@@ -11492,7 +12101,7 @@ impl<'a> Run<'a> {
         let tree = self.tree.clone();
         let kept_all = Kept {
             checkpoint: &checkpoint,
-            cases: &cases,
+            tree: &self.tree,
             cases_kept: &kept,
             surface: &surface,
             surface_kept: &surface_kept,
@@ -11620,7 +12229,7 @@ impl<'a> Run<'a> {
         // What the step left, read now; a read that fails (a file the run may not read)
         // discards the step before the run ends on the error.
         let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
-            let touched = differing(&kept, &snapshot(&cases)?);
+            let touched = differing(&kept, &snapshot_cases(&self.tree)?);
             let mut surface_touched: BTreeSet<String> =
                 differing(&surface_kept, &surface.snapshot(&tree)?)
                     .iter()
@@ -11651,7 +12260,7 @@ impl<'a> Run<'a> {
         };
         // Named as the step left them; the cases directory is put back with the rest of the
         // step's change by `undo`, after the reset, on every path below that discards it.
-        let touched_named = cases_named(&cases, &touched);
+        let touched_named = cases_named(&self.tree, &touched);
         // A step that returned when the hour budget ended, failed (killed by it) or not, is
         // discarded whole like any failed step, recorded as a refusal, and the run stops on
         // the budget. One that reported keeps its step line, with its tokens and their
@@ -11714,6 +12323,26 @@ impl<'a> Run<'a> {
             Ok(report) => report,
             Err(error) => {
                 let _ = tell(out);
+                // An instruction file the base tracks that cannot be given: the step was not
+                // started, so nothing is charged; the run stops with the files named, in its
+                // output and its record, and the case stays open.
+                if let Some(refusal) =
+                    error.downcast_ref::<crate::harness::InstructionFilesRefused>()
+                {
+                    let moved = match undo() {
+                        Ok(moved) => moved,
+                        Err(undo) => {
+                            return Err(error.context(format!(
+                                "step {}: the step could not be given its instruction files, and its change could not be discarded: {undo:#}{note}",
+                                self.steps
+                            )));
+                        }
+                    };
+                    let why = format!("step {}: {refusal}{moved}{note}", self.steps);
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "{why}")?;
+                    return Ok(Judgement::Stop(Stop::StepRefused(why)));
+                }
                 // A session that ended without the line naming its action, its change put back
                 // whole, is handed to the executor, which records the try and tries again
                 // ([`NO_ACTION_TRIES`]); one whose change could not be put back is not.
@@ -12064,7 +12693,7 @@ impl<'a> Run<'a> {
                 ask: true,
                 held: StepKept {
                     checkpoint,
-                    cases,
+                    tree: self.tree.clone(),
                     cases_kept: kept,
                     surface,
                     surface_kept,
@@ -12118,7 +12747,7 @@ impl<'a> Run<'a> {
             ask: false,
             held: StepKept {
                 checkpoint,
-                cases,
+                tree: self.tree.clone(),
                 cases_kept: kept,
                 surface,
                 surface_kept,
@@ -12282,30 +12911,47 @@ impl<'a> Run<'a> {
             writeln!(out, "  effect: no file changed")?;
             return Ok((false, None));
         }
+        // The message is the harness's `commit` when it passes its check, else the fallback,
+        // said in the record before the step's effect; the trailer is takt's, from the case's
+        // story, never from the reply.
+        let plan = self.commit_plan_now();
+        let reply = self.harness.take_commit();
+        let story = self.case.story()?;
+        let title = match &self.unit {
+            Unit::Story(story) => story.title.clone(),
+            Unit::Intent(intent) => intent.lines().next().unwrap_or_default().to_owned(),
+        };
+        let message = crate::commit_style::message(
+            &plan,
+            &report.action,
+            &report.summary,
+            &title,
+            reply.as_ref(),
+            story.as_deref(),
+        );
         // A commit that fails (a hook of the repository's own refused it) leaves nothing
         // of the step behind either.
-        let head = match crate::git::commit_paths(
-            &self.tree,
-            &self.committer,
-            changed,
-            &format!("{}: {}", report.action, one_line(&report.summary)),
-        ) {
-            Ok(head) => head,
-            Err(error) => {
-                let moved = undo_step(&self.tree, &proposed.held.kept())
-                    .map(|undone| undone.aside.named())?;
-                self.record_proposed(events, proposed)?;
-                return Err(error.context(format!(
+        let head =
+            match crate::git::commit_paths(&self.tree, &self.committer, changed, &message.text) {
+                Ok(head) => head,
+                Err(error) => {
+                    let moved = undo_step(&self.tree, &proposed.held.kept())
+                        .map(|undone| undone.aside.named())?;
+                    self.record_proposed(events, proposed)?;
+                    return Err(error.context(format!(
                     "step {}: the commit of {}'s change failed; the change was discarded{moved}",
                     self.steps, report.action
                 )));
-            }
-        };
+                }
+            };
         // The step is on record before anything that can end the run, so the tokens it spent
         // are kept whatever follows: a case that declares no implementation artifact ends
         // the run here.
         self.record_proposed(events, proposed)?;
         self.case.set_revision("implementation", &head)?;
+        if let Some(reason) = message.fallback {
+            events.emit(self.steps, &Event::CommitFallback { reason })?;
+        }
         events.emit(
             self.steps,
             &Event::Effect {

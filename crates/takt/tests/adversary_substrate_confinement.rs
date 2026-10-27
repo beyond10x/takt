@@ -2,11 +2,11 @@
 //!
 //! A test command's observation reads the *end* of what it printed: cargo's `test result:` lines
 //! and the failed tests' names come last, and `forge::Limits::output` is documented as "the last
-//! ones". Before this change `run_child` kept the real tail. Substrate's adapters keep only the
-//! first 1 MiB of a stream (`local`'s `LOCAL_OUTPUT_LIMIT_BYTES`, the host driver's
-//! `MAX_IO_BYTES`), and takt's `confinement::finished` then takes the last bytes of that head: a
-//! test command printing more than 1 MiB is summarised from the middle of its output, and the
-//! failure it ended with is lost.
+//! ones". Before this change `run_child` kept the real tail. Substrate's adapters keep at most
+//! 1 MiB of a stream (`local`'s `LOCAL_OUTPUT_LIMIT_BYTES`, the host driver's `MAX_IO_BYTES`),
+//! the first by default; takt asks them for the last (`OutputRetention` `Tail`, Substrate
+//! 0.14.0), so a test command printing more than 1 MiB is still summarised from its end, where
+//! the failure it ended with is.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -70,7 +70,6 @@ const LONG_FAILURE: &str = "#!/bin/sh\nyes 'a captured line a failing test print
 /// that printed more than 1 MiB names its failure: the counts of its `test result:` line and the
 /// failed test by name, as the tail `run_child` kept before this change showed them.
 #[test]
-#[ignore = "story:confinement-through-substrate-on-linux-and-macos: needs Substrate to keep an output tail (requested); run with --ignored"]
 fn adversary_substrate_confinement_none_summary_keeps_the_end_of_a_long_output() {
     let outer = scratch("none-long");
     let repo = repository(&outer.0, &[("long.sh", LONG_FAILURE, true)]);
@@ -90,7 +89,6 @@ fn adversary_substrate_confinement_none_summary_keeps_the_end_of_a_long_output()
 /// Under `--confinement substrate`, the same: a cargo test that fails after printing more than
 /// 1 MiB is returned with cargo's closing `test result: FAILED` line in the tail takt keeps.
 #[test]
-#[ignore = "story:confinement-through-substrate-on-linux-and-macos: needs Substrate to keep an output tail (requested); run with --ignored"]
 fn adversary_substrate_confinement_substrate_tail_holds_the_test_result_line() {
     let outer = scratch("substrate-long");
     let repo = repository(

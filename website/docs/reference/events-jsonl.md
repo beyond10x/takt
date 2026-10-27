@@ -6,7 +6,7 @@ description: The run record of a case, one JSON object per line, appended and ne
 
 # `events.jsonl`
 
-The run record of a case: `.engineering/cases/<case>/events.jsonl`, one JSON object per line,
+The run record of a case: `.takt/cases/<case>/events.jsonl`, one JSON object per line,
 appended and never rewritten. Every run on a case appends to the same file, so a case resumed after
 an approval continues its record. Only takt writes it
 ([Protocol and case](../concepts/protocol-and-case.md#case)).

@@ -439,7 +439,7 @@ fn a_cases_dir_refusal_names_where_the_rewrite_went() {
     let (stop, _) = go(
         &s,
         Box::new(|tree: &Path| {
-            fs::write(tree.join(".engineering/cases/rv/forged.yaml"), "x").expect("a write");
+            fs::write(tree.join(".takt/cases/rv/forged.yaml"), "x").expect("a write");
             fs::write(tree.join("build/old.o"), "POISON").expect("a write");
             Ok(())
         }),
@@ -466,7 +466,7 @@ fn nothing_is_moved_aside_when_the_undo_fails() {
     let s = repository("undo-fails", "build/\n");
     fs::create_dir_all(s.repo.join("build")).expect("a directory");
     fs::write(s.repo.join("build/old.o"), "AAAA").expect("a file");
-    let case = s.repo.join(".engineering/cases/rv");
+    let case = s.repo.join(".takt/cases/rv");
     let locked = case.clone();
     let (stop, text) = go(
         &s,

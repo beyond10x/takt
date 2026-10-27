@@ -54,7 +54,7 @@ impl World {
         git(&world.repo(), &["commit", "-q", "-m", "start"]);
         executable(
             &world.bin().join("claude"),
-            "#!/bin/sh\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{\\\"action\\\": \\\"tests.write\\\", \\\"summary\\\": \\\"wrote a test\\\"}\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}'\n",
+            "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nmkdir -p tests\necho work >> tests/work.txt\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"{\\\"action\\\": \\\"tests.write\\\", \\\"summary\\\": \\\"wrote a test\\\"}\",\"usage\":{\"input_tokens\":3,\"output_tokens\":4}}'\n",
         );
         world
     }
@@ -119,7 +119,7 @@ impl World {
 
     /// The transcripts the case's run record names, relative to the transcripts directory.
     fn named(&self) -> Vec<String> {
-        let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(".engineering/cases"))
+        let cases: Vec<PathBuf> = fs::read_dir(self.repo().join(".takt/cases"))
             .expect("the cases directory")
             .map(|entry| entry.expect("an entry").path())
             .collect();
@@ -263,13 +263,18 @@ fn an_unusable_named_state_dir_is_refused_before_the_case_opens() {
             let output = world.run(&args);
             let said = text(&output);
             assert_eq!(output.status.code(), Some(1), "{args:?}\n{said}");
+            // story:the-state-directory-holds-every-host-record: the refusal names the directory
+            // as `takt::git::shown` writes it (control characters escaped, the home directory as `~`).
             assert!(
-                said.contains(&format!("the state directory {}", dir.display())),
+                said.contains(&format!(
+                    "the state directory {}",
+                    takt::git::shown(dir.as_os_str())
+                )),
                 "{args:?}\n{said}"
             );
             assert!(said.contains(why), "{why}: {args:?}\n{said}");
             assert!(
-                !world.repo().join(".engineering/cases").exists(),
+                !world.repo().join(".takt/cases").exists(),
                 "no case was opened: {args:?}\n{said}"
             );
         }

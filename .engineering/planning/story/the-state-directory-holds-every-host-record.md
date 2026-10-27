@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-state-directory-holds-every-host-record
 kind: story
-status: active
+status: implemented
 title: The state directory holds every host record and defaults to the Loom agent document's runtime.state_dir
 summary: set-aside joins transcripts under --state-dir; loom.agent/1 runtime.state_dir is the default
 tags:
@@ -19,10 +19,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:44:46Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-27T01:44:47Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-27T11:33:40Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-state-directory-holds-every-host-record
 

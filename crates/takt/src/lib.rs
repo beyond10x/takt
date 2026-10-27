@@ -7,6 +7,7 @@
 //! The design is `docs/design/takt.md`.
 
 pub mod case;
+pub mod commit_style;
 pub mod confinement;
 pub mod events;
 pub mod evidence;
@@ -18,6 +19,7 @@ pub mod improvement;
 pub mod loop_scorecard;
 #[cfg(target_os = "macos")]
 mod marked;
+pub mod obligations;
 pub mod promotion;
 pub mod protocol;
 pub mod replay;
@@ -29,6 +31,7 @@ pub mod scorecard;
 pub mod trace;
 pub mod validator;
 pub mod view;
+pub mod workspace;
 
 pub use case::{CaseDir, Decision};
 pub use forge::Forge;

@@ -1,14 +1,16 @@
 //! The manifests under `examples/loom-agent/`, which the guides "Run in a container" and "Deploy
 //! on Kubernetes" show, read back through takt's own readers, so an example cannot drift from
-//! what takt accepts: `agent.yaml` and the `takt.yaml` of the `LoomAgent`'s `spec.configFiles`
-//! through [`RunConfig::read`], each `endpoint.toml` through [`EndpointFields::read`], and the
-//! names the `LoomAgent` uses held to the chart values that admit them.
+//! what takt accepts: `agent.yaml` through [`RunConfig::read`], each `endpoint.toml` through
+//! [`EndpointFields::read`], the `takt.yaml` and `llm.yaml` of the `LoomAgent`'s
+//! `spec.configFiles` through [`RunConfig::read`] (the one run file and its llm document beside
+//! it), the `spec.agent` through loom's own decoder, and the names the `LoomAgent` uses held to
+//! the chart values that admit them.
 
 use std::path::{Path, PathBuf};
 
 use serde_yaml_ng::Value;
 use takt::harness::EndpointFields;
-use takt::run_config::RunConfig;
+use takt::run_config::{Routes, RunConfig};
 
 fn examples() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/loom-agent")
@@ -40,7 +42,13 @@ fn strings(value: &Value) -> Vec<String> {
 fn assert_run(config: &RunConfig) {
     assert_eq!(config.iterations, None);
     assert_eq!(config.hours, Some(1.0));
-    assert_eq!(config.harness.as_deref(), Some("harness"));
+    assert_eq!(
+        config
+            .harness
+            .as_ref()
+            .map(takt::run_config::HarnessSetting::harness),
+        Some("harness")
+    );
     assert_eq!(config.model, None);
     assert_eq!(config.forge.as_deref(), Some("none"));
     assert_eq!(
@@ -81,12 +89,32 @@ fn the_container_examples_agent_yaml_and_endpoint_toml_are_read_as_the_guide_say
     assert_endpoint(&EndpointFields::read(&endpoint_file).expect("endpoint.toml reads"));
 }
 
-#[test]
-fn the_loom_agents_config_files_are_read_as_the_guide_says() {
-    let agent = yaml("takt-agent.yaml");
-    let spec = get(&agent, &["spec"]);
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("examples-config");
-    std::fs::create_dir_all(&dir).expect("a scratch directory");
+/// The run configuration the `LoomAgent`'s `takt.yaml` gives: the story, the budget, the harness,
+/// the route `agent` of its llm document and the forge, with no endpoint file of its own.
+fn assert_loom_run(config: &RunConfig) {
+    assert_eq!(config.story.as_deref(), Some("story:add-sub"));
+    assert_eq!(config.iterations, None);
+    assert_eq!(config.hours, Some(1.0));
+    assert_eq!(
+        config
+            .harness
+            .as_ref()
+            .map(takt::run_config::HarnessSetting::harness),
+        Some("harness")
+    );
+    assert_eq!(config.model.as_deref(), Some("agent"));
+    assert_eq!(config.forge.as_deref(), Some("none"));
+    assert_eq!(
+        config.test_cmd.as_deref(),
+        Some("cargo test --quiet --locked")
+    );
+    assert_eq!(config.endpoint_file, None);
+    assert!(config.llm_digest.is_some(), "the llm section is read");
+}
+
+/// Writes the `LoomAgent`'s `spec.configFiles` into `dir` verbatim and returns their names.
+fn write_config_files(spec: &Value, dir: &Path) -> Vec<String> {
+    std::fs::create_dir_all(dir).expect("a scratch directory");
     let mut names = Vec::new();
     for file in get(spec, &["configFiles"]).as_sequence().expect("a list") {
         let name = get(file, &["name"]).as_str().expect("a name");
@@ -94,24 +122,39 @@ fn the_loom_agents_config_files_are_read_as_the_guide_says() {
         std::fs::write(dir.join(name), content).expect("a config file");
         names.push(name.to_owned());
     }
-    assert_eq!(names, ["takt.yaml", "endpoint.toml"]);
+    names
+}
+
+#[test]
+fn the_loom_agents_config_files_are_read_as_the_guide_says() {
+    let agent = yaml("takt-agent.yaml");
+    let spec = get(&agent, &["spec"]);
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("examples-config");
+    let names = write_config_files(spec, &dir);
+    assert_eq!(names, ["takt.yaml", "llm.yaml"]);
     let config = RunConfig::read(&dir.join("takt.yaml")).expect("takt.yaml reads");
-    assert_run(&config);
-    assert_endpoint(&EndpointFields::read(&dir.join("endpoint.toml")).expect("endpoint reads"));
+    assert_loom_run(&config);
+    let llm = std::fs::read_to_string(dir.join("llm.yaml")).expect("llm.yaml");
     assert_eq!(
-        std::fs::read_to_string(dir.join("endpoint.toml")).expect("written"),
-        std::fs::read_to_string(examples().join("endpoint.toml")).expect("endpoint.toml"),
-        "the LoomAgent's endpoint.toml is the container example's"
+        config.llm_digest.as_deref(),
+        Some(Routes::parse(&llm).expect("llm parses").digest()),
+        "the run file's llm digest is the mounted llm.yaml's"
+    );
+    let llm_value: Value = serde_yaml_ng::from_str(&llm).expect("llm.yaml is YAML");
+    assert_eq!(
+        get(&llm_value, &["endpoints", "llm", "auth", "secret"]).as_str(),
+        Some("env:LLM_API_KEY"),
+        "the key is named by its variable, never written"
     );
 
     let entrypoint = strings(get(spec, &["command", "entrypoint"])).join(" ");
     assert!(
-        entrypoint.contains("exec takt run --repo /workspace --config /config/takt.yaml"),
+        entrypoint.contains("exec takt run --repo /workspace \"$@\""),
         "{entrypoint}"
     );
     assert_eq!(
         strings(get(spec, &["command", "args"])),
-        ["--story", "story:add-sub"]
+        ["--config", "/config/takt.yaml"]
     );
     assert!(
         get(spec, &["agent"]).get("takt").is_none(),
@@ -120,6 +163,51 @@ fn the_loom_agents_config_files_are_read_as_the_guide_says() {
     assert_eq!(
         get(spec, &["image", "tag"]).as_str(),
         Some(env!("CARGO_PKG_VERSION"))
+    );
+}
+
+/// Acceptance 2 of story:one-run-file-for-host-and-loom-agent, the part of Loom's admission takt can
+/// reach: the `spec.agent` of the example decodes under `loom_sdk::agent::parse` with its `model`
+/// and no `takt` member. A document without `model`, or with one, is refused by the same decoder.
+#[test]
+fn the_loom_agents_spec_agent_is_admitted_by_loom_with_a_model_and_no_takt_member() {
+    let agent = yaml("takt-agent.yaml");
+    let spec_agent = get(get(&agent, &["spec"]), &["agent"]).clone();
+    let text = serde_yaml_ng::to_string(&spec_agent).expect("spec.agent");
+    loom_sdk::agent::parse(&text).expect("loom admits spec.agent");
+
+    let mut without_model = spec_agent.clone();
+    without_model
+        .as_mapping_mut()
+        .expect("a mapping")
+        .remove("model");
+    let text = serde_yaml_ng::to_string(&without_model).expect("spec.agent");
+    assert!(loom_sdk::agent::parse(&text).is_err());
+
+    let mut with_takt = spec_agent;
+    with_takt
+        .as_mapping_mut()
+        .expect("a mapping")
+        .insert("takt".into(), Value::Mapping(Default::default()));
+    let text = serde_yaml_ng::to_string(&with_takt).expect("spec.agent");
+    assert!(loom_sdk::agent::parse(&text).is_err());
+}
+
+/// The image's ENTRYPOINT runs the run file's `--config` argument and its CMD names `agent.yaml`,
+/// so an image started without arguments still reads `/config/agent.yaml`.
+#[test]
+fn the_image_reads_agent_yaml_when_started_without_arguments() {
+    let dockerfile =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Dockerfile"))
+            .expect("the Dockerfile");
+    let lines: Vec<&str> = dockerfile.lines().collect();
+    assert!(
+        lines.contains(&r#"ENTRYPOINT ["tini", "--", "takt", "run", "--repo", "/workspace"]"#),
+        "the ENTRYPOINT"
+    );
+    assert!(
+        lines.contains(&r#"CMD ["--config", "/config/agent.yaml"]"#),
+        "the CMD"
     );
 }
 

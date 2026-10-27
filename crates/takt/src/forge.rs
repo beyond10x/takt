@@ -6,6 +6,7 @@
 //! |---|---|---|
 //! | `bot` | [`bot`] ([`BotRoute`]) | the organization's bot route, whose credential never enters takt |
 //! | `gitlab` | [`gitlab`] ([`gitlab::Glab`]) | `glab` under the user's own GitLab login |
+//! | `connectors` | [`connectors`] ([`connectors::ConnectorsForge`]) | `connectors operations invoke` on the run file's `forge_instance`; named, never a default |
 //! | `none` | none | nothing; nothing leaves the machine |
 //!
 //! Before any of it leaves the machine, an adapter that publishes has a scan read what a push
@@ -41,6 +42,9 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::confinement::Command;
 
 pub mod bot;
+pub mod command;
+pub mod connectors;
+pub mod credential;
 pub mod gitlab;
 
 pub use bot::BotRoute;
@@ -488,9 +492,32 @@ impl Finished {
 /// has been killed.
 pub(crate) const GRACE: Duration = Duration::from_secs(2);
 
+/// The names of the variables a run file names as a credential source (`credential: {env: NAME}`),
+/// whatever they look like: no child takt starts inherits one.
+static WITHHELD: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+/// Records `name` as a credential's variable: [`is_credential`] holds for it from now on, and
+/// [`without_credentials`] removes it from every child, whatever `keep` says.
+pub fn withhold(name: &str) {
+    let mut names = WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !names.iter().any(|held| held == name) {
+        names.push(name.to_owned());
+    }
+}
+
+fn withheld(name: &str) -> bool {
+    WITHHELD
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|held| held == name)
+}
+
 /// Whether the environment variable `name` carries a credential: a GitHub, GitLab or Anthropic
 /// token, the SSH agent's socket, or any name that ends like one (`_TOKEN`, `_API_KEY`,
-/// `_SECRET`, `_PASSWORD`, ...).
+/// `_SECRET`, `_PASSWORD`, ...), or one a run file named as a credential's source ([`withhold`]).
 #[must_use]
 pub fn is_credential(name: &str) -> bool {
     const SUFFIXES: [&str; 9] = [
@@ -504,8 +531,10 @@ pub fn is_credential(name: &str) -> bool {
         "_CREDENTIALS",
         "_PRIVATE_KEY",
     ];
+    let original = name;
     let name = name.to_ascii_uppercase();
-    name.starts_with("GITLAB_")
+    withheld(original)
+        || name.starts_with("GITLAB_")
         || name == "SSH_AUTH_SOCK"
         || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
 }
@@ -526,7 +555,7 @@ pub fn bot_route_reads(name: &str) -> bool {
 pub fn without_credentials(command: &mut Command, keep: fn(&str) -> bool) {
     for (name, _) in std::env::vars_os() {
         let text = name.to_string_lossy();
-        if is_credential(&text) && !keep(&text) {
+        if withheld(&text) || (is_credential(&text) && !keep(&text)) {
             command.env_remove(&name);
         }
     }
@@ -1339,7 +1368,20 @@ fn push_over_https(
     url: &str,
     route: &str,
 ) -> Result<()> {
-    let exit = runner.run_env(tree, argv, &BotRoute::PUSH_ENV)?;
+    push_over_https_with(runner, tree, argv, url, route, &BotRoute::PUSH_ENV)
+}
+
+/// [`push_over_https`] with `env` as the line's environment, which holds [`BotRoute::PUSH_ENV`]
+/// and what the adapter's credential helper reads besides.
+fn push_over_https_with(
+    runner: &dyn Runner,
+    tree: &Path,
+    argv: &[String],
+    url: &str,
+    route: &str,
+    env: &[(&str, &str)],
+) -> Result<()> {
+    let exit = runner.run_env(tree, argv, env)?;
     if exit.success() {
         return Ok(());
     }

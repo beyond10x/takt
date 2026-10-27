@@ -277,7 +277,7 @@ fn without_glab_the_run_is_refused_before_its_first_step() {
     );
     assert!(!out.contains("step 1"), "stdout {out} stderr {err}");
     assert!(
-        !repo.join(".engineering/cases").exists(),
+        !repo.join(".takt/cases").exists(),
         "no case opened: stdout {out} stderr {err}"
     );
 }
@@ -298,7 +298,7 @@ fn without_a_glab_login_the_run_is_refused_before_its_first_step() {
     }
     assert!(!out.contains("step 1"), "stdout {out} stderr {err}");
     assert!(
-        !repo.join(".engineering/cases").exists(),
+        !repo.join(".takt/cases").exists(),
         "no case opened: stdout {out} stderr {err}"
     );
     assert_eq!(
@@ -334,6 +334,8 @@ fn a_gitlab_origin_delivers_through_glab_up_to_the_merge_grant() {
         "none",
         "--test-cmd",
         "true",
+        "--protocol",
+        "story.delivery/1",
     ];
     let mut first = run.to_vec();
     first.extend(["--iterations", "0"]);
@@ -489,7 +491,7 @@ fn a_scenario_run_refuses_the_gitlab_forge_before_anything_opens() {
     assert_eq!(git_out(&repo, &["rev-parse", "HEAD"]), head);
     assert_eq!(git_out(&repo, &["symbolic-ref", "--short", "HEAD"]), "main");
     assert!(
-        !repo.join(".engineering/cases").exists(),
+        !repo.join(".takt/cases").exists(),
         "no case opened: stdout {out} stderr {err}"
     );
     assert!(

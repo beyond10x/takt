@@ -20,7 +20,7 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
@@ -74,3 +74,20 @@ of story:harness-section-is-metaharness-session-request.
 
 - `crates/takt-cli/src/main.rs` (`LoopArgs`), `crates/takt-cli/tests/`, `website/docs/reference/configuration.md`,
   `ess/ess-inputs.yaml`.
+
+## Status
+
+Partial unit under D84, built at d2294dff and merged at cb63ced3 on integration/takt. The story stays active: acceptance 1
+is partly built.
+
+- 1 each-flag-observed: partly. --max-turns 60 under claude is built, `the_max_turns_flag_is_the_claude_ceiling`. --effort,
+  --max-budget-usd, --strict-version and --context are refused before any case opens, as the file's keys are
+  (`a_flag_not_carried_yet_is_refused_before_any_case_opens`, `scenario_run_refuses_a_flag_not_carried_yet_before_anything_opens`).
+  Their observables wait on the metaharness session-request and Loom partial RunSpec stories.
+- 2 flag-over-key: built, `a_flag_wins_over_the_files_max_turns`.
+- 3 kind-check-applies: takt's refusal built, `max_turns_under_codex_is_refused_before_any_case_opens`; metaharness's own
+  refusal text waits on its session-request story.
+- 4 help-lists-names: built, `the_help_of_both_run_commands_lists_the_five_flags`.
+
+Also in the unit: a session setting given with --harness none is refused, since none starts no session
+(`a_session_flag_under_harness_none_is_refused_before_any_case_opens`).

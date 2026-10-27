@@ -61,6 +61,7 @@ fn executable(path: &Path, text: &str) {
 /// prints a result naming `tests.write`.
 fn fake_claude(at: &Path, calls: &Path) {
     let script = r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 prompt=''
 prev=''
 for a in "$@"; do
@@ -72,7 +73,7 @@ n=$((n + 1))
 printf '%s' "$prompt" > '@CALLS@'/$n.prompt
 pwd > '@CALLS@'/$n.pwd
 cat tests/work.txt > '@CALLS@'/$n.work 2>/dev/null
-ls .engineering/cases/*/evidence > '@CALLS@'/$n.evidence 2>/dev/null
+ls .takt/cases/*/evidence > '@CALLS@'/$n.evidence 2>/dev/null
 mkdir -p tests
 echo work >> tests/work.txt
 printf '%s\n' '{"type":"result","subtype":"success","result":"{\"action\": \"tests.write\", \"summary\": \"wrote a test\"}","usage":{"input_tokens":3,"output_tokens":4}}'
@@ -163,7 +164,7 @@ fn recorded_with(outer: &Path, intent: &str, files: &[(&str, &str)]) -> Recorded
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();
@@ -610,9 +611,9 @@ fn a_prompt_that_differs_from_the_recorded_one_replays_nothing() {
     assert!(!out.exists(), "nothing written");
 }
 
-/// A copy of the case `case` at `<outer>/.engineering/cases/<id>`, made with `cp -a`.
+/// A copy of the case `case` at `<outer>/.takt/cases/<id>`, made with `cp -a`.
 fn copy_case(case: &Path, outer: &Path) -> PathBuf {
-    let cases = outer.join(".engineering/cases");
+    let cases = outer.join(".takt/cases");
     fs::create_dir_all(&cases).expect("a cases directory");
     let copy = cases.join(case.file_name().expect("a name"));
     let status = Command::new("cp")
@@ -708,7 +709,7 @@ fn a_link_in_the_revision_s_tree_is_refused_and_the_case_is_not_written() {
     let ways = [
         (".engineering".to_owned(), rec.repo.join(".engineering")),
         (
-            format!(".engineering/cases/{id}/evidence"),
+            format!(".takt/cases/{id}/evidence"),
             rec.case.join("evidence"),
         ),
     ];

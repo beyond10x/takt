@@ -263,7 +263,7 @@ fn a_step_the_hour_budget_killed_is_missing_from_the_run_record() {
     let text = String::from_utf8_lossy(&out).into_owned();
     assert!(matches!(stop, Ok(Stop::Hours(_))), "{stop:?}\n{text}");
     assert!(text.contains("hour budget ran out"), "{text}");
-    let events = fs::read_to_string(tree.join(".engineering/cases/adv-record/events.jsonl"))
+    let events = fs::read_to_string(tree.join(".takt/cases/adv-record/events.jsonl"))
         .expect("the run record");
     let explained = events.lines().any(|line| {
         !line.contains("\"stop\"") && (line.contains("timed out") || line.contains("hour budget"))
