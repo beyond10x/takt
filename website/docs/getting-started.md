@@ -97,7 +97,11 @@ sandbox of its own:
   real one is the one host root declared writable to the adapter.
 
 On macOS, whose adapter serves no writable root, a promotion's build installs into the workspace
-and takt copies the binary into the fresh install root.
+and takt copies the binary into the fresh install root. Its `PATH` names the selected developer
+tools' own programs before `/usr/bin`, whose shims cannot run under `macos`, so the build's `git`
+reads the revision. A `.cargo/config.toml` in a directory above the build directory,
+`~/.cargo/config.toml` included, fails the build: the adapter lets cargo see the file but not read
+it.
 
 :::
 

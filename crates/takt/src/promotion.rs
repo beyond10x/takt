@@ -1543,7 +1543,11 @@ impl Confinement {
     /// in it) in the workspace, the toolchain read-only, no network, the environment `PATH`,
     /// `HOME`, `TMPDIR`, `CARGO_HOME` and `RUSTC` alone, and where the adapter serves it the fresh
     /// install root writable at [`INSIDE_INSTALL`]; the command and the adapter are shown on
-    /// `out`; a failure is a [`BuildFailed`].
+    /// `out`; a failure is a [`BuildFailed`]. On `macos` its `PATH` names the developer tools'
+    /// own programs before `/usr/bin` ([`crate::confinement::developer_programs`]), whose shims
+    /// cannot run there, so the build script's `git` reads the revision the binary prints, and
+    /// `GIT_CONFIG_NOSYSTEM` is set, so that git reads no system configuration the policy
+    /// refuses it.
     fn cargo(
         &self,
         confined: &crate::confinement::Confined,
@@ -1576,8 +1580,13 @@ impl Confinement {
             &format!("{INSIDE_TOOLCHAIN}/bin"),
         )?;
         let (home, tmp) = Self::scratch(confined, work)?;
-        let env = BTreeMap::from([
-            ("PATH".to_owned(), format!("{bin}:/usr/bin:/bin")),
+        let developer = confined.developer_programs();
+        let path = match &developer {
+            Some(developer) => format!("{bin}:{developer}:/usr/bin:/bin"),
+            None => format!("{bin}:/usr/bin:/bin"),
+        };
+        let mut env = BTreeMap::from([
+            ("PATH".to_owned(), path),
             ("HOME".to_owned(), home),
             ("TMPDIR".to_owned(), tmp),
             (
@@ -1586,6 +1595,9 @@ impl Confinement {
             ),
             ("RUSTC".to_owned(), format!("{bin}/rustc")),
         ]);
+        if developer.is_some() {
+            env.insert("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned());
+        }
         let mut argv = vec![format!("{bin}/cargo")];
         argv.extend(args.iter().map(|arg| (*arg).to_owned()));
         let toolchain = self

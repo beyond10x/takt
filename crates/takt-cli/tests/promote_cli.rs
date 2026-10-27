@@ -2484,7 +2484,9 @@ fn a_set_with_a_disk_low_trial_is_not_recorded_as_a_baseline() {
 /// in the caller's environment, a `.cargo/config.toml` in an ancestor of the build directory or
 /// in the caller's `CARGO_HOME`, and a `cargo` earlier on `PATH` change nothing: the wrapper and
 /// the planted cargo never run, no linker map is written, debug assertions stay off, and the
-/// build succeeds.
+/// build succeeds. On macOS the ancestor's `.cargo/config.toml` is left out: there the build
+/// fails closed on it
+/// ([`on_macos_a_cargo_configuration_above_the_build_directory_fails_the_build_closed`]).
 #[test]
 fn the_build_reads_nothing_outside_the_commit() {
     let world = World::new("outside", BASELINE_TOKENS, FIVE_APPROVALS);
@@ -2500,7 +2502,9 @@ fn the_build_reads_nothing_outside_the_commit() {
         ),
     );
     let config = format!("[build]\nrustc-wrapper = \"{}\"\n", wrapper.display());
-    write(&world.outer.join("cache/.cargo/config.toml"), &config);
+    if !cfg!(target_os = "macos") {
+        write(&world.outer.join("cache/.cargo/config.toml"), &config);
+    }
     let cargo_home = world.outer.join("cargo-home-with-config");
     write(&cargo_home.join("config.toml"), &config);
     let planted = world.outer.join("planted");
@@ -2562,6 +2566,48 @@ fn the_build_reads_nothing_outside_the_commit() {
         String::from_utf8_lossy(&probe.stdout).trim(),
         "debug_assertions=false",
         "the release profile is the commit's"
+    );
+}
+
+/// story:confinement-through-substrate-on-linux-and-macos, on macOS: a `.cargo/config.toml` in a
+/// directory above the build directory (`~/.cargo/config.toml` among them while the build
+/// directory lies under the home) is never read, and the build fails closed on it. The `macos`
+/// adapter's policy lets cargo see the file but not read it, and cargo stops on a configuration
+/// file it cannot read; a Linux adapter shows the build none of the host's directories above it.
+/// The wrapper the file names never runs.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_cargo_configuration_above_the_build_directory_fails_the_build_closed() {
+    let world = World::new("above-config", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("above-config", BASELINE_TOKENS, FIVE_APPROVALS);
+    let log = world.outer.join("wrap.log");
+    let wrapper = world.outer.join("wrap.sh");
+    script(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\necho \"INJECTED $0 $*\" >> '{}'\nexit 1\n",
+            log.display()
+        ),
+    );
+    write(
+        &world.outer.join("cache/.cargo/config.toml"),
+        &format!("[build]\nrustc-wrapper = \"{}\"\n", wrapper.display()),
+    );
+    let (code, out, err) = world.promote(&card, &[]);
+    let text = format!("{out}{err}");
+    assert_ne!(
+        code, 0,
+        "story:confinement-through-substrate-on-linux-and-macos: the build fails closed: {text}"
+    );
+    assert!(
+        text.contains("could not load Cargo configuration")
+            && text.contains("Operation not permitted"),
+        "story:confinement-through-substrate-on-linux-and-macos: cargo could not read the configuration above the build: {text}"
+    );
+    assert!(
+        !log.exists(),
+        "story:confinement-through-substrate-on-linux-and-macos: the wrapper never ran"
     );
 }
 

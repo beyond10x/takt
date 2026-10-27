@@ -1515,6 +1515,17 @@ impl Confined {
         }
     }
 
+    /// Where a run that sees host paths (`macos`) finds the selected developer tools' own
+    /// programs ([`developer_programs`]), to be named in its `PATH` before `/usr/bin`; none under
+    /// a Linux adapter or without developer tools.
+    #[must_use]
+    pub fn developer_programs(&self) -> Option<String> {
+        if !self.opened.candidate.paths_are_host_paths() {
+            return None;
+        }
+        developer_programs().and_then(|dir| text(&dir).ok())
+    }
+
     /// Runs `spec` in `workspace` to its end.
     ///
     /// # Errors
@@ -1572,6 +1583,24 @@ impl Confined {
         };
         self.opened.run(&profile, &command, spec.timeout)
     }
+}
+
+/// The selected developer tools' own programs on macOS: `usr/bin` of the directory
+/// `xcode-select` selects, else of the Command Line Tools, when it lies beneath the developer
+/// root a `macos` run may execute from ([`substrate_host::seatbelt::developer_root`], which
+/// [`Confined::run`] adds to its exec subpaths) and holds `git`; resolved without running
+/// anything. Inside the `macos` policy the `/usr/bin` shims of these programs cannot run (they
+/// ask `xcodebuild` through `/bin/sh`), so a build script that runs `git`, as takt's own does to
+/// read the revision, finds the program itself here. `None` elsewhere.
+#[must_use]
+pub fn developer_programs() -> Option<PathBuf> {
+    use substrate_host::seatbelt::{COMMAND_LINE_TOOLS, XCODE_SELECT_LINK, developer_root};
+    let root = developer_root()?;
+    let selected = std::fs::canonicalize(XCODE_SELECT_LINK)
+        .or_else(|_| std::fs::canonicalize(COMMAND_LINE_TOOLS))
+        .ok()?;
+    let programs = selected.join("usr/bin");
+    (programs.starts_with(&root) && programs.join("git").is_file()).then_some(programs)
 }
 
 /// The toolchain a confined `cargo` runs from, resolved without running anything or searching

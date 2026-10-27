@@ -40,6 +40,8 @@ takt's releases.
 - The first line names the Substrate adapter and the facts it proved (`; proved: <facts>`); the `opened` event records both.
 - Where the adapter serves `limits`, a test command is held to 2048 processes, 8 GiB of memory and an hour of CPU time, as under loom-sdk 0.45.0.
 - `takt promote` builds a candidate through the same selection; a host none of whose adapters serves the build exits 5 naming each, where a missing bubblewrap exited 1.
+- On macOS the build finds `git` among the selected developer tools' programs, as the `/usr/bin` shims cannot run under `macos`, so the binary names its revision.
+- On macOS a `.cargo/config.toml` above the build directory, `~/.cargo/config.toml` included, fails the build: `macos` lets cargo see it but not read it.
 - **Breaking:** `--confinement none` runs the test command through Substrate's `local` adapter, declared insecure; the first line and the `opened` event give the reason.
 - It keeps the cleared environment, the scratch home and `TMPDIR`, the timeout and the bounded output, and runs in no namespace of takt's own.
 - The checks run `ess` 0.70.0.
