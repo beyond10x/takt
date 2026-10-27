@@ -65,8 +65,9 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
         record names it before a step ran, so step 8 reads it from run 1's record.
      6. the forge and the harness binary: a trial on a github.com repository that should end
         exit 0 runs with `--forge bot` (under `--forge none` it stops exit 7 at `pr.opened`), and
-        a Claude run names a qualified binary with `--harness-program <absolute path>` (the
-        guide *Run a story*, § A trial on a GitHub repository).
+        a Claude run names a qualified binary with `--harness-program <absolute path>`, a copy
+        at a stable path outside Claude Code's pruned versions directory, whose sha256 the run's
+        `opened` record must match (the guide *Run a story*, § A trial on a GitHub repository).
 
      A failed check starts no run; it is a deviation (§ Reports), fixed before the set starts.
      Release 0.4.0's cycle discarded five runs (368,818 tokens), each refused at `pr.open` by the
