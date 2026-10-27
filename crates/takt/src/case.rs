@@ -2426,6 +2426,29 @@ impl Records {
             self
         }
     }
+
+    /// The profile a case `id` of protocol `protocol` keeps when `self` is asked for: every
+    /// decision of a scenario case ([`is_scenario_case`]) whatever is asked, and of an improvement
+    /// case ([`Records::for_protocol`]); what is asked otherwise. The one rule a run keeps its
+    /// decisions by, a new run and a resumed one alike.
+    #[must_use]
+    pub fn for_case(self, protocol: &str, id: &str) -> Self {
+        if is_scenario_case(id) {
+            Self::Trial
+        } else {
+            self.for_protocol(protocol)
+        }
+    }
+}
+
+/// Whether the case `id` is a scenario run's: `scenario-<scenario>-trial-<n>`, the case a
+/// `takt scenario run` opens for each trial of a scenario, whose scorecard reads every decision
+/// it made.
+#[must_use]
+pub fn is_scenario_case(id: &str) -> bool {
+    id.strip_prefix("scenario-")
+        .and_then(|rest| rest.rsplit_once("-trial-"))
+        .is_some_and(|(scenario, n)| !scenario.is_empty() && n.parse::<u128>().is_ok())
 }
 
 /// The parts of the `canon-decision/1` document the governor of Loom rendered for a case that
@@ -2859,6 +2882,40 @@ impl CaseDir {
         Ok(())
     }
 
+    /// The records profile the case's first `opened` line names, the profile the case was opened
+    /// under: a resume without `--records` runs under it. A first line with no `records` field
+    /// reads as `trial`, as does a case whose record holds no `opened` line yet: each keeps every
+    /// decision it may hold (story:a-run-keeps-every-decision-only-on-a-trial).
+    pub fn opened_profile(&self) -> Result<Records> {
+        use std::io::Read as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let path = self.dir.join(crate::events::EVENTS_FILE);
+        let mut bytes = Vec::new();
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.read_to_end(&mut bytes)
+                    .with_context(|| format!("read {}", path.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Records::Trial);
+            }
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", path.display()));
+            }
+        }
+        // A line that does not read as an event is skipped here, as the run itself goes on past one.
+        Ok(bytes
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+            .find(|line| line["event"] == "opened")
+            .and_then(|line| line["records"].as_str().and_then(Records::named))
+            .unwrap_or(Records::Trial))
+    }
+
     /// The number of the latest evaluation written under the case, the highest `n` of its
     /// `decisions/<n>.json`; 0 before the first. One sequence per case, continued across its
     /// runs: a run numbers its evaluations, and the records its validators write, from here.
@@ -2883,12 +2940,14 @@ impl CaseDir {
         Ok(highest)
     }
 
-    /// Removes the decisions numbered below `seq`, the `decisions/<n>.json` of the earlier
-    /// evaluations, so that decision `seq` is the only one the case keeps; the `default` records
-    /// profile does this after it writes each decision. Only regular `.json` files whose name is
-    /// a number below `seq` go; the sequence is unchanged, since [`CaseDir::evaluations`] still
-    /// reads `seq` as the highest. Returns how many were removed.
-    pub fn keep_only_decision(&self, seq: usize) -> Result<usize> {
+    /// Removes the decisions this run wrote before its latest one, `latest`: the
+    /// `decisions/<n>.json` numbered from `first`, the run's first sequence number, up to
+    /// `latest`, so that decision `latest` is the only one of the run the case keeps. An earlier
+    /// run's decisions are never removed (story:a-run-keeps-every-decision-only-on-a-trial). The
+    /// `default` records profile does this after it writes each decision. Only regular `.json`
+    /// files whose name is a number in that range go; the sequence is unchanged, since
+    /// [`CaseDir::evaluations`] still reads `latest` as the highest. Returns how many were removed.
+    pub fn keep_only_decision(&self, first: usize, latest: usize) -> Result<usize> {
         let decisions = self.dir.join("decisions");
         let mut removed = 0;
         for entry in std::fs::read_dir(&decisions)
@@ -2896,15 +2955,15 @@ impl CaseDir {
         {
             let entry = entry?;
             let path = entry.path();
-            let numbered_below = path
+            let this_run = path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
                 .and_then(|stem| stem.parse::<usize>().ok())
-                .is_some_and(|n| n < seq);
+                .is_some_and(|n| first <= n && n < latest);
             let json = path
                 .extension()
                 .is_some_and(|extension| extension == "json");
-            if numbered_below && json && entry.file_type()?.is_file() {
+            if this_run && json && entry.file_type()?.is_file() {
                 std::fs::remove_file(&path)
                     .with_context(|| format!("remove {}", path.display()))?;
                 removed += 1;
@@ -3765,7 +3824,19 @@ mod tests {
             assert_eq!(asked.for_protocol(TURN_PROTOCOL), Records::Trial);
             assert_eq!(asked.for_protocol(LOOP_PROTOCOL), Records::Trial);
             assert_eq!(asked.for_protocol("story.delivery/1"), asked);
+            assert_eq!(asked.for_case(TURN_PROTOCOL, "turn-1"), Records::Trial);
+            assert_eq!(
+                asked.for_case("story.delivery/1", "scenario-1-trial-2"),
+                Records::Trial
+            );
+            assert_eq!(asked.for_case("story.delivery/1", "issue-42"), asked);
         }
+        assert!(is_scenario_case("scenario-1-trial-2"));
+        assert!(is_scenario_case("scenario-a-b-trial-10"));
+        assert!(!is_scenario_case("scenario-1-trial-"));
+        assert!(!is_scenario_case("scenario--trial-2"));
+        assert!(!is_scenario_case("scenario-1-trial-x"));
+        assert!(!is_scenario_case("issue-42"));
         assert_eq!(Records::named("default"), Some(Records::Default));
         assert_eq!(Records::named("trial"), Some(Records::Trial));
         assert_eq!(Records::named("Trial"), None);

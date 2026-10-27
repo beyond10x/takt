@@ -38,7 +38,7 @@ $ find .engineering/cases -type f | sort
 .engineering/cases/<case>/protocol.yaml
 ```
 
-The run kept its latest decision alone, as the default records profile does; `--records trial`
+The run kept its latest decision alone, as the default records profile does for each run; `--records trial`
 would list `decisions/0001.json` as well. A case that works a story, goes through a forge or a
 harness has more files. All of them:
 
@@ -53,7 +53,7 @@ harness has more files. All of them:
 | `commit-identity` | the identity of every commit of the case, `<name> <email>` on one line; absent when none was configured | takt, at open ([identity](./configuration.md#commit-identity)) |
 | `observations.json` | the observations reported to the case, in order, as Loom's file case store keeps them | takt, appended during the run |
 | `python-modules.json` | the Python module names a test command can import from outside the repository, as the Python the case opened with answered, or built-in lists | takt, at open, only when a Python answered or could not be established; absent otherwise, when the built-in lists stand in |
-| `decisions/NNNN.json` | one file per evaluation: every action's status (`admissible`, `approval-required`, `blocked`), the claims and why; under the default records profile only the latest is kept, numbering goes on from it, and `--records trial` keeps every one ([Records profiles](./configuration.md#records-profiles)) | the governor of Loom, through takt, one per decision |
+| `decisions/NNNN.json` | one file per evaluation: every action's status (`admissible`, `approval-required`, `blocked`), the claims and why; under the default records profile only each run's latest is kept, numbering goes on from it, and `--records trial` keeps every one ([Records profiles](./configuration.md#records-profiles)) | the governor of Loom, through takt, one per decision |
 | `evidence/NNNN-<kind>-<n>.json` | one `canon-evidence/1` record: `kind`, `result`, `subject`, `subject_revision`, `observed_at`, `producer` | a validator only |
 | `artifacts/` | what a validator retained beside its record, such as a gate's bundle | the validator, through takt |
 | `authority.yaml` | the grants: `capability`, `decision`, `approver`, `granted_at`, `revision` | `takt approve` |

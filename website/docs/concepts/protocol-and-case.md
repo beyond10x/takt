@@ -104,7 +104,7 @@ protocol.yaml
 | file | holds |
 |---|---|
 | `case.yaml` | the case: protocol, artifacts at their revisions, inputs |
-| `decisions/NNNN.json` | each evaluation the governor returned, numbered; the latest alone under the default records profile, every one under `--records trial` |
+| `decisions/NNNN.json` | each evaluation the governor returned, numbered; each run's latest alone under the default records profile, every one under `--records trial` |
 | `evidence/` | each `canon-evidence/1` record a validator wrote |
 | `authority.yaml` | the grants, once `takt approve` gave one |
 | `events.jsonl` | the run record, one line per event ([reference](../reference/events-jsonl.md)) |

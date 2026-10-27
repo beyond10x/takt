@@ -2785,12 +2785,14 @@ fn evidence_of(case_dir: &Path) -> Result<Vec<serde_json::Value>> {
 
 /// The steps and the tokens `events.jsonl` in the case directory states so far: the step lines
 /// counted, and the `tokens` they state summed. Each is [`NOT_STATED`] when the file is missing,
-/// and the tokens when no step line states any.
+/// and the tokens when no step line states any. When only some step lines state tokens, the sum
+/// says how many of the steps stated them.
 fn run_figures_of(case_dir: &Path) -> (String, String) {
     let Ok(text) = std::fs::read_to_string(case_dir.join(crate::events::EVENTS_FILE)) else {
         return (NOT_STATED.to_owned(), NOT_STATED.to_owned());
     };
     let mut steps = 0u64;
+    let mut stated_steps = 0u64;
     let mut tokens: Option<u64> = None;
     for line in text.lines() {
         let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
@@ -2801,13 +2803,16 @@ fn run_figures_of(case_dir: &Path) -> (String, String) {
         }
         steps += 1;
         if let Some(stated) = event["tokens"].as_u64() {
+            stated_steps += 1;
             tokens = Some(tokens.unwrap_or(0).saturating_add(stated));
         }
     }
-    (
-        steps.to_string(),
-        tokens.map_or_else(|| NOT_STATED.to_owned(), |tokens| tokens.to_string()),
-    )
+    let tokens = match tokens {
+        None => NOT_STATED.to_owned(),
+        Some(sum) if stated_steps == steps => sum.to_string(),
+        Some(sum) => format!("{sum} (stated by {stated_steps} of {steps} steps)"),
+    };
+    (steps.to_string(), tokens)
 }
 
 /// One evidence record as a body line: its kind, result, short revision and producer, each
@@ -2863,16 +2868,15 @@ fn body_of(case_dir: &Path, intent: &str, revision: &str) -> Result<String> {
         .saturating_sub(head.len())
         .saturating_sub(EVIDENCE_RESERVE)
         .min(EVIDENCE_LIMIT);
-    let mut listed = String::new();
-    let mut count = 0;
-    for record in &records {
-        let line = evidence_line(record);
-        if listed.len() + line.len() > budget {
-            break;
-        }
-        listed.push_str(&line);
-        count += 1;
-    }
+    let lines: Vec<String> = records.iter().map(evidence_line).collect();
+    let keep = kept_within(&records, &lines, revision, budget);
+    let listed: String = lines
+        .iter()
+        .zip(&keep)
+        .filter(|(_, kept)| **kept)
+        .map(|(line, _)| line.as_str())
+        .collect();
+    let count = keep.iter().filter(|kept| **kept).count();
     let mut body = head;
     body.push_str(&format!(
         "\nEvidence: {} records in the case.\n\n{listed}",
@@ -2880,12 +2884,45 @@ fn body_of(case_dir: &Path, intent: &str, revision: &str) -> Result<String> {
     ));
     if count < records.len() {
         body.push_str(&format!(
-            "\n{} of {} evidence records are left out of this body, which is bounded at {BODY_LIMIT} bytes.\n",
+            "\n{} of {} evidence records are left out of this body, the list being bounded at {EVIDENCE_LIMIT} bytes.\n",
             records.len() - count,
             records.len()
         ));
     }
     Ok(body)
+}
+
+/// Which of `records` the body lists within `budget` bytes, marked by index in `keep`, `lines`
+/// their body lines. Every passing `test_result` at `revision`, the record the held claims rest
+/// on, is kept first, the newest while they fit; then the newest of the others while they fit.
+/// What is kept reads oldest to newest in the body, so the newest records that fit are the ones
+/// that are listed.
+fn kept_within(
+    records: &[serde_json::Value],
+    lines: &[String],
+    revision: &str,
+    budget: usize,
+) -> Vec<bool> {
+    let rests_on_claims = |record: &serde_json::Value| {
+        record["kind"] == "test_result"
+            && record["result"] == "pass"
+            && record["subject_revision"] == revision
+    };
+    let mut keep = vec![false; records.len()];
+    let mut used = 0;
+    for pinned in [true, false] {
+        for index in (0..records.len()).rev() {
+            if rests_on_claims(&records[index]) != pinned {
+                continue;
+            }
+            if used + lines[index].len() > budget {
+                break;
+            }
+            used += lines[index].len();
+            keep[index] = true;
+        }
+    }
+    keep
 }
 
 /// What `pr.open` does after the push: opens the case's pull request, or reads the one it has.
