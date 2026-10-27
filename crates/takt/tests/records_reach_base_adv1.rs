@@ -490,8 +490,11 @@ fn records_of_an_earlier_revision_reach_the_base_with_a_later_grant() {
             .filter(|(_, _, json)| json["change"]["kind"] == "test_result")
             .map(|(_, _, json)| {
                 let reference = json["change"]["reference"].as_str().expect("a reference");
+                let path = reference.split_once('#').map_or(reference, |(path, _)| path);
                 let observed: serde_json::Value = serde_json::from_slice(
-                    &fs::read(case.repo.join(reference)).expect("the case's record"),
+                    &fs::read(case.repo.join(path)).expect(
+                        "story:the-pull-request-and-the-store-carry-the-evidence: the case's record, at the reference's path before its fragment",
+                    ),
                 )
                 .expect("json");
                 observed["subject_revision"]

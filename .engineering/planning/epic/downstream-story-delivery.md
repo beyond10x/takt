@@ -7,7 +7,7 @@ title: takt delivers a story on a repository that is not ours, the way that repo
 summary: the gaps a downstream trial found around takt's inner loop
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Epic: downstream-story-delivery
 
@@ -64,6 +64,11 @@ engineering-protocols -> takt; worktree -> takt) is delivered in one workspace:
   `worktree`, the locally built binary goes on `PATH`.
 - The end-to-end check runs on that workspace.
 - Then the releases go out in chain order, as pin-only hops.
+
+Inside takt, the active branch `story/scan-forge-adapters` (`story:scan-and-forge-are-adapters`, not yet on
+integration) also changes `crates/takt/src/run.rs`, `run_config.rs`, `harness.rs`, `forge.rs` and `forge/gitlab.rs`.
+Those are files most stories here claim. No story of this epic starts before that branch is merged into integration.
+The three forge stories are held by `dependency-blocker:scan-and-forge-adapters-not-on-integration` until then.
 
 ## Acceptance
 

@@ -123,9 +123,11 @@ fn a_command_line_endpoint_files_credential_wins_over_the_configurations_variabl
     )
     .expect("an endpoint file");
     let config = world.0.join("run.toml");
+    // story:scan-and-forge-are-adapters: `--harness harness` with no policy needs the file to
+    // declare `scan = "none"`, or it is refused before the case opens.
     fs::write(
         &config,
-        format!("harness = \"harness\"\nendpoint_token_env = \"{VARIABLE}\"\n"),
+        format!("harness = \"harness\"\nendpoint_token_env = \"{VARIABLE}\"\nscan = \"none\"\n"),
     )
     .expect("a run configuration file");
     let output = world.run(&[

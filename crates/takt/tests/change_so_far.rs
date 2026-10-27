@@ -13,7 +13,7 @@ use std::process::Command;
 
 use takt::case::Branch;
 use takt::harness::ClaudeCode;
-use takt::run::ChangeScan;
+use takt::scan::gates::ChangeScan;
 use takt::validator::Validator;
 use takt::{Run, RunOptions};
 

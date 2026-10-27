@@ -10,6 +10,8 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: story:pr-opens-when-change-is-done
+- depends_on: story:takt-ships-default-protocol-settings
+- depends_on: story:the-run-file-sets-protocol-settings
 scope:
 - confidence: inferred
   path: Cargo.toml
@@ -19,7 +21,7 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 4}
@@ -44,7 +46,7 @@ Owner decision of 2026-10-19: "why is takt committing the code, then PR, and onl
 
 On scenario 1 with a fake harness, a story case runs `tests.write` before `implementation.edit`. A `tests.run` between them records `fail` and is cited by the implementation's precondition. `pr.open` is offered only after both paths changed and tests and gate are green at one revision, and the forge records one push. A harness that edits the implementation first is refused by the protocol, not after the fact.
 
-Added 2026-10-27, from a downstream trial in which the gate ran three times per case, once on a known-red revision:
+Added 2026-10-27, from a downstream trial in which the gate ran three times per case, once on a known-red revision. The `gate_on` default comes from `story:takt-ships-default-protocol-settings`, and the `protocol` key from `story:the-run-file-sets-protocol-settings`. Both are depends_on edges.
 
-- `gate_deferral::a_red_revision_runs_no_gate`: under `gate_on: after_handover` (the default of `story:takt-ships-default-protocol-settings`), the gate runs once per case, on the handed-over revision. Each deferral is printed as `gate.run: deferred (precondition ... not true at <rev>)` and recorded as an event, never as a pass.
-- `protocol_settings::tests_optional_keeps_todays_order`: `tests_first: optional`, or `protocol: story.delivery/1`, keeps today's order.
+- `gate_deferral::a_red_revision_runs_no_gate`: under the default `gate_on: after_handover`, scenario 1 records exactly one `gate_result`, at the handed-over revision. Each earlier revision prints `gate.run: deferred (precondition ... not true at <rev>)` and records one `gate.deferred` event, and no deferral is recorded as a pass.
+- `protocol_settings::tests_optional_admits_implementation_first`: with `protocols: {story.delivery: {tests_first: optional}}`, a fake harness that edits the implementation first is admitted, and the case records no refusal.

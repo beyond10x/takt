@@ -15,15 +15,19 @@ takt's releases.
 - That output has terminal escape codes stripped and credentials withheld, and passes the secret scan when a policy is set.
 - `takt run --config` takes `story`, `endpoint_token_env` and `state_dir`; `--state-dir` puts transcripts under `<state_dir>/transcripts`.
 - `takt scenario run` takes `--config`.
+- `scan` in the `takt run --config` file, the run's scan adapter: `gates`, the default, scans proposals with `b10x-gates` under `B10X_GATES_POLICY`; `none` scans nothing.
+- `scan = "none"` is accepted only in that file, never as a flag; the run says so before its first step, and the case's `opened` event records the adapter as `scan`.
 
 ### Changed
 
+- **Breaking:** `--harness codex` or `--harness harness` with neither `B10X_GATES_POLICY` nor `scan: none` is refused before the case opens, exit 1, naming the scan adapter; a resumed case too.
+- `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
+- `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
+- `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
 - `b10x-loom-sdk` moves from loom 0.43.0 to 0.45.0 with metaharness 0.20.0: a Codex step on a codex off metaharness's pin proposes its change, H9 advisory (story:codex-off-pin-proposes).
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
-
-### Changed
-
-- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer, and the pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
+- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
+- The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 
 ### Fixed
 
@@ -33,7 +37,11 @@ takt's releases.
 - A judgement step whose session ends without its action line is tried again, 3 times at most; each try counts against `--iterations`.
 - Each such try is charged the tokens its session reported; the run ends exit 5 after the third, or exit 3 if a try spent the budget.
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
-- The site says what runs under Seatbelt on macOS since 0.10.0, that the gates scan is required for every harness but Claude Code, and that `bot` is github.com.
+- The site says what runs under Seatbelt on macOS since 0.10.0, which scan and forge adapters a run can have, and that `bot` is beyond10x's github.com route.
+
+### Security
+
+- A proposal is refused when a path it names holds text of the shape of a credential, as its content and summary already were, before any refusal that would name the path.
 
 ## [0.14.0] - 2026-10-26
 

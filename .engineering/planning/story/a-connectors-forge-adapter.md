@@ -19,8 +19,8 @@ scope:
 - confidence: inferred
   path: crates/takt/src/run_config.rs
 - confidence: inferred
-  path: crates/takt/tests
-revision: 2
+  path: crates/takt/tests/connectors_forge.rs
+revision: 4
 ---
 # Story: a-connectors-forge-adapter
 
@@ -49,13 +49,17 @@ Each is a named conformance scenario run by `task check`, on a fake `connectors`
 2. `connectors_forge::a_run_opens_and_reads_its_change_request`: the fake records create, then read, with the named
    instance.
 3. `connectors_forge::it_is_never_the_default`: a run file without `forge: connectors` never invokes `connectors`.
+4. `connectors_forge::merge_carries_the_head`: the fake records the merge invocation with the head the checks were
+   read on.
+5. `connectors_forge::checks_for_another_head_are_not_read`: a pipeline the fake reports for another head leaves the
+   checks pending, and no merge is invoked.
 
 ## Scope
 
 - `crates/takt/src/forge/connectors.rs` (new)
 - `crates/takt/src/forge.rs` (adapter registration)
 - `crates/takt/src/run_config.rs` (`forge_instance`)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/connectors_forge.rs`
 
 ## Out of scope
 

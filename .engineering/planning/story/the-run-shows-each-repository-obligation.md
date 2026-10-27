@@ -20,8 +20,8 @@ scope:
 - confidence: inferred
   path: crates/takt/src/validator.rs
 - confidence: inferred
-  path: crates/takt/tests
-revision: 2
+  path: crates/takt/tests/obligations.rs
+revision: 4
 ---
 # Story: the-run-shows-each-repository-obligation
 
@@ -53,6 +53,8 @@ Each is a named conformance scenario run by `task check`.
 3. `obligations::a_change_to_the_gates_document_does_not_weaken_its_gate`: a candidate that deletes the gate from the
    gates document is still held to it.
 4. `obligations::the_prompt_names_the_repository_obligations`: the first step's prompt lists each gate's text.
+5. `obligations::the_report_prints_the_table`: after scenario 1's run, `takt report --case <id>` prints
+   `release-notes` with status `fail`, and its JSON form holds the same row.
 
 ## Scope
 
@@ -60,7 +62,7 @@ Each is a named conformance scenario run by `task check`.
 - `crates/takt/src/harness.rs` (`prompt_with`)
 - `crates/takt/src/run.rs` (stop line)
 - `crates/takt/src/report.rs` (the report table)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/obligations.rs`
 
 ## Delivery
 

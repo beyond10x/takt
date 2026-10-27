@@ -40,12 +40,8 @@ admits only while the branch's tip is merged into the default branch.
 `takt scenario run` takes the same budget, harness, endpoint, forge and test flags as
 `takt run`, `--continue-past-red-base` among them.
 
-:::caution[Planned]
-
-`takt scenario run --config` is planned and not in 0.14.0. Give a scenario run its settings as
-flags ([Known limitations](../known-limitations.md#takt)).
-
-:::
+`takt scenario run --config <FILE>` reads the same run configuration file as `takt run`, and
+refuses a `story` in it, since the scenario names the story. (Not in 0.14.0.)
 
 ## Scenarios
 

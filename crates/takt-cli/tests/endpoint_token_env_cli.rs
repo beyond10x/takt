@@ -137,7 +137,9 @@ impl World {
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
-            .env_remove("B10X_GATES_POLICY")
+            // A harness run opens only under a policy or a declared `scan: none`
+            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
+            .env("B10X_GATES_POLICY", self.outer().join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove(VARIABLE);
         if let Some(value) = value {
@@ -430,7 +432,7 @@ fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() 
             "--endpoint-token-env",
             VARIABLE,
             "--iterations",
-            "4",
+            "5",
             "--test-cmd",
             "sh probe.sh",
         ],
@@ -470,7 +472,11 @@ fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() 
         Some(MARKER),
         "the staged file holds the value"
     );
-    assert_eq!(output.status.code(), Some(5), "{stdout}\n{stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "story:a-harness-step-without-an-action-is-retried: three tries inside a budget of 5 steps end on the error, exit 5:\n{stdout}\n{stderr}"
+    );
     assert!(
         !stdout.contains(MARKER) && !stderr.contains(MARKER),
         "{stdout}\n{stderr}"

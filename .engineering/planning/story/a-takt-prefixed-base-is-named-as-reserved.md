@@ -16,8 +16,8 @@ scope:
 - confidence: inferred
   path: crates/takt/src/run.rs
 - confidence: inferred
-  path: crates/takt/tests
-revision: 2
+  path: crates/takt/tests/reserved_prefix.rs
+revision: 4
 ---
 # Story: a-takt-prefixed-base-is-named-as-reserved
 
@@ -49,4 +49,4 @@ Each is a named conformance scenario run by `task check`.
 
 - `crates/takt/src/run.rs` (`on_a_case_branch`, `to_base`)
 - `crates/takt/src/case.rs` (`BRANCH_PREFIX`)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/reserved_prefix.rs`
