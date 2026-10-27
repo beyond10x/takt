@@ -1793,9 +1793,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // file, the default, and each declared input from `--input`, the run file or takt's
             // default, each with its source. One it does not declare is refused before anything is
             // opened. A fresh case on a story resolves them per story below, once its tags are
-            // known; a resumed case keeps its own.
+            // known; a resumed case keeps its own, and its run file is checked all the same.
             let fresh = case.is_none() && resuming.is_none();
             let story_unit = fresh && intent.is_none();
+            if !fresh {
+                takt::protocol::check_run_file(&protocol_settings, None)?;
+            }
             let mut applied = if fresh && !story_unit {
                 Some(settings_for(
                     &protocol_settings,

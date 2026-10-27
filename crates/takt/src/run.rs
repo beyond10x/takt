@@ -11000,6 +11000,19 @@ impl<'a> Run<'a> {
         // in the record so a reader knows what confined the evidence.
         let confinement = crate::confinement::current().name().to_owned();
         let commit_record = self.commit_plan_now().record();
+        let input_sources = self.case.input_sources();
+        let shown_inputs: Vec<String> = inputs
+            .iter()
+            .map(|input| {
+                let source = input
+                    .split_once('=')
+                    .and_then(|(name, _)| input_sources.iter().find(|(held, _)| held == name));
+                match source {
+                    Some((_, source)) => format!("{input}({source})"),
+                    None => input.clone(),
+                }
+            })
+            .collect();
         events.emit_opened_with(
             self.steps,
             &Event::Opened {
@@ -11021,6 +11034,9 @@ impl<'a> Run<'a> {
                 records: Some(self.kept_records().name().to_owned()),
                 // The scan adapter every proposal and the change so far pass.
                 scan: Some(self.scan.name().to_owned()),
+                protocol_source: self.case.protocol_source(),
+                input_sources: (!input_sources.is_empty())
+                    .then(|| input_sources.iter().cloned().collect()),
             },
             self.llm_digest.as_deref(),
             &commit_record,
@@ -11031,10 +11047,10 @@ impl<'a> Run<'a> {
             self.case.id,
             self.case.protocol.id,
             self.tree.display(),
-            if inputs.is_empty() {
+            if shown_inputs.is_empty() {
                 "none".to_owned()
             } else {
-                inputs.join(" ")
+                shown_inputs.join(" ")
             }
         )?;
         // One sequence per case, continued across its runs: no decision file is overwritten,

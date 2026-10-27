@@ -133,18 +133,24 @@ pub const LOOP_BASELINE: &str = "loop_baseline";
 
 /// The case a branch of `tree` is the branch of: `Some(id)` for `takt/<id>` with that case's
 /// directory present, `None` for a branch outside [`BRANCH_PREFIX`]. A branch under the prefix
-/// that names no case id is refused as such, and one that names a case id with no case
-/// directory is refused as a base using takt's reserved prefix, naming the prefix and a rename.
+/// that is no case id, or names a case id with no case
+/// directory, is refused as a base using takt's reserved prefix, naming the prefix and a rename.
 pub(crate) fn case_of_branch<'a>(tree: &Path, branch: &'a str) -> Result<Option<&'a str>> {
     let Some(case) = branch.strip_prefix(BRANCH_PREFIX) else {
         return Ok(None);
     };
-    // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
-    check_id(case).with_context(|| format!("the branch {} names no case", shown(branch)))?;
-    if std::fs::symlink_metadata(CaseDir::locate(tree, case)).is_err() {
+    // The name is joined to the cases directory only as a case id: `takt/x/y` is no case id, so
+    // it is a base using the reserved prefix, like a name with no case directory.
+    let names_no_case = check_id(case).is_err();
+    if names_no_case || std::fs::symlink_metadata(CaseDir::locate(tree, case)).is_err() {
         let name = shown(branch);
+        let lead = if names_no_case {
+            format!("the branch {name} names no case; ")
+        } else {
+            String::new()
+        };
         bail!(
-            "branch `{name}` uses takt's reserved prefix `{BRANCH_PREFIX}`; base branches cannot start with it; rename it (e.g. `git branch -m {name} trial/{}`)",
+            "{lead}branch `{name}` uses takt's reserved prefix `{BRANCH_PREFIX}`; base branches cannot start with it; rename it (e.g. `git branch -m {name} trial/{}`)",
             shown(case)
         );
     }
@@ -3217,6 +3223,13 @@ impl CaseDir {
     #[must_use]
     pub fn input_sources(&self) -> Vec<(String, String)> {
         sources_in(&self.doc)
+    }
+
+    /// Where the case's protocol was chosen from, as the case record holds it (`flag`, `tag`,
+    /// `run-file`, `default`...); none for a case opened before the record was kept.
+    #[must_use]
+    pub fn protocol_source(&self) -> Option<String> {
+        self.doc["protocol_source"].as_str().map(str::to_owned)
     }
 
     /// Creates the directory and writes the case's files, `case.yaml` last.

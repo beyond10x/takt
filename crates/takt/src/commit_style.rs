@@ -363,10 +363,11 @@ pub fn one_line(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Whether `line` opens with a word and a colon: the shape of a trailer, and of a line of
-/// takt's own (`takt: take`).
+/// Whether `line` opens with a word, optional white space and a colon: the shape git reads as a
+/// trailer (`Key: value` and `Key : value`), and of a line of takt's own (`takt: take`).
 fn trailer_shaped(line: &str) -> bool {
     line.trim_start().split_once(':').is_some_and(|(word, _)| {
+        let word = word.trim_end();
         !word.is_empty()
             && word
                 .chars()
@@ -398,7 +399,11 @@ fn checked(style: Style, kind: &str, reply: Option<&serde_json::Value>) -> Resul
             "the commit's subject is past {SUBJECT_MAX} characters"
         ));
     }
-    if trailer_shaped(subject) && subject.trim_start().to_lowercase().starts_with("takt:") {
+    if trailer_shaped(subject)
+        && subject
+            .split_once(':')
+            .is_some_and(|(word, _)| word.trim().eq_ignore_ascii_case("takt"))
+    {
         return Err("the commit's subject opens as a line of takt's".to_owned());
     }
     if body
@@ -503,7 +508,7 @@ pub fn message(
                 if !summary.is_empty() {
                     text.push_str("\n\n");
                     if trailer_shaped(&summary) {
-                        text.push_str("reported: ");
+                        text.push_str("reported - ");
                     }
                     text.push_str(&summary);
                 }
@@ -672,7 +677,7 @@ mod tests {
         );
         assert_eq!(
             made.text,
-            "test: Title\n\nreported: takt: take story:other\n"
+            "test: Title\n\nreported - takt: take story:other\n"
         );
     }
 

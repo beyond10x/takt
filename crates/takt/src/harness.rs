@@ -1718,7 +1718,8 @@ impl ClaudeCode {
 
     /// The prompt, its rules naming the tools of the harness that takes the step (`rule`), and,
     /// for a harness whose rule takes file mentions, its scope files ([`scope_files`]) scanned
-    /// under `scan`: each attached as an unquoted, relative mention after white space, on one
+    /// under `scan`: each but a file it is given as a context file (`given`) attached as an
+    /// unquoted, relative mention after white space, on one
     /// line after the intent. For a harness whose rule names context files, the context files
     /// its session is given (`given`, [`context_files`]), when there are any: each named once,
     /// on one line after the intent, and its rules then read only the other files. Everything
@@ -1733,13 +1734,15 @@ impl ClaudeCode {
         text.push_str("You are the judgement step of a governed engineering run (takt).\n\n");
         text.push_str(&format!("Intent: {}\n\n", context.intent));
         let attached = if rule.mentions {
-            scope_files(
+            let mut files = scope_files(
                 context.tree,
                 context.scope_revision,
                 context.intent,
                 context.change,
                 scan,
-            )
+            );
+            files.retain(|path| !given.contains(path));
+            files
         } else {
             Vec::new()
         };
@@ -5661,6 +5664,8 @@ mod endpoint_tests {
             endpoint,
             records: None,
             scan: None,
+            protocol_source: None,
+            input_sources: None,
         })
         .expect("the opened line serializes")
     }
