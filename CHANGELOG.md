@@ -12,6 +12,10 @@ takt's releases.
 - Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
 - Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
 
+### Changed
+
+- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer, and the pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
+
 ### Fixed
 
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.

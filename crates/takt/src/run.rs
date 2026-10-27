@@ -9845,7 +9845,8 @@ impl<'a> Run<'a> {
     }
 
     /// The latest `test_result` pass record a validator of the case wrote that is about the
-    /// current revision of its subject: its path in the repository and its own `observed_at`.
+    /// current revision of its subject: the reference the store records for it (its path, sha256
+    /// and fields, [`crate::frontier::test_result_reference`]) and its own `observed_at`.
     /// A record counts only when an `evidence` line of the case's record, which the kernel
     /// writes and a step may not, names it under the case's `evidence/`: a record put there by
     /// any other hand is never one the run observed. `None` when there is none.
@@ -9866,20 +9867,24 @@ impl<'a> Run<'a> {
                 continue;
             }
             let full = self.tree.join(relative);
-            let text = std::fs::read_to_string(&full)
+            let bytes = std::fs::read(&full)
                 .with_context(|| format!("read the record {}", full.display()))?;
-            let record: serde_json::Value = serde_json::from_str(&text)
+            let record: serde_json::Value = serde_json::from_slice(&bytes)
                 .with_context(|| format!("read the record {}", full.display()))?;
             let current = record["subject"]
                 .as_str()
                 .and_then(|subject| self.case.revision(subject));
             if record["kind"] == TEST_RESULT
-                && record["result"] == "pass"
-                && current.is_some()
-                && record["subject_revision"].as_str() == current.as_deref()
+                && let Some(result) = record["result"].as_str().filter(|result| *result == "pass")
+                && let Some(revision) = record["subject_revision"].as_str()
+                && current.as_deref() == Some(revision)
+                && let Some(producer) = record["producer"].as_str()
                 && let Some(at) = record["observed_at"].as_str()
             {
-                return Ok(Some((path.to_owned(), at.to_owned())));
+                let reference = crate::frontier::test_result_reference(
+                    path, &bytes, result, revision, producer,
+                );
+                return Ok(Some((reference, at.to_owned())));
             }
         }
         Ok(None)
