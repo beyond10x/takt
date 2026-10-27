@@ -242,8 +242,8 @@ fn takt_run_on_a_story_whose_case_is_accepted_records_the_test_result_and_moves_
     );
     assert!(recorded.contains("\"source\": \"takt\""), "{recorded}");
     assert!(
-        recorded.contains(&format!("\"reference\": \"{path}\"")),
-        "{recorded}"
+        recorded.contains(&format!("\"reference\": \"{path}#sha256=")),
+        "story:the-pull-request-and-the-store-carry-the-evidence: the reference is the record's path with its sha256 and fields\n{recorded}"
     );
     assert_eq!(status(&repo, STORY), "implemented", "{out}");
     assert!(
