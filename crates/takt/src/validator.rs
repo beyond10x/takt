@@ -1879,7 +1879,15 @@ fn python_dir(tree: &Path, at: &str, revision: &str, dir: &str) -> Result<Vec<St
     };
     let mut paths = Vec::new();
     for commit in [at, revision] {
-        let mut args = vec!["ls-tree", "-r", "-z", "--name-only", "--full-tree", commit];
+        let mut args = vec![
+            "--literal-pathspecs",
+            "ls-tree",
+            "-r",
+            "-z",
+            "--name-only",
+            "--full-tree",
+            commit,
+        ];
         if !dir.is_empty() {
             args.extend(["--", dir]);
         }
@@ -2083,9 +2091,21 @@ fn lint_changes(before: &str, after: &str) -> std::result::Result<Vec<String>, &
 }
 
 /// What git stores at `path` in the commit `at`: its mode and object, or `None` when the commit
-/// has no such path.
+/// has no such path. The path is looked up literally (`--literal-pathspecs`): a path a gate's
+/// command names may start with `:`, which git reads as pathspec magic
+/// (story:a-gate-script-with-a-colon-is-run).
 fn object_at(tree: &Path, at: &str, path: &str) -> Result<Option<String>> {
-    let listed = crate::git::run(tree, &["ls-tree", "--full-tree", at, "--", path])?;
+    let listed = crate::git::run(
+        tree,
+        &[
+            "--literal-pathspecs",
+            "ls-tree",
+            "--full-tree",
+            at,
+            "--",
+            path,
+        ],
+    )?;
     Ok(listed
         .split('\t')
         .next()
@@ -4601,5 +4621,58 @@ mod tests {
         assert_eq!(changed("[lints] x\n"), Err("after"));
         assert_eq!(changed("d = \"\"\"\n[package]\n\"\"\"\n"), Err("after"));
         assert_eq!(changed("d = [\n"), Err("after"));
+    }
+
+    /// story:a-gate-script-with-a-colon-is-run, acceptance 2: a path a gate's command names that
+    /// starts with `:` is looked up as the literal path it names. Git reads `:/` as the top of the
+    /// tree and refuses `:/__main__.py`; `:x` it reads as a magic-less pattern that matches no
+    /// path, so a file of that name would look absent.
+    #[test]
+    fn a_path_that_starts_with_a_colon_is_looked_up_literally() {
+        let dir = std::env::temp_dir().join(format!("takt-object-at-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(":")).expect("a directory");
+        std::fs::write(dir.join(":x"), "x\n").expect("a file");
+        std::fs::write(dir.join(":").join("__main__.py"), "print(1)\n").expect("a module");
+        crate::git::run(&dir, &["init", "-q", "-b", "main"]).expect("git init");
+        crate::git::run(&dir, &["add", "-A"]).expect("git add");
+        crate::git::run(
+            &dir,
+            &[
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@localhost",
+                "commit",
+                "-q",
+                "-m",
+                "start",
+            ],
+        )
+        .expect("git commit");
+        let file = object_at(&dir, "HEAD", ":x").expect("the lookup runs");
+        assert!(
+            file.as_deref()
+                .is_some_and(|o| o.starts_with("100644 blob ")),
+            "story:a-gate-script-with-a-colon-is-run: `:x` is not looked up literally: {file:?}"
+        );
+        let module = object_at(&dir, "HEAD", ":/__main__.py").expect("the lookup runs");
+        assert!(
+            module
+                .as_deref()
+                .is_some_and(|o| o.starts_with("100644 blob ")),
+            "story:a-gate-script-with-a-colon-is-run: `:/__main__.py` is not looked up literally: \
+             {module:?}"
+        );
+        assert_eq!(
+            object_at(&dir, "HEAD", ":/nothing.py").expect("the lookup runs"),
+            None
+        );
+        assert_eq!(
+            python_dir(&dir, "HEAD", "HEAD", ":").expect("the listing runs"),
+            vec![":/__main__.py".to_owned()],
+            "story:a-gate-script-with-a-colon-is-run: the directory `:` is not listed literally"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
