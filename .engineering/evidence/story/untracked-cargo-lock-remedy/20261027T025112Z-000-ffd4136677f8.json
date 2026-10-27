@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T02:51:12Z",
+  "actor": "human:timo",
+  "artifact": "story:untracked-cargo-lock-remedy",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --locked -p b10x-takt --no-fail-fast at edb9ab6e: 568 passed, 0 failed; untracked_cargo_lock_remedy 5 passed"
+  }
+}
