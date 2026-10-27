@@ -1641,7 +1641,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // in the store; an intent's run has no story and writes nothing there.
             run.record_on(&store);
             let records = looping.records_profile();
-            finish(&mut run, forge_line.as_deref(), scan, &looping, records, out)
+            finish(
+                &mut run,
+                forge_line.as_deref(),
+                scan,
+                &looping,
+                records,
+                out,
+            )
         }
     }
 }
