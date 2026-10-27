@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-27
+
+takt confines every test command through Substrate on Linux and macOS, and a store story opens on
+`story.delivery/2`; declared setup commands run before the first check.
+
 ### Added
 
 - `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
@@ -684,7 +689,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.15.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.16.0...HEAD
+[0.16.0]: https://github.com/beyond10x/takt/compare/0.15.1...0.16.0
 [0.15.1]: https://github.com/beyond10x/takt/compare/0.15.0...0.15.1
 [0.15.0]: https://github.com/beyond10x/takt/compare/0.14.0...0.15.0
 [0.14.0]: https://github.com/beyond10x/takt/compare/0.13.1...0.14.0

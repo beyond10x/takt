@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.15.1 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.16.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and
 `self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS
 (aarch64). Its harnesses are Claude Code (`--harness claude`), Codex (`codex`) and b10x-harness
@@ -39,6 +39,7 @@ How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGE
 | 0.14.0 | a run whose tests are red stops instead of spending model calls: `RedBase` at a red base before the first model call, `RepeatedTestFailure` after two test runs in a row at new revisions fail the same tests; `--continue-past-red-base` goes on |
 | 0.15.0 | a run names the Claude Code binary it starts (`--harness-program`, recorded with its sha256 on `opened`) and stops `HarnessUnqualified` before the first session when metaharness does not qualify it; the command forge, the GitLab API transport, protocol settings in the run file and semantic step commits |
 | 0.15.1 | 0.15.0 with its macOS test jobs passing; 0.15.0 has no GitHub Release, its release run having failed on macOS. On macOS an `llm` route with a `{file: ...}` key is refused and the fresh-home step guard is unproven |
+| 0.16.0 | confinement through Substrate 0.14.0 on Linux and macOS, takt's own Seatbelt and bubblewrap code retired; `story.delivery/2` the default for a store story; declared `setup` commands; each gate of the repository's gates document shown with its status; the connectors forge; the Workspace seam with a minimal `case.dispatch` |
 
 | milestone | state |
 |---|---|
