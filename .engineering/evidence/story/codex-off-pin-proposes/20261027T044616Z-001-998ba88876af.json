@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-27T04:46:16Z",
+  "actor": "human:timo",
+  "artifact": "story:codex-off-pin-proposes",
+  "kind": "story",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "pin commit b2c71c7 (b10x-loom-sdk tag 0.45.0, metaharness 0.20.0), merged with integration/takt 8834ffd at 17db649: cargo test --workspace 1923 passed, 1 failed (test_command_login_cli: socket path over SUN_LEN under the long scratch target dir, environmental), 5 ignored; harness_parity a_codex_session_on_another_version_proposes_its_change, a_codex_session_off_the_pin_charges_its_tokens, codex_is_the_one_on_the_childs_path, the_session_executor_is_looms ok; fmt and clippy exit 0. End to end: takt run --harness codex --forge none on a scratch crate with child codex 0.164.0 (H9 gap) and 0.160.0 (H9 ok) both stop ApprovalRequired (repository.merge), steps 4, exit 4, no H9 in the stop line",
+    "reference": "b2c71c7"
+  }
+}

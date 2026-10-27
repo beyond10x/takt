@@ -2,15 +2,17 @@
 format: aep.planning-md/3
 id: story:codex-off-pin-proposes
 kind: story
-status: proposed
+status: implemented
 title: A Codex step on a codex outside metaharness's pin proposes its change
 summary: metaharness 0.20.0 makes H9 advisory; takt takes it through a loom-sdk pin
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:takt-on-loom-sdk
-revision: 2
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T02:27:17Z", actor: "human:timo", revision: 2, decided_on: {"recorded":{"approval":1}}}
+- {from: "proposed", to: "active", at: "2026-10-27T04:46:16Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"test_result":2,"approval":2}}}
+- {from: "active", to: "implemented", at: "2026-10-27T04:46:16Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":2,"approval":2}}}
 ---
 # A Codex step on a codex outside metaharness's pin proposes its change
 
