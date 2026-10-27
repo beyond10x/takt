@@ -39,7 +39,7 @@ for `_`; `scan` has no flag.
 | `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
 | `forge` | string: `bot`, `gitlab` or `none` |
 | `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
-| `state_dir` | path: the state directory, as `--state-dir`; a relative path is read beside the configuration file |
+| `state_dir` | path: the state directory, as `--state-dir`: the run's transcripts go to `<state_dir>/transcripts` and what a discarded step sets aside to `<state_dir>/set-aside` ([The state directory](#the-state-directory)); a relative path is read beside the configuration file |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
@@ -73,7 +73,7 @@ step 1: tests.run {}
   effect: the test command exited 0: pass; 
   evidence: test_result pass
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
-stopped: Iterations (1); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231214Z
+stopped: Iterations (1); steps 1, tokens 0, case ~/demo/.takt/cases/takt-20261026T231214Z
 ```
 
 ### A minimal loom.agent/1 document
@@ -92,7 +92,9 @@ takt:
   test_cmd: "true"
 ```
 
-The same run, with the same output as above, starts from `--config agent.yaml`. A
+The same run, with the same output as above, starts from `--config agent.yaml`. The document's
+`runtime.state_dir`, when it has one, is the run's default state directory
+([The state directory](#the-state-directory)). A
 `loom.agent/1` document with no `takt` member sets nothing, so every setting then comes from
 flags: that is how a Loom release that does not admit a `takt` member is used, with the settings
 in `spec.command.args`.
@@ -118,7 +120,9 @@ and never a value written in it:
 
 Loom's members, as takt reads them from Loom 0.43.0, are `format`, `agent`, `model`, `session`,
 `loops`, `states`, `bindings`, `channel`, `writes`, `policy`, `expose`, `runtime` and `deploy`.
-takt reads none of them.
+takt reads one value of them, `runtime.state_dir`, and none of the rest: the other `runtime`
+members are Loom's and are not refused. A `runtime.state_dir` that is not a path string is
+refused, without its value.
 
 An unknown key in a TOML file, run for real:
 
@@ -145,7 +149,7 @@ line runs two steps:
 $ takt run --repo ~/demo --intent x --config run.toml --iterations 2
 step 1: tests.run {}
 step 2: repository.merge (none)
-stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/demo/.engineering/cases/prec
+stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/demo/.takt/cases/prec
 ```
 
 (Lines of the run that do not show the precedence are left out.)
@@ -154,6 +158,26 @@ stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/demo/.en
 `endpoint_file` and a command line that says `--harness none` runs with no endpoint and is not
 refused. A relative `endpoint_file` is read beside the configuration file, not against the
 current directory.
+
+### The state directory
+
+Everything a run keeps on the host, outside the repository, goes under one directory, the state
+directory. It is the first of these that is set:
+
+1. `--state-dir`;
+2. `state_dir` in the run configuration file, or in the `takt` member of a `loom.agent/1`
+   document;
+3. `runtime.state_dir` of a `loom.agent/1` document, which is Loom's own key for it;
+4. `$XDG_STATE_HOME/takt`, or `~/.local/state/takt` without `XDG_STATE_HOME`.
+
+A relative path from the file (either key) is read beside the file; one from `--state-dir` is
+read against the working directory. With one of the first three set, the run's session
+transcripts are under `<state_dir>/transcripts` and what a discarded step set aside is under
+`<state_dir>/set-aside`, so nothing a run keeps on the host is written under
+`$XDG_STATE_HOME/takt`. For a container, name a directory on a kept volume. A state directory
+whose `transcripts` or `set-aside` cannot be used (inside the repository, a file on its way, not
+writable) is refused before anything opens, naming it and why, exit 1. A replay, a promotion and
+the judges are not under it: they stay in `$XDG_STATE_HOME/takt`.
 
 ## The endpoint file
 
@@ -412,7 +436,7 @@ which is `--model`) need `--harness harness`, and an `llm` section may not sit b
 
 | flag | meaning |
 |---|---|
-| `--state-dir <DIR>` | the state directory the run keeps its session transcripts in (`<DIR>/transcripts`), in place of `$XDG_STATE_HOME/takt`; for a container, a directory on a kept volume |
+| `--state-dir <DIR>` | the state directory the run keeps its host records in: session transcripts in `<DIR>/transcripts` and what a discarded step sets aside in `<DIR>/set-aside`, in place of `$XDG_STATE_HOME/takt`; wins over `state_dir` and a `loom.agent/1` document's `runtime.state_dir` ([The state directory](#the-state-directory)); for a container, a directory on a kept volume |
 
 ### Records
 

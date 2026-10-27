@@ -116,7 +116,7 @@ step 1: tests.run {}
   evidence: test_result pass
 step 2: gate.run {}
   effect: the gates document .engineering/gates.yaml from main at e4f3d09f, pinned at open: pass; every gate true: format; retained as gate-result-2.bundle.json
-  artifact: .engineering/cases/story-add-sub-20261026T231852Z/artifacts/gate-result-2.bundle.json
+  artifact: .takt/cases/story-add-sub-20261026T231852Z/artifacts/gate-result-2.bundle.json
   evidence: gate_result pass
 step 3: implementation.edit (codex)
   said: Added public sub(left, right) and a unit test in src/lib.rs asserting sub(5, 2) returns 3; tests left to takt. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
@@ -126,7 +126,7 @@ step 4: tests.run {}
   evidence: test_result pass
 step 5: gate.run {}
   effect: the gates document .engineering/gates.yaml from main at e4f3d09f, pinned at open: pass; every gate true: format; retained as gate-result-5.bundle.json
-  artifact: .engineering/cases/story-add-sub-20261026T231852Z/artifacts/gate-result-5.bundle.json
+  artifact: .takt/cases/story-add-sub-20261026T231852Z/artifacts/gate-result-5.bundle.json
   evidence: gate_result pass
 step 6: change.handover (codex)
   said: The public sub function and unit test satisfy the story; no further edits are needed. Hand over for pull request creation and CI. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
@@ -136,7 +136,7 @@ step 7: change.read {}
   effect: merging b09390e9 into main at e4f3d09f, its tip now, changes its tree outside .engineering/: ahead
   evidence: change_record ahead
 candidate: d3f99cd08b31da20bbc26741779be713237909d2
-stopped: Unperformable (pr.opened; nothing performs it without the forge); steps 7, tokens 75939, case ~/my-repo/.engineering/cases/story-add-sub-20261026T231852Z
+stopped: Unperformable (pr.opened; nothing performs it without the forge); steps 7, tokens 75939, case ~/my-repo/.takt/cases/story-add-sub-20261026T231852Z
 ```
 
 1. The frontier took the story and committed the take on the case's branch,

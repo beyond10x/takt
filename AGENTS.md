@@ -38,7 +38,8 @@ detail (`website/docs/`); it duplicates none of them.
 | `website/` | the public site: Docusaurus pages in `website/docs/`, the landing in `product.json`, and `scripts/generate.mjs`, which writes the status, charts, CLI reference and protocol viewer from the records at build time |
 | `examples/loom-agent/` | the placeholder-named `LoomAgent` manifests the deploy guide (`website/docs/guides/deploy-on-kubernetes.md`) uses; `crates/takt/tests/examples_config.rs` reads them through takt's config reader |
 | `.engineering/planning` | the AEP planning store; change it only through `aep plan artifact` verbs |
-| `.engineering/cases` | in a repository takt runs on: the cases a run writes; never edited by hand (here: the recorded improvement turns) |
+| `.takt/cases` | in a repository takt runs on: the cases a run writes, ignored by git unless the repository commits its own `.takt/.gitignore`; never edited by hand |
+| `.engineering/cases` | a case an earlier takt opened, still resumed and read where it is; here: the recorded improvement turns, committed |
 
 ## Commands
 

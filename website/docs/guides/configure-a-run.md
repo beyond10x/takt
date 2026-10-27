@@ -31,7 +31,7 @@ takt run --repo . --intent "keep the tests green" --config takt.toml --iteration
 step 1: tests.run {}
   effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
-stopped: Iterations (1); steps 1, tokens 0, case ~/cfg-demo/.engineering/cases/takt-20261026T233456Z
+stopped: Iterations (1); steps 1, tokens 0, case ~/cfg-demo/.takt/cases/takt-20261026T233456Z
 ```
 
 (The `case` and `frontier` lines are left out.) `--iterations 1` on the command line won over the

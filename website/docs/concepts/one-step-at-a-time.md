@@ -56,7 +56,7 @@ step 1: tests.run {}
   effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
-stopped: Iterations (1); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231123Z
+stopped: Iterations (1); steps 1, tokens 0, case ~/demo/.takt/cases/takt-20261026T231123Z
 ```
 
 The word frontier has a second use in takt: the `Frontier` seam is the planning store, which

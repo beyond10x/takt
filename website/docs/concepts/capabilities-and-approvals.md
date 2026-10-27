@@ -60,7 +60,7 @@ frontier: implementation.edit (admissible), release.rollback (approval-required)
 step 1: repository.merge (none)
   said: no harness: nothing but the approval is left; requesting it
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231123Z
+stopped: ApprovalRequired (repository.merge); steps 1, tokens 0, case ~/demo/.takt/cases/takt-20261026T231123Z
 ```
 
 ## Recording a grant

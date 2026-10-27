@@ -12,7 +12,7 @@ Some actions of a protocol need a capability. In `software.change/1` and `story.
 you meet is `repository.merge`. When it is the next thing left, the run stops:
 
 ```console
-stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261026T234353Z
+stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-demo/.takt/cases/takt-20261026T234353Z
 ```
 
 The exit code is 4. What a capability is, and why the model cannot grant one:
@@ -35,7 +35,7 @@ recorded: nothing in the planning store; the case delivers no story (it was open
 ## 2. Check what was written
 
 ```console
-$ cat .engineering/cases/takt-20261026T234353Z/authority.yaml
+$ cat .takt/cases/takt-20261026T234353Z/authority.yaml
 - capability: repository.merge
   decision: granted
   approver: human:demo
@@ -58,6 +58,9 @@ store, no commit, and no store needed.
 | a story's | `takt run --repo .`, which resumes the open case of the story being worked |
 | an intent's | `takt run --repo . --case <case>`; without a planning store, a run with neither `--intent` nor `--case` is refused |
 
+A case under `.engineering/cases`, opened by an earlier takt, is approved and resumed the same way,
+where it is.
+
 The resumed run needs a harness. Merging is a judgement step. `--harness none` takes the action
 the case is granted, once it is admissible, and no other judgement step; with `--forge none`
 nothing performs that merge, so the step changes no file and the run stops:
@@ -69,7 +72,7 @@ step 1: repository.merge (none)
   said: no harness: the action the case is granted is taken
   effect: no file changed
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (admissible), tests.run (admissible), tests.write (admissible)
-stopped: NoProgress; steps 1, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261026T234353Z
+stopped: NoProgress; steps 1, tokens 0, case ~/takt-demo/.takt/cases/takt-20261026T234353Z
 ```
 
 The case stays open, exit 3. Resumed with a forge, the merge is performed by the forge's merge
@@ -90,7 +93,7 @@ step 2: tests.run {}
   effect: the test command exited 0: pass; 2 passed, 0 failed, 0 ignored over 2 result lines
 step 3: repository.merge (codex)
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 3, tokens 45753, case ~/takt-demo2/.engineering/cases/takt-20261026T233005Z
+stopped: ApprovalRequired (repository.merge); steps 3, tokens 45753, case ~/takt-demo2/.takt/cases/takt-20261026T233005Z
 ```
 
 (The model's `said:` lines, the `evidence:` line and the later `frontier:` lines are left out.) The first `frontier:`

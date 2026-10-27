@@ -127,7 +127,7 @@ frontier: implementation.edit (admissible), release.rollback (approval-required)
 step 2: repository.merge (none)
   said: no harness: nothing but the approval is left; requesting it
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261026T234353Z
+stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-demo/.takt/cases/takt-20261026T234353Z
 ```
 
 What happened:
@@ -140,7 +140,8 @@ What happened:
 4. With the tests green, the merge became `approval-required`. No harness was there to do more,
    so the run stopped for a grant, exit 4.
 
-The case is a directory in the repository, `.engineering/cases/<case>/`, untracked so far.
+The case is a directory in the repository, `.takt/cases/<case>/`. takt wrote `.takt/.gitignore` holding `*`, so `git status` shows none of
+it.
 [Read a case](./guides/read-a-case.md) walks through it. `takt approve` grants the merge, as
 [Approve a capability](./guides/approve-a-capability.md) shows. Merging is a judgement step, so
 it needs a harness.
@@ -172,7 +173,7 @@ frontier: implementation.edit (admissible), release.rollback (approval-required)
 step 4: repository.merge (codex)
   said: Reviewed the diff: sub(left, right) subtracts right from left, with a test confirming sub(5, 2) equals 3. No further edits needed; requesting merge approval. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 4, tokens 75709, case ~/takt-demo2/.engineering/cases/takt-20261026T233005Z
+stopped: ApprovalRequired (repository.merge); steps 4, tokens 75709, case ~/takt-demo2/.takt/cases/takt-20261026T233005Z
 ```
 
 The model took two steps: the edit and the request for the merge. takt committed the edit, then
@@ -202,7 +203,7 @@ $ takt run --repo takt-demo --config run.toml --iterations 0 --intent "add a fun
 scan: none (declared in run.toml); what --harness codex proposes is accepted unscanned, checked only for the shape of a credential
 case takt-20261027T014116Z on software.change/1 in ~/takt-demo; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-stopped: Iterations (0); steps 0, tokens 0, case ~/takt-demo/.engineering/cases/takt-20261027T014116Z
+stopped: Iterations (0); steps 0, tokens 0, case ~/takt-demo/.takt/cases/takt-20261027T014116Z
 ```
 
 The case's `opened` event records `"scan":"none"`.

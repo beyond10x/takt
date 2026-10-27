@@ -91,7 +91,7 @@ build's `REVISION`. A build from a clone, where `.git` is a directory, names its
 | `/config/agent.yaml` | the run's configuration: a `loom.agent/1` document whose `takt` member holds the fields of [the run configuration](./configuration.md), or those fields alone as YAML | read-only |
 | `/config/endpoint.toml` | the endpoint file the configuration names, `endpoint_file: endpoint.toml`: [the endpoint file](./configuration.md#the-endpoint-file) | read-only |
 
-The run's outcome is in `/workspace/.engineering/cases` and the exit code
+The run's outcome is in `/workspace/.takt/cases` and the exit code
 ([exit codes](./exit-codes.md)). With `forge: none` the delivery stays a branch in `/workspace`.
 Under the default `gates` scan adapter, the policy for `b10x-gates` comes from the deployment
 (`B10X_GATES_POLICY`), never the image; a configuration that declares `scan: none` needs none.
@@ -128,7 +128,7 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
   ```console
   $ docker run --rm --user 1000:1000 -e HOME=/tmp -v ~/demo:/workspace -v ./agent.yaml:/config/agent.yaml:ro takt:0.13.1 --intent "add a README line"
   frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-  stopped: error: tests.run (takt.tests-run): run true: the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed: run true: Operation not permitted (os error 1); steps 1, tokens 0, case /workspace/.engineering/cases/<case>
+  stopped: error: tests.run (takt.tests-run): run true: the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed: run true: Operation not permitted (os error 1); steps 1, tokens 0, case /workspace/.takt/cases/<case>
   ```
 
   Run the container with both unconfined, and the same command passes:
