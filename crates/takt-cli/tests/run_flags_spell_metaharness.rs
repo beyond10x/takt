@@ -465,6 +465,9 @@ fn each_old_name_opens_the_record_of_its_new_name_and_warns_once() {
 /// Acceptance 3: `--llm-config` over a run file's `llm` section gives the document's digest in the
 /// `opened` record, the section's own digest is not recorded; and `--llm-config` alone, without
 /// `--config`, does the same from a TOML document.
+/// Linux only: llm 0.16.0 reads a `{file: ...}` key on Linux alone and refuses it elsewhere
+/// (`llm-credentials` `file.rs`, `SecretError::UnsupportedPlatform`).
+#[cfg(target_os = "linux")]
 #[test]
 fn llm_config_replaces_the_run_files_section() {
     let world = World::new("llm-config", false);

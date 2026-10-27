@@ -226,6 +226,10 @@ fn variant(variant: &str, make: &[&str]) -> Option<String> {
 /// takt and outside it. Today the run is accepted and the source left, as it is in an existing
 /// `~/.cargo` (the next case): a known gap, story:cargo-home-sources-are-step-changes, which
 /// turns this case into "the run stops naming it".
+/// Linux only for now: under Seatbelt on macOS (`crate::seatbelt::test_command`) the 0.15.0
+/// release run did not see the planting this case needs under the run's `HOME`; what takt's
+/// guard does there is story:the-fresh-home-cases-hold-on-macos.
+#[cfg(target_os = "linux")]
 #[test]
 fn adv_a_crate_source_planted_in_a_fresh_cargo_home_is_accepted_today() {
     assert_eq!(variant("registry", &[]), None);
@@ -244,6 +248,10 @@ fn adv_a_crate_source_planted_in_an_existing_cargo_home_is_accepted_today() {
 /// configuration path `~/.cargo` back removes it whole: the program, the directory made for it
 /// and the cache beside it. A known gap, story:a-refused-step-leaves-the-cargo-home-it-made,
 /// which turns this case into "all three are left".
+/// Linux only for now: under Seatbelt on macOS (`crate::seatbelt::test_command`) the 0.15.0
+/// release run did not see the planting this case needs under the run's `HOME`; what takt's
+/// guard does there is story:the-fresh-home-cases-hold-on-macos.
+#[cfg(target_os = "linux")]
 #[test]
 fn adv_a_program_planted_in_a_fresh_cargo_bin_is_removed_with_cargo_home_today() {
     assert_eq!(variant("bin-left", &[]), None);
@@ -253,6 +261,10 @@ fn adv_a_program_planted_in_a_fresh_cargo_bin_is_removed_with_cargo_home_today()
 /// `$RUSTUP_HOME/settings.toml`: the next `cargo` a rustup proxy runs is the planted one.
 /// Today the run is accepted: a known gap, story:a-toolchain-linked-into-the-tree-is-a-step-change,
 /// which turns this case into "the run stops naming it".
+/// Linux only for now: under Seatbelt on macOS (`crate::seatbelt::test_command`) the 0.15.0
+/// release run did not see the planting this case needs under the run's `HOME`; what takt's
+/// guard does there is story:the-fresh-home-cases-hold-on-macos.
+#[cfg(target_os = "linux")]
 #[test]
 fn adv_a_rustup_default_toolchain_linked_into_the_tree_is_accepted_today() {
     assert_eq!(

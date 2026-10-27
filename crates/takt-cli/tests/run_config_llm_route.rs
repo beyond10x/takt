@@ -325,6 +325,9 @@ fn llm_section_without_model_refused() {
 /// Acceptance 1, at the function level: the alias `fast` of route `small` on endpoint `e` resolves to
 /// `e`'s base URL, the `openai-responses` wire its `responses` protocol maps to, and the upstream
 /// model, with the credential by reference: the key read from its file, never recorded.
+/// Linux only: llm 0.16.0 reads a `{file: ...}` key on Linux alone and refuses it elsewhere
+/// (`llm-credentials` `file.rs`, `SecretError::UnsupportedPlatform`).
+#[cfg(target_os = "linux")]
 #[test]
 fn route_resolves_to_endpoint_values() {
     let world = World::new("resolve");
