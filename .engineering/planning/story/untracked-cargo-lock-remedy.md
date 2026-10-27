@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:untracked-cargo-lock-remedy
 kind: story
-status: active
+status: implemented
 title: A tests.run refusal for an untracked Cargo.lock names the remedy
 summary: the refusal for a test command that writes an untracked Cargo.lock says to commit or ignore it
 relations:
@@ -13,10 +13,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/untracked_cargo_lock_remedy.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T02:32:04Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-27T02:32:05Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-27T02:51:12Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: untracked-cargo-lock-remedy
 
