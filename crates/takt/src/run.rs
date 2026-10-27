@@ -8842,6 +8842,13 @@ pub fn change_so_far(
     })
 }
 
+/// The managed worktree a dispatched run works in, with the Workspace seam that made it: the
+/// run leaves it when it ends ([`Run::run`]).
+struct Attached {
+    workspace: crate::workspace::Workspace,
+    tree: crate::workspace::Tree,
+}
+
 /// A run over one case. Its stop [`Stop::Unperformable`] is off by default in the library: a
 /// library caller opts in with [`Run::stop_when_unperformable`], and the CLI turns it on for
 /// every run in its `finish`, so the library's default is not the product's behaviour.
@@ -8911,6 +8918,9 @@ pub struct Run<'a> {
     stops_red_base: bool,
     /// The run file's `setup` commands, run when the case opens ([`Run::declare_setup`]).
     setup: Vec<crate::run_config::SetupCommand>,
+    /// The managed tree of a dispatched child and the seam that leaves it when the run ends
+    /// ([`Run::dispatch`]); none for a run no dispatcher opened.
+    workspace: Option<Attached>,
     /// The records profile the case keeps its decisions under ([`Records`]): the profile the
     /// case was opened under on a resume ([`CaseDir::opened_profile`]), `trial` on a new run,
     /// until [`Run::keep_records`]; what the case keeps is [`Records::for_case`] of it. The CLI
@@ -8988,6 +8998,104 @@ impl<'a> Run<'a> {
     /// ([`opening_set_aside`]), which is then not read. None is the default.
     pub fn open_unit_in(
         tree: &Path,
+        options: RunOptions,
+        unit: Unit,
+        commit_as: &CommitAs,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        Self::open_unit_placed(
+            None, tree, options, unit, commit_as, set_aside, harness, validators,
+        )
+    }
+
+    /// `case.dispatch`, the minimal form: opens the child case `options.case_id` on the intent in
+    /// `options` for the case `parent`, in a managed worktree of its own that `workspace` makes
+    /// and leases, and prepares the run. The child works in that tree and writes its records to
+    /// the cases directory of `root`, the checkout that dispatches it, never into the tree:
+    /// its `case.yaml` records `parent` and `worktree`. A case already under `root` is resumed
+    /// in the tree its `case.yaml` names, which the seam enters again without making a second;
+    /// the options give it no protocol or input then, as for [`Run::resume`]. When the run
+    /// ends, [`Run::run`] leaves the tree: archived and released after a stop that is not
+    /// terminal, released and finished after [`Stop::Completed`]; dispatch the case again to
+    /// resume it. The child's commits are takt's own; the declared setup runs in its tree
+    /// ([`Run::declare_setup`]).
+    pub fn dispatch(
+        root: &Path,
+        workspace: &crate::workspace::Workspace,
+        parent: &str,
+        options: RunOptions,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        let id = options
+            .case_id
+            .clone()
+            .ok_or_else(|| anyhow!("a dispatched case needs a case id"))?;
+        crate::case::check_id(&id)?;
+        let existing = CaseDir::locate(root, &id);
+        let recorded = if existing.join("case.yaml").is_file() {
+            Some(crate::case::worktree_of(&existing)?.ok_or_else(|| {
+                anyhow!(
+                    "the case {id} at {} was not dispatched: it records no worktree",
+                    existing.display()
+                )
+            })?)
+        } else {
+            None
+        };
+        let tree = workspace.enter(root, &id, recorded.as_deref())?;
+        let opened = match &recorded {
+            Some(_) => crate::case::link_tree(&tree.path, root)
+                .and_then(|()| Self::resume(&tree.path, options, &id, harness, validators)),
+            None => {
+                let unit = Unit::Intent(options.intent.clone());
+                Self::open_unit_placed(
+                    Some(crate::case::Dispatched { root, parent }),
+                    &tree.path,
+                    options,
+                    unit,
+                    &CommitAs::Takt,
+                    None,
+                    harness,
+                    validators,
+                )
+            }
+        };
+        match opened {
+            Ok(mut run) => {
+                run.workspace = Some(Attached {
+                    workspace: workspace.clone(),
+                    tree,
+                });
+                Ok(run)
+            }
+            Err(error) => {
+                // A case that was not opened leaves no tree in use: one this call made is
+                // finished, empty; one it resumed is archived and released, resumable still.
+                let how = if recorded.is_some() {
+                    crate::workspace::Leave::Stopped
+                } else {
+                    crate::workspace::Leave::Terminal
+                };
+                match workspace.leave(&tree, how) {
+                    Ok(()) => Err(error),
+                    Err(left) => Err(error.context(format!(
+                        "and the tree {} could not be left: {left:#}",
+                        tree.path.display()
+                    ))),
+                }
+            }
+        }
+    }
+
+    /// [`Run::open_unit_in`] for a case a dispatcher opens when `placed` says so
+    /// ([`CaseDir::open_in`]).
+    #[allow(clippy::too_many_arguments)]
+    fn open_unit_placed(
+        placed: Option<crate::case::Dispatched<'_>>,
+        tree: &Path,
         mut options: RunOptions,
         unit: Unit,
         commit_as: &CommitAs,
@@ -9018,7 +9126,8 @@ impl<'a> Run<'a> {
             .case_id
             .clone()
             .unwrap_or_else(|| format!("takt-{}", crate::now().replace([':', '-'], "")));
-        let case = CaseDir::open_as(
+        let case = CaseDir::open_in(
+            placed,
             tree,
             protocol,
             &id,
@@ -9087,6 +9196,7 @@ impl<'a> Run<'a> {
             stops_unperformable: false,
             stops_red_base: true,
             setup: Vec::new(),
+            workspace: None,
             records: Records::Trial,
             min_free: 0,
             build_dir: None,
@@ -9387,6 +9497,7 @@ impl<'a> Run<'a> {
             stops_unperformable: false,
             stops_red_base: true,
             setup: Vec::new(),
+            workspace: None,
             records,
             min_free: 0,
             build_dir: None,
@@ -10100,6 +10211,7 @@ impl<'a> Run<'a> {
                     Ok(()) => {
                         let _ = events.emit(self.steps, &Event::Error { error });
                         let _ = self.case.release();
+                        let _ = self.leave_workspace(crate::workspace::Leave::Stopped);
                     }
                     Err(way) => self.unrecorded(&error, &way),
                 }
@@ -10131,9 +10243,23 @@ impl<'a> Run<'a> {
             }
         };
         let released = self.case.release();
+        let left = self.leave_workspace(match &outcome {
+            Ok(Stop::Completed(_)) => crate::workspace::Leave::Terminal,
+            _ => crate::workspace::Leave::Stopped,
+        });
         let stop = outcome?;
         released?;
+        left?;
         Ok(stop)
+    }
+
+    /// Leaves the managed worktree a dispatched run works in ([`Run::dispatch`]), once: a run
+    /// that works in no such tree has nothing to leave.
+    fn leave_workspace(&mut self, how: crate::workspace::Leave) -> Result<()> {
+        match self.workspace.take() {
+            Some(attached) => attached.workspace.leave(&attached.tree, how),
+            None => Ok(()),
+        }
     }
 
     /// Says on standard error what a run that ended on `error` did not record because the way to
