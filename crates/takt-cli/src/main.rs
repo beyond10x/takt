@@ -1384,8 +1384,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             if let Some(code) = looping.confine(&repo)? {
                 return Ok(code);
             }
-            looping.check_state_dir(&repo)?;
             looping.check_set_aside(&repo)?;
+            looping.check_state_dir(&repo)?;
             let inputs = inputs
                 .iter()
                 .map(|pair| {
@@ -1655,25 +1655,43 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // active story or the next ready story of the planning store; a case is opened
             // before the store is told, so a run that cannot open its case takes nothing.
             let resumed = case.is_some() || resuming.is_some();
+            // Where a discarded step sets its files aside: the state directory's, given to the
+            // run at open, so that opening reads neither `XDG_STATE_HOME` nor `HOME`.
+            let set_aside = looping.state_dir.as_deref().map(state_set_aside);
             let mut run = match (case, intent, resuming) {
                 (Some(_), Some(_), _) => {
                     return Err(anyhow!(
                         "--case resumes a case and --intent opens one; give one of them"
                     ));
                 }
-                (Some(case), None, _) => Run::resume(&repo, options, &case, harness, &validators)?,
-                (None, Some(intent), _) => Run::open_unit_as(
+                (Some(case), None, _) => Run::resume_in(
+                    &repo,
+                    options,
+                    &case,
+                    set_aside.as_deref(),
+                    harness,
+                    &validators,
+                )?,
+                (None, Some(intent), _) => Run::open_unit_in(
                     &repo,
                     options,
                     Unit::Intent(intent),
                     &commit_as,
+                    set_aside.as_deref(),
                     harness,
                     &validators,
                 )?,
                 // The open case of an active story, found and checked above: resumed as found,
                 // the store not read again.
                 (None, None, Some(resuming)) => {
-                    let run = Run::resume(&repo, options, &resuming.id, harness, &validators)?;
+                    let run = Run::resume_in(
+                        &repo,
+                        options,
+                        &resuming.id,
+                        set_aside.as_deref(),
+                        harness,
+                        &validators,
+                    )?;
                     let title = match &run.unit {
                         Unit::Story(story) => story.title.clone(),
                         Unit::Intent(intent) => intent.clone(),
@@ -1708,11 +1726,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         }),
                         None => None,
                     };
-                    match Run::take_next_as(
+                    match Run::take_next_as_in(
                         &repo,
                         options,
                         frontier,
                         &commit_as,
+                        set_aside.as_deref(),
                         harness,
                         &validators,
                         out,
@@ -1843,15 +1862,29 @@ impl LoopArgs {
         };
         let root =
             takt::harness::transcripts_root(&state_transcripts(dir), repo).map_err(refused)?;
-        takt::harness::make_transcripts_root(&root, &mut Vec::new()).map_err(refused)?;
-        let probe = root.join(format!(".takt-write-check-{}", std::process::id()));
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&probe)
-            .map_err(|error| refused(anyhow!("{} is not writable: {error}", root.display())))?;
-        let _ = std::fs::remove_file(&probe);
-        Ok(())
+        // What this check makes is taken back when it refuses, so a refused state directory is
+        // left as it was found.
+        let mut made = Vec::new();
+        let checked = takt::harness::make_transcripts_root(&root, &mut made)
+            .map_err(refused)
+            .and_then(|()| {
+                let probe = root.join(format!(".takt-write-check-{}", std::process::id()));
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&probe)
+                    .map_err(|error| {
+                        refused(anyhow!("{} is not writable: {error}", root.display()))
+                    })?;
+                let _ = std::fs::remove_file(&probe);
+                Ok(())
+            });
+        if checked.is_err() {
+            for made in made.iter().rev() {
+                let _ = std::fs::remove_dir(made);
+            }
+        }
+        checked
     }
 
     /// Refuses a state directory named by --state-dir or the run configuration's `state_dir`
@@ -2573,11 +2606,6 @@ fn finish(
     }
     run.scan_with(scan);
     run.binary = Some(REVISION.to_owned());
-    // A state directory given holds what a discarded step sets aside as well, in place of the
-    // state home: nothing a run keeps on the host is then written under `$XDG_STATE_HOME/takt`.
-    if let Some(dir) = &looping.state_dir {
-        run.set_aside_in(state_set_aside(dir))?;
-    }
     run.llm_digest = looping.llm_digest.clone();
     // The transcripts directory is made now, before any step; one that cannot be (a read-only
     // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
@@ -2875,8 +2903,8 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     if let Some(code) = looping.confine(&repo)? {
         return Ok(code);
     }
-    looping.check_state_dir(&repo)?;
     looping.check_set_aside(&repo)?;
+    looping.check_state_dir(&repo)?;
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;
     let harness = harness_of(&looping)?;
     let harness = harness.as_ref();
@@ -3044,7 +3072,17 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     )?;
     let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
     let store = Aep::default();
-    let mut run = take_story(&repo, options, story, &commit_as, harness, &validators, out)?;
+    let set_aside = looping.state_dir.as_deref().map(state_set_aside);
+    let mut run = take_story(
+        &repo,
+        options,
+        story,
+        &commit_as,
+        set_aside.as_deref(),
+        harness,
+        &validators,
+        out,
+    )?;
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch. A scenario run keeps every decision whatever `--records`
     // says, a resume of it too: the trial's record is what the scenario's scorecard reads, and
@@ -3187,11 +3225,13 @@ fn short(revision: &str) -> &str {
 /// for a case an earlier scenario run opened for the same story on another trial base: each
 /// run of a scenario is a case of its own. The case is opened with, and the take committed by,
 /// the identity `commit_as` says.
+#[allow(clippy::too_many_arguments)]
 fn take_story<'a>(
     repo: &Path,
     options: RunOptions,
     story: takt::Story,
     commit_as: &takt::case::CommitAs,
+    set_aside: Option<&Path>,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
@@ -3200,11 +3240,12 @@ fn take_story<'a>(
     let id = story.id.clone();
     let id = id.as_str();
     let title = story.title.clone();
-    let mut run = Run::open_unit_as(
+    let mut run = Run::open_unit_in(
         repo,
         options,
         Unit::Story(story),
         commit_as,
+        set_aside,
         harness,
         validators,
     )?;

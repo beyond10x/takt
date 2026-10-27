@@ -277,8 +277,9 @@ pub fn holds_cases_root(path: &str) -> bool {
 }
 
 /// Every case directory under `tree`, under either root, by case id in name order: a case under
-/// both roots is listed once, under the new one. Neither root present is none; a root that is
-/// not a directory is an error naming it.
+/// both roots is listed once, under the new one. Neither root present is none, and a root whose
+/// parent is not a directory (a `.takt` that is a file of another tool's) is absent too, so a
+/// legacy case is still found; a root that cannot be read is an error naming it.
 pub fn case_dirs(tree: &Path) -> Result<Vec<(String, PathBuf)>> {
     let mut found: BTreeMap<String, PathBuf> = BTreeMap::new();
     for root in CASE_ROOTS {
@@ -293,7 +294,11 @@ pub fn case_dirs(tree: &Path) -> Result<Vec<(String, PathBuf)>> {
                     }
                 }
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
             Err(error) => return Err(error).with_context(|| format!("read {}", dir.display())),
         }
     }
@@ -2440,8 +2445,10 @@ pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Resul
 }
 
 /// Writes [`TAKT_GITIGNORE`] under `tree`'s [`TAKT_DIR`] when there is none, creating the
-/// directory as needed. A file already there is left as it is, byte for byte.
-fn write_takt_gitignore(tree: &Path) -> Result<()> {
+/// directory as needed. A file already there, a link or a directory included, is left as it is,
+/// byte for byte. Called at open, on resume and after each observation, since a test command
+/// may remove it.
+pub fn write_takt_gitignore(tree: &Path) -> Result<()> {
     let takt = tree.join(TAKT_DIR);
     let path = takt.join(TAKT_GITIGNORE);
     if std::fs::symlink_metadata(&path).is_ok() {
@@ -2898,9 +2905,9 @@ impl CaseDir {
     /// a `HEAD` that reaches the implementation revision only through its riders (the
     /// approval's commits, the `test_result` and the move to `implemented`, by the one rule the
     /// push and the merge read, [`approvals_only`]) leaves it where it is, the revision the
-    /// grant authorises, so an accepted case resumed by id has nothing due again. Nothing else
-    /// is written. A directory without a `case.yaml` is
-    /// no case, and an id that is not a case id ([`check_id`]) is refused before it is joined
+    /// grant authorises, so an accepted case resumed by id has nothing due again. Nothing else is written, but
+    /// a case under `.takt/` gets its `.gitignore` when it is absent. A directory without a `case.yaml` is no
+    /// case, and an id that is not a case id ([`check_id`]) is refused before it is joined
     /// to a path. The case is held (`run.lock`, taken atomically) before the checkout and the
     /// revision are written and let go once they are: a case another holds is refused with
     /// nothing written, and of two resuming at once only one writes. The run takes its own
@@ -2925,6 +2932,9 @@ impl CaseDir {
         if crate::git::current_branch(tree)?.as_deref() != Some(branch.as_str()) {
             crate::git::run(tree, &["checkout", "-q", &branch])
                 .with_context(|| format!("check out the branch of the case {id}"))?;
+        }
+        if dir.starts_with(tree.join(CASES_DIR)) {
+            write_takt_gitignore(tree)?;
         }
         let mut case = Self {
             id: id.to_owned(),

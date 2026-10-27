@@ -8082,6 +8082,18 @@ fn opening_set_aside(tree: &Path) -> Result<Option<PathBuf>> {
         .transpose()
 }
 
+/// The set-aside root a run on `tree` opens with: the directory `given` names, checked as
+/// [`opening_set_aside`] checks the default, when the caller gives one; the default otherwise.
+/// A run given a directory reads neither `XDG_STATE_HOME` nor `HOME`.
+fn opening_set_aside_given(tree: &Path, given: Option<&Path>) -> Result<Option<PathBuf>> {
+    match given {
+        Some(dir) => crate::git::set_aside_root(dir, tree)
+            .context("the run does not start")
+            .map(Some),
+        None => opening_set_aside(tree),
+    }
+}
+
 /// Where discarding a harness step moves the files inside an ignored directory it rewrote,
 /// outside every repository and every case directory: `$XDG_STATE_HOME/takt/set-aside`
 /// (`~/.local/state/takt/set-aside` without it), state and not cache, since what is moved
@@ -8907,9 +8919,24 @@ impl<'a> Run<'a> {
     /// anything is written.
     pub fn open_unit_as(
         tree: &Path,
+        options: RunOptions,
+        unit: Unit,
+        commit_as: &CommitAs,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        Self::open_unit_in(tree, options, unit, commit_as, None, harness, validators)
+    }
+
+    /// [`Run::open_unit_as`], the discarded steps' set-aside directory given as `set_aside`
+    /// (checked as [`Run::set_aside_in`] checks one) in place of the default
+    /// ([`opening_set_aside`]), which is then not read. None is the default.
+    pub fn open_unit_in(
+        tree: &Path,
         mut options: RunOptions,
         unit: Unit,
         commit_as: &CommitAs,
+        set_aside: Option<&Path>,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
@@ -8931,7 +8958,7 @@ impl<'a> Run<'a> {
         // branch exists for it.
         Shape::of(&protocol, &options.inputs)?;
         // Nor does a run start that a harness step's rewrite could not be moved out of.
-        let set_aside = opening_set_aside(tree)?;
+        let set_aside = opening_set_aside_given(tree, set_aside)?;
         let id = options
             .case_id
             .clone()
@@ -9230,12 +9257,26 @@ impl<'a> Run<'a> {
     /// are not read: the case's own rule.
     pub fn resume(
         tree: &Path,
-        mut options: RunOptions,
+        options: RunOptions,
         id: &str,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
-        let set_aside = opening_set_aside(tree)?;
+        Self::resume_in(tree, options, id, None, harness, validators)
+    }
+
+    /// [`Run::resume`], the discarded steps' set-aside directory given as `set_aside` (checked as
+    /// [`Run::set_aside_in`] checks one) in place of the default ([`opening_set_aside`]), which
+    /// is then not read. None is the default.
+    pub fn resume_in(
+        tree: &Path,
+        mut options: RunOptions,
+        id: &str,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        let set_aside = opening_set_aside_given(tree, set_aside)?;
         let case = CaseDir::resume(tree, id)?;
         let intent = case.intent()?;
         let unit = match case.story()? {
@@ -9309,11 +9350,37 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        Self::open_next_in(tree, options, frontier, None, harness, validators, out)
+    }
+
+    /// [`Run::open_next`], the discarded steps' set-aside directory given as `set_aside` (checked
+    /// as [`Run::set_aside_in`] checks one) in place of the default, for the case it resumes or
+    /// opens ([`Run::open_unit_in`]). None is the default.
+    pub fn open_next_in(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
         if let Some((case_id, story_id)) = Self::next_to_resume(tree, frontier, out)? {
-            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
-                .map(Some);
+            return Self::resumed(
+                tree, options, &case_id, &story_id, set_aside, harness, validators, out,
+            )
+            .map(Some);
         }
-        Self::take_next(tree, options, frontier, harness, validators, out)
+        Self::take_next_as_in(
+            tree,
+            options,
+            frontier,
+            &CommitAs::Takt,
+            set_aside,
+            harness,
+            validators,
+            out,
+        )
     }
 
     /// The open case [`Run::open_next`] resumes, as `(case id, story id)`, answered with nothing
@@ -9389,6 +9456,24 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        Self::take_next_as_in(
+            tree, options, frontier, commit_as, None, harness, validators, out,
+        )
+    }
+
+    /// [`Run::take_next_as`], each case opened with the discarded steps' set-aside directory
+    /// `set_aside` ([`Run::open_unit_in`]); None is the default.
+    #[allow(clippy::too_many_arguments)]
+    pub fn take_next_as_in(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        commit_as: &CommitAs,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
         to_base(tree)?;
         let cased = cases_with_story(tree)?;
         for id in frontier.candidates(tree)? {
@@ -9413,11 +9498,12 @@ impl<'a> Run<'a> {
                 }
                 options.case_id = Some(minted);
             }
-            let mut run = Self::open_unit_as(
+            let mut run = Self::open_unit_in(
                 tree,
                 options,
                 Unit::Story(story),
                 commit_as,
+                set_aside,
                 harness,
                 validators,
             )?;
@@ -9461,16 +9547,18 @@ impl<'a> Run<'a> {
     }
 
     /// Resumes the case `case_id` of the story `story_id` and says so on `out`.
+    #[allow(clippy::too_many_arguments)]
     fn resumed(
         tree: &Path,
         options: RunOptions,
         case_id: &str,
         story_id: &str,
+        set_aside: Option<&Path>,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Self> {
-        let run = Self::resume(tree, options, case_id, harness, validators)?;
+        let run = Self::resume_in(tree, options, case_id, set_aside, harness, validators)?;
         let title = match &run.unit {
             Unit::Story(story) => story.title.clone(),
             Unit::Intent(intent) => intent.clone(),
@@ -10649,7 +10737,20 @@ impl<'a> Run<'a> {
             writeln!(out, "  {why}")?;
             return Ok(Taken::Stop(Stop::Hours(h)));
         }
+        // A test command may have removed `.takt/.gitignore`, which keeps the case out of `git
+        // status`: it is written again after each observation that stands, and an observation
+        // that failed is written again before its error ends the run.
+        let ignore = if self
+            .case
+            .dir
+            .starts_with(self.tree.join(crate::case::CASES_DIR))
+        {
+            crate::case::write_takt_gitignore(&self.tree)
+        } else {
+            Ok(())
+        };
         let (observation, waits) = observed?;
+        ignore?;
         self.stepped(
             events,
             SteppedBy::Validator(Some(&revision)),
