@@ -225,6 +225,7 @@ The first line names the case, `scenario-1-trial-<n>`. The run goes on until it 
 |---|---|---|
 | `Waiting` | 6 | the pull request's checks are still running: run the resume command below again |
 | `ApprovalRequired (repository.merge)` | 4 | grant the merge, then resume |
+| `NoProgress` | 3 | the merge was refused: read the last `repository.merge` evidence; a missing delegation reads as below |
 | `HarnessUnqualified` | 1 | the binary is not a qualified version: name one and run again |
 | `Completed` | 0 | the pull request is merged into `trial/<n>`: the trial is done |
 
@@ -233,27 +234,28 @@ case's branch, `takt/scenario-1-trial-<n>` (`git branch --show-current` prints i
 `takt approve` commits the grant on that branch, and refuses a tree on another branch or with uncommitted work:
 
 ```sh
-takt approve --repo . scenario-1-trial-<n> repository.merge --by agent:<role>
+takt approve --repo . scenario-1-trial-<n> repository.merge --by agent:takt-trial
 takt run --repo . --case scenario-1-trial-<n> --harness claude \
   --harness-program ~/.local/opt/claude-2.1.309/claude --forge bot --test-cmd ./check.sh --hours 1
 ```
 
-`--by` names who grants: `human:<name>` for a person, `agent:<role>` for the agent that runs the
-trial. The case keeps the commit identity it was opened with, so the resume does not give it.
+`--by` names who grants: `agent:takt-trial`, the role the seed delegates the merge to (below), for
+the agent that runs the trial, or `human:<name>` for a person. The case keeps the commit identity it was opened with, so the resume does not give it.
 
 **An agent's grant needs a delegation at the base.** Before it merges, `repository.merge` judges
 every path the change touches against `.engineering/judge-allow.yaml` at the tip of the merge
 target, `trial/<n>`. A path that file does not admit is a judge surface. With no such file, every
 path is one. A change to a judge surface merges under the owner's grant (`human:<id>`). An agent
 role's grant (`agent:<role>`) counts only when `.engineering/delegations.yaml` at that same tip
-records an unrevoked delegation to exactly that role:
+records an unrevoked delegation to exactly that role. todo-app-example's scenario-1 seed (`896382c`,
+as `.engineering/scenarios.conf` on its `main` names it) holds one:
 
 ```yaml
 delegations:
-  - owner: human:<id>
-    role: agent:<role>
+  - owner: human:operator
+    role: agent:takt-trial
     capability: repository.merge.judge_surface
-    given_at: "2026-10-27T18:00:00Z"
+    given_at: "2026-10-27T17:44:48Z"
 ```
 
 `role` must be the `--by` value word for word. Both files are read only at the merge target's tip,
@@ -261,8 +263,9 @@ never from the case's tree, so they belong in the seed commit the trial branch i
 case's own edit of either counts for nothing. A change to either file merges under the owner's
 grant alone.
 
-When the delegation is missing, the `ApprovalRequired` stop does not say so. `takt approve --by
-agent:<role>` succeeds, and the resumed run merges nothing. Its `repository.merge` evidence reads:
+When the delegation is missing, or names another role, the `ApprovalRequired` stop does not say so.
+`takt approve` succeeds, and the resumed run merges nothing and stops `NoProgress`, exit 3. With no
+file at all, its `repository.merge` evidence reads:
 
 ```text
 pull request #<number> at <revision> is open and granted by agent:<role>, and merging <revision>
@@ -271,7 +274,8 @@ delegation of repository.merge.judge_surface to it is on record at trial/<n> <ti
 (.engineering/delegations.yaml is not there); nothing merged, the claim stays unknown
 ```
 
-Put the delegation on the seed, cut a new trial, and run it again.
+On another repository, put the delegation on the commit the merge target is at, then cut a new
+trial and run it again.
 
 The record is the clone's `.takt/cases/scenario-1-trial-<n>/` ([Case files](../reference/case-files.md)):
 `events.jsonl` holds the `opened` line, with `harness_program` and `preflight`, every step, and the
