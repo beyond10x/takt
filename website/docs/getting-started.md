@@ -90,7 +90,9 @@ sandbox of its own:
 - `--confinement none`, the default, starts the test command through Substrate's `local` adapter,
   declared insecure with its reason, which the first line and the `opened` event carry. It runs on
   the host as this user, with an environment cleared of logins, a scratch home and `TMPDIR`, the
-  timeout and a bounded output, and can read whatever this user can.
+  timeout and a bounded output, and can read whatever this user can. On macOS it no longer runs
+  under takt's Seatbelt profile, so its writes, the programs it starts, launchd and the keychain
+  are not limited.
 - `takt promote` builds a candidate through the same selection: the fresh install root beside the
   real one is the one host root declared writable to the adapter.
 

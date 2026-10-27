@@ -246,17 +246,23 @@ impl AdapterRecord {
         }
     }
 
-    /// The adapter as the run's first line names it: `Substrate linux`, `Substrate systemd
-    /// around linux`, or `Substrate local, declared insecure: <reason>`.
+    /// The adapter as the run's first line names it, with the facts it proved by their contract
+    /// names: `Substrate linux; proved: <facts>`, `Substrate systemd around linux; proved:
+    /// <facts>`, or `Substrate local, declared insecure: <reason>; proved: <facts>`.
     #[must_use]
     pub fn describe(&self) -> String {
         let name = match &self.inner {
             Some(inner) => format!("{} around {inner}", self.adapter),
             None => self.adapter.clone(),
         };
-        match &self.declared_insecure {
+        let named = match &self.declared_insecure {
             Some(reason) => format!("Substrate {name}, declared insecure: {reason}"),
             None => format!("Substrate {name}"),
+        };
+        if self.facts.is_empty() {
+            format!("{named}; proved: no fact")
+        } else {
+            format!("{named}; proved: {}", self.facts.join(", "))
         }
     }
 
@@ -938,6 +944,12 @@ impl Opened {
     /// One thread starts the run and follows it to its end: a `linux` or `systemd` adapter's
     /// leader dies with the thread that started it (its parent-death signal), so a thread that
     /// ended once the run started would kill it.
+    ///
+    /// Where the adapter proves no `whole_tree_kill` (`macos`), the run carries a mark of its own
+    /// ([`crate::forge::MARK`]) and every process still carrying it once the run ended is killed
+    /// ([`crate::forge::sweep_mark`]): what a build script started in a session of its own does
+    /// not outlive the run, as it did not outlive a promotion's build before
+    /// story:confinement-through-substrate-on-linux-and-macos.
     fn run(
         &self,
         profile: &ConfinementProfile,
@@ -948,9 +960,17 @@ impl Opened {
         let admitted = adapter
             .admit(profile)
             .map_err(|error| anyhow!("{}", describe(&error)))?;
+        let mark = (!adapter.facts().proves(&Fact::WholeTreeKill)).then(crate::forge::next_mark);
+        let mut command = command.clone();
+        if let Some(mark) = &mark {
+            command
+                .env
+                .insert(crate::forge::MARK.to_owned(), mark.clone());
+        }
+        let command = &command;
         let _held = crate::forge::hold_sweeps();
         let program = command.argv.first().map_or("", String::as_str);
-        block_on(async {
+        let ran: anyhow::Result<anyhow::Result<Ran>> = block_on(async {
             let run = started(adapter, &admitted, command).await?;
             let deadline = Instant::now() + timeout;
             let followed = follow(adapter, &run, None, deadline)
@@ -984,30 +1004,62 @@ impl Opened {
                 stdout_truncated: output.stdout_truncated,
                 timed_out,
             })
-        })?
+        });
+        let swept = mark.as_deref().map_or(Ok(()), crate::forge::sweep_mark);
+        let ran = ran??;
+        swept?;
+        Ok(ran)
     }
 
-    /// The profile of a run in `workspace`: [`base_profile`], process bounds for `timeout` where
-    /// the adapter serves `limits`.
-    fn profile(&self, workspace: &Path, needs: &Needs, timeout: Duration) -> ConfinementProfile {
+    /// The profile of a run in `workspace`: [`base_profile`], held to `bounds` where the adapter
+    /// serves `limits`.
+    fn profile(
+        &self,
+        workspace: &Path,
+        needs: &Needs,
+        bounds: ProcessBounds,
+    ) -> ConfinementProfile {
         let facts = self.adapter.facts();
         let mut profile = base_profile(self.candidate, workspace, needs);
         if facts.serves(&ContractFamily::Limits) {
-            profile.process_bounds = Some(bounds(timeout));
+            profile.process_bounds = Some(bounds);
         }
         profile
     }
 }
 
-/// The bounds a confined run is held to where the adapter serves `limits`: `timeout` and five
-/// seconds more (takt kills it at `timeout` itself), at most 4096 processes and threads, 32 GiB
-/// of memory, and the CPU time of every core for the whole timeout, each within Substrate's caps.
-fn bounds(timeout: Duration) -> ProcessBounds {
-    const DAY_MS: u64 = 86_400_000;
-    let timeout_ms = u64::try_from(timeout.as_millis())
+/// The longest a confined run may be held to: a day, Substrate's cap.
+const DAY_MS: u64 = 86_400_000;
+
+/// A run's wall-clock bound for `timeout`: five seconds more, as takt kills it at `timeout`
+/// itself, within a second and a day.
+fn timeout_ms(timeout: Duration) -> u64 {
+    u64::try_from(timeout.as_millis())
         .unwrap_or(u64::MAX)
         .saturating_add(5_000)
-        .clamp(1_000, DAY_MS);
+        .clamp(1_000, DAY_MS)
+}
+
+/// The bounds a test command is held to where the adapter serves `limits`: its timeout
+/// ([`timeout_ms`]), and no looser than the ones loom-sdk 0.45.0's `SubstrateRunner` held it to
+/// before story:confinement-through-substrate-on-linux-and-macos: 2048 processes and threads,
+/// 8 GiB of memory and an hour of CPU time.
+fn test_bounds(timeout: Duration) -> ProcessBounds {
+    ProcessBounds {
+        timeout_ms: timeout_ms(timeout),
+        processes: 2048,
+        memory_bytes: 8 << 30,
+        cpu_millis: 3_600_000,
+    }
+}
+
+/// The bounds a promotion's build and its binary's `--version` are held to where the adapter
+/// serves `limits`: their timeout ([`timeout_ms`]), at most 4096 processes and threads, 32 GiB of
+/// memory, and the CPU time of every core for the whole timeout. A release build of the
+/// candidate runs a compiler on every core at once; before Substrate it ran with no bound but
+/// its sandbox's.
+fn build_bounds(timeout: Duration) -> ProcessBounds {
+    let timeout_ms = timeout_ms(timeout);
     ProcessBounds {
         timeout_ms,
         processes: 4096,
@@ -1286,7 +1338,7 @@ impl TestPlan {
         let cargo_home = scratch.0.join("cargo-home");
         std::fs::create_dir_all(&cargo_home)
             .with_context(|| format!("create {}", cargo_home.display()))?;
-        let mut profile = opened.profile(tree, needs, timeout);
+        let mut profile = opened.profile(tree, needs, test_bounds(timeout));
         let mut env = BTreeMap::from([
             ("CARGO_NET_OFFLINE".to_owned(), "true".to_owned()),
             ("RUSTUP_AUTO_INSTALL".to_owned(), "0".to_owned()),
@@ -1472,7 +1524,9 @@ impl Confined {
         let workspace = workspace
             .canonicalize()
             .with_context(|| format!("the workspace {}", workspace.display()))?;
-        let mut profile = self.opened.profile(&workspace, &self.needs, spec.timeout);
+        let mut profile = self
+            .opened
+            .profile(&workspace, &self.needs, build_bounds(spec.timeout));
         profile.workdir.clone_from(&spec.workdir);
         let host_paths = self.opened.candidate.paths_are_host_paths();
         for (host, mount) in &spec.read_only {

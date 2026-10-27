@@ -1014,6 +1014,32 @@ pub(crate) fn sweep_led(leader: u32, mark: &str) -> Result<()> {
     }
 }
 
+/// Kills every process of this user that carries `mark` as its [`MARK`], wherever it went, and
+/// reaps this process's children among them: what a confined run left once it ended, when its
+/// adapter proves no `whole_tree_kill` (story:confinement-through-substrate-on-linux-and-macos;
+/// `macos`, whose run a build script can leave in a session of its own). Not killed: one that
+/// dropped the mark. Elsewhere than on Linux and macOS, nothing is done.
+///
+/// # Errors
+///
+/// When one is still there after the last round of killing.
+pub(crate) fn sweep_mark(mark: &str) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        // No process is in group -1 and none is spared: only the mark is swept.
+        leftovers::sweep_marked(-1, mark, 0)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        crate::marked::sweep(MARK, |carried| carried == mark.as_bytes())
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = mark;
+        Ok(())
+    }
+}
+
 /// Kills and reaps what this process started or adopted that is in a process group of its own
 /// no running child of [`run_child`] leads, or in a session of its own: what a judgement step's
 /// harness, or a validator that ran a program by itself, left running once it returned (a writer

@@ -442,8 +442,8 @@ fn confinement_local_is_declared_insecure() {
     );
     let first = first_line(&output);
     assert!(
-        first.ends_with(&format!(
-            "; confinement none: Substrate local, declared insecure: {}",
+        first.contains(&format!(
+            "; confinement none: Substrate local, declared insecure: {}; proved: ",
             takt::confinement::LOCAL_REASON
         )),
         "story:confinement-through-substrate-on-linux-and-macos: the first line states the reason: {}",

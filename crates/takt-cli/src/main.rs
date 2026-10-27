@@ -966,9 +966,10 @@ struct LoopArgs {
     /// of `systemd` around `linux`, `linux` (with --confinement-cgroup-root when given) and
     /// `macos` whose facts serve its profile: the tree as the workspace, its `target/`
     /// writable, the toolchain and the host's cargo caches as read-only roots, the tree as
-    /// the working directory, the network isolated, and process bounds from the timeout where
-    /// the adapter serves `limits`; a test command its profile does not serve (it serves
-    /// `cargo` on a Rust toolchain; a Python one among those it does not), a gate's commands,
+    /// the working directory, the network isolated, and where the adapter serves `limits` the
+    /// timeout, 2048 processes, 8 GiB of memory and an hour of CPU time; a test command its
+    /// profile does not serve (it serves `cargo` on a Rust toolchain; a Python one among those it
+    /// does not), a gate's commands,
     /// which the assertions library starts itself, and a host none of whose adapters serves
     /// the profile or a fact --confinement-needs names are refused by name and never run
     /// unconfined. `none`: the test command runs through Substrate's `local` adapter, declared

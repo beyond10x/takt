@@ -1,0 +1,142 @@
+//! Adversary cases for story:confinement-through-substrate-on-linux-and-macos.
+//!
+//! A test command's observation reads the *end* of what it printed: cargo's `test result:` lines
+//! and the failed tests' names come last, and `forge::Limits::output` is documented as "the last
+//! ones". Before this change `run_child` kept the real tail. Substrate's adapters keep only the
+//! first 1 MiB of a stream (`local`'s `LOCAL_OUTPUT_LIMIT_BYTES`, the host driver's
+//! `MAX_IO_BYTES`), and takt's `confinement::finished` then takes the last bytes of that head: a
+//! test command printing more than 1 MiB is summarised from the middle of its output, and the
+//! failure it ended with is lost.
+
+use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use takt::confinement::{self, Confinement as _, Substrate, TestRun};
+use takt::validator::{TestsRun, Validator as _};
+
+/// A scratch directory under this crate's build directory, removed on drop.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(name: &str) -> Scratch {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("adversary-substrate-{}-{name}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).expect("a scratch directory");
+    Scratch(dir)
+}
+
+fn git(tree: &Path, args: &[&str]) -> String {
+    let output = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
+        .args(args)
+        .current_dir(tree)
+        .output()
+        .expect("git runs");
+    assert!(output.status.success(), "git {args:?}");
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+/// A repository at `outer/repo` holding `files` (path, text, executable) in one commit.
+fn repository(outer: &Path, files: &[(&str, &str, bool)]) -> PathBuf {
+    let repo = outer.join("repo");
+    fs::create_dir_all(&repo).expect("a directory");
+    fs::write(repo.join(".gitignore"), "target/\n").expect("a file");
+    for (path, text, executable) in files {
+        let at = repo.join(path);
+        fs::create_dir_all(at.parent().expect("a parent")).expect("a directory");
+        fs::write(&at, text).expect("a file");
+        if *executable {
+            fs::set_permissions(&at, fs::Permissions::from_mode(0o755)).expect("a mode");
+        }
+    }
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-q", "-m", "start"]);
+    repo
+}
+
+/// A failing test run whose captured output passes 1 MiB before cargo's closing lines.
+const LONG_FAILURE: &str = "#!/bin/sh\nyes 'a captured line a failing test printed before it failed' | head -c 2097152\necho\necho 'test the_failing_test ... FAILED'\necho 'test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out'\nexit 101\n";
+
+/// Under `--confinement none` (Substrate `local`), the observation of a failing test command
+/// that printed more than 1 MiB names its failure: the counts of its `test result:` line and the
+/// failed test by name, as the tail `run_child` kept before this change showed them.
+#[test]
+#[ignore = "story:confinement-through-substrate-on-linux-and-macos: needs Substrate to keep an output tail (requested); run with --ignored"]
+fn adversary_substrate_confinement_none_summary_keeps_the_end_of_a_long_output() {
+    let outer = scratch("none-long");
+    let repo = repository(&outer.0, &[("long.sh", LONG_FAILURE, true)]);
+    let revision = git(&repo, &["rev-parse", "HEAD"]);
+    let observation = TestsRun::new("./long.sh")
+        .expect("a command")
+        .observe(&repo, &revision, 1)
+        .expect("the test command runs under none");
+    assert!(
+        observation.summary.contains("0 passed, 1 failed")
+            && observation.summary.contains("the_failing_test"),
+        "the observation is summarised from the end of the output, where the failure is: {}",
+        &observation.summary[..observation.summary.len().min(600)]
+    );
+}
+
+/// Under `--confinement substrate`, the same: a cargo test that fails after printing more than
+/// 1 MiB is returned with cargo's closing `test result: FAILED` line in the tail takt keeps.
+#[test]
+#[ignore = "story:confinement-through-substrate-on-linux-and-macos: needs Substrate to keep an output tail (requested); run with --ignored"]
+fn adversary_substrate_confinement_substrate_tail_holds_the_test_result_line() {
+    let outer = scratch("substrate-long");
+    let repo = repository(
+        &outer.0,
+        &[
+            (
+                "Cargo.toml",
+                "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[workspace]\n",
+                false,
+            ),
+            (
+                "src/lib.rs",
+                "#[test]\nfn the_failing_test() {\n    let line = \"a captured line a failing test printed before it failed\\n\";\n    print!(\"{}\", line.repeat(2 * 1024 * 1024 / line.len()));\n    panic!(\"failed\");\n}\n",
+                false,
+            ),
+            (
+                "Cargo.lock",
+                "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"probe\"\nversion = \"0.1.0\"\n",
+                false,
+            ),
+        ],
+    );
+    let adapter = match Substrate::open(&repo, &confinement::Options::default()) {
+        Ok(adapter) => adapter,
+        Err(error) => {
+            eprintln!("skipped: missing prerequisite: {error:#}");
+            return;
+        }
+    };
+    let argv: Vec<String> = ["cargo", "test", "--quiet", "--offline"]
+        .iter()
+        .map(|arg| (*arg).to_owned())
+        .collect();
+    let finished = adapter
+        .run_test(&TestRun {
+            argv: &argv,
+            tree: &repo,
+            limits: TestsRun::LIMITS,
+        })
+        .expect("the confined test command runs");
+    assert_ne!(finished.code, Some(0), "the test fails");
+    let stdout = String::from_utf8_lossy(&finished.stdout);
+    assert!(
+        stdout.contains("test result: FAILED"),
+        "{}: the kept tail of standard output holds cargo's closing line; it ends: {:?}",
+        adapter.record().describe(),
+        &stdout[stdout.len().saturating_sub(300)..]
+    );
+}

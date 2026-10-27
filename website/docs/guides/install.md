@@ -111,4 +111,6 @@ refuses it by name where none does ([Getting started](../getting-started.md)). U
 ran it in a user and mount namespace of its own, which a host or container that refuses
 unprivileged user namespaces ended on an error, exit 5; in a container that meant running it with
 seccomp and AppArmor unconfined ([Run in a container](./run-in-a-container.md)), which has not been
-measured again since.
+measured again since. On macOS, up to 0.14.0, `none` also ran it under takt's Seatbelt profile,
+which limited its writes, the programs it started, launchd and the keychain; Substrate's `local`
+adapter limits none of them.

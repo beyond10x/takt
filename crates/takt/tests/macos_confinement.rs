@@ -352,6 +352,41 @@ fn the_git_dirs_a_test_command_writes_leave_out_hooks_and_configuration() {
     );
 }
 
+/// story:confinement-through-substrate-on-linux-and-macos, review finding 3, on every platform:
+/// a process a confined run (a promotion's build, a test command) started in a session of its
+/// own does not outlive the run. On Linux the `systemd` adapter kills the run's whole tree; on
+/// macOS, whose adapter proves no `whole_tree_kill`, takt kills what carries the run's mark once
+/// it ended, as `run_child` did for a promotion's build before. The leftover writes `beat` in
+/// the tree every 200 ms for a minute at most; once the run returned, `beat` is removed and must
+/// not come back.
+#[test]
+fn a_process_a_confined_run_started_in_a_session_of_its_own_does_not_outlive_it() {
+    let dir = scratch("session-leftover");
+    let tree = dir.0.join("tree");
+    fs::create_dir_all(&tree).expect("a tree");
+    let Some(ran) = confined(
+        &tree,
+        "perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' /bin/sh -c 'i=0; while [ $i -lt 300 ]; do date > beat; sleep 0.2; i=$((i+1)); done' </dev/null >/dev/null 2>&1 &\n\
+         i=0; while [ ! -s beat ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done\n\
+         test -s beat",
+    ) else {
+        return;
+    };
+    assert!(
+        ran.success(),
+        "story:confinement-through-substrate-on-linux-and-macos: the leftover started and wrote its beat; the run {}: {}",
+        ran.ending(),
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    let beat = tree.join("beat");
+    let _ = fs::remove_file(&beat);
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        !beat.exists(),
+        "story:confinement-through-substrate-on-linux-and-macos: what the run started in a session of its own still ran after the run returned"
+    );
+}
+
 /// The workflow at `.github/workflows/<name>` of this repository, parsed.
 fn workflow(name: &str) -> serde_yaml_ng::Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))

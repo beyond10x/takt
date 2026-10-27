@@ -1444,8 +1444,8 @@ fn the_first_line_and_the_opened_event_name_the_adapter() {
     let first = ran.text.lines().next().unwrap_or_default();
     assert!(
         first.starts_with("case ")
-            && first.ends_with(&format!(
-                "; confinement none: Substrate local, declared insecure: {}",
+            && first.contains(&format!(
+                "; confinement none: Substrate local, declared insecure: {}; proved: ",
                 confinement::LOCAL_REASON
             )),
         "story:confinement-through-substrate-on-linux-and-macos: the first line names the adapter and the reason it is declared insecure: {first}\n{}",

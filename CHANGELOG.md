@@ -37,6 +37,8 @@ takt's releases.
 - `--harness none` takes a granted action, changing no file, not `stopped: error:` (exit 5); with `--forge none` the run then stops `NoProgress` (exit 3) (story:harness-none-takes-a-granted-action).
 - **Breaking:** takt confines through Substrate's confinement contract, `b10x-substrate-host` 0.12.0, on Linux and macOS (story:confinement-through-substrate-on-linux-and-macos).
 - `--confinement substrate` runs the test command through the first of Substrate's `systemd` around `linux`, `linux` and `macos` adapters that serves it, or refuses it by name.
+- The first line names the Substrate adapter and the facts it proved (`; proved: <facts>`); the `opened` event records both.
+- Where the adapter serves `limits`, a test command is held to 2048 processes, 8 GiB of memory and an hour of CPU time, as under loom-sdk 0.45.0.
 - `takt promote` builds a candidate through the same selection; a host none of whose adapters serves the build exits 5 naming each, where a missing bubblewrap exited 1.
 - **Breaking:** `--confinement none` runs the test command through Substrate's `local` adapter, declared insecure; the first line and the `opened` event give the reason.
 - It keeps the cleared environment, the scratch home and `TMPDIR`, the timeout and the bounded output, and runs in no namespace of takt's own.
@@ -62,6 +64,7 @@ takt's releases.
 
 - A proposal is refused when a path it names holds text of the shape of a credential, as its content and summary already were, before any refusal that would name the path.
 - A `--confinement none` test command can read what its user can, the home, runtime sockets and `$CARGO_HOME/credentials.toml` included; use `substrate` for untrusted code.
+- On macOS a `--confinement none` test command no longer runs under takt's Seatbelt profile: its writes, the programs it starts, launchd and the keychain are no longer limited.
 
 ## [0.14.0] - 2026-10-26
 
