@@ -36,7 +36,7 @@ use loom_sdk::commission::ports::executor::AgentExecutor;
 use loom_sdk::{CanonGovernor, EffectPort, LoopContext, run_until_blocked};
 
 use crate::case::{
-    CASES_DIR, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT,
+    CASES_DIR, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT, Records,
 };
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::evidence::{CaseEvidence, uuid_from};
@@ -8824,6 +8824,10 @@ pub struct Run<'a> {
     stops_unperformable: bool,
     /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
     stops_red_base: bool,
+    /// The records profile asked for the case's decisions ([`Records`]), `trial` until
+    /// [`Run::keep_records`]; what the case keeps is [`Records::for_protocol`] of it. The CLI asks
+    /// for `default` unless told otherwise; a library caller keeps every decision.
+    records: Records,
     /// The least free space, in bytes, a step needs on the file system of the tree and of the
     /// build directory; 0 reads nothing, and is the default until [`Run::stop_when_disk_below`].
     min_free: u64,
@@ -8974,6 +8978,7 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            records: Records::Trial,
             min_free: 0,
             build_dir: None,
             read_free: Box::new(free_space),
@@ -9252,6 +9257,7 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            records: Records::Trial,
             min_free: 0,
             build_dir: None,
             read_free: Box::new(free_space),
@@ -9582,6 +9588,21 @@ impl<'a> Run<'a> {
     /// without this call.
     pub fn continue_past_red_base(&mut self) {
         self.stops_red_base = false;
+    }
+
+    /// Asks for the records profile the case keeps its decisions under: `default` keeps the
+    /// latest decision alone, after each decision is written; `trial` keeps every one. A case of
+    /// an improvement protocol keeps every one whatever is asked ([`Records::for_protocol`]).
+    /// `trial` until this call.
+    pub fn keep_records(&mut self, records: Records) {
+        self.records = records;
+    }
+
+    /// The records profile this run's case keeps: the one asked, or every decision for an
+    /// improvement case.
+    #[must_use]
+    pub fn kept_records(&self) -> Records {
+        self.records.for_protocol(&self.case.protocol.id)
     }
 
     /// Stops the run [`Stop::DiskLow`] before a step (a harness step, a deterministic step, the
@@ -10798,6 +10819,7 @@ impl<'a> Run<'a> {
                 confinement: Some(confinement.clone()),
                 // The endpoint the harness is pointed at, by reference: never a token.
                 endpoint: self.harness.endpoint_reference(),
+                records: Some(self.kept_records().name().to_owned()),
                 // The scan adapter every proposal and the change so far pass.
                 scan: Some(self.scan.name().to_owned()),
             },
@@ -10860,6 +10882,11 @@ impl<'a> Run<'a> {
         loop {
             seq += 1;
             let decision = self.case.evaluate(seq)?;
+            // The `default` profile keeps the decision just written and none before it; the
+            // sequence goes on from it, so no later decision reuses a number.
+            if self.kept_records() == Records::Default {
+                self.case.keep_only_decision(seq)?;
+            }
             // Each fact is recorded before it is printed, here and below: an `out` that fails
             // ends the run on an error, never with a fact it printed missing from the record.
             events.emit(
