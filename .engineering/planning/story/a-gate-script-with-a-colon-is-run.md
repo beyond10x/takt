@@ -2,14 +2,18 @@
 format: aep.planning-md/3
 id: story:a-gate-script-with-a-colon-is-run
 kind: story
-status: draft
+status: active
 title: A gate script holding the shell's colon builtin is run, not a pathspec error
 tags:
 - finding
 relations:
 - decomposes: epic:composable-agentic-work
 - informed_by: review-result:adversary-u2-pass-1
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T02:32:10Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-27T02:32:11Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

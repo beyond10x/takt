@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:gate-commands-find-programs-on-a-system-path
 kind: story
-status: draft
+status: active
 title: A gate command names its program without an absolute path or a PATH of its own
 summary: gate commands find programs on a fixed system path, never the user's
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T02:32:05Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-27T02:32:05Z", actor: "human:timo", revision: 3}
 ---
 # Story: gate-commands-find-programs-on-a-system-path
 
