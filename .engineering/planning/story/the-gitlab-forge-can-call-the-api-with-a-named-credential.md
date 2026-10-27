@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-gitlab-forge-can-call-the-api-with-a-named-credential
 kind: story
-status: draft
+status: active
 title: The GitLab forge calls the API directly with a credential from a named source
 summary: 'transport: api, credential from env or a mode-600 file, never in argv'
 tags:
@@ -11,6 +11,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:downstream-story-delivery
 - informed_by: story:gitlab-forge
+- depends_on: story:scan-and-forge-are-adapters
 scope:
 - confidence: inferred
   path: crates/takt/src/forge.rs
@@ -22,7 +23,10 @@ scope:
   path: crates/takt/tests/gitlab_api.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:45Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:46Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: the-gitlab-forge-can-call-the-api-with-a-named-credential
 

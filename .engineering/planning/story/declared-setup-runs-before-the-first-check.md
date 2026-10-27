@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:declared-setup-runs-before-the-first-check
 kind: story
-status: draft
+status: active
 title: A run executes its declared setup commands before the red-base check
 summary: setup key, SetupFailed stop before any model call
 tags:
@@ -21,7 +21,10 @@ scope:
   path: crates/takt/tests/setup.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
 ---
 # Story: declared-setup-runs-before-the-first-check
 

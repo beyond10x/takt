@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:harness-program-is-chosen-per-run
 kind: story
-status: draft
+status: active
 title: A run names the harness binary it uses and records it
 summary: '--harness-program, later program under harness:'
 tags:
@@ -20,7 +20,10 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/tests/harness_program.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-27T12:00:44Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "proposed", to: "active", at: "2026-10-27T12:00:44Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":3}}}
 ---
 # Story: harness-program-is-chosen-per-run
 
