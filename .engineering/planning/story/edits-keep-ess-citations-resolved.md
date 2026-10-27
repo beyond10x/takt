@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:edits-keep-ess-citations-resolved
 kind: story
-status: active
+status: implemented
 title: Edits keep ESS read-from citations resolved
 summary: re-point citations after line shifts before the gate (trial run 7)
 tags:
@@ -18,10 +18,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:10Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:54Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-27T02:43:54Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"review_outcome":1},"asserted":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: edits-keep-ess-citations-resolved
 

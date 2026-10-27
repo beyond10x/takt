@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-state-directory-is-configurable
 kind: story
-status: active
+status: implemented
 title: The run's state and transcript directory is configurable
 summary: transcripts under an unkept HOME were lost when the pod was replaced (second kind-cluster trial)
 tags:
@@ -15,10 +15,11 @@ scope:
   path: crates/takt-cli/src/main.rs
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T20:53:21Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:56Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-27T02:43:56Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1},"asserted":{"test_result":1,"review_outcome":1}}}
 ---
 ## Outcome
 
