@@ -120,7 +120,14 @@ fn ci_runs_the_check_tasks_commands_as_three_jobs() {
         .and_then(|steps| steps.last())
         .expect("the check job's steps");
     assert_eq!(last["env"]["PART"].as_str(), Some("${{ matrix.part }}"));
-    assert_eq!(last["run"].as_str(), Some("task \"$PART\""));
+    // The step may first close what its shell inherited from the runner; its last command
+    // is the task.
+    let run = last["run"].as_str().expect("the last step runs a script");
+    assert_eq!(
+        run.lines().map(str::trim).rfind(|line| !line.is_empty()),
+        Some("task \"$PART\""),
+        "{run}"
+    );
 }
 
 /// takt's own gates document, read through the loader the gate validator evaluates it with:
