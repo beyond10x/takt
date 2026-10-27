@@ -18,7 +18,7 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:10Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-26T20:53:54Z", actor: "human:timo", revision: 5}
@@ -57,8 +57,10 @@ gating is protocol data, not takt code.
 
 1. After a `gate.run` whose `citations` command fails naming unresolved citations, the next
    judgement step's prompt contains each `<document>:<line>: unresolved:` line the command
-   printed (up to the bound) under the gate's id, and the `gate.run` evidence record keeps them: a
-   test with a fake harness and a gate command that prints such lines.
+   printed (up to the bound) under the gate's id, and the run record's `gate.run` evidence line
+   keeps them in its `failed` field (amended at close: the canon evidence record keeps no output,
+   so takt runs a failed command once more to read its lines): a test with a fake harness and a
+   gate command that prints such lines.
 2. A gate that passes adds nothing to the prompt; a passing run's prompt is unchanged.
 3. The section is bounded in bytes; output past the bound is cut with the count of lines left
    out named.

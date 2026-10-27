@@ -175,7 +175,7 @@ refused ([Approve a capability](./approve-a-capability.md)).
 |---|---|---|
 | `ApprovalRequired` | 4 | merges once a grant is recorded |
 | `Waiting` | 6 | reads the forge again |
-| an error once the case was open | 5 | resumes the case |
+| an error once the case was open; a judgement step whose session ends without the line naming its action is tried 3 times first, each try a step that `--iterations` counts (a budget a try spent is exit 3) | 5 | resumes the case |
 | `Unperformable` | 7 | resumes the case; give it what was missing (a forge, a gates document) |
 | a budget, `StepRefused`, `NoProgress`, `NothingAdmissible` | 3 | resumes the case |
 | `RedBase`, `RepeatedTestFailure` | 3 | runs the tests again first and stops again while they fail the same way |

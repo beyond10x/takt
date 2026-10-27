@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-26T22:19:04Z",
+  "actor": "human:timo",
+  "artifact": "story:a-red-base-stops-at-open",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:adversary-u1-pass-1",
+    "review": "review-result:adversary-u1-pass-1",
+    "outcome": "fixed"
+  }
+}
