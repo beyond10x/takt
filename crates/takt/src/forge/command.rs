@@ -2,7 +2,8 @@
 //! [`Forge`] seam is the argument list the file's `forge_commands` section names, run without a
 //! shell through the forge [`Runner`], so a title holding `;` or `$(...)` is one argument. The
 //! push stays takt's own, scanned push over HTTPS to the project the `origin` remote names: this
-//! forge replaces the host's API calls and nothing before them.
+//! forge replaces the host's API calls and nothing before them. The merge target's tip is read
+//! through git, not through an entry ([`Forge::target_tip`]).
 //!
 //! | entry | runs | prints |
 //! |---|---|---|
@@ -24,9 +25,9 @@ use regex::Regex;
 use crate::scan::Scan;
 
 use super::{
-    BotRoute, Checks, Exit, Forge, Head, IdentityScan, Outgoing, PullRequest, PullRequestState,
-    PullRequestView, Runner, Scanner, fresh, head_is_a_commit, held_by, push_over_https, succeed,
-    write_request,
+    BotRoute, Checks, Exit, Failed, Forge, Head, IdentityScan, Outgoing, PullRequest,
+    PullRequestState, PullRequestView, Runner, Scanner, fresh, head_is_a_commit, held_by,
+    is_object_id, push_over_https, succeed, write_request,
 };
 
 /// An action of the forge and the entry of `forge_commands` that performs it.
@@ -157,7 +158,7 @@ impl fmt::Display for ForgeFailed {
 impl std::error::Error for ForgeFailed {}
 
 /// Output of a command that cannot be read: the entry and the field that is missing or wrong
-/// (`id_pattern`, `output`, `state`, `head`, `branch`, `base` or `name`).
+/// (`id_pattern`, `number`, `output`, `state`, `head`, `branch`, `base` or `name`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForgeOutput {
     /// The entry that ran.
@@ -483,7 +484,8 @@ impl CommandForge {
     }
 
     /// The request's number in what `open` printed: `id_pattern`'s first group, last match; else
-    /// the last integer of the last URL, else a lone number on the last line.
+    /// the number of the request path segment of the last URL that has one
+    /// ([`request_number_of`]), else a lone number on the last line.
     fn number_of(&self, stdout: &str) -> Result<u64> {
         let unreadable = || ForgeOutput {
             command: Entry::Open.name().to_owned(),
@@ -498,15 +500,10 @@ impl CommandForge {
         } else {
             stdout
                 .split_whitespace()
-                .rfind(|word| word.contains("://"))
-                .and_then(|url| {
-                    let url = url.split(['?', '#']).next().unwrap_or(url);
-                    let end = url.trim_end_matches(|c: char| !c.is_ascii_digit());
-                    let start = end
-                        .rfind(|c: char| !c.is_ascii_digit())
-                        .map_or(0, |at| at + 1);
-                    (start < end.len()).then(|| end[start..].to_owned())
-                })
+                .rev()
+                .filter(|word| word.contains("://"))
+                .find_map(request_number_of)
+                .map(str::to_owned)
                 .or_else(|| {
                     let line = stdout.lines().rfind(|line| !line.trim().is_empty())?.trim();
                     let line = line.trim_start_matches(['#', '!']);
@@ -529,6 +526,48 @@ impl CommandForge {
             .into()
         })
     }
+}
+
+/// The path segments after which a request's number stands: GitLab's `merge_requests` and
+/// GitHub's `pull` and `pulls`.
+const REQUEST_SEGMENTS: [&str; 3] = ["merge_requests", "pull", "pulls"];
+
+/// The request number in the URL `word`: the digits that make up the whole path segment after a
+/// segment of [`REQUEST_SEGMENTS`], the last such pair of the path. Nothing else of a URL is a
+/// number: not a digit of the host, its port, the project's name or a segment that is no number
+/// (`.../merge_requests/new`), and not the query or the fragment.
+fn request_number_of(word: &str) -> Option<&str> {
+    let word = word.trim_end_matches(['.', ',', ';', ')', ']', '>', '"', '\'']);
+    let rest = word.split_once("://")?.1;
+    let rest = rest.split(['?', '#']).next()?;
+    let path = &rest[rest.find('/')?..];
+    let segments: Vec<&str> = path.split('/').collect();
+    segments
+        .windows(2)
+        .rev()
+        .find(|pair| {
+            REQUEST_SEGMENTS.contains(&pair[0])
+                && !pair[1].is_empty()
+                && pair[1].bytes().all(|byte| byte.is_ascii_digit())
+        })
+        .map(|pair| pair[1])
+}
+
+/// The commit id in the output of `git ls-remote` for the reference `reference`: the one line
+/// that names exactly that reference (a bare id is the line of a pattern that matched one),
+/// never another reference the pattern also matches. `None` when no line names it.
+fn tip_of<'a>(stdout: &'a str, reference: &str) -> Option<&'a str> {
+    let mut named = stdout.lines().filter_map(|line| {
+        let mut fields = line.split_whitespace();
+        let id = fields.next()?;
+        match fields.next() {
+            None => Some(id),
+            Some(name) if name == reference && fields.next().is_none() => Some(id),
+            Some(_) => None,
+        }
+    });
+    let tip = named.next()?;
+    named.next().is_none().then_some(tip)
 }
 
 /// A field of `command`'s output that cannot be read.
@@ -711,7 +750,82 @@ impl Forge for CommandForge {
         )?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
-        self.number_of(&exit.stdout)
+        let number = self.number_of(&exit.stdout)?;
+        let view = self.pull_request(tree, number).with_context(|| {
+            format!(
+                "the number {number} read from what `open` printed was not read back through `read`; the request may be open under another number, and none is recorded"
+            )
+        })?;
+        if view.head.branch != request.branch || view.state != PullRequestState::Open {
+            return Err(ForgeOutput {
+                command: Entry::Open.name().to_owned(),
+                field: "number".to_owned(),
+            })
+            .with_context(|| {
+                format!(
+                    "`read` reports request {number} as {} with the head {}, not an open request for {}; none is recorded",
+                    view.state, view.head.branch, request.branch
+                )
+            });
+        }
+        Ok(number)
+    }
+
+    /// The commit the branch `base`, the merge target, is at in the project `origin` names:
+    /// `git ls-remote` of `refs/heads/<base>` over HTTPS alone, as the push goes, then the
+    /// commit fetched into no ref, so the tree's repository holds it and no branch, tag or
+    /// tracking ref a step can see has moved. No `forge_commands` entry reports it: `read`
+    /// describes one request, not a branch. A project with no such branch, an answer that is no
+    /// object id, or a command that fails is the error.
+    fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        let url = self.push_url()?;
+        let reference = format!("refs/heads/{base}");
+        let guarded = |verb: &[&str]| -> Vec<String> {
+            [
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "http.followRedirects=false",
+            ]
+            .into_iter()
+            .chain(verb.iter().copied())
+            .map(str::to_owned)
+            .collect()
+        };
+        let run = |argv: &[String]| -> Result<Exit> {
+            let exit = self.runner.run_env(tree, argv, &BotRoute::PUSH_ENV)?;
+            if exit.success() {
+                return Ok(exit);
+            }
+            Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: exit.stderr.trim().to_owned(),
+            }
+            .into())
+        };
+        let listed = run(&guarded(&["ls-remote", &url, &reference]))?;
+        let tip = tip_of(&listed.stdout, &reference).ok_or_else(|| {
+            anyhow!(
+                "the project {url} has no single branch {base} to merge into: `git ls-remote` named none"
+            )
+        })?;
+        if !is_object_id(tip) {
+            bail!(
+                "the project {url} reports {base} at `{}`, which is no object id",
+                tip.escape_debug()
+            );
+        }
+        run(&guarded(&[
+            "fetch",
+            &url,
+            tip,
+            "--no-write-fetch-head",
+            "--no-tags",
+            "--recurse-submodules=no",
+        ]))?;
+        Ok(tip.to_owned())
     }
 
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {
@@ -825,6 +939,58 @@ mod tests {
             let error = commands.check().expect_err("refused").to_string();
             assert!(error.contains("forge_commands.checks"), "{error}");
         }
+    }
+
+    #[test]
+    fn a_number_is_only_the_request_path_segment() {
+        for (url, number) in [
+            ("https://forge.example/g/p/-/merge_requests/17", Some("17")),
+            ("https://forge.example/g/p/-/merge_requests/17/", Some("17")),
+            (
+                "https://forge.example/g/p/-/merge_requests/17/diffs?x=3#n4",
+                Some("17"),
+            ),
+            ("https://forge.example/g/p/pull/9", Some("9")),
+            ("https://forge.example/g/p/pulls/9.", Some("9")),
+            ("https://forge.example:8443/g/p/pull/9", Some("9")),
+            ("https://forge.example/g/p/-/merge_requests/new", None),
+            ("https://forge.example/g/project-2/-/merge_requests", None),
+            ("https://forge.example/g/p/-/merge_requests/2x", None),
+            ("https://forge.example:8443/g/project", None),
+            ("https://forge.example:8443", None),
+            ("https://10.0.0.1/g/p", None),
+            ("https://forge.example/g/p?merge_requests/5", None),
+            ("https://forge.example/g/p#pull/5", None),
+            ("https://forge.example/g/p/issues/12", None),
+            (
+                "https://forge.example/g/merge_requests/5x/pull/6",
+                Some("6"),
+            ),
+        ] {
+            assert_eq!(request_number_of(url), number, "{url}");
+        }
+    }
+
+    #[test]
+    fn a_tip_is_the_line_that_names_exactly_the_reference() {
+        let id = "0123456789abcdef0123456789abcdef01234567";
+        let other = "89abcdef0123456789abcdef0123456789abcdef";
+        let main = "refs/heads/main";
+        assert_eq!(tip_of(&format!("{id}\t{main}\n"), main), Some(id));
+        assert_eq!(tip_of(&format!("{id}\n"), main), Some(id));
+        assert_eq!(
+            tip_of(
+                &format!("{other}\trefs/heads/x/{main}\n{id}\t{main}\n"),
+                main
+            ),
+            Some(id)
+        );
+        assert_eq!(tip_of("", main), None);
+        assert_eq!(tip_of(&format!("{id}\trefs/heads/x/{main}\n"), main), None);
+        assert_eq!(
+            tip_of(&format!("{id}\t{main}\n{other}\t{main}\n"), main),
+            None
+        );
     }
 
     #[test]

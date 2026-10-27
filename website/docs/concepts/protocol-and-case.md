@@ -39,6 +39,7 @@ ml-experiment/1
 self-improvement/1
 software-change/1
 story-delivery/1
+story-delivery/2
 support-triage/1
 ```
 
@@ -48,7 +49,8 @@ takt's own until 0.13.0 moved them into engineering protocols 0.10.0.
 | protocol | a case is | opened by |
 |---|---|---|
 | `software.change/1` | one change for an intent | `--intent` (the default protocol) |
-| `story.delivery/1` | one story of the planning store, delivered to a merged pull request | a story the store gives (the default) |
+| `story.delivery/2` | one story of the planning store, delivered to a merged pull request, with the case inputs `tests_first` and `gate_on` | a story the store gives (the default; [defaults](../reference/protocol-defaults.md)) |
+| `story.delivery/1` | the same story delivery with no case input | `--protocol story.delivery/1` |
 | `self.improvement/1` | one improvement turn of takt itself | `--protocol self.improvement/1` |
 | `loop.improvement/1` | one change to the improvement loop | `--protocol loop.improvement/1` |
 

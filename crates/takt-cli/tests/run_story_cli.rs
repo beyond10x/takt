@@ -119,6 +119,12 @@ fn repository(name: &str) -> Scratch {
 /// Runs the built `takt run` on `repo` with no harness, one iteration and a passing test
 /// command, plus `extra`: the exit code, stdout and stderr.
 fn run(repo: &Path, extra: &[&str]) -> (i32, String, String) {
+    // These tests run the first delivery protocol; the second one declares inputs they do not set.
+    let pinned: &[&str] = if extra.contains(&"--protocol") {
+        &[]
+    } else {
+        &["--protocol", "story.delivery/1"]
+    };
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args([
             "run",
@@ -131,6 +137,7 @@ fn run(repo: &Path, extra: &[&str]) -> (i32, String, String) {
             "--test-cmd",
             "true",
         ])
+        .args(pinned)
         .args(extra)
         .output()
         .expect("takt runs");

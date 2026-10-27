@@ -2718,6 +2718,98 @@ impl Decision {
     }
 }
 
+/// The file in a dispatched case's tree's git directory that names the checkout whose cases
+/// directory holds the case: the one thing in the tree's reach that says where its records are,
+/// since the tree holds none ([`Dispatched`]).
+pub const CASES_ROOT_POINTER: &str = "takt-cases-root";
+
+/// Where a case is opened when a dispatcher opens it for a child: the checkout `root` whose
+/// cases directory holds the child's records (never the child's own tree), and the case that
+/// `parent` dispatched it. The child's `case.yaml` records `parent` and `worktree`, the tree it
+/// works in ([`CaseDir::open_in`]).
+#[derive(Debug, Clone, Copy)]
+pub struct Dispatched<'a> {
+    /// The checkout whose cases directory holds the child's records.
+    pub root: &'a Path,
+    /// The case that dispatched the child.
+    pub parent: &'a str,
+}
+
+/// The git directory of the checkout at `tree`: `.git` when it is a directory, the directory a
+/// linked worktree's `.git` file names; none for anything else.
+fn git_dir_of(tree: &Path) -> Option<PathBuf> {
+    let dot_git = tree.join(".git");
+    let meta = std::fs::symlink_metadata(&dot_git).ok()?;
+    if meta.is_dir() {
+        return Some(dot_git);
+    }
+    if !meta.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dot_git).ok()?;
+    let named = text
+        .lines()
+        .find_map(|line| line.strip_prefix("gitdir:"))?
+        .trim();
+    let named = Path::new(named);
+    Some(if named.is_absolute() {
+        named.to_path_buf()
+    } else {
+        tree.join(named)
+    })
+}
+
+/// The checkout whose cases directory holds the cases of the dispatched case `tree` works in:
+/// what [`link_tree`] wrote into the tree's git directory; none for a tree that is not a
+/// dispatched case's, or whose pointer does not name a directory.
+#[must_use]
+pub fn cases_root_of(tree: &Path) -> Option<PathBuf> {
+    let pointer = git_dir_of(tree)?.join(CASES_ROOT_POINTER);
+    let text = std::fs::read_to_string(pointer).ok()?;
+    let root = PathBuf::from(text.trim_end_matches('\n'));
+    (root.is_absolute() && root.is_dir()).then_some(root)
+}
+
+/// Records in the git directory of `tree` that the cases of the case it works in are under the
+/// cases directory of the checkout `root`, so the validators, which find a case from its tree by
+/// the branch it is on, find it ([`CaseDir::locate`]). Written when a dispatched case is opened
+/// and again when it is resumed.
+pub fn link_tree(tree: &Path, root: &Path) -> Result<()> {
+    let git_dir = git_dir_of(tree).ok_or_else(|| {
+        anyhow!(
+            "{} has no git directory to point at its cases",
+            tree.display()
+        )
+    })?;
+    let root = std::fs::canonicalize(root)
+        .with_context(|| format!("read the cases root {}", root.display()))?;
+    let pointer = git_dir.join(CASES_ROOT_POINTER);
+    std::fs::write(&pointer, format!("{}\n", root.display()))
+        .with_context(|| format!("write {}", pointer.display()))
+}
+
+/// The case that dispatched the case at `case_dir` (`parent` in its `case.yaml`), none for a
+/// case no dispatcher opened.
+pub fn parent_of(case_dir: &Path) -> Result<Option<String>> {
+    case_member(case_dir, "parent")
+}
+
+/// The tree the case at `case_dir` works in (`worktree` in its `case.yaml`), none for a case no
+/// dispatcher opened.
+pub fn worktree_of(case_dir: &Path) -> Result<Option<PathBuf>> {
+    case_member(case_dir, "worktree").map(|member| member.map(PathBuf::from))
+}
+
+/// The string `case.yaml` of the case at `case_dir` holds under `key`, if it holds one.
+fn case_member(case_dir: &Path, key: &str) -> Result<Option<String>> {
+    let path = case_dir.join("case.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(doc[key].as_str().map(str::to_owned))
+}
+
 /// One case's files.
 #[derive(Debug, Clone)]
 pub struct CaseDir {
@@ -2743,17 +2835,33 @@ impl CaseDir {
     /// [`LEGACY_CASES_DIR`] when it is there, so a case already under the legacy root is read and
     /// written where it is. A case in neither is one a new open makes, so the directory under
     /// [`CASES_DIR`] is named. Nothing is created or read beyond the two existence checks.
+    ///
+    /// A tree a dispatched case works in ([`Dispatched`]) holds no case: it is looked for in
+    /// the cases root its git directory points at ([`cases_root_of`]) when neither of its own
+    /// roots has it, and a case in neither is the one a new open makes under that root.
     #[must_use]
     pub fn locate(tree: &Path, id: &str) -> PathBuf {
-        let new = tree.join(CASES_DIR).join(id);
-        if std::fs::symlink_metadata(&new).is_ok() {
+        let (new, found) = Self::locate_under(tree, id);
+        if found {
             return new;
         }
-        let legacy = tree.join(LEGACY_CASES_DIR).join(id);
+        match cases_root_of(tree) {
+            Some(root) => Self::locate_under(&root, id).0,
+            None => new,
+        }
+    }
+
+    /// The directory of case `id` under the checkout `root` alone, and whether it is there.
+    fn locate_under(root: &Path, id: &str) -> (PathBuf, bool) {
+        let new = root.join(CASES_DIR).join(id);
+        if std::fs::symlink_metadata(&new).is_ok() {
+            return (new, true);
+        }
+        let legacy = root.join(LEGACY_CASES_DIR).join(id);
         if std::fs::symlink_metadata(&legacy).is_ok() {
-            legacy
+            (legacy, true)
         } else {
-            new
+            (new, false)
         }
     }
 
@@ -2796,10 +2904,30 @@ impl CaseDir {
         inputs: &[(String, String)],
         commit_as: &CommitAs,
     ) -> Result<Self> {
+        Self::open_in(None, tree, protocol, id, intent, inputs, commit_as)
+    }
+
+    /// [`CaseDir::open_as`] for a case a dispatcher opens for a child ([`Dispatched`]) in `tree`,
+    /// a managed worktree of its own: the case's directory is under the cases directory of the
+    /// dispatching checkout, `case.yaml` records its `parent` and the `worktree` it works in, the
+    /// tree's git directory points at the checkout ([`link_tree`]), and the tree gets no case
+    /// file. The case's base is the branch the dispatching checkout is on when the tree is on
+    /// none, which is how a managed tree is made. `None` opens a case under `tree` itself, as
+    /// [`CaseDir::open_as`] does.
+    pub fn open_in(
+        dispatched: Option<Dispatched<'_>>,
+        tree: &Path,
+        protocol: LoadedProtocol,
+        id: &str,
+        intent: &str,
+        inputs: &[(String, String)],
+        commit_as: &CommitAs,
+    ) -> Result<Self> {
+        let cases = dispatched.map_or(tree, |dispatched| dispatched.root);
         check_id(id)?;
-        refuse_link_on_the_way(tree, id, "opened")?;
-        let dir = tree.join(CASES_DIR).join(id);
-        let existing = CaseDir::locate(tree, id);
+        refuse_link_on_the_way(cases, id, "opened")?;
+        let dir = cases.join(CASES_DIR).join(id);
+        let existing = CaseDir::locate(cases, id);
         if std::fs::symlink_metadata(&existing).is_ok() {
             return Err(anyhow!(
                 "the case {id} already exists at {}",
@@ -2868,7 +2996,16 @@ impl CaseDir {
         // is on another case's branch, that case's base, at its tip, so a case never forks from
         // another case's commits. `left` is the branch the tree was on, which a discarded case
         // returns to.
-        let (left, base, from) = opening_base(tree)?;
+        let (left, mut base, from) = opening_base(tree)?;
+        if let Some(dispatched) = dispatched {
+            // A managed tree is made detached: its case's base is the branch the dispatching
+            // checkout is on, the tree being made at that checkout's head.
+            if base.is_none() {
+                base = crate::git::current_branch(dispatched.root)?;
+            }
+            doc.insert("parent".into(), dispatched.parent.into());
+            doc.insert("worktree".into(), tree.display().to_string().into());
+        }
         let base_commit = crate::git::run(
             tree,
             &["rev-parse", "--verify", from.as_deref().unwrap_or("HEAD")],
@@ -2897,7 +3034,7 @@ impl CaseDir {
             pull_request: None,
         };
         crate::git::create_branch(tree, &branch.name, from.as_deref())?;
-        let takt_dir = tree.join(TAKT_DIR);
+        let takt_dir = cases.join(TAKT_DIR);
         let takt_was = std::fs::symlink_metadata(&takt_dir).is_ok();
         let ignore_was = std::fs::symlink_metadata(takt_dir.join(TAKT_GITIGNORE)).is_ok();
         let keep_was = std::fs::symlink_metadata(takt_dir.join(TAKT_WORKTREEKEEP)).is_ok();
@@ -2922,7 +3059,10 @@ impl CaseDir {
             {
                 case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
-            write_takt_files(tree)?;
+            write_takt_files(cases)?;
+            if let Some(dispatched) = dispatched {
+                link_tree(tree, dispatched.root)?;
+            }
             case.create(intent, &branch)?;
             if let Some(identity) = &identity {
                 let path = case.dir.join(COMMIT_IDENTITY_RECORD);
@@ -2971,7 +3111,13 @@ impl CaseDir {
             let _ = std::fs::remove_dir(cases);
         }
         let (takt_was, ignore_was, keep_was) = existed;
-        let takt_dir = tree.join(TAKT_DIR);
+        let checkout = dir.ancestors().nth(3).unwrap_or(tree);
+        if checkout != tree
+            && let Some(git_dir) = git_dir_of(tree)
+        {
+            let _ = std::fs::remove_file(git_dir.join(CASES_ROOT_POINTER));
+        }
+        let takt_dir = checkout.join(TAKT_DIR);
         if !ignore_was {
             let _ = std::fs::remove_file(takt_dir.join(TAKT_GITIGNORE));
         }
@@ -3009,6 +3155,9 @@ impl CaseDir {
     pub fn resume(tree: &Path, id: &str) -> Result<Self> {
         check_id(id)?;
         refuse_link_on_the_way(tree, id, "resumed")?;
+        if let Some(root) = cases_root_of(tree) {
+            refuse_link_on_the_way(&root, id, "resumed")?;
+        }
         let dir = Self::locate(tree, id);
         let snapshot = dir.join("case.yaml");
         if !snapshot.is_file() {
@@ -3075,10 +3224,15 @@ impl CaseDir {
     /// hold among them, until this holds ([`crate::Run::run`]).
     pub fn check_way(&self) -> Result<()> {
         let mut way = PathBuf::new();
-        let relative = self.dir.strip_prefix(&self.tree).unwrap_or(&self.dir);
+        let base = if self.dir.starts_with(&self.tree) {
+            self.tree.as_path()
+        } else {
+            self.dir.ancestors().nth(3).unwrap_or(&self.tree)
+        };
+        let relative = self.dir.strip_prefix(base).unwrap_or(&self.dir);
         for part in relative.components() {
             way.push(part);
-            let at = self.tree.join(&way);
+            let at = base.join(&way);
             let meta =
                 std::fs::symlink_metadata(&at).with_context(|| format!("read {}", at.display()))?;
             if meta.file_type().is_symlink() {

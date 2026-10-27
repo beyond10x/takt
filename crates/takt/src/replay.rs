@@ -518,6 +518,7 @@ fn context<'a>(
         time_left: None,
         change,
         failed,
+        obligations: &[],
     }
 }
 

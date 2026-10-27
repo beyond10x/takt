@@ -22,6 +22,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
   CHECK_FINDING_MIN_FREE_GIB: "0"
 
 jobs:
@@ -36,6 +38,13 @@ jobs:
       matrix:
         part: [check-static, test-cli, test-library]
     steps:
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
@@ -61,8 +70,8 @@ jobs:
 
       - name: Install ess
         env:
-          ESS_VERSION: "0.69.2"
-          ESS_SHA256: 8cc5a3a7ed7c27aacbff131ab1437e18e7d7d1878fee77542b3e0fff7157d414
+          ESS_VERSION: "0.70.0"
+          ESS_SHA256: eb7794aa5dac6ded63d09c06e6812831f70f3a84e8387cb93654e99d8fd1713a
         run: |
           set -euo pipefail
           asset="ess-$ESS_VERSION-x86_64-unknown-linux-gnu.tar.gz"
@@ -110,16 +119,38 @@ jobs:
       - name: Fill aep's protocol cache
         run: aep plan artifact validate
 
-      - name: Install bubblewrap
+      - name: Install bubblewrap and socat
         run: |
           set -euo pipefail
-          sudo apt-get update -qq && sudo apt-get install -y bubblewrap
+          sudo apt-get update -qq && sudo apt-get install -y bubblewrap socat
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
           bwrap --unshare-net --dev-bind / / true
 
+      - name: Start the runner's user systemd manager
+        run: |
+          set -euo pipefail
+          uid=$(id -u)
+          sudo loginctl enable-linger "$(id -un)"
+          for _ in $(seq 1 30); do
+            [ -S "/run/user/$uid/bus" ] && break
+            sleep 1
+          done
+          echo "XDG_RUNTIME_DIR=/run/user/$uid" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus" >> "$GITHUB_ENV"
+          XDG_RUNTIME_DIR="/run/user/$uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+            systemd-run --user --scope --quiet true
+
       - name: task ${{ matrix.part }}
         env:
           PART: ${{ matrix.part }}
-        run: task "$PART"
+        run: |
+          set -euo pipefail
+          for fd in /proc/$$/fd/*; do
+            n=${fd##*/}
+            if [ "$n" -gt 2 ] && [ "$n" -ne 255 ]; then
+              eval "exec $n>&-" 2>/dev/null || true
+            fi
+          done
+          task "$PART"

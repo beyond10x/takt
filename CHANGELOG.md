@@ -6,6 +6,56 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-27
+
+takt confines every test command through Substrate on Linux and macOS, and a store story opens on
+`story.delivery/2`; declared setup commands run before the first check.
+
+### Added
+
+- `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
+- A run lists each gate of the repository's gates document with its status in the prompt, the last line of the run and `takt report` (`--format json`); the gate runner is told base, subject and story.
+- `forge: connectors` with `forge_instance` goes through `connectors operations invoke`; its preflight exits 1 naming a missing operation, and it is never a default.
+- The Workspace seam and a minimal `case.dispatch`: a dispatched child gets a leased managed worktree through the `worktree` CLI, its records stay at the root, and leaving archives or finishes it.
+- `--confinement-needs <NAME>`: a Substrate family or fact the test command needs; an adapter that lacks it is not chosen, and with none left the run is refused before it starts.
+- `--confinement-cgroup-root <DIR>`: a delegated cgroup v2 root in which Substrate's `linux` adapter bounds each run without `systemd`.
+- The `opened` event records the Substrate adapter as `substrate`: its name, the one it wraps, its families, its proved facts and any declared-insecure reason.
+
+### Changed
+
+- Engineering protocols 0.11.0: `takt protocols` lists `story.delivery/2`, which declares the case inputs `tests_first` and `gate_on`; `story.delivery/1` is unchanged.
+- **Breaking:** takt ships one defaults document: a store story opens on `story.delivery/2` with `tests_first: required` and `gate_on: after_handover`; an `--intent` keeps `software.change/1`.
+- The `protocol-defaults` reference page is generated from that document and a test fails on drift; a case input nobody sets still refuses the case at open, naming it and its values.
+- **Breaking:** takt confines through Substrate's confinement contract, `b10x-substrate-host` 0.14.0, on Linux and macOS (story:confinement-through-substrate-on-linux-and-macos).
+- Under `linux` and `systemd` around it a test command writes only its tree's `target`; a host without `exec.workspace-scoped-write` refuses `--confinement substrate` by that name.
+- Where `/usr/bin/cc` links through `/etc/alternatives` (Debian, Ubuntu), a test command and a promotion build under `linux` get a `cc` on `PATH` that cargo can link with.
+- There a test command that would write `Cargo.lock` fails naming the read-only file: commit a current `Cargo.lock`, as ignoring it in `.gitignore` no longer serves.
+- A test command's run keeps the last bytes of each output stream within Substrate's 1 MiB bound, so a run that printed more is still summarised from its `test result:` lines.
+- `--confinement substrate` runs the test command through the first of Substrate's `systemd` around `linux`, `linux` and `macos` adapters that serves it, or refuses it by name.
+- The `case` line names the Substrate adapter and the facts it proved (`; proved: <facts>`); the `opened` event records both.
+- Where the adapter serves `limits`, a test command is held to 2048 processes, 8 GiB of memory and an hour of CPU time, as under loom-sdk 0.45.0.
+- `takt promote` builds a candidate through the same selection; a host none of whose adapters serves the build exits 5 naming each, where a missing bubblewrap exited 1.
+- On macOS the build finds `git` among the selected developer tools' programs, as the `/usr/bin` shims cannot run under `macos`, so the binary names its revision.
+- On macOS a `.cargo/config.toml` above the build directory, `~/.cargo/config.toml` included, fails the build: `macos` lets cargo see it but not read it.
+- **Breaking:** `--confinement none` runs the test command through Substrate's `local` adapter, declared insecure; the `case` line and the `opened` event give the reason.
+- It keeps the cleared environment, the scratch home and `TMPDIR`, the timeout and the bounded output, and runs in no namespace of takt's own.
+- The checks run `ess` 0.70.0.
+
+### Removed
+
+- takt's own confinement: its Seatbelt profiles, the bubblewrap build of a promotion, the namespace that hid logins under `none` and the `systemd-run` re-run.
+
+### Fixed
+
+- The command forge reads the merge target's tip through git (`ls-remote`, then a fetch into no ref), so `repository.merge` reaches the run file's `merge` entry instead of stopping unknown.
+- Without `id_pattern`, the command forge takes a request number only from a `merge_requests`, `pull` or `pulls` path segment; a URL naming no request gives none and `pr.open` refuses.
+- The command forge reads a request number back through `read` before `pr.open` records it; a request `read` does not confirm as open for the case's branch is refused.
+
+### Security
+
+- A `--confinement none` test command can read what its user can, the home, runtime sockets and `$CARGO_HOME/credentials.toml` included; use `substrate` for untrusted code.
+- On macOS a `--confinement none` test command no longer runs under takt's Seatbelt profile: its writes, the programs it starts, launchd and the keychain are no longer limited.
+
 ## [0.15.1] - 2026-10-27
 
 0.15.0 with its macOS test jobs passing, and the first release of that code with binaries: the 0.15.0
@@ -640,7 +690,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.15.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.16.0...HEAD
+[0.16.0]: https://github.com/beyond10x/takt/compare/0.15.1...0.16.0
 [0.15.1]: https://github.com/beyond10x/takt/compare/0.15.0...0.15.1
 [0.15.0]: https://github.com/beyond10x/takt/compare/0.14.0...0.15.0
 [0.14.0]: https://github.com/beyond10x/takt/compare/0.13.1...0.14.0

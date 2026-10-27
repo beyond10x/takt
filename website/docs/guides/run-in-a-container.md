@@ -20,7 +20,7 @@ No image is published, so build it from the tag:
 ```sh
 git clone --branch 0.14.0 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.15.1 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.16.0 .
 ```
 
 The image carries takt, `aep`, `b10x-harness` 0.20.0, `ess`, `b10x-gates` (the `gates` scan
@@ -71,7 +71,7 @@ under another uid is refused by git as `dubious ownership`, so clone into a volu
 git -C my-repo bundle create ../my-repo.bundle main
 docker volume create takt-demo-ws
 docker run --rm -v "$PWD/my-repo.bundle:/src/my-repo.bundle:ro" -v takt-demo-ws:/workspace \
-  --entrypoint git takt:0.15.1 clone -q -b main /src/my-repo.bundle /workspace
+  --entrypoint git takt:0.16.0 clone -q -b main /src/my-repo.bundle /workspace
 ```
 
 A story run needs what [Run a story](./run-a-story.md#1-prepare-the-repository) lists, committed
@@ -84,7 +84,7 @@ docker run --rm \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   -e LLM_API_KEY \
   -v takt-demo-ws:/workspace -v "$PWD/config:/config:ro" \
-  --entrypoint tini takt:0.15.1 -- \
+  --entrypoint tini takt:0.16.0 -- \
   /bin/sh -c 'mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace --config /config/agent.yaml "$@"' takt
 ```
 
@@ -97,9 +97,11 @@ has no group or other bits and the directory is not group- or other-writable; a 
 the host's owner. This page's runs used `--harness none` and no policy. The two pieces that are
 not the image's default are:
 
-1. **seccomp and AppArmor unconfined.** Under the default `--confinement none` the test command runs in a user and mount namespace of
-   its own, and both default profiles refuse to create one: with only seccomp or only AppArmor
-   unconfined, the first test run still failed.
+1. **seccomp and AppArmor unconfined.** Under the default `--confinement none` of 0.14.0 the test
+   command ran in a user and mount namespace of its own, and both default profiles refuse to create
+   one: with only seccomp or only AppArmor unconfined, the first test run still failed. Since then
+   `none` starts it through Substrate's `local` adapter, in no namespace of takt's own; whether a
+   container still needs both unconfined has not been measured again.
 2. **`mkdir -p "$HOME/.cargo/bin"` before takt.** In a fresh `HOME` the first test run creates
    `~/.cargo`, and takt refuses a test run that writes outside the tree.
 

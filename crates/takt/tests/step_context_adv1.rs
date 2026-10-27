@@ -107,6 +107,7 @@ fn step(
         scope_revision: None,
         base_revision: base,
         commit: None,
+        obligations: &[],
     })
 }
 

@@ -25,8 +25,8 @@ generated [CLI reference](./cli.md); a walk-through is in
 | `.yaml`, `.yml` | YAML: the fields at the top level, or in the `takt` member of a `loom.agent/1` document |
 | anything else | refused |
 
-Every field is optional. Every field but `scan`, `forge_commands`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
-for `_`; those four have no flag.
+Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `setup`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
+for `_`; those six have no flag.
 
 | field | meaning |
 |---|---|
@@ -37,7 +37,7 @@ for `_`; those four have no flag.
 | `model` | string: the harness's model, when it takes one; with an `llm` section under `--harness harness`, the route or alias of that section it names, whose endpoint, wire and upstream model the session uses |
 | `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
 | `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
-| `forge` | string: `bot`, `gitlab`, `command` or `none` |
+| `forge` | string: `bot`, `gitlab`, `command`, `connectors` or `none` |
 | `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
 | `state_dir` | path: the state directory, as `--state-dir`: the run's transcripts go to `<state_dir>/transcripts` and what a discarded step sets aside to `<state_dir>/set-aside` ([The state directory](#the-state-directory)); a relative path is read beside the configuration file |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
@@ -45,17 +45,19 @@ for `_`; those four have no flag.
 | `commit` | mapping of `style` (`semantic`, the default, `repository` or `action`), `trailer` (default `Refs`; empty for none) and `types` (an action to its commit type), as `--commit-style`, `--commit-trailer` and `--commit-types`: how a step commit's message is written ([Commit messages](#commit-messages)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 | `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
+| `forge_instance` | string: the instance `forge: connectors` invokes `connectors operations` on, one word of letters, digits, `.`, `_` and `-`; checked when the file is read, needed by `forge: connectors` and refused under any other forge ([The connectors forge](#the-connectors-forge)); no flag |
+| `setup` | a list of `{name, argv}` commands, run once in the tree when the case opens, before the red-base check and any model call, under the test command's environment and confinement; `argv` is a program and its arguments, run without a shell; each duration is recorded on a `setup` line of the run record and the output kept under the state directory; a command that does not end 0 stops the run `SetupFailed`, exit 1; a resumed case runs them again only when its base moved; no flag |
 | `transport` | `glab`, the default, or `api`: how `forge: gitlab` reaches the host ([The GitLab API transport](#the-gitlab-api-transport)); no flag |
 | `credential` | `{env: NAME}` or `{file: PATH}`, where the `api` transport's token comes from, by reference only; no flag |
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
-| `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says |
+| `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says; with none of them a story opens on `story.delivery/2` ([defaults](protocol-defaults.md)) |
 | `protocols` | a mapping of a protocol, by name (every revision) or `<name>/<major>`, to a mapping of its declared case inputs, each set to one of the values the protocol declares; an unknown protocol, input or value is refused at its line before any case opens. An input is taken from `--input`, else a story tag `input:<name>=<value>`, else this section, else takt's built-in default for the protocol; each value is recorded with its source in the case's `case.yaml` |
 
 `takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
 `--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
-`--commit-identity`, `--confinement`, `--llm-config`, `--model-endpoint`, `--model-wire`,
+`--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
 `--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
 `--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
 
@@ -135,7 +137,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -251,8 +253,7 @@ takt: the endpoint's base URL https://llm.example.com/v1 is not the default http
 API-key file. takt:
 
 1. takes the variable out of its own environment before it starts anything, so no process it
-   starts sees it (under `--confinement substrate` outside a delegated cgroup, `systemd-run` and
-   the takt it re-runs are the exception);
+   starts sees it;
 2. on Linux with glibc, overwrites its value in its initial environment block, which
    `/proc/<pid>/environ` reads;
 3. stages the value as a token file of mode 0600 in a new directory of mode 0700 under the first
@@ -325,13 +326,14 @@ Without `--forge`, takt follows `origin`:
 | any other host, with `glab auth status --hostname <host>` exiting 0 | `gitlab` |
 | anything else | `none`, with the reason in one line |
 
-Each forge is an adapter, and the four are peers:
+Each forge is an adapter, and the five are peers:
 
 | forge | what it pushes and opens through | what scans what it publishes |
 |---|---|---|
 | `gitlab` | `git push` over HTTPS with `glab auth git-credential` as its one credential helper; the merge request opened, read and merged through `glab api`, or through the API itself under `transport: api` | the run's scan adapter ([The scan](#the-scan)) |
 | `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the case's branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its state and checks | `b10x-gates scan-text`, always: it is the `gates` adapter's own forge |
 | `command` | the commands of the run file's `forge_commands`, each an argument list run without a shell; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
+| `connectors` | `connectors operations invoke` on the instance the run file's `forge_instance` names, once per action; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
 | `none` | nothing | nothing leaves the machine |
 
 `--forge gitlab` without `glab` or its login is refused before the case opens. Under `scan:
@@ -341,8 +343,8 @@ none` it checks that the head is a commit and pushes without a scan. `--forge bo
 commits, replayed on the base branch's tip under the configured identity and named by
 `refs/takt/candidates/<case>`. With no identity configured it makes none and names the setting.
 
-A scenario run creates its trial base only through the bot route: it refuses `--forge gitlab` and
-`--forge command`, and on another host it runs with `--forge none`.
+A scenario run creates its trial base only through the bot route: it refuses `--forge gitlab`,
+`--forge command` and `--forge connectors`, and on another host it runs with `--forge none`.
 
 ### The GitLab API transport
 
@@ -392,8 +394,16 @@ forge_commands:
   the head the checks were read on. A placeholder an entry does not take, written in braces as a word
   of lowercase letters and `_`, and a placeholder as the first element, the program, are refused
   before the case opens.
-- **Output.** `open` prints the request's URL or number, read by `id_pattern` (default: the last
-  integer of the last URL on standard output). `read` prints JSON with `state` (`open`, `merged` or
+- **Request number.** `open` prints the request's URL or number. `id_pattern`'s first group, in
+  the last match, is the number. Without it the number comes only from the request path segment of
+  a URL: the digits that make the whole segment after a `merge_requests`, `pull` or `pulls`
+  segment, in the last URL that has one, else a lone number on the last line. A URL that names no
+  request gives no number: a `.../merge_requests/new` page, a host with a port, a project whose
+  name holds a digit. `pr.open` is then refused, naming `id_pattern`, and nothing is recorded. Any
+  number is read back through `read` before `open` returns: a request `read` does not report as an
+  open request for the case's branch, or cannot read, is refused naming `number`, and its number
+  is not recorded.
+- **Output.** `read` prints JSON with `state` (`open`, `merged` or
   `closed`), `head` (the commit, or an object with `sha` and `branch`), `branch` (when `head` is the
   commit alone) and `base`. `checks` prints JSON, a list of `{name, state}`. Output that cannot be
   read is an error naming the command and the field.
@@ -403,8 +413,39 @@ forge_commands:
 - **Missing entries.** A protocol that opens, reads checks or merges needs the entries for those
   actions; a missing one is refused before the case opens, naming it.
 - **Push and scan.** The push stays takt's scanned push over HTTPS to the project `origin` names,
-  under the run's scan adapter. No entry reports the merge target's tip, so the judge guard refuses a
-  merge through this forge until one does.
+  under the run's scan adapter.
+- **Merge target's tip.** No entry reports it, since `read` describes one request and not a
+  branch. `repository.merge` reads it through git, as the push goes: `git ls-remote` of
+  `refs/heads/<base>` in the project `origin` names, over HTTPS alone, then that commit fetched into
+  no ref. The tree needs an `origin` remote naming the project, and git must be able to read it
+  with the credentials the push uses. A project with no such branch, an answer that is no commit
+  id, or a command that fails gives no tip, and the judge guard merges nothing. With a tip, the
+  `merge` entry runs once, at the head the checks were read on, and the merge is read back through
+  `read`.
+
+### The connectors forge
+
+`forge: connectors` with `forge_instance` goes through `connectors operations invoke` on that
+instance. It is never a default: no run reaches it without both keys.
+
+```yaml
+forge: connectors
+forge_instance: forge
+```
+
+- **Operations.** The instance's `gitlab` connector's: `merge_request.create` opens the request at the
+  case branch's commit, `merge_request.get` reads it, `pipeline.get` reads the pipeline its head names
+  and `merge_request.merge` merges it. The project is the one `origin` names; the schema and revision
+  each invocation needs come from `connectors operations describe`.
+- **Preflight.** Before the case opens, `connectors operations list --output json` must list all four,
+  and an instance lists a write only when it admits it. A missing one is exit 1, naming each missing
+  operation, and no case opens. The run prints the instance's connector, name and descriptor revision.
+- **Checks and merge.** The checks are the status of the pipeline the request's head names; a pipeline
+  of another head is not read and the checks stay pending. `merge` carries the head the checks were
+  read on, with that pipeline, and a head with no such reading is refused with no merge invoked.
+- **Push and scan.** The push stays takt's scanned push over HTTPS to the project `origin` names,
+  under the run's scan adapter. Approvals for the instance's writes are not given here, and no entry
+  reports the merge target's tip, so the judge guard refuses a merge through this forge until one does.
 
 ## The scan
 
@@ -594,7 +635,9 @@ which is `--model`) need `--harness harness`, and an `llm` section may not sit b
 
 | flag | meaning |
 |---|---|
-| `--confinement <C>` | `none` (default) or `substrate`: the test command run by Loom's `SubstrateRunner` with no network |
+| `--confinement <C>` | `none` (default): the test command through Substrate's `local` adapter, declared insecure, on the host as this user; `substrate`: through the first Substrate adapter of the host that serves it (`systemd` around `linux`, `linux`, `macos`), with no network, or refused by name |
+| `--confinement-needs <NAME>` | a contract family or fact of Substrate's (`limits`, `network_egress`, `private_tmpdir`, …) the test command needs beyond what every run needs; an adapter that does not serve or prove it is not chosen, and with none left the run is refused before anything starts. Repeatable |
+| `--confinement-cgroup-root <DIR>` | for `substrate`: a cgroup v2 directory delegated to this user, under which the `linux` adapter bounds each run without `systemd` |
 | `--commit-identity <'NAME <EMAIL>'>` | the author and committer of every commit of the case |
 
 ### The file

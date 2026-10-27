@@ -196,12 +196,19 @@ mod tests {
             .stdout(std::process::Stdio::piped())
             .spawn()
             .expect("sh runs");
-        child
+        // A helper that answers nothing may end before it reads its input.
+        let written = child
             .stdin
             .take()
             .expect("stdin")
-            .write_all(stdin.as_bytes())
-            .expect("written");
+            .write_all(stdin.as_bytes());
+        if let Err(error) = written {
+            assert_eq!(
+                error.kind(),
+                std::io::ErrorKind::BrokenPipe,
+                "written: {error}"
+            );
+        }
         let out = child.wait_with_output().expect("sh finishes");
         String::from_utf8_lossy(&out.stdout).into_owned()
     }

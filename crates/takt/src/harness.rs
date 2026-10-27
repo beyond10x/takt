@@ -62,6 +62,10 @@ pub struct StepContext<'a> {
     /// one ([`crate::commit_style::Plan::ask`]); none for the `action` style, whose prompt is as
     /// it was.
     pub commit: Option<&'a crate::commit_style::Ask>,
+    /// The repository's obligations: each gate of the gates document at the case's base with
+    /// its status at the current revision ([`crate::obligations`]), shown as a block after the open
+    /// obligations; empty for a run with no gates document, and then no block.
+    pub obligations: &'a [crate::obligations::Obligation],
 }
 
 /// What a step reported.
@@ -2033,6 +2037,7 @@ impl ClaudeCode {
                 text.push_str(&format!("- {obligation}\n"));
             }
         }
+        text.push_str(&crate::obligations::block(context.obligations));
         text.push_str(&failed_block_scanned(context.failed, context.tree, scan));
         text.push_str(&context.change.block());
         text.push_str("\nYou may perform exactly ONE of these actions now, nothing else:\n");
@@ -2229,6 +2234,29 @@ pub fn keep_transcript(
     keep_transcript_making(root, repo, case, run, step, bytes, &mut Vec::new())
 }
 
+/// Keeps the output of the setup command `name` (`setup-<name>.log`) beside the transcripts of run
+/// `run` of the case `case`, under the same rules as [`keep_transcript`]: each directory it made and
+/// the file it created are put in `made`. `name` is one plain word.
+pub(crate) fn keep_setup_output(
+    root: &Path,
+    repo: &str,
+    case: &str,
+    run: u64,
+    name: &str,
+    bytes: &[u8],
+    made: &mut Vec<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    keep_named(
+        root,
+        repo,
+        case,
+        run,
+        &format!("setup-{name}.log"),
+        bytes,
+        made,
+    )
+}
+
 /// [`keep_transcript`], each directory it made and the file it created put in `made` as it is
 /// made, in order from `/`, whether or not it ends in an error: the exact paths takt itself
 /// wrote, which [`crate::run::Run`] takes as found so no step is charged with them.
@@ -2238,6 +2266,27 @@ fn keep_transcript_making(
     case: &str,
     run: u64,
     step: u64,
+    bytes: &[u8],
+    made: &mut Vec<std::path::PathBuf>,
+) -> Result<std::path::PathBuf> {
+    keep_named(
+        root,
+        repo,
+        case,
+        run,
+        &format!("step-{step}.jsonl"),
+        bytes,
+        made,
+    )
+}
+
+/// [`keep_transcript_making`] for the file `file` of the run's directory.
+fn keep_named(
+    root: &Path,
+    repo: &str,
+    case: &str,
+    run: u64,
+    file: &str,
     bytes: &[u8],
     made: &mut Vec<std::path::PathBuf>,
 ) -> Result<std::path::PathBuf> {
@@ -2268,7 +2317,7 @@ fn keep_transcript_making(
             made.push(part.clone());
         }
     }
-    let path = dir.join(format!("step-{step}.jsonl"));
+    let path = dir.join(file);
     let mut file = match std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -4570,6 +4619,7 @@ mod tests {
             scope_revision: None,
             base_revision: Some("HEAD"),
             commit: None,
+            obligations: &[],
         })
     }
 
@@ -5920,6 +5970,7 @@ mod endpoint_tests {
             binary: None,
             layers: None,
             confinement: None,
+            substrate: None,
             endpoint,
             records: None,
             scan: None,

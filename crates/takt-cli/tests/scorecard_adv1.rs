@@ -77,6 +77,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         binary: None,
         layers: None,
         confinement: None,
+        substrate: None,
         endpoint: None,
         records: None,
         scan: None,

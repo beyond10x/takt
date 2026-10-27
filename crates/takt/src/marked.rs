@@ -67,6 +67,11 @@ fn bsd_info(pid: libc::pid_t) -> Option<(libc::pid_t, libc::pid_t, bool)> {
     ))
 }
 
+/// Whether the process `pid` has ended: gone, or a zombie not reaped yet.
+pub fn ended(pid: libc::pid_t) -> bool {
+    bsd_info(pid).is_none_or(|(_, _, zombie)| zombie)
+}
+
 /// Kills and reaps, round after round, the children of this process that left its process
 /// group for one no pid of `running` leads, or left its session: what a judgement step's
 /// harness, or a validator that ran a program by itself, started in the background and left

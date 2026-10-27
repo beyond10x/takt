@@ -44,14 +44,18 @@
 //! cases under the newer one ([`rebaseline`], `--rebaseline`), which starts a new series, or
 //! extended by whole scenarios, which keeps it; a
 //! candidate that holds is built from a fresh
-//! clone of the exact commit, confined in bubblewrap ([`Confinement`]): only the clone, a
-//! scratch `CARGO_HOME` with the host's registry cache bound read-only, the toolchain takt
-//! resolves and the system directories are visible, the environment is cleared, the process and
-//! network namespaces are the build's own, and `cargo build --locked --offline` is the
-//! toolchain's own binary, never a rustup proxy; the store, the install root and the real home
-//! are not mounted, so nothing the commit runs reads a setting outside it, writes outside the
-//! build or outlives it. Every run of the candidate's binary during a promotion (`--version`)
-//! is confined the same way. The binary is installed with `cargo install --locked --path
+//! clone of the exact commit, confined through a Substrate adapter chosen by facts as a run's is
+//! ([`Confinement`], [`crate::confinement::CANDIDATES`]): the candidate's build directory is the
+//! workspace, the toolchain takt resolves and the host's registry caches are read-only roots, a
+//! scratch `CARGO_HOME` in the workspace has no configuration, the environment is cleared, the
+//! network is isolated, and `cargo build --locked --offline` is the toolchain's own binary, never
+//! a rustup proxy; the store and the real home are not visible, and the fresh install root beside
+//! the real one is the one writable host root declared to the adapter (on `macos`, which serves
+//! none, the build fills a root in the workspace and the binary is copied into the fresh root), so
+//! nothing the commit runs reads a setting outside it, writes outside the build or outlives it.
+//! A host whose adapters serve no such run refuses the promotion by name and builds nothing.
+//! Every run of the candidate's binary during a promotion (`--version`) goes through the same
+//! adapter. The binary is installed with `cargo install --locked --path
 //! crates/takt-cli` into a fresh root, hashed, recorded first and then moved into place in one
 //! rename, and checked again in place against the revision and the digest; a failure after the
 //! move puts the binary before it back and removes the record. Promotions run one at a time,
@@ -97,88 +101,53 @@ pub const MAINLINE: &str = "main";
 /// The remote whose [`MAINLINE`] branch is the mainline.
 pub const MAINLINE_REMOTE: &str = "origin";
 
-/// The sandbox the candidate is built in and its binary run under: bubblewrap, found on `PATH`.
-pub const BWRAP: &str = "bwrap";
-
-/// The sandbox a promotion names in what it prints: [`BWRAP`], and on macOS `sandbox-exec`,
-/// which confines the build there under the profile [`crate::seatbelt::build`] writes.
-#[cfg(not(target_os = "macos"))]
-pub const SANDBOX: &str = BWRAP;
-
-/// The sandbox a promotion names in what it prints: on macOS `sandbox-exec`
-/// ([`crate::seatbelt::SANDBOX_EXEC`]), which confines the build under the profile
-/// [`crate::seatbelt::build`] writes.
-#[cfg(target_os = "macos")]
-pub const SANDBOX: &str = "sandbox-exec";
-
-/// The variable a confined build or `--version` run carries on macOS, its value unique to the
-/// run: a process that still carries it once the run ended was started by the candidate's code.
-#[cfg(target_os = "macos")]
-const BUILD_MARK: &str = "TAKT_PROMOTION";
-
-/// Runs `command` to its end in a process group of its own, its output read, then kills that
-/// group and every process of this user that carries the run's [`BUILD_MARK`], wherever it
-/// went: what the candidate's `build.rs` or binary started and left, which no subreaper adopts
-/// on macOS. Not killed: one that left the group and dropped the mark. An error too when one
-/// is still there after the sweep.
-#[cfg(target_os = "macos")]
-fn output_reaped(command: &mut Command) -> Result<std::process::Output> {
-    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let mark = format!(
-        "{}-{}",
-        std::process::id(),
-        RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    );
-    command
-        .env(BUILD_MARK, &mark)
-        .process_group(0)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    let child = command.spawn()?;
-    let group = libc::pid_t::try_from(child.id()).context("a process id")?;
-    let output = child.wait_with_output();
-    // SAFETY: `killpg` takes two integers and touches no memory of this process.
-    unsafe {
-        libc::killpg(group, libc::SIGKILL);
-    }
-    crate::marked::sweep(BUILD_MARK, |carried| carried == mark.as_bytes())?;
-    Ok(output?)
-}
+/// Where a Linux adapter shows the confined build its workspace, the candidate's own directory
+/// under the build directory: the clone, its target directory and the scratch `CARGO_HOME` are
+/// in it, and it is the one writable directory but the install root.
+pub const INSIDE_WORKSPACE: &str = "/workspace";
 
 /// Where the confined build sees the clone: writable, at a path no ancestor of which holds a
 /// `.cargo` directory, so cargo reads configuration from the commit and nowhere else.
-pub const INSIDE_WORK: &str = "/work";
+pub const INSIDE_WORK: &str = "/workspace/source";
 
 /// Where the confined build sees its target directory.
-pub const INSIDE_TARGET: &str = "/target";
+pub const INSIDE_TARGET: &str = "/workspace/target";
 
 /// Where the confined build sees the toolchain, read-only; its `bin/cargo` and `bin/rustc` are
 /// the ones called.
 pub const INSIDE_TOOLCHAIN: &str = "/toolchain";
 
 /// Where the confined build sees its scratch `CARGO_HOME`: writable, holding no `config.toml`,
-/// with the host's [`CACHED`] directories bound read-only under it.
-pub const INSIDE_CARGO_HOME: &str = "/cargo-home";
+/// with links to the host's [`CACHED`] directories, read-only at [`INSIDE_CACHE`], in it.
+pub const INSIDE_CARGO_HOME: &str = "/workspace/cargo-home";
 
-/// Where the confined build sees the fresh install root `cargo install --root` fills.
+/// Where the confined build sees the host's [`CACHED`] directories, read-only.
+pub const INSIDE_CACHE: &str = "/cargo-cache";
+
+/// Where the confined build sees the fresh install root `cargo install --root` fills, declared
+/// writable as [`INSTALL_ROOT_NAME`].
 pub const INSIDE_INSTALL: &str = "/install";
 
 /// Where the binary moved into place is seen when it is run confined after the move.
 pub const INSIDE_INSTALLED: &str = "/installed";
 
-/// The home directory inside the sandbox, an empty tmpfs.
-pub const INSIDE_HOME: &str = "/build-home";
+/// The home directory inside the confinement, an empty `/tmp` of its own.
+pub const INSIDE_HOME: &str = "/tmp";
 
-/// The host `CARGO_HOME` directories bound read-only into the scratch one: the registry's cache
-/// and index, and git dependencies' databases and checkouts. Nothing is fetched (`--offline`),
-/// so a crate missing from them fails the build.
-pub const CACHED: [&str; 4] = [
-    "registry/cache",
-    "registry/index",
-    "git/db",
-    "git/checkouts",
-];
+/// The name the fresh install root is declared writable under, where the adapter serves writable
+/// roots outside the workspace.
+pub const INSTALL_ROOT_NAME: &str = "install";
+
+/// How long one confined cargo step of a promotion may run.
+pub const BUILD_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3600);
+
+/// How long a confined `--version` of the candidate's binary may run.
+pub const VERSION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The host `CARGO_HOME` directories the confined build reads: the registry's cache and index,
+/// and git dependencies' databases, from which cargo makes their checkouts again offline.
+/// Nothing is fetched (`--offline`), so a crate missing from them fails the build.
+pub const CACHED: [&str; 3] = ["registry/cache", "registry/index", "git/db"];
 
 /// What a record is: the first baseline (`takt promote --baseline-only`, nothing installed), a
 /// promotion that installed a binary, a candidate refused on its scorecard, kept so the same
@@ -1372,11 +1341,6 @@ fn last_lines(bytes: &[u8]) -> String {
     lines[from..].join(" | ")
 }
 
-/// Whether a regular file at `path` has an execute bit.
-fn is_executable(path: &Path) -> bool {
-    std::fs::metadata(path).is_ok_and(|metadata| metadata.is_file() && metadata.mode() & 0o111 != 0)
-}
-
 /// Publishes `text` at `path` in the store: written and synced to a temporary file beside it,
 /// then linked into place, so a reader sees the whole file or none; a file there already is not
 /// overwritten.
@@ -1500,262 +1464,199 @@ fn lock(store: &Path) -> Result<StoreLock> {
     Ok(StoreLock(file))
 }
 
-/// Where the candidate is built and its binary run: bubblewrap (on macOS `sandbox-exec`), the
-/// toolchain and the host's cargo caches, resolved by takt before the candidate is judged,
-/// never from the commit.
+/// What the candidate is built with and its binary run through: the toolchain and the host's
+/// cargo caches, resolved by takt before the candidate is judged, never from the commit, and the
+/// Substrate adapter each build opens ([`Confinement::open`]), chosen by facts as a run's is
+/// ([`crate::confinement::CANDIDATES`]).
 #[derive(Debug, Clone)]
 pub struct Confinement {
-    /// The sandbox's binary: `bwrap`, found on `PATH`; on macOS
-    /// [`crate::seatbelt::SANDBOX_EXEC`].
-    pub sandbox: PathBuf,
     /// The toolchain's directory: rustup's default toolchain, read from its settings file
-    /// ([`Confinement::toolchain`]), whose `bin/cargo` and sibling `bin/rustc` are the ones
-    /// called; never one found on `PATH`, a `rust-toolchain.toml` or `RUSTUP_TOOLCHAIN` picks.
+    /// ([`crate::confinement::toolchain`]), whose `bin/cargo` and sibling `bin/rustc` are the
+    /// ones called; never one found on `PATH`, a `rust-toolchain.toml` or `RUSTUP_TOOLCHAIN`
+    /// picks.
     pub toolchain: PathBuf,
-    /// The host's `CARGO_HOME`, whose [`CACHED`] directories are bound read-only; none when it
-    /// does not exist.
+    /// The host's `CARGO_HOME`, whose [`CACHED`] directories are read-only; none when it does
+    /// not exist.
     pub cargo_home: Option<PathBuf>,
+    /// What the adapter is chosen by.
+    pub options: crate::confinement::Options,
 }
 
 impl Confinement {
-    /// Finds `bwrap` on `PATH` (on macOS [`crate::seatbelt::SANDBOX_EXEC`]) and the toolchain;
-    /// either missing is an error naming it, and a candidate is never built unconfined.
-    #[cfg(target_os = "macos")]
+    /// Resolves the toolchain; missing, it is an error naming it, and a candidate is never
+    /// built unconfined.
+    ///
+    /// # Errors
+    ///
+    /// What is missing of the toolchain.
     pub fn resolve() -> Result<Self> {
-        let sandbox = PathBuf::from(crate::seatbelt::SANDBOX_EXEC);
-        if !is_executable(&sandbox) {
-            bail!(
-                "the macOS sandbox (`{}`) is missing; a promotion builds the candidate confined in it and never unconfined",
-                sandbox.display()
+        Ok(Self {
+            toolchain: crate::confinement::toolchain(None)?,
+            cargo_home: cargo_home(),
+            options: crate::confinement::Options::default(),
+        })
+    }
+
+    /// The adapter for `work`: its directory the workspace, beneath the build directory, and the
+    /// fresh install root declared writable as [`INSTALL_ROOT_NAME`] where the adapter serves
+    /// writable roots outside the workspace.
+    fn open(&self, work: &Work) -> Result<crate::confinement::Confined> {
+        crate::confinement::Confined::open(
+            &work.dir,
+            Some((INSTALL_ROOT_NAME, &work.install)),
+            &self.options,
+        )
+        .map_err(|error| BuildFailed(format!("confinement substrate: {error:#}")).into())
+    }
+
+    /// The host's [`CACHED`] directories that exist, canonical, each with where a Linux adapter
+    /// shows it.
+    fn caches(&self) -> Vec<(PathBuf, String)> {
+        let Some(host) = &self.cargo_home else {
+            return Vec::new();
+        };
+        CACHED
+            .iter()
+            .filter_map(|sub| {
+                let dir = host.join(sub).canonicalize().ok()?;
+                dir.is_dir().then(|| (dir, format!("{INSIDE_CACHE}/{sub}")))
+            })
+            .collect()
+    }
+
+    /// The home and temporary directory a confined run of `work` gets: on Linux its own empty
+    /// `/tmp`; on macOS, where a run sees host paths, `home` and `tmp` in its directory.
+    fn scratch(confined: &crate::confinement::Confined, work: &Work) -> Result<(String, String)> {
+        let home = work.dir.join("home");
+        let tmp = work.dir.join("tmp");
+        for made in [&home, &tmp] {
+            std::fs::create_dir_all(made).with_context(|| format!("create {}", made.display()))?;
+        }
+        Ok((
+            confined.sees(&home, INSIDE_HOME)?,
+            confined.sees(&tmp, INSIDE_HOME)?,
+        ))
+    }
+
+    /// Runs the toolchain's `cargo <args>` confined by `confined`, in the clone, with the target
+    /// directory and the scratch `CARGO_HOME` (links to the host's [`CACHED`] directories, read-only,
+    /// in it) in the workspace, the toolchain read-only, no network, the environment `PATH`,
+    /// `HOME`, `TMPDIR`, `CARGO_HOME` and `RUSTC` alone, and where the adapter serves it the fresh
+    /// install root writable at [`INSIDE_INSTALL`]; the command and the adapter are shown on
+    /// `out`; a failure is a [`BuildFailed`]. On `macos` its `PATH` names the developer tools'
+    /// own programs before `/usr/bin` ([`crate::confinement::developer_programs`]), whose shims
+    /// cannot run there, so the build script's `git` reads the revision the binary prints, and
+    /// `GIT_CONFIG_NOSYSTEM` is set, so that git reads no system configuration the policy
+    /// refuses it.
+    fn cargo(
+        &self,
+        confined: &crate::confinement::Confined,
+        work: &Work,
+        args: &[&str],
+        out: &mut dyn Write,
+    ) -> Result<()> {
+        let adapter = confined.record().describe();
+        writeln!(out, "cargo {} (confined by {adapter})", args.join(" "))?;
+        let mut read_only = vec![(self.toolchain.clone(), INSIDE_TOOLCHAIN.to_owned())];
+        for (dir, inside) in self.caches() {
+            let sub = inside
+                .strip_prefix(&format!("{INSIDE_CACHE}/"))
+                .unwrap_or(&inside)
+                .to_owned();
+            let link = work.cargo_home.join(&sub);
+            if std::fs::symlink_metadata(&link).is_err() {
+                if let Some(parent) = link.parent() {
+                    std::fs::create_dir_all(parent)
+                        .with_context(|| format!("create {}", parent.display()))?;
+                }
+                let target = confined.sees(&dir, &inside)?;
+                std::os::unix::fs::symlink(&target, &link)
+                    .with_context(|| format!("link {} to {target}", link.display()))?;
+            }
+            read_only.push((dir, inside));
+        }
+        let bin = confined.sees(
+            &self.toolchain.join("bin"),
+            &format!("{INSIDE_TOOLCHAIN}/bin"),
+        )?;
+        let (home, tmp) = Self::scratch(confined, work)?;
+        let developer = confined.developer_programs();
+        let mut path = match &developer {
+            Some(developer) => format!("{bin}:{developer}:/usr/bin:/bin"),
+            None => format!("{bin}:/usr/bin:/bin"),
+        };
+        let linker = work.dir.join("linker");
+        if crate::confinement::linker_link(&linker)? {
+            path = format!(
+                "{}:{path}",
+                confined.sees(&linker, &format!("{INSIDE_WORKSPACE}/linker"))?
             );
         }
-        Ok(Self {
-            sandbox,
-            toolchain: Self::toolchain()?,
-            cargo_home: cargo_home(),
-        })
-    }
-
-    /// Finds `bwrap` on `PATH` and the toolchain; either missing is an error naming it, and a
-    /// candidate is never built unconfined.
-    #[cfg(not(target_os = "macos"))]
-    pub fn resolve() -> Result<Self> {
-        let bwrap = std::env::var_os("PATH").and_then(|path| {
-            std::env::split_paths(&path)
-                .map(|dir| dir.join(BWRAP))
-                .find(|candidate| is_executable(candidate))
-        });
-        let Some(bwrap) = bwrap else {
-            bail!(
-                "bubblewrap (`{BWRAP}`) is not on PATH; a promotion builds the candidate confined in it and never unconfined, so install bubblewrap first"
-            );
+        let mut env = BTreeMap::from([
+            ("PATH".to_owned(), path),
+            ("HOME".to_owned(), home),
+            ("TMPDIR".to_owned(), tmp),
+            (
+                "CARGO_HOME".to_owned(),
+                confined.sees(&work.cargo_home, INSIDE_CARGO_HOME)?,
+            ),
+            ("RUSTC".to_owned(), format!("{bin}/rustc")),
+        ]);
+        if developer.is_some() {
+            env.insert("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned());
+        }
+        let mut argv = vec![format!("{bin}/cargo")];
+        argv.extend(args.iter().map(|arg| (*arg).to_owned()));
+        let toolchain = self
+            .toolchain
+            .to_str()
+            .ok_or_else(|| anyhow!("{} is not UTF-8", self.toolchain.display()))?;
+        let spec = crate::confinement::RunSpec {
+            workdir: Some("source".to_owned()),
+            argv,
+            env,
+            read_only,
+            writable: if confined.serves_writable_roots() {
+                vec![(INSTALL_ROOT_NAME.to_owned(), INSIDE_INSTALL.to_owned())]
+            } else {
+                Vec::new()
+            },
+            exec: vec![
+                "target".to_owned(),
+                toolchain.to_owned(),
+                "/usr/bin".to_owned(),
+            ],
+            timeout: BUILD_TIMEOUT,
         };
-        Ok(Self {
-            sandbox: bwrap,
-            toolchain: Self::toolchain()?,
-            cargo_home: cargo_home(),
-        })
-    }
-
-    /// The toolchain a promotion builds with, resolved once and without running anything or
-    /// searching `PATH`: rustup's home (`RUSTUP_HOME`, else `~/.rustup`), the
-    /// `default_toolchain` its `settings.toml` names, and that toolchain's directory under
-    /// `toolchains/` (by its name, or the one directory named by it and a target triple). Its
-    /// `bin/cargo` and the sibling `bin/rustc` must be executable files and `lib/rustlib` must
-    /// exist; anything missing is an error naming it.
-    pub fn toolchain() -> Result<PathBuf> {
-        let rustup_home = match std::env::var_os("RUSTUP_HOME").filter(|dir| !dir.is_empty()) {
-            Some(dir) if Path::new(&dir).is_absolute() => PathBuf::from(dir),
-            _ => home()?.join(".rustup"),
-        };
-        let settings = rustup_home.join("settings.toml");
-        let text = std::fs::read_to_string(&settings).with_context(|| {
-            format!(
-                "read {}, rustup's settings, which name the toolchain a promotion builds with; a promotion finds no toolchain on PATH",
-                settings.display()
-            )
+        let ran = confined.run(&work.dir, &spec).map_err(|error| {
+            BuildFailed(format!(
+                "cargo {} confined by {adapter}: {error:#}",
+                args.join(" ")
+            ))
         })?;
-        let name = text
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("default_toolchain"))
-            .filter_map(|rest| rest.trim_start().strip_prefix('='))
-            .map(|value| value.trim().trim_matches('"').to_owned())
-            .find(|value| !value.is_empty());
-        let Some(name) = name else {
-            bail!(
-                "{} names no default_toolchain; a promotion builds with rustup's default toolchain and finds none on PATH",
-                settings.display()
-            );
-        };
-        if name.contains('/') || name.starts_with('.') {
-            bail!(
-                "{}: default_toolchain {name:?} is no toolchain name",
-                settings.display()
-            );
-        }
-        let toolchains = rustup_home.join("toolchains");
-        let exact = toolchains.join(&name);
-        let toolchain = if exact.is_dir() {
-            exact
-        } else {
-            let prefix = format!("{name}-");
-            let mut found: Vec<PathBuf> = std::fs::read_dir(&toolchains)
-                .with_context(|| format!("read {}", toolchains.display()))?
-                .flatten()
-                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
-                .map(|entry| entry.path())
-                .filter(|path| path.is_dir())
-                .collect();
-            match found.len() {
-                1 => found.remove(0),
-                0 => bail!(
-                    "rustup's default toolchain {name} ({}) is not installed under {}",
-                    settings.display(),
-                    toolchains.display()
-                ),
-                n => bail!(
-                    "rustup's default toolchain {name} ({}) matches {n} directories under {}; name it in full",
-                    settings.display(),
-                    toolchains.display()
-                ),
-            }
-        };
-        for binary in ["bin/cargo", "bin/rustc"] {
-            if !is_executable(&toolchain.join(binary)) {
-                bail!(
-                    "the toolchain {} (rustup's default, {}) has no executable {binary}; a promotion calls the toolchain's own cargo and its sibling rustc, never a rustc on PATH",
-                    toolchain.display(),
-                    settings.display()
-                );
-            }
-        }
-        if !toolchain.join("lib/rustlib").is_dir() {
-            bail!(
-                "the toolchain {} (rustup's default, {}) has no lib/rustlib",
-                toolchain.display(),
-                settings.display()
-            );
-        }
-        Ok(toolchain)
-    }
-
-    /// A bwrap command with the system directories read-only, its own process and network
-    /// namespaces, dying with takt, the environment cleared but for `HOME` and `TMPDIR`, and an
-    /// empty `/tmp` and home directory; the caller binds what else is seen and sets `PATH`.
-    #[cfg(not(target_os = "macos"))]
-    fn sandbox(&self) -> Command {
-        let mut command = Command::new(&self.sandbox);
-        command.env_clear();
-        command.args([
-            "--unshare-pid",
-            "--unshare-net",
-            "--die-with-parent",
-            "--clearenv",
-            "--setenv",
-            "HOME",
-            INSIDE_HOME,
-            "--setenv",
-            "TMPDIR",
-            "/tmp",
-            "--ro-bind",
-            "/usr",
-            "/usr",
-        ]);
-        for dir in ["/lib", "/lib64", "/bin", "/sbin"] {
-            match std::fs::read_link(dir) {
-                Ok(target) => {
-                    command.arg("--symlink").arg(target).arg(dir);
-                }
-                Err(_) if Path::new(dir).is_dir() => {
-                    command.args(["--ro-bind", dir, dir]);
-                }
-                Err(_) => {}
-            }
-        }
-        command.args([
-            "--ro-bind",
-            "/etc",
-            "/etc",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-            "--tmpfs",
-            "/tmp",
-            "--tmpfs",
-            INSIDE_HOME,
-        ]);
-        command
-    }
-
-    /// Runs the toolchain's `cargo <args>` confined, in the clone at [`INSIDE_WORK`], with the
-    /// target directory, the scratch `CARGO_HOME` (the host's [`CACHED`] directories read-only
-    /// under it) and the fresh install root bound, the command shown on `out`; a failure is a
-    /// [`BuildFailed`].
-    #[cfg(not(target_os = "macos"))]
-    fn cargo(&self, work: &Work, args: &[&str], out: &mut dyn Write) -> Result<()> {
-        writeln!(out, "cargo {} (confined in {BWRAP})", args.join(" "))?;
-        let mut command = self.sandbox();
-        command.args([
-            "--setenv",
-            "PATH",
-            &format!("{INSIDE_TOOLCHAIN}/bin:/usr/bin:/bin"),
-            "--setenv",
-            "CARGO_HOME",
-            INSIDE_CARGO_HOME,
-            "--setenv",
-            "RUSTC",
-            &format!("{INSIDE_TOOLCHAIN}/bin/rustc"),
-        ]);
-        command
-            .arg("--ro-bind")
-            .arg(&self.toolchain)
-            .arg(INSIDE_TOOLCHAIN);
-        command.arg("--bind").arg(&work.source).arg(INSIDE_WORK);
-        command.arg("--bind").arg(&work.target).arg(INSIDE_TARGET);
-        command
-            .arg("--bind")
-            .arg(&work.cargo_home)
-            .arg(INSIDE_CARGO_HOME);
-        if let Some(host) = &self.cargo_home {
-            for sub in CACHED {
-                let dir = host.join(sub);
-                if dir.is_dir() {
-                    command
-                        .arg("--ro-bind")
-                        .arg(&dir)
-                        .arg(format!("{INSIDE_CARGO_HOME}/{sub}"));
-                }
-            }
-        }
-        command.arg("--bind").arg(&work.install).arg(INSIDE_INSTALL);
-        command.args([
-            "--chdir",
-            INSIDE_WORK,
-            "--",
-            &format!("{INSIDE_TOOLCHAIN}/bin/cargo"),
-        ]);
-        command.args(args);
-        let output = command
-            .output()
-            .with_context(|| format!("run {BWRAP} for cargo {}", args.join(" ")))?;
-        if !output.status.success() {
+        if !ran.success() {
             return Err(BuildFailed(format!(
-                "cargo {} confined in {BWRAP} exited {}: {}",
+                "cargo {} confined by {adapter} {}: {}",
                 args.join(" "),
-                output.status,
-                last_lines(&output.stderr)
+                ran.ending(),
+                last_lines(&ran.stderr)
             ))
             .into());
         }
         Ok(())
     }
 
-    /// The revision the binary at `binary` prints for `--version`, run confined with its
-    /// directory bound read-only at `at` and nothing of the host visible but the system
-    /// directories.
-    #[cfg(not(target_os = "macos"))]
-    fn printed_revision(&self, binary: &Path, at: &str) -> Result<String> {
+    /// The revision the binary at `binary` prints for `--version`, run confined by `confined`
+    /// with nothing of the host visible but the system directories and the binary: in the
+    /// workspace where it lies there, else its directory read-only at `at` (on macOS at its own
+    /// path).
+    fn printed_revision(
+        confined: &crate::confinement::Confined,
+        work: &Work,
+        binary: &Path,
+        at: &str,
+    ) -> Result<String> {
+        let adapter = confined.record().describe();
         let dir = binary
             .parent()
             .ok_or_else(|| anyhow!("{} has no directory", binary.display()))?;
@@ -1763,174 +1664,41 @@ impl Confinement {
             .file_name()
             .and_then(|name| name.to_str())
             .ok_or_else(|| anyhow!("{} has no UTF-8 name", binary.display()))?;
-        let mut command = self.sandbox();
-        command.args(["--setenv", "PATH", "/usr/bin:/bin"]);
-        command.arg("--ro-bind").arg(dir).arg(at);
-        command.args([
-            "--chdir",
-            INSIDE_HOME,
-            "--",
-            &format!("{at}/{name}"),
-            "--version",
-        ]);
-        let output = command
-            .output()
-            .with_context(|| format!("run {} --version confined in {BWRAP}", binary.display()))?;
-        let text = String::from_utf8_lossy(&output.stdout);
+        let (program, read_only) = match binary.strip_prefix(&work.dir) {
+            Ok(inside) => (
+                confined.sees(binary, &format!("{INSIDE_WORKSPACE}/{}", inside.display()))?,
+                Vec::new(),
+            ),
+            Err(_) => (
+                confined.sees(binary, &format!("{at}/{name}"))?,
+                vec![(dir.to_path_buf(), at.to_owned())],
+            ),
+        };
+        let (home, tmp) = Self::scratch(confined, work)?;
+        let spec = crate::confinement::RunSpec {
+            workdir: None,
+            argv: vec![program, "--version".to_owned()],
+            env: BTreeMap::from([
+                ("PATH".to_owned(), "/usr/bin:/bin".to_owned()),
+                ("HOME".to_owned(), home),
+                ("TMPDIR".to_owned(), tmp),
+            ]),
+            read_only,
+            writable: Vec::new(),
+            exec: Vec::new(),
+            timeout: VERSION_TIMEOUT,
+        };
+        let ran = confined
+            .run(&work.dir, &spec)
+            .with_context(|| format!("run {} --version confined by {adapter}", binary.display()))?;
+        let text = String::from_utf8_lossy(&ran.stdout);
         let line = text.lines().next().unwrap_or("");
         parse_version(line).ok_or_else(|| {
-            let stderr = last_lines(&output.stderr);
+            let stderr = last_lines(&ran.stderr);
             anyhow!(
-                "{} --version, confined at {at}, printed {line:?}, not `takt <version> (<revision>)`{}",
+                "{} --version, confined by {adapter} (at {at}), {} and printed {line:?}, not `takt <version> (<revision>)`{}",
                 binary.display(),
-                if stderr.is_empty() {
-                    String::new()
-                } else {
-                    format!("; stderr: {stderr}")
-                }
-            )
-        })
-    }
-
-    /// The homes under which the confined build and the binary read only what they are given:
-    /// `HOME` and the home this user's passwd entry names.
-    #[cfg(target_os = "macos")]
-    fn homes() -> Vec<PathBuf> {
-        home()
-            .ok()
-            .filter(|dir| dir.is_absolute())
-            .into_iter()
-            .chain(crate::validator::passwd_home())
-            .collect()
-    }
-
-    /// A `sandbox-exec` command under `profile` for `program`, the environment cleared but for
-    /// `vars`, in `dir`.
-    #[cfg(target_os = "macos")]
-    fn sandbox(
-        &self,
-        profile: &crate::seatbelt::Profile,
-        program: &Path,
-        vars: &[(&str, &std::ffi::OsStr)],
-        dir: &Path,
-    ) -> Command {
-        let mut command = Command::new(&self.sandbox);
-        command.env_clear();
-        command.envs(vars.iter().copied());
-        command.args(profile.args()).arg(program).current_dir(dir);
-        command
-    }
-
-    /// Runs the toolchain's `cargo <args>` confined, in the clone, which it sees at its own
-    /// path: no network; writes only to the clone, the target directory, the scratch
-    /// `CARGO_HOME` (the host's [`CACHED`] directories linked into it, read-only), the fresh
-    /// install root, and a home and a temporary directory of the build's own, never this user's
-    /// temporary and cache directories under `/var/folders`; it starts no program outside its
-    /// profile; under the user's home it reads only those, the toolchain and the cached directories ([`crate::seatbelt::build`]).
-    /// The command is shown on `out`; a failure is a [`BuildFailed`].
-    #[cfg(target_os = "macos")]
-    fn cargo(&self, work: &Work, args: &[&str], out: &mut dyn Write) -> Result<()> {
-        writeln!(out, "cargo {} (confined in {SANDBOX})", args.join(" "))?;
-        let mut command = self.build_command(work, &self.toolchain.join("bin/cargo"))?;
-        command.args(args);
-        let output = output_reaped(&mut command)
-            .with_context(|| format!("run {SANDBOX} for cargo {}", args.join(" ")))?;
-        if !output.status.success() {
-            return Err(BuildFailed(format!(
-                "cargo {} confined in {SANDBOX} exited {}: {}",
-                args.join(" "),
-                output.status,
-                last_lines(&output.stderr)
-            ))
-            .into());
-        }
-        Ok(())
-    }
-
-    /// `program` as the confined build runs it, as [`Confinement::cargo`] describes, before its arguments.
-    #[cfg(target_os = "macos")]
-    fn build_command(&self, work: &Work, program: &Path) -> Result<Command> {
-        let home = work.dir.join("home");
-        let tmp = work.dir.join("tmp");
-        for made in [&home, &tmp] {
-            std::fs::create_dir_all(made).with_context(|| format!("create {}", made.display()))?;
-        }
-        let mut readable = vec![self.toolchain.clone()];
-        if let Some(host) = &self.cargo_home {
-            for sub in CACHED {
-                let dir = host.join(sub);
-                let link = work.cargo_home.join(sub);
-                if dir.is_dir() && std::fs::symlink_metadata(&link).is_err() {
-                    if let Some(parent) = link.parent() {
-                        std::fs::create_dir_all(parent)
-                            .with_context(|| format!("create {}", parent.display()))?;
-                    }
-                    std::os::unix::fs::symlink(&dir, &link)
-                        .with_context(|| format!("link {} to {}", link.display(), dir.display()))?;
-                    readable.push(dir);
-                }
-            }
-        }
-        let writable = vec![
-            work.source.clone(),
-            work.target.clone(),
-            work.cargo_home.clone(),
-            work.install.clone(),
-            home.clone(),
-            tmp.clone(),
-        ];
-        let profile = crate::seatbelt::build(&writable, &readable, &Self::homes());
-        let bin = self.toolchain.join("bin");
-        let mut path = bin.clone().into_os_string();
-        path.push(":/usr/bin:/bin");
-        let rustc = bin.join("rustc");
-        Ok(self.sandbox(
-            &profile,
-            program,
-            &[
-                ("HOME", home.as_os_str()),
-                ("TMPDIR", tmp.as_os_str()),
-                ("PATH", &path),
-                ("CARGO_HOME", work.cargo_home.as_os_str()),
-                ("RUSTC", rustc.as_os_str()),
-            ],
-            &work.source,
-        ))
-    }
-
-    /// The revision the binary at `binary` prints for `--version`, run confined at its own path
-    /// (`at`, where Linux shows it, is not used): no network, no program started outside its
-    /// profile, writes only to a scratch home, which is its temporary directory too, and under
-    /// the user's home it reads only the binary's directory.
-    #[cfg(target_os = "macos")]
-    fn printed_revision(&self, binary: &Path, at: &str) -> Result<String> {
-        let dir = binary
-            .parent()
-            .ok_or_else(|| anyhow!("{} has no directory", binary.display()))?;
-        let scratch = crate::forge::ScratchHome::new()?;
-        let writable = vec![scratch.path().to_path_buf()];
-        let profile = crate::seatbelt::build(&writable, &[dir.to_path_buf()], &Self::homes());
-        let mut command = self.sandbox(
-            &profile,
-            binary,
-            &[
-                ("HOME", scratch.path().as_os_str()),
-                ("TMPDIR", scratch.path().as_os_str()),
-                ("PATH", std::ffi::OsStr::new("/usr/bin:/bin")),
-            ],
-            scratch.path(),
-        );
-        command.arg("--version");
-        let output = output_reaped(&mut command)
-            .with_context(|| format!("run {} --version confined in {SANDBOX}", binary.display()))?;
-        drop(scratch);
-        let text = String::from_utf8_lossy(&output.stdout);
-        let line = text.lines().next().unwrap_or("");
-        parse_version(line).ok_or_else(|| {
-            let stderr = last_lines(&output.stderr);
-            anyhow!(
-                "{} --version, confined in {SANDBOX} (for {at}), printed {line:?}, not `takt <version> (<revision>)`{}",
-                binary.display(),
+                ran.ending(),
                 if stderr.is_empty() {
                     String::new()
                 } else {
@@ -1941,21 +1709,10 @@ impl Confinement {
     }
 }
 
-/// Where the confined build sees `host`, as an argument it is given: on Linux at `inside`,
-/// where bubblewrap binds it; on macOS at its own path, Seatbelt binding nothing.
-fn seen(host: &Path, inside: &str) -> Result<String> {
-    if cfg!(target_os = "macos") {
-        host.to_str()
-            .map(str::to_owned)
-            .ok_or_else(|| anyhow!("{} is not UTF-8", host.display()))
-    } else {
-        Ok(inside.to_owned())
-    }
-}
-
-/// The build's directories on the host: under the build directory, the clone, its target
-/// directory and the scratch `CARGO_HOME`; and the fresh install root beside the real one, on
-/// its file system, so the binary moves into place in one rename. All removed when dropped.
+/// The build's directories on the host: under the build directory, the candidate's own
+/// directory (the workspace of its confined runs) with the clone, its target directory and the
+/// scratch `CARGO_HOME` in it; and the fresh install root beside the real one, on its file
+/// system, so the binary moves into place in one rename. All removed when dropped.
 struct Work {
     dir: PathBuf,
     source: PathBuf,
@@ -1973,8 +1730,9 @@ impl Drop for Work {
 
 /// A candidate built and installed into the fresh root, not yet in place.
 struct Staged {
+    /// The adapter the build ran through, which runs the binary once it is in place.
+    confined: crate::confinement::Confined,
     /// The directories the build used, kept until the binary is in place.
-    #[allow(dead_code)]
     work: Work,
     /// The binary in the fresh root.
     binary: PathBuf,
@@ -2479,6 +2237,9 @@ fn write_instant(clock: fn() -> String, existing: &[Promotion]) -> Result<String
 /// Builds the candidate from a fresh clone of `repo` at `revision` in an empty directory under
 /// `build_dir`, confined, checks the built binary names `revision`, installs it into a fresh
 /// root beside `root`, checks that one, and hashes it: the staged binary, nothing yet in place.
+/// Where the adapter serves no writable root outside the workspace (`macos`), `cargo install`
+/// fills a root in the workspace and the binary is copied from there into the fresh root beside
+/// `root`, then hashed and checked there, so it still moves into place in one rename.
 fn stage(
     confinement: &Confinement,
     repo: &Path,
@@ -2535,13 +2296,22 @@ fn stage(
     }
     git(&work.source, &["checkout", "--quiet", "--detach", revision])
         .map_err(|error| BuildFailed(format!("check out {revision}: {error:#}")))?;
-    let target = seen(&work.target, INSIDE_TARGET)?;
-    let install = seen(&work.install, INSIDE_INSTALL)?;
-    let crate_dir = seen(
+    let confined = confinement.open(&work)?;
+    let target = confined.sees(&work.target, INSIDE_TARGET)?;
+    let (filled, filled_inside) = if confined.serves_writable_roots() {
+        (work.install.clone(), INSIDE_INSTALL.to_owned())
+    } else {
+        let filled = work.dir.join("install");
+        std::fs::create_dir_all(&filled).with_context(|| format!("create {}", filled.display()))?;
+        let inside = confined.sees(&filled, &format!("{INSIDE_WORKSPACE}/install"))?;
+        (filled, inside)
+    };
+    let crate_dir = confined.sees(
         &work.source.join("crates/takt-cli"),
         &format!("{INSIDE_WORK}/crates/takt-cli"),
     )?;
     confinement.cargo(
+        &confined,
         &work,
         &[
             "build",
@@ -2558,9 +2328,13 @@ fn stage(
         out,
     )?;
     let built = work.target.join("release/takt");
-    let printed = confinement
-        .printed_revision(&built, &format!("{INSIDE_TARGET}/release"))
-        .map_err(|error| BuildFailed(format!("{error:#}")))?;
+    let printed = Confinement::printed_revision(
+        &confined,
+        &work,
+        &built,
+        &format!("{INSIDE_TARGET}/release"),
+    )
+    .map_err(|error| BuildFailed(format!("{error:#}")))?;
     if printed != revision {
         return Err(BuildFailed(format!(
             "the built binary names {printed}, not {revision}: a promotion installs a clean build of the exact revision"
@@ -2568,6 +2342,7 @@ fn stage(
         .into());
     }
     confinement.cargo(
+        &confined,
         &work,
         &[
             "install",
@@ -2577,16 +2352,23 @@ fn stage(
             "--path",
             &crate_dir,
             "--root",
-            &install,
+            &filled_inside,
             "--target-dir",
             &target,
         ],
         out,
     )?;
     let binary = work.install.join("bin/takt");
-    let printed = confinement
-        .printed_revision(&binary, &format!("{INSIDE_INSTALL}/bin"))
-        .map_err(|error| BuildFailed(format!("{error:#}")))?;
+    if filled != work.install {
+        let bin = work.install.join("bin");
+        std::fs::create_dir_all(&bin).with_context(|| format!("create {}", bin.display()))?;
+        let from = filled.join("bin/takt");
+        std::fs::copy(&from, &binary)
+            .with_context(|| format!("copy {} to {}", from.display(), binary.display()))?;
+    }
+    let printed =
+        Confinement::printed_revision(&confined, &work, &binary, &format!("{INSIDE_INSTALL}/bin"))
+            .map_err(|error| BuildFailed(format!("{error:#}")))?;
     if printed != revision {
         return Err(BuildFailed(format!(
             "the installed binary {} names {printed}, not {revision}",
@@ -2596,6 +2378,7 @@ fn stage(
     }
     let digest = sha256_of(&binary)?;
     Ok(Staged {
+        confined,
         work,
         binary,
         digest,
@@ -2646,7 +2429,6 @@ fn keep_replaced(before: &Path, store: &Path) -> Result<PathBuf> {
 /// by its digest ([`kept_binary`]): the answer is its path, or why it was not kept (which
 /// undoes nothing), or none when nothing was installed before.
 fn install(
-    confinement: &Confinement,
     staged: &Staged,
     installed: &Path,
     revision: &str,
@@ -2674,9 +2456,13 @@ fn install(
         )
     });
     let checked = moved.and_then(|()| {
-        let printed = confinement
-            .printed_revision(installed, INSIDE_INSTALLED)
-            .map_err(|error| BuildFailed(format!("{error:#}")))?;
+        let printed = Confinement::printed_revision(
+            &staged.confined,
+            &staged.work,
+            installed,
+            INSIDE_INSTALLED,
+        )
+        .map_err(|error| BuildFailed(format!("{error:#}")))?;
         if printed != revision {
             return Err(BuildFailed(format!(
                 "{} names {printed} once in place, not {revision}",
@@ -3062,7 +2848,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     if request.dry_run {
         writeln!(
             out,
-            "dry run: would clone {} at {revision} under {}, build it there confined in {SANDBOX}, install under {} and write {} and {}",
+            "dry run: would clone {} at {revision} under {}, build it there confined through Substrate, install under {} and write {} and {}",
             request.repo.display(),
             request.build_dir.display(),
             request.install_root.display(),
@@ -3087,7 +2873,7 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     record.binary = Some(installed.clone());
     record.binary_sha256 = Some(staged.digest.clone());
     let path = write(store, &record, &text)?;
-    let kept = match install(confinement, &staged, &installed, &revision, store) {
+    let kept = match install(&staged, &installed, &revision, store) {
         Ok(kept) => kept,
         Err(error) => {
             return Err(match unwrite(store, &record, existing.last()) {
@@ -3546,71 +3332,5 @@ mod tests {
             ),
             "{refused}"
         );
-    }
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod seatbelt_tests {
-    use super::*;
-
-    /// The confined build, as `sandbox-exec` starts cargo for a promotion, run with a shell in
-    /// cargo's place: it writes to its target directory, a write beside its build directory is
-    /// denied and leaves no file, and a connection to a listener on the loopback is refused.
-    #[test]
-    fn the_confined_build_writes_only_its_directories_and_reaches_no_network() {
-        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../../target")
-            .join(format!("seatbelt-build-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let work = Work {
-            dir: root.join("build"),
-            source: root.join("build/source"),
-            target: root.join("build/target"),
-            cargo_home: root.join("build/cargo-home"),
-            install: root.join("install"),
-        };
-        for made in [&work.source, &work.target, &work.cargo_home, &work.install] {
-            std::fs::create_dir_all(made).expect("the build's directories");
-        }
-        let outside = root.join("outside");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a listener");
-        listener
-            .set_nonblocking(true)
-            .expect("a listener that does not block");
-        let port = listener.local_addr().expect("its address").port();
-        let confinement = Confinement {
-            sandbox: PathBuf::from(crate::seatbelt::SANDBOX_EXEC),
-            toolchain: PathBuf::from("/nonexistent-toolchain"),
-            cargo_home: None,
-        };
-        let mut command = confinement
-            .build_command(&work, Path::new("/bin/bash"))
-            .expect("the confined command");
-        command.args([
-            "-c",
-            "echo in > \"$1\" || exit 10; if echo out > \"$2\"; then exit 11; fi; if : < \"/dev/tcp/127.0.0.1/$3\"; then exit 12; fi; exit 0",
-            "bash",
-        ]);
-        command
-            .arg(work.target.join("inside"))
-            .arg(&outside)
-            .arg(port.to_string());
-        let output = command.output().expect("sandbox-exec runs");
-        assert_eq!(
-            output.status.code(),
-            Some(0),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(work.target.join("inside").is_file(), "the write inside");
-        assert!(!outside.exists(), "no file outside the build's directories");
-        assert!(
-            listener
-                .accept()
-                .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock),
-            "no connection reached the listener"
-        );
-        drop(work);
-        let _ = std::fs::remove_dir_all(&root);
     }
 }

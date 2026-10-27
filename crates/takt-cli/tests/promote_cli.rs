@@ -5,8 +5,9 @@
 //! the revision the installed `takt --version` prints, as many a day as hold, one at a time;
 //! a worse candidate is refused, recorded and not judged again; `--baseline-only`
 //! records the first baseline and installs nothing; `--dry-run` writes and installs nothing.
-//! The build runs confined in bubblewrap, so nothing the commit runs reads a setting outside
-//! it, reaches the store or outlives the build; the record is written before the binary moves
+//! The build runs confined through a Substrate adapter, so nothing the commit runs reads a
+//! setting outside it, reaches the store or outlives the build; the record is written before the
+//! binary moves
 //! into place and a failure after the move puts the binary before it back; the store is locked
 //! while read and written; each record carries the digest of the one before it; and the
 //! installed binary must name the latest record before anything is judged.
@@ -251,6 +252,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 binary: binary.map(str::to_owned),
                 layers: None,
                 confinement: None,
+                substrate: None,
                 endpoint: None,
                 records: None,
                 scan: None,
@@ -1292,8 +1294,8 @@ fn a_candidate_within_the_rule_is_installed_and_recorded() {
         "{out}"
     );
     assert!(
-        out.contains(&format!("confined in {}", takt::promotion::SANDBOX)),
-        "{out}"
+        out.contains("(confined by Substrate "),
+        "story:confinement-through-substrate-on-linux-and-macos: each cargo step names the Substrate adapter it ran through: {out}"
     );
     assert_eq!(
         world.version(),
@@ -2231,7 +2233,7 @@ fn help_lists_the_exit_codes() {
         "  0  promoted",
         "  3  refused on the scorecard",
         "  5  ",
-        "bubblewrap",
+        "no Substrate adapter on the host serving the build",
         "--revision <SHA>",
         "--binary-sha256 <HEX>",
         "binary.txt",
@@ -2486,7 +2488,9 @@ fn a_set_with_a_disk_low_trial_is_not_recorded_as_a_baseline() {
 /// in the caller's environment, a `.cargo/config.toml` in an ancestor of the build directory or
 /// in the caller's `CARGO_HOME`, and a `cargo` earlier on `PATH` change nothing: the wrapper and
 /// the planted cargo never run, no linker map is written, debug assertions stay off, and the
-/// build succeeds.
+/// build succeeds. On macOS the ancestor's `.cargo/config.toml` is left out: there the build
+/// fails closed on it
+/// ([`on_macos_a_cargo_configuration_above_the_build_directory_fails_the_build_closed`]).
 #[test]
 fn the_build_reads_nothing_outside_the_commit() {
     let world = World::new("outside", BASELINE_TOKENS, FIVE_APPROVALS);
@@ -2502,7 +2506,9 @@ fn the_build_reads_nothing_outside_the_commit() {
         ),
     );
     let config = format!("[build]\nrustc-wrapper = \"{}\"\n", wrapper.display());
-    write(&world.outer.join("cache/.cargo/config.toml"), &config);
+    if !cfg!(target_os = "macos") {
+        write(&world.outer.join("cache/.cargo/config.toml"), &config);
+    }
     let cargo_home = world.outer.join("cargo-home-with-config");
     write(&cargo_home.join("config.toml"), &config);
     let planted = world.outer.join("planted");
@@ -2564,6 +2570,48 @@ fn the_build_reads_nothing_outside_the_commit() {
         String::from_utf8_lossy(&probe.stdout).trim(),
         "debug_assertions=false",
         "the release profile is the commit's"
+    );
+}
+
+/// story:confinement-through-substrate-on-linux-and-macos, on macOS: a `.cargo/config.toml` in a
+/// directory above the build directory (`~/.cargo/config.toml` among them while the build
+/// directory lies under the home) is never read, and the build fails closed on it. The `macos`
+/// adapter's policy lets cargo see the file but not read it, and cargo stops on a configuration
+/// file it cannot read; a Linux adapter shows the build none of the host's directories above it.
+/// The wrapper the file names never runs.
+#[cfg(target_os = "macos")]
+#[test]
+fn on_macos_a_cargo_configuration_above_the_build_directory_fails_the_build_closed() {
+    let world = World::new("above-config", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let card = world.candidate_card("above-config", BASELINE_TOKENS, FIVE_APPROVALS);
+    let log = world.outer.join("wrap.log");
+    let wrapper = world.outer.join("wrap.sh");
+    script(
+        &wrapper,
+        &format!(
+            "#!/bin/sh\necho \"INJECTED $0 $*\" >> '{}'\nexit 1\n",
+            log.display()
+        ),
+    );
+    write(
+        &world.outer.join("cache/.cargo/config.toml"),
+        &format!("[build]\nrustc-wrapper = \"{}\"\n", wrapper.display()),
+    );
+    let (code, out, err) = world.promote(&card, &[]);
+    let text = format!("{out}{err}");
+    assert_ne!(
+        code, 0,
+        "story:confinement-through-substrate-on-linux-and-macos: the build fails closed: {text}"
+    );
+    assert!(
+        text.contains("could not load Cargo configuration")
+            && text.contains("Operation not permitted"),
+        "story:confinement-through-substrate-on-linux-and-macos: cargo could not read the configuration above the build: {text}"
+    );
+    assert!(
+        !log.exists(),
+        "story:confinement-through-substrate-on-linux-and-macos: the wrapper never ran"
     );
 }
 
@@ -2712,6 +2760,81 @@ fn the_candidate_cannot_reach_the_store_or_outlive_its_build() {
     assert_eq!(field(&record, "binary_sha256"), sha256(&world.installed()));
 }
 
+/// What a probing candidate's `build.rs` does first: fails the build when it can read a host
+/// file outside it, write beside that file, or reach a listener on the loopback.
+const PROBE: &str = r#"
+fn probe() {
+    if std::fs::read_to_string("__SECRET__").is_ok() {
+        panic!("the build read a host file outside it");
+    }
+    if std::fs::write("__OUTSIDE__", "planted by the build\n").is_ok() {
+        panic!("the build wrote outside it");
+    }
+    if std::net::TcpStream::connect(("127.0.0.1", __PORT__)).is_ok() {
+        panic!("the build reached the network");
+    }
+}
+"#;
+
+/// story:confinement-through-substrate-on-linux-and-macos: a promotion's build goes through
+/// the Substrate adapter a run's `--confinement substrate` chooses, each cargo step naming it;
+/// the candidate's `build.rs` reads no host file outside the build, writes none and reaches no
+/// listener, and the binary it built is installed and recorded. Where no adapter of this host
+/// serves the build, the case prints `skipped: missing prerequisite: …` and returns.
+#[test]
+fn confinement_promotion_build_confined() {
+    let world = World::new("substrate-build", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    let secret = world.outer.join("secret.txt");
+    write(&secret, "operator-secret\n");
+    let outside = world.outer.join("planted-by-the-build");
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
+    listener.set_nonblocking(true).expect("non-blocking");
+    let port = listener.local_addr().expect("an address").port();
+    let probe = PROBE
+        .replace("__SECRET__", secret.to_str().expect("utf-8"))
+        .replace("__OUTSIDE__", outside.to_str().expect("utf-8"))
+        .replace("__PORT__", &port.to_string());
+    write(
+        &world.repo.join("crates/takt-cli/build.rs"),
+        &format!(
+            "{}{probe}",
+            TAKT_BUILD.replacen("fn main() {\n", "fn main() {\n    probe();\n", 1)
+        ),
+    );
+    let revision = world.commit("probe");
+    let card = world.passing_card("probe", &revision);
+    let (code, out, err) = world.promote(&card, &[]);
+    if err.contains("no Substrate adapter on this host serves") {
+        eprintln!("skipped: missing prerequisite: {}", err.trim());
+        return;
+    }
+    assert_eq!(
+        code, 0,
+        "story:confinement-through-substrate-on-linux-and-macos: the confined build holds: {out}{err}"
+    );
+    for step in ["cargo build ", "cargo install "] {
+        assert!(
+            out.lines()
+                .any(|line| line.starts_with(step) && line.contains("(confined by Substrate ")),
+            "story:confinement-through-substrate-on-linux-and-macos: {step}names the adapter: {out}"
+        );
+    }
+    assert!(
+        !outside.exists(),
+        "story:confinement-through-substrate-on-linux-and-macos: nothing written outside the build"
+    );
+    assert!(
+        listener.accept().is_err(),
+        "story:confinement-through-substrate-on-linux-and-macos: the build reached no listener"
+    );
+    assert_eq!(
+        world.version(),
+        format!("takt 0.1.0 ({revision})"),
+        "story:confinement-through-substrate-on-linux-and-macos: the confined build is installed"
+    );
+}
+
 /// A record that cannot be written leaves the installed binary untouched (probe N10): the
 /// record is written before the binary moves into place, so a store that refuses the write is
 /// exit 1 with nothing installed and nothing recorded.
@@ -2736,9 +2859,9 @@ fn a_record_that_cannot_be_written_leaves_the_binary_untouched() {
 fn a_binary_that_changes_once_installed_is_rolled_back() {
     let world = World::new("flip", BASELINE_TOKENS, FIVE_APPROVALS);
     world.record_baseline();
-    // Where the build and the fresh root are as the candidate sees them: inside the sandbox on
-    // Linux, at their host paths on macOS (the build under the cache, the fresh root beside the
-    // install root).
+    // Where the build and the fresh root are as the candidate sees them: inside a Linux
+    // adapter's mounts on Linux, at their host paths on macOS (the build under the cache, the
+    // fresh root beside the install root).
     let (target, install) = if cfg!(target_os = "macos") {
         (
             format!("{}/", world.outer.join("cache/takt/promote").display()),

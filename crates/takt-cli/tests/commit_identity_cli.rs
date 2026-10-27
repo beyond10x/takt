@@ -194,6 +194,9 @@ impl World {
     fn run(&self, extra: &[&str]) -> (i32, String, String) {
         let repo = self.repo.to_str().expect("utf-8");
         let mut args = vec!["run", "--repo", repo, "--test-cmd", "true"];
+        if !extra.contains(&"--protocol") {
+            args.extend(["--protocol", "story.delivery/1"]);
+        }
         args.extend_from_slice(extra);
         self.takt(&args)
     }

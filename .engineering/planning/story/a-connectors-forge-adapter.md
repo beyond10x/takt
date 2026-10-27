@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-connectors-forge-adapter
 kind: story
-status: active
+status: implemented
 title: An optional Connectors forge whose preflight names a missing operation
 summary: never the default, lowest priority
 tags:
@@ -21,10 +21,11 @@ scope:
   path: crates/takt/src/run_config.rs
 - confidence: inferred
   path: crates/takt/tests/connectors_forge.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-10-27T12:00:43Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "active", to: "implemented", at: "2026-10-27T18:13:59Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: a-connectors-forge-adapter
 

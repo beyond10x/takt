@@ -46,11 +46,15 @@ fn exit(code: i32, stdout: &str, stderr: &str) -> Exit {
     }
 }
 
+/// The name and value of each variable a line was run with.
+type Environment = Vec<(String, String)>;
+
 /// The command double: records every argument list it is run with and answers the next line of
 /// its script.
 #[derive(Clone, Default)]
 struct Fake {
     calls: Rc<RefCell<Vec<Vec<String>>>>,
+    envs: Rc<RefCell<Vec<Environment>>>,
     script: Rc<RefCell<VecDeque<Exit>>>,
 }
 
@@ -64,6 +68,11 @@ impl Fake {
     fn calls(&self) -> Vec<Vec<String>> {
         self.calls.borrow().clone()
     }
+
+    /// The environment each line was run with by `run_env`, in order.
+    fn envs(&self) -> Vec<Environment> {
+        self.envs.borrow().clone()
+    }
 }
 
 impl Runner for Fake {
@@ -76,7 +85,12 @@ impl Runner for Fake {
             .expect("the script has a reply for each command"))
     }
 
-    fn run_env(&self, tree: &Path, argv: &[String], _env: &[(&str, &str)]) -> Result<Exit> {
+    fn run_env(&self, tree: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<Exit> {
+        self.envs.borrow_mut().push(
+            env.iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+                .collect(),
+        );
         self.run(tree, argv)
     }
 }
@@ -158,6 +172,7 @@ fn opens_with_the_configured_argv() {
             "",
         ),
         exit(0, &view("opened"), ""),
+        exit(0, &view("opened"), ""),
     ]);
     let forge = forge_over(&scratch, commands(), Box::new(fake.clone())).expect("a forge");
     let artifacts = scratch.0.join("artifacts");
@@ -185,8 +200,13 @@ fn opens_with_the_configured_argv() {
             &body,
         ])
     );
+    assert_eq!(
+        fake.calls()[1],
+        argv(&["tool", "read", "42"]),
+        "the number is read back through `read` before the open returns"
+    );
     let read = forge.pull_request(&scratch.0, number).expect("reads");
-    assert_eq!(fake.calls()[1], argv(&["tool", "read", "42"]));
+    assert_eq!(fake.calls()[2], argv(&["tool", "read", "42"]));
     assert_eq!(read.state, PullRequestState::Open);
     assert_eq!(read.head.sha, HEAD);
     assert_eq!(read.head.branch, "takt/case-1");
@@ -199,7 +219,10 @@ fn opens_with_the_configured_argv() {
 fn a_title_is_one_argument() {
     let title = "fix; rm -rf x && echo $(id) `id`";
     let scratch = Scratch::new("title");
-    let fake = Fake::answering([exit(0, "https://forge.test/merge_requests/1", "")]);
+    let fake = Fake::answering([
+        exit(0, "https://forge.test/merge_requests/1", ""),
+        exit(0, &view("opened"), ""),
+    ]);
     let forge = forge_over(&scratch, commands(), Box::new(fake.clone())).expect("a forge");
     forge
         .open_pull_request(&scratch.0, &scratch.0.join("a"), &request(title))
@@ -216,6 +239,7 @@ fn a_title_is_one_argument() {
             "https://forge.test/merge_requests/9",
             "{title}",
         ])),
+        read: Some(argv(&["echo", &view("opened")])),
         ..commands()
     };
     let forge =
@@ -394,10 +418,15 @@ fn the_request_number_is_read_from_its_url() {
             "see https://a.test/x/1 then\nhttps://a.test/g/p/-/merge_requests/17?x=3#note\n",
             17,
         ),
+        (
+            "https://forge.example/g/p/pull/7 and https://forge.example/g/p\n",
+            7,
+        ),
+        ("(https://forge.example/g/p/pulls/31).\n", 31),
         ("#23\n", 23),
         ("5", 5),
     ] {
-        let fake = Fake::answering([exit(0, printed, "")]);
+        let fake = Fake::answering([exit(0, printed, ""), exit(0, &view("opened"), "")]);
         let forge = forge_over(&scratch, without.clone(), Box::new(fake)).expect("a forge");
         let opened = forge
             .open_pull_request(&scratch.0, &scratch.0.join("a"), &request("T"))
@@ -456,4 +485,185 @@ fn settings_must_fit_the_forge() {
     let error = none.check_for(Some("command")).expect_err("needs commands");
     assert!(format!("{error:#}").contains("forge_commands"));
     assert!(none.check_for(None).is_ok());
+}
+
+/// A request number `open` printed is read back through `read` before the open returns: a
+/// request `read` does not report as an open request for the case's branch, or that it cannot
+/// read at all, is no request takt records, and the error names the number.
+#[test]
+fn a_recorded_number_is_read_back_through_read() {
+    let scratch = Scratch::new("read-back");
+    let printed = "https://forge.test/g/p/-/merge_requests/42\n";
+    let other_branch = view("opened").replace("takt/case-1", "takt/case-2");
+    for (replies, field) in [
+        (
+            vec![exit(0, printed, ""), exit(0, &other_branch, "")],
+            Some("number"),
+        ),
+        (
+            vec![exit(0, printed, ""), exit(0, &view("merged"), "")],
+            Some("number"),
+        ),
+        (vec![exit(0, printed, ""), exit(0, "not json", "")], None),
+        (
+            vec![exit(0, printed, ""), exit(1, "", "no such request")],
+            None,
+        ),
+    ] {
+        let fake = Fake::answering(replies);
+        let forge = forge_over(&scratch, commands(), Box::new(fake.clone())).expect("a forge");
+        let error = forge
+            .open_pull_request(&scratch.0, &scratch.0.join("a"), &request("T"))
+            .expect_err("a number `read` does not confirm is not recorded");
+        let text = format!("{error:#}");
+        assert!(text.contains("42"), "the error names the number: {text}");
+        if let Some(field) = field {
+            let typed = error.downcast_ref::<ForgeOutput>().expect("typed");
+            assert_eq!(
+                (typed.command.as_str(), typed.field.as_str()),
+                ("open", field)
+            );
+        }
+        assert_eq!(fake.calls()[1], argv(&["tool", "read", "42"]), "{text}");
+    }
+}
+
+/// A repository whose `origin` names a project on a fake host.
+fn repository(scratch: &Scratch) -> PathBuf {
+    let tree = scratch.0.join("tree");
+    fs::create_dir_all(&tree).expect("a tree");
+    for args in [
+        vec!["init", "-q"],
+        vec![
+            "remote",
+            "add",
+            "origin",
+            "https://forge.example/group/project.git",
+        ],
+    ] {
+        let status = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&tree)
+            .args(args)
+            .status()
+            .expect("git runs");
+        assert!(status.success());
+    }
+    tree
+}
+
+/// The merge target's tip is read through git, not through an entry of `forge_commands`: the
+/// branch listed over HTTPS alone in the project `origin` names, then its commit fetched into no
+/// ref. A listing that names another reference, none, two, or no object id gives no tip, and a
+/// command that fails gives none.
+#[test]
+fn the_target_tip_is_read_through_git() {
+    let scratch = Scratch::new("tip");
+    let tree = repository(&scratch);
+    let url = "https://forge.example/group/project.git";
+    let listed = format!("{HEAD}\trefs/heads/main\n");
+    let fake = Fake::answering([exit(0, &listed, ""), exit(0, "", "")]);
+    let forge = CommandForge::for_tree(
+        &tree,
+        commands(),
+        &actions(),
+        scratch.0.join("state"),
+        Scan::None {
+            declared_in: scratch.0.join("run.yaml"),
+        },
+        Box::new(fake.clone()),
+    )
+    .expect("a forge");
+    assert_eq!(forge.target_tip(&tree, "main").expect("a tip"), HEAD);
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 2, "{calls:?}");
+    let verbs: Vec<&str> = calls.iter().map(|call| call[5].as_str()).collect();
+    assert_eq!(verbs, ["ls-remote", "fetch"]);
+    assert_eq!(&calls[0][6..], [url, "refs/heads/main"]);
+    assert_eq!(
+        &calls[1][6..],
+        [
+            url,
+            HEAD,
+            "--no-write-fetch-head",
+            "--no-tags",
+            "--recurse-submodules=no"
+        ]
+    );
+    assert_eq!(
+        fake.envs(),
+        vec![vec![("GIT_ALLOW_PROTOCOL".to_owned(), "https".to_owned())]; 2],
+        "both run over HTTPS alone"
+    );
+
+    let other = "refs/heads/ci/refs/heads/main";
+    let refused = [
+        format!("{HEAD}\t{other}\n"),
+        String::new(),
+        format!("{HEAD}\trefs/heads/main\n{HEAD}\trefs/heads/main\n"),
+        "main\trefs/heads/main\n".to_owned(),
+    ];
+    for printed in refused {
+        let fake = Fake::answering([exit(0, &printed, ""), exit(0, "", "")]);
+        let forge = CommandForge::for_tree(
+            &tree,
+            commands(),
+            &actions(),
+            scratch.0.join("state"),
+            Scan::None {
+                declared_in: scratch.0.join("run.yaml"),
+            },
+            Box::new(fake.clone()),
+        )
+        .expect("a forge");
+        assert!(forge.target_tip(&tree, "main").is_err(), "{printed:?}");
+        assert_eq!(fake.calls().len(), 1, "nothing is fetched: {printed:?}");
+    }
+    for failing in [0, 1] {
+        let mut replies = vec![exit(0, &listed, ""), exit(0, "", "")];
+        replies[failing] = exit(128, "", "fatal: could not read from the remote");
+        let fake = Fake::answering(replies);
+        let forge = CommandForge::for_tree(
+            &tree,
+            commands(),
+            &actions(),
+            scratch.0.join("state"),
+            Scan::None {
+                declared_in: scratch.0.join("run.yaml"),
+            },
+            Box::new(fake),
+        )
+        .expect("a forge");
+        let error = forge.target_tip(&tree, "main").expect_err("no tip");
+        assert!(format!("{error:#}").contains("128"), "{error:#}");
+    }
+}
+
+/// With no `origin` remote naming a project there is no project to ask: no tip.
+#[test]
+fn the_target_tip_needs_the_origin_project() {
+    let scratch = Scratch::new("tip-no-origin");
+    let tree = scratch.0.join("tree");
+    fs::create_dir_all(&tree).expect("a tree");
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&tree)
+        .args(["init", "-q"])
+        .status()
+        .expect("git runs");
+    assert!(status.success());
+    let fake = Fake::answering([]);
+    let forge = CommandForge::for_tree(
+        &tree,
+        commands(),
+        &actions(),
+        scratch.0.join("state"),
+        Scan::None {
+            declared_in: scratch.0.join("run.yaml"),
+        },
+        Box::new(fake.clone()),
+    )
+    .expect("a forge");
+    assert!(forge.target_tip(&tree, "main").is_err());
+    assert!(fake.calls().is_empty());
 }
