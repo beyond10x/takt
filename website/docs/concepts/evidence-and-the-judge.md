@@ -49,8 +49,9 @@ For `story.delivery/1` and `software.change/1`:
 | `ci.read` | the forge reads the pull request's checks | `ci_result` pass or fail |
 | `repository.merge` | the forge merges, under a grant | `merge_observation` |
 
-The forge is the repository's bot route on github.com (`b10x-gates` pushes and opens, `gh` reads
-checks), `glab` on a GitLab host, or none (`--forge none`), when the last three have no
+The forge is an adapter ([The forge](../reference/configuration.md#the-forge)): `glab` on a GitLab
+host, beyond10x's bot route on github.com (`b10x-gates` pushes and opens, `gh` reads checks), or
+none (`--forge none`), when the last three have no
 performer. A failing `tests.run` names up to 64 failed tests (cargo, Python unittest, pytest)
 and cargo's rerun hint in its summary; the [two test stops](./how-a-run-ends.md#the-two-test-stops)
 read those names.

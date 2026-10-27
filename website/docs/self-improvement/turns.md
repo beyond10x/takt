@@ -34,7 +34,7 @@ The finding was the same in all three: `takt scorecard --help` said a run's outc
 (`story:scorecard-help-names-the-held-out-check`). In each trial, takt delivered the candidate
 itself, on `story.delivery/1` with Claude Code as the harness.
 
-| | trial 2 | trial 3 | trial 4 |
+| measure | trial 2 | trial 3 | trial 4 |
 |---|---|---|---|
 | takt (branch `impl/rsi-part-2`) | 71f061c, part 2 | 7a4d6b9, correction 1: the judge binary recorded at open | 30bd2f0, correction 2: the judge-surface rule, `--install-root` |
 | candidate delivered by takt | 123 s, 268,051 tokens | 171 s, 491,390 tokens | 111 s, 285,325 tokens |

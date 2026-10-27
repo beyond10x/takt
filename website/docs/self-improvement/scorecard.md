@@ -43,9 +43,10 @@ Decided on 2026-10-18:
 ## Promotion
 
 `takt promote` checks the candidate's saved scorecard against the promoted baseline's under the
-scorecard's rule. When no scenario is worse it builds a fresh clone of that revision inside
-bubblewrap (`cargo build --locked --offline`, the environment cleared, only the clone, rustup's
-default toolchain and the registry cache visible), installs the binary, records the promotion
+scorecard's rule. When no scenario is worse it builds a fresh clone of that revision confined
+(`cargo build --locked --offline`, the environment cleared, no network): inside bubblewrap on
+Linux, with only the clone, rustup's default toolchain and the registry cache visible; under
+`sandbox-exec` on macOS, writing only its own directories. It installs the binary, records the promotion
 under `~/.local/state/takt/promotions/`, where the latest record is the next baseline, and moves
 the binary into place. Promotions run one at a time under the store's lock. `--install-root`
 names where the binary goes; without it, `CARGO_INSTALL_ROOT`, else `CARGO_HOME`, else `~/.cargo`.
@@ -55,7 +56,7 @@ From 0.2.2, `takt promote` keeps the binary it replaces, executable, at
 promotion finishes under that binary ([Running a turn](./the-loop.md#running-a-turn)). Kept
 binaries are not removed.
 
-Linux only ([Getting started](../getting-started.md#what-it-needs)).
+On Linux the build runs under bubblewrap, on macOS under `/usr/bin/sandbox-exec` (since 0.10.0); [Getting started](../getting-started.md#what-it-needs) says what differs.
 
 Sources: `takt scorecard --help`, `takt promote --help`, `crates/takt/src/scorecard.rs`,
 `design:recursive-self-improvement` § Scorecard, `docs/metrics/README.md`.

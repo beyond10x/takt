@@ -1,7 +1,7 @@
 # Protocol viewer
 
-A small Vue 3 app that shows takt's three protocols, the engineering protocols' built-ins
-`story.delivery/1`, `self.improvement/1` and `loop.improvement/1`: their actions, evidence kinds,
+A small Vue 3 app that shows the eight protocols `takt protocols` lists, the engineering
+protocols' built-ins, `software.change/1` first: their actions, evidence kinds,
 claims, obligations and outcomes as tables, and as one graph of how they connect.
 
 The protocol documents are the source of truth. `scripts/collect.mjs` reads them at build time,

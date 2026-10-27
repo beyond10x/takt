@@ -11,7 +11,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Concepts',
-      collapsed: false,
+      collapsed: true,
       items: [
         'concepts/architecture',
         'concepts/protocol-and-case',
@@ -25,7 +25,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Guides',
-      collapsed: false,
+      collapsed: true,
       items: [
         'guides/install',
         'guides/configure-a-run',
@@ -42,7 +42,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Self-improvement',
-      collapsed: false,
+      collapsed: true,
       items: [
         'self-improvement/the-loop',
         'self-improvement/scorecard',
@@ -54,7 +54,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Reference',
-      collapsed: false,
+      collapsed: true,
       items: [
         'reference/configuration',
         'reference/cli',

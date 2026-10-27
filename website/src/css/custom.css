@@ -344,4 +344,13 @@ html .takt-word--long {
   max-inline-size: 100%;
   white-space: inherit;
   text-indent: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The landing's five related tools fill two rows, three and two, from 997 px: the docs-system's
+   auto-fit grid set four in a row and the fifth alone under them. */
+@media (min-width: 997px) {
+  html .b10x-related {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
 }
