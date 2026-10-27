@@ -23,6 +23,7 @@ takt's releases.
 ### Fixed
 
 - The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.
+- A `tests.run` that writes an untracked `Cargo.lock` is refused with the remedy named: commit it, ignore it (`.gitignore`), or give `--test-cmd` a command that does not write it.
 - The endpoint token staging tests pass when the temporary directory is writable by others without the sticky bit.
 - A judgement step whose session ends without its action line is tried again, 3 times at most; each try counts against `--iterations`.
 - Each such try is charged the tokens its session reported; the run ends exit 5 after the third, or exit 3 if a try spent the budget.

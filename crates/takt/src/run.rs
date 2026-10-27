@@ -8010,6 +8010,22 @@ fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -
     named
 }
 
+/// What a refusal says after an untracked `Cargo.lock`: a cargo test command writes one into a
+/// repository that commits none, and each of the three ways out is named on the same line.
+const CARGO_LOCK_REMEDY: &str = "commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it";
+
+/// Whether one of the `paths` a step changed is a `Cargo.lock` at any directory level that the
+/// repository does not track: git lists it under neither the index nor a commit.
+fn untracked_cargo_lock(tree: &Path, paths: &[String]) -> bool {
+    paths.iter().any(|path| {
+        Path::new(path)
+            .file_name()
+            .is_some_and(|name| name == "Cargo.lock")
+            && crate::git::run(tree, &["ls-files", "-z", "--", path])
+                .is_ok_and(|listed| listed.is_empty())
+    })
+}
+
 /// How a refusal names ignored paths ([`crate::git::paths_named`]).
 fn ignored_named(paths: &[std::ffi::OsString]) -> String {
     crate::git::paths_named(paths)
@@ -10497,6 +10513,7 @@ impl<'a> Run<'a> {
         }
         outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
         if !foreign.is_empty() || !outside.is_empty() {
+            let lock_remedy = untracked_cargo_lock(&self.tree, &change.paths);
             let left = undo_step(&self.tree, &kept_all)?.left;
             foreign.extend(outside);
             foreign.extend(left.iter().map(|path| {
@@ -10507,6 +10524,9 @@ impl<'a> Run<'a> {
                 validator.action(),
                 foreign.join(", ")
             );
+            if lock_remedy {
+                why.push_str(&format!("; {CARGO_LOCK_REMEDY}"));
+            }
             if let Err(error) = &observed {
                 why.push_str(&format!("; the observation failed too: {error:#}"));
             }
