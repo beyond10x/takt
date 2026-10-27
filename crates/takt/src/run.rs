@@ -2864,6 +2864,17 @@ impl Modules {
         Ok(modules)
     }
 
+    /// The names a resumed case guards: the ones it keeps ([`MODULES_FILE`]), else asked again
+    /// and kept by no one, so the file exists only as the case opened with it and a replay of
+    /// any step rebuilds the case as that step found it.
+    #[must_use]
+    pub fn at_resume(case_dir: &Path, runs: &[String], tree: &Path) -> Self {
+        if case_dir.join(MODULES_FILE).is_file() {
+            return Self::read(case_dir);
+        }
+        Self::ask(runs, tree)
+    }
+
     /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); the built-in lists when it
     /// keeps none it can read.
     #[must_use]
@@ -9041,9 +9052,9 @@ impl<'a> Run<'a> {
         options.case_id = Some(id.to_owned());
         options.protocol = case.protocol.id.clone();
         // A case with no module file (none kept at open: no Python answered, or the case predates
-        // the file) is asked now, and keeps the names from here only if a Python answers.
+        // the file) is asked again for this run, and nothing is written.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
-        let modules = Modules::of_case(&case.dir, &runs, tree)?;
+        let modules = Modules::at_resume(&case.dir, &runs, tree);
         let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
         // The identity the case was opened with, whatever the repository configures by now.
         let committer = case.committer()?;

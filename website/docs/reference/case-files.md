@@ -37,7 +37,6 @@ $ find .engineering/cases -type f | sort
 .engineering/cases/<case>/observations.json
 .engineering/cases/<case>/protocol.ir.json
 .engineering/cases/<case>/protocol.yaml
-.engineering/cases/<case>/python-modules.json
 ```
 
 A case that works a story, goes through a forge or a harness has more files. All of them:
@@ -52,7 +51,7 @@ A case that works a story, goes through a forge or a harness has more files. All
 | `branch.yaml` | the branch `takt/<case>`, its `base`, the `base_commit` it forked from, the branch the tree was `left` on, and once pushed, `pushed` and `pull_request` | takt; the `pr.open` validator adds the last two |
 | `commit-identity` | the identity of every commit of the case, `<name> <email>` on one line; absent when none was configured | takt, at open ([identity](./configuration.md#commit-identity)) |
 | `observations.json` | the observations reported to the case, in order, as Loom's file case store keeps them | takt, appended during the run |
-| `python-modules.json` | the Python module names a test command can import from outside the repository, as the Python the case opened with answered, or built-in lists | takt, at open |
+| `python-modules.json` | the Python module names a test command can import from outside the repository, as the Python the case opened with answered, or built-in lists | takt, at open, only when a Python answered or could not be established; absent otherwise, when the built-in lists stand in |
 | `decisions/NNNN.json` | one file per evaluation: every action's status (`admissible`, `approval-required`, `blocked`), the claims and why | the governor of Loom, through takt, one per decision |
 | `evidence/NNNN-<kind>-<n>.json` | one `canon-evidence/1` record: `kind`, `result`, `subject`, `subject_revision`, `observed_at`, `producer` | a validator only |
 | `artifacts/` | what a validator retained beside its record, such as a gate's bundle | the validator, through takt |
