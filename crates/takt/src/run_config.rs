@@ -5,7 +5,8 @@
 //! one file so a run started in a container takes them from a mounted file. The file is TOML
 //! (`.toml`) or YAML (`.yaml`, `.yml`), the same fields in either; a YAML file whose `format`
 //! is `loom.agent/1` is the agent document Loom mounts for a `LoomAgent` at
-//! `/config/agent.yaml`, and its `takt` member is the run configuration. A flag given on the
+//! `/config/agent.yaml`, and its `takt` member is the run configuration, its `runtime.state_dir`
+//! the state directory when `takt` names none. A flag given on the
 //! command line wins over the file, and the file over the flag's default; the run applies
 //! them (`crates/takt-cli/src/main.rs`).
 
@@ -17,10 +18,18 @@ use anyhow::{Context as _, Result, anyhow};
 pub const LOOM_AGENT_FORMAT: &str = "loom.agent/1";
 
 /// A `loom.agent/1` document as takt reads it for the lines of its refusals: its `takt` member
-/// alone, the members checked against [`LOOM_AGENT_MEMBERS`] beforehand.
+/// and its `runtime` member, the members checked against [`LOOM_AGENT_MEMBERS`] beforehand.
 #[derive(serde::Deserialize)]
 struct LoomAgentDocument {
     takt: Option<RunConfig>,
+    runtime: Option<LoomRuntime>,
+}
+
+/// The `runtime` member of a `loom.agent/1` document as takt reads it: its `state_dir`, the
+/// default state directory. Loom's other members of it are not takt's and are not refused.
+#[derive(serde::Deserialize)]
+struct LoomRuntime {
+    state_dir: Option<PathBuf>,
 }
 
 /// The members of a `loom.agent/1` document Loom declares (Loom 0.43.0, `loom-sdk` `agent.rs`
@@ -179,10 +188,15 @@ fn from_yaml(path: &Path, text: &str) -> Result<RunConfig> {
             }
             let agent: LoomAgentDocument =
                 serde_yaml_ng::from_str(text).map_err(|error| refused(path, line(&error)))?;
-            match (agent.takt, document.get("takt")) {
-                (Some(_), Some(takt)) => strict(path, takt),
-                _ => Ok(RunConfig::default()),
-            }
+            let mut config = match (agent.takt, document.get("takt")) {
+                (Some(_), Some(takt)) => strict(path, takt)?,
+                _ => RunConfig::default(),
+            };
+            // The document's `runtime.state_dir` is the default: `takt.state_dir` names one first.
+            config.state_dir = config
+                .state_dir
+                .or(agent.runtime.and_then(|runtime| runtime.state_dir));
+            Ok(config)
         }
         Some(_) => Err(anyhow!(
             "the run configuration file {} is refused: its `format` is not {LOOM_AGENT_FORMAT}, \
@@ -195,7 +209,8 @@ fn from_yaml(path: &Path, text: &str) -> Result<RunConfig> {
 impl RunConfig {
     /// The run configuration file at `path`: TOML when its name ends in `.toml`, YAML when it
     /// ends in `.yaml` or `.yml`, any other refused. A YAML `loom.agent/1` document gives its
-    /// `takt` member, or nothing without one. Any other key, or a value of another type, is
+    /// `takt` member, or nothing without one, and a `state_dir` its `runtime.state_dir` when its
+    /// `takt` member names none. Any other key, or a value of another type, is
     /// refused naming the path and, for a parse, the line, never a value written there. A
     /// relative `endpoint_file` or `state_dir` is made relative to the file's directory.
     pub fn read(path: &Path) -> Result<Self> {
@@ -484,5 +499,45 @@ mod tests {
             RunConfig::read(&path).expect("read").endpoint_file,
             Some(PathBuf::from("/config/endpoint.toml"))
         );
+    }
+
+    /// story:the-state-directory-holds-every-host-record: a `loom.agent/1` document's
+    /// `runtime.state_dir` is the state directory when its `takt` member names none, a relative
+    /// one read beside the file; `takt.state_dir` wins over it; the other `runtime` members are
+    /// Loom's and are not refused.
+    #[test]
+    fn a_loom_runtime_state_dir_is_the_default_and_takt_state_dir_wins() {
+        let path = scratch_named(
+            "runtime-state",
+            "agent.yaml",
+            "format: loom.agent/1\nruntime:\n  state_dir: state\n  connectors: []\n",
+        );
+        assert_eq!(
+            RunConfig::read(&path).expect("read").state_dir,
+            Some(path.parent().expect("a directory").join("state"))
+        );
+        let path = scratch_named(
+            "runtime-takt-state",
+            "agent.yaml",
+            "format: loom.agent/1\nruntime:\n  state_dir: /data/runtime\ntakt:\n  state_dir: /data/takt\n",
+        );
+        assert_eq!(
+            RunConfig::read(&path).expect("read").state_dir,
+            Some(PathBuf::from("/data/takt"))
+        );
+    }
+
+    /// story:the-state-directory-holds-every-host-record: a `runtime.state_dir` that is not a
+    /// string is refused naming the file and never its value.
+    #[test]
+    fn a_loom_runtime_state_dir_that_is_not_a_string_is_refused_without_its_value() {
+        let path = scratch_named(
+            "runtime-type",
+            "agent.yaml",
+            "format: loom.agent/1\nruntime:\n  state_dir: [MARKER-runtime]\n",
+        );
+        let error = format!("{:#}", RunConfig::read(&path).expect_err("refused"));
+        assert!(error.contains(&path.display().to_string()), "{error}");
+        assert!(!error.contains("MARKER"), "{error}");
     }
 }

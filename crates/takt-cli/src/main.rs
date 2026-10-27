@@ -660,7 +660,8 @@ struct RunArgs {
     /// `B10X_GATES_POLICY` is set). Under `gates` with no policy, `--harness codex` and
     /// `--harness harness`, whose sessions may read outside their copy, are refused before the
     /// case opens. A YAML `loom.agent/1` document, as Loom mounts it at `/config/agent.yaml`,
-    /// gives them in its `takt` member, and nothing without one. A flag given on the command
+    /// gives them in its `takt` member, and nothing without one; its `runtime.state_dir` is the
+    /// `state_dir` when `takt` names none. A flag given on the command
     /// line wins over the file, the file over the flag's default: the file's `story` is taken
     /// only when neither --story, --intent nor --case is given, and its `endpoint_token_env`
     /// only when no credential flag is. The file's `endpoint_file` and `endpoint_token_env` are
@@ -913,11 +914,11 @@ struct LoopArgs {
     /// run does. The first line the run prints and its `opened` event name the adapter.
     #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
     confinement: String,
-    /// The state directory the run keeps its session transcripts in, in place of
+    /// The state directory the run keeps its host records in, in place of
     /// `$XDG_STATE_HOME/takt` (`~/.local/state/takt` without it): each harness step's
     /// transcript under `<DIR>/transcripts`, where the step's line names it relative to that
-    /// directory (`takt replay --transcripts <DIR>/transcripts` reads it there). What a
-    /// discarded step sets aside stays under the state home. A relative path is read against
+    /// directory (`takt replay --transcripts <DIR>/transcripts` reads it there), and what a
+    /// discarded step sets aside under `<DIR>/set-aside`. A relative path is read against
     /// the current directory. For a container whose home is not kept, a directory on a volume
     /// that is.
     #[arg(long, value_name = "DIR")]
@@ -1282,6 +1283,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 return Ok(code);
             }
             looping.check_state_dir(&repo)?;
+            looping.check_set_aside(&repo)?;
             let inputs = inputs
                 .iter()
                 .map(|pair| {
@@ -1713,6 +1715,23 @@ impl LoopArgs {
             .open(&probe)
             .map_err(|error| refused(anyhow!("{} is not writable: {error}", root.display())))?;
         let _ = std::fs::remove_file(&probe);
+        Ok(())
+    }
+
+    /// Refuses a state directory named by --state-dir or the run configuration's `state_dir`
+    /// whose set-aside directory, `<state_dir>/set-aside`, cannot be used by the run (not
+    /// absolute, inside `repo`, a file on its way), before anything of the run is opened,
+    /// naming it and why; [`LoopArgs::check_state_dir`] checks the transcripts' directory.
+    fn check_set_aside(&self, repo: &Path) -> Result<()> {
+        let Some(dir) = &self.state_dir else {
+            return Ok(());
+        };
+        takt::git::set_aside_root(&state_set_aside(dir), repo).map_err(|why| {
+            anyhow!(
+                "the state directory {} (--state-dir, or the run configuration's `state_dir`) cannot be used: {why:#}; nothing was opened",
+                dir.display()
+            )
+        })?;
         Ok(())
     }
 
@@ -2274,9 +2293,20 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Fo
 /// The transcripts directory under the state directory `dir`, `<dir>/transcripts`, a relative
 /// `dir` read against the current directory.
 fn state_transcripts(dir: &Path) -> PathBuf {
+    state_under(dir, "transcripts")
+}
+
+/// The set-aside directory under the state directory `dir`, `<dir>/set-aside`, where what a
+/// discarded step moved aside goes ([`state_transcripts`] for `dir`).
+fn state_set_aside(dir: &Path) -> PathBuf {
+    state_under(dir, "set-aside")
+}
+
+/// `name` under the state directory `dir`, a relative `dir` read against the current directory.
+fn state_under(dir: &Path, name: &str) -> PathBuf {
     std::path::absolute(dir)
         .unwrap_or_else(|_| dir.to_path_buf())
-        .join("transcripts")
+        .join(name)
 }
 
 /// Runs the open case `run` to its stop, `forge_line` said first, the run given this binary's
@@ -2305,6 +2335,11 @@ fn finish(
     }
     run.scan_with(scan);
     run.binary = Some(REVISION.to_owned());
+    // A state directory given holds what a discarded step sets aside as well, in place of the
+    // state home: nothing a run keeps on the host is then written under `$XDG_STATE_HOME/takt`.
+    if let Some(dir) = &looping.state_dir {
+        run.set_aside_in(state_set_aside(dir))?;
+    }
     // The transcripts directory is made now, before any step; one that cannot be (a read-only
     // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
     // as a step whose transcript could not be kept does. --state-dir, or the configuration's
@@ -2602,6 +2637,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         return Ok(code);
     }
     looping.check_state_dir(&repo)?;
+    looping.check_set_aside(&repo)?;
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;
     let harness = harness_of(&looping)?;
     let harness = harness.as_ref();

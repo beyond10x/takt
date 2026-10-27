@@ -31,6 +31,7 @@ takt's releases.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 - A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
+- The state directory holds discarded steps' set-aside files too; a `loom.agent/1` document's `runtime.state_dir` is the default when neither `--state-dir` nor `takt.state_dir` names one.
 
 ### Fixed
 
