@@ -147,9 +147,10 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"{\"action\": \"imp
     }
 }
 
-/// The gate, then one judgement step: the first prompt, the whole run record as text, and the
-/// failed checks its evidence line keeps.
-fn run(tree: &Path, id: &str) -> (String, String, Vec<FailedCheck>) {
+/// The run of the gate, and of the judgement step a failed gate hands on: the run's stop as its
+/// error text (`Err` when it ends on one), what it printed, its record as text, and the fake
+/// harness's directory, which keeps `prompt-<n>` for each judgement step.
+fn run_to_stop(tree: &Path, id: &str) -> (Result<(), String>, String, String, Scratch) {
     let fake = directory(&format!("{id}-claude"));
     let harness = fake_claude(&fake);
     let protocol = fake.join("protocol.yaml");
@@ -168,12 +169,22 @@ fn run(tree: &Path, id: &str) -> (String, String, Vec<FailedCheck>) {
         vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
     let mut run = Run::open(tree, options, &harness, &validators).expect("the case opens");
     let mut out = Vec::new();
-    let stop = run.run(&mut out);
+    let stop = run
+        .run(&mut out)
+        .map(|_stop| ())
+        .map_err(|error| format!("{error:#}"));
     let text = String::from_utf8(out).expect("utf-8");
-    stop.unwrap_or_else(|error| panic!("the run stops without an error: {error:#}\n{text}"));
+    let record = fs::read_to_string(run.case.dir.join("events.jsonl")).expect("a run record");
+    (stop, text, record, fake)
+}
+
+/// The gate, then one judgement step: the first prompt, the whole run record as text, and the
+/// failed checks its evidence line keeps.
+fn run(tree: &Path, id: &str) -> (String, String, Vec<FailedCheck>) {
+    let (stop, text, record, fake) = run_to_stop(tree, id);
+    stop.unwrap_or_else(|error| panic!("the run stops without an error: {error}\n{text}"));
     let prompt = fs::read_to_string(fake.join("prompt-1"))
         .unwrap_or_else(|error| panic!("the judgement step ran: {error}\n{text}"));
-    let record = fs::read_to_string(run.case.dir.join("events.jsonl")).expect("a run record");
     let failed = record
         .lines()
         .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json"))
@@ -321,46 +332,56 @@ fn bounds_hold_at_the_edge() {
     assert!(lines[0].trim_end_matches('…').chars().all(|c| c == 'é'));
 }
 
-/// Found on the way, not this story's: a gate script holding the shell's `:` builtin (a no-op,
-/// common as `: > file`) makes the gate's reader of what Python loads ask git for the pathspec
-/// `:/__main__.py`, which git refuses, and `gate.run` ends the run with an error instead of
-/// failing the gate. This holds today's behaviour; story:a-gate-script-with-a-colon-is-run
-/// changes it.
+/// story:a-gate-script-with-a-colon-is-run, acceptance 1: a gate script holding the shell's `:`
+/// builtin (a no-op, common as `: > file`) is run and judged on its command's own exit. The gate
+/// fails, the run goes on to the judgement step, and the evidence line keeps the failing line;
+/// the run does not end on git's refusal of the pathspec `:/__main__.py`.
 #[test]
-fn today_a_gate_script_with_the_colon_builtin_ends_the_run_on_an_error() {
+fn a_gate_script_with_the_colon_builtin_is_run() {
     let tree = repository("colon", ":\necho 'a:1: unresolved: b'\nexit 1");
-    let fake = directory("colon-claude");
-    let harness = fake_claude(&fake);
-    let protocol = fake.join("protocol.yaml");
-    fs::write(&protocol, EDIT_PROTOCOL).expect("a protocol");
-    let options = RunOptions {
-        protocol: protocol.display().to_string(),
-        intent: "keep the citations resolved".to_owned(),
-        inputs: Vec::new(),
-        iterations: Some(2),
-        hours: None,
-        tokens: None,
-        case_id: Some("colon".to_owned()),
-        gate: None,
-    };
-    let validators: Vec<Box<dyn Validator>> =
-        vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
-    let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
-    let mut out = Vec::new();
-    let stop = run.run(&mut out);
-    let text = String::from_utf8(out).expect("utf-8");
-    let error = format!(
-        "{:#}",
-        stop.expect_err(
-            "story:a-gate-script-with-a-colon-is-run landed: rewrite this test to assert the \
-             run stops without an error and the gate's evidence line keeps one failed check \
-             holding `a:1: unresolved: b`"
-        )
+    let (prompt, record, failed) = run(&tree, "colon");
+    assert!(
+        record.contains("\"result\":\"fail\""),
+        "story:a-gate-script-with-a-colon-is-run: the gate did not run and fail: {record}"
+    );
+    assert_eq!(
+        failed.len(),
+        1,
+        "story:a-gate-script-with-a-colon-is-run: the evidence line keeps one failed check: {record}"
     );
     assert!(
-        error.contains(":/__main__.py") && error.contains("pathspec magic"),
-        "today the gate's reader of what Python loads asks git for the pathspec \
-         `:/__main__.py`, which git refuses (story:a-gate-script-with-a-colon-is-run): \
-         {error}\n{text}"
+        failed[0]
+            .lines
+            .iter()
+            .any(|line| line == "a:1: unresolved: b"),
+        "story:a-gate-script-with-a-colon-is-run: the failed check does not keep its line: {:?}",
+        failed[0].lines
+    );
+    assert!(
+        prompt.contains("a:1: unresolved: b"),
+        "story:a-gate-script-with-a-colon-is-run: the judgement step is not shown the failing \
+         line:\n{prompt}"
+    );
+}
+
+/// story:a-gate-script-with-a-colon-is-run, acceptance 1, the passing twin: a gate script holding
+/// the `:` builtin that exits 0 is run and passes on its command's own exit, and the run records
+/// the gate as passed, with no failed check.
+#[test]
+fn a_gate_script_with_the_colon_builtin_that_passes_is_run() {
+    let tree = repository("colon-passes", ":\necho 'all citations resolved'\nexit 0");
+    let (stop, text, record, _fake) = run_to_stop(&tree, "colon-passes");
+    stop.unwrap_or_else(|error| {
+        panic!(
+            "story:a-gate-script-with-a-colon-is-run: the run stops with an error: {error}\n{text}"
+        )
+    });
+    assert!(
+        record.contains("\"result\":\"pass\""),
+        "story:a-gate-script-with-a-colon-is-run: the gate did not run and pass: {record}"
+    );
+    assert!(
+        !record.contains("\"result\":\"fail\""),
+        "story:a-gate-script-with-a-colon-is-run: the gate failed: {record}"
     );
 }
