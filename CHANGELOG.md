@@ -64,6 +64,7 @@ takt's releases.
 - Each such try is charged the tokens its session reported; the run ends exit 5 after the third, or exit 3 if a try spent the budget.
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
 - The site says what runs under Seatbelt on macOS since 0.10.0, which scan and forge adapters a run can have, and that `bot` is beyond10x's github.com route.
+- The GitLab push and fetch run no hook the repository names (`core.hooksPath`, `--no-verify`) and follow no redirect; under `api` the credential helper answers only for the host named.
 
 ### Security
 
