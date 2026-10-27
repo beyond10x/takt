@@ -393,8 +393,16 @@ forge_commands:
   the head the checks were read on. A placeholder an entry does not take, written in braces as a word
   of lowercase letters and `_`, and a placeholder as the first element, the program, are refused
   before the case opens.
-- **Output.** `open` prints the request's URL or number, read by `id_pattern` (default: the last
-  integer of the last URL on standard output). `read` prints JSON with `state` (`open`, `merged` or
+- **Request number.** `open` prints the request's URL or number. `id_pattern`'s first group, in
+  the last match, is the number. Without it the number comes only from the request path segment of
+  a URL: the digits that make the whole segment after a `merge_requests`, `pull` or `pulls`
+  segment, in the last URL that has one, else a lone number on the last line. A URL that names no
+  request gives no number: a `.../merge_requests/new` page, a host with a port, a project whose
+  name holds a digit. `pr.open` is then refused, naming `id_pattern`, and nothing is recorded. Any
+  number is read back through `read` before `open` returns: a request `read` does not report as an
+  open request for the case's branch, or cannot read, is refused naming `number`, and its number
+  is not recorded.
+- **Output.** `read` prints JSON with `state` (`open`, `merged` or
   `closed`), `head` (the commit, or an object with `sha` and `branch`), `branch` (when `head` is the
   commit alone) and `base`. `checks` prints JSON, a list of `{name, state}`. Output that cannot be
   read is an error naming the command and the field.
@@ -404,8 +412,15 @@ forge_commands:
 - **Missing entries.** A protocol that opens, reads checks or merges needs the entries for those
   actions; a missing one is refused before the case opens, naming it.
 - **Push and scan.** The push stays takt's scanned push over HTTPS to the project `origin` names,
-  under the run's scan adapter. No entry reports the merge target's tip, so the judge guard refuses a
-  merge through this forge until one does.
+  under the run's scan adapter.
+- **Merge target's tip.** No entry reports it, since `read` describes one request and not a
+  branch. `repository.merge` reads it through git, as the push goes: `git ls-remote` of
+  `refs/heads/<base>` in the project `origin` names, over HTTPS alone, then that commit fetched into
+  no ref. The tree needs an `origin` remote naming the project, and git must be able to read it
+  with the credentials the push uses. A project with no such branch, an answer that is no commit
+  id, or a command that fails gives no tip, and the judge guard merges nothing. With a tip, the
+  `merge` entry runs once, at the head the checks were read on, and the merge is read back through
+  `read`.
 
 ## The scan
 

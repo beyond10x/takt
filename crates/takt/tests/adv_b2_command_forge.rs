@@ -110,6 +110,13 @@ fn request(branch: &str, body: &str) -> PullRequest {
     }
 }
 
+/// What `read` prints for an open request whose head is `branch`.
+fn opened_view(branch: &str) -> String {
+    format!(
+        r#"{{"state": "opened", "head": "0123456789abcdef0123456789abcdef01234567", "branch": "{branch}", "base": "main"}}"#
+    )
+}
+
 /// The runner of case A: while A's `open` runs, another run's command forge on the same state
 /// directory (the CLI gives every run on the machine `<state home>/forge-command` without
 /// `--state-dir`) opens its own request; then A's command reads the body file it was handed.
@@ -132,6 +139,9 @@ impl Runner for Interleaved {
                 .position(|word| word == "--description-file")
                 .expect("the body file flag");
             *self.seen.borrow_mut() = Some(fs::read_to_string(&argv[at + 1]).expect("a body"));
+        }
+        if argv.get(1).map(String::as_str) == Some("read") {
+            return Ok(exit(0, &opened_view("case-a")));
         }
         Ok(exit(0, "https://forge.test/g/p/-/merge_requests/1\n"))
     }
@@ -168,10 +178,10 @@ fn adv_b2_the_body_file_is_the_cases_own() {
         &delivery_actions(),
         &state,
         scan(&scratch),
-        Box::new(Fake::answering([exit(
-            0,
-            "https://forge.test/g/p/-/merge_requests/2\n",
-        )])),
+        Box::new(Fake::answering([
+            exit(0, "https://forge.test/g/p/-/merge_requests/2\n"),
+            exit(0, &opened_view("case-b")),
+        ])),
     )
     .expect("a forge");
     *other.borrow_mut() = Some(forge_b);
@@ -226,10 +236,13 @@ fn adv_b2_read_states_and_the_last_match() {
         ]
     );
 
-    let fake = Fake::answering([exit(
-        0,
-        "see https://forge.test/g/p/-/merge_requests/1\nopened https://forge.test/g/p/-/merge_requests/2\n",
-    )]);
+    let fake = Fake::answering([
+        exit(
+            0,
+            "see https://forge.test/g/p/-/merge_requests/1\nopened https://forge.test/g/p/-/merge_requests/2\n",
+        ),
+        exit(0, &opened_view("b")),
+    ]);
     let forge = CommandForge::for_tree(
         &scratch.0,
         ForgeCommands {

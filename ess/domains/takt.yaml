@@ -2186,15 +2186,34 @@ types:
   # the head `read` reported, which `merge` receives as the head the checks were read on.
   # A placeholder an entry does not take, and a placeholder as an entry's program, are refused
   # before the case opens.
-  # `id_pattern` is a regular expression whose first group is the number in what `open` printed
-  # (default: the last integer of the last URL on standard output, else a lone number); an exit
-  # code in `refused_exit` is a refusal, any other non-zero exit a failure; standard error of every
-  # command goes to a file under the state directory. The push stays takt's own, scanned push over
-  # HTTPS to the project the `origin` remote names; the command forge never replaces the scan.
+  # `id_pattern` is a regular expression whose first group is the number in what `open` printed.
+  # Without it the number comes only from the request path segment of a URL on standard output:
+  # the digits that make the whole segment after a `merge_requests`, `pull` or `pulls` segment, of
+  # the last URL that has one, else a lone number on the last line. A URL that names no request
+  # (a `merge_requests/new` page, a host with a port, a project whose name holds a digit) gives no
+  # number, and `pr.open` is refused naming `id_pattern`. Whatever the number's source, it is read
+  # back through `read` before `open` returns: a request `read` does not report as an open request
+  # for the case's branch, or cannot read, is refused naming `number` and records no number, so
+  # `pr.opened` never holds for a request `read` did not confirm.
+  # An exit code in `refused_exit` is a refusal, any other non-zero exit a failure; standard
+  # error of every command goes to a file under the state directory. The push stays takt's own,
+  # scanned push over HTTPS to the project the `origin` remote names; the command forge never
+  # replaces the scan.
   # An action the protocol the run opens on needs (`pr.open`: `open` and `read`; `ci.read`: `read`
   # and `checks`; `repository.merge`: `read` and `merge`) whose entry is missing is refused before
-  # the case opens, naming the entry. No entry reports the merge target's tip, so a merge through
-  # this forge stays refused by the judge guard until one does.
+  # the case opens, naming the entry.
+  # No entry reports the merge target's tip, since `read` describes one request and not a branch.
+  # `repository.merge` reads it through git, as the push goes: `git ls-remote` of
+  # `refs/heads/<base>` in the project the `origin` remote names, over HTTPS alone, whose one line
+  # naming exactly that reference gives the commit, then that commit fetched into no ref (no
+  # `FETCH_HEAD`, tag or tracking ref). A project with no such branch, an answer that is no
+  # object id or a command that fails gives no tip, and nothing is merged. With a tip, the
+  # `merge` entry runs once, at the head the checks were read on, and the merge is read back
+  # through `read`.
+  # read from: crates/takt/src/forge/command.rs:531-554
+  # read from: crates/takt/src/forge/command.rs:753-771
+  # read from: crates/takt/src/forge/command.rs:556-571
+  # read from: crates/takt/src/forge/command.rs:780-829
   - name: takt.work.ForgeCommands
     kind: struct
     fields:
@@ -2214,7 +2233,7 @@ types:
   # Why the command forge stopped, each naming the command's entry (`open`, `read`, `checks`,
   # `merge`) and never a credential: a command that exited in `refused_exit` (`refused`, with its
   # exit), one that exited otherwise or ended on a signal (`failed`), one whose output cannot be
-  # read (`unparseable`, naming the field: `id_pattern`, `output`, `state`, `head`, `branch`, `base` or
+  # read (`unparseable`, naming the field: `id_pattern`, `number`, `output`, `state`, `head`, `branch`, `base` or
   # `name`), and an action whose entry the run file lacks (`missing`).
   - name: takt.work.ForgeCommandError
     kind: union
