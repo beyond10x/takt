@@ -61,6 +61,7 @@ fn executable(path: &Path, text: &str) {
 /// prints a result naming `tests.write`.
 fn fake_claude(at: &Path, calls: &Path) {
     let script = r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo double; exit 0; fi
 prompt=''
 prev=''
 for a in "$@"; do

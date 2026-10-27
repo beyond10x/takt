@@ -371,6 +371,7 @@ fn write_opened_case(dir: &Path, case: &str) {
                 scan: None,
                 protocol_source: None,
                 input_sources: None,
+                harness_program: None,
             },
         ),
         (

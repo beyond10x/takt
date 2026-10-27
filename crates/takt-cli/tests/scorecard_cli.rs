@@ -109,6 +109,7 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 scan: None,
                 protocol_source: None,
                 input_sources: None,
+                harness_program: None,
             },
         ),
         (
@@ -883,6 +884,7 @@ fn run_with_layers(repo: &Path, case: &str, layers: &[(&str, &str)], model: Opti
                 scan: None,
                 protocol_source: None,
                 input_sources: None,
+                harness_program: None,
             },
         ),
         (

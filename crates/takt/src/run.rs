@@ -10990,8 +10990,8 @@ impl<'a> Run<'a> {
         }
         // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
         // revision as the caller gave it. The harness's version and the model are read from
-        // the harness's stream at each step, so their layers are on the step lines: takt runs
-        // the harness program in a judgement step and nowhere else, never for its version.
+        // the harness's stream at each step, so their layers are on the step lines; the program's
+        // own path, hash and version are recorded beside them as `harness_program`.
         let mut layers = std::collections::BTreeMap::new();
         if let Some(binary) = &self.binary {
             layers.insert("takt".to_owned(), binary.clone());
@@ -11000,6 +11000,7 @@ impl<'a> Run<'a> {
         // in the record so a reader knows what confined the evidence.
         let confinement = crate::confinement::current().name().to_owned();
         let commit_record = self.commit_plan_now().record();
+        let harness_program = self.harness.program_record()?;
         let input_sources = self.case.input_sources();
         let shown_inputs: Vec<String> = inputs
             .iter()
@@ -11037,6 +11038,7 @@ impl<'a> Run<'a> {
                 protocol_source: self.case.protocol_source(),
                 input_sources: (!input_sources.is_empty())
                     .then(|| input_sources.iter().cloned().collect()),
+                harness_program,
             },
             self.llm_digest.as_deref(),
             &commit_record,

@@ -8,6 +8,7 @@ takt's releases.
 
 ### Added
 
+- `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
 - `forge: command` with a `forge_commands` section in the `takt run --config` file: the run's forge actions (`open`, `read`, `checks`, `merge`) are the exact argument lists the file names, run without a shell, with the placeholders `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
 - `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree) in the `takt run --config` file: the `gitlab` forge calls the GitLab REST API over HTTPS itself instead of `glab api`. The token is held in memory only, replaced where an answer of the host is quoted, and given to the push through a credential helper that reads it from that one command's environment. `glab` stays the default transport.
 - The run file takes `protocol`, the protocol a store story opens on, and `protocols`, the values of that protocol's declared inputs. Each input takes the first of `--input`, the story's tag `input:<name>=<value>`, the run file and takt's built-in default; a story's tag `protocol:<name>/<major>` chooses its protocol. A value the protocol does not list is refused at its line. `case.yaml` records each value with its source.

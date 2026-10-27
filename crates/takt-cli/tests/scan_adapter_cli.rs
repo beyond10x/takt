@@ -55,7 +55,7 @@ impl World {
             let double = world.bin().join(program);
             fs::write(
                 &double,
-                format!("#!/bin/sh\ntouch '{}'\nexit 1\n", world.started().display()),
+                format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo double; exit 0; fi\ntouch '{}'\nexit 1\n", world.started().display()),
             )
             .expect("a double");
             fs::set_permissions(&double, fs::Permissions::from_mode(0o755)).expect("exec bit");

@@ -208,6 +208,7 @@ fn the_scorecard_reads_a_record_cut_inside_a_character() {
         scan: None,
         protocol_source: None,
         input_sources: None,
+        harness_program: None,
     };
     events.emit(0, &opened).expect("the run opens");
     append(events.path(), CUT);

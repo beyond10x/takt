@@ -94,6 +94,10 @@ pub enum Event {
     /// Where the protocol was chosen from (`protocol_source`) and where each input's value came
     /// from (`input_sources`, input name to `flag`, `tag`, `run-file` or `default`), as the case
     /// record holds them; absent on a line written before, and for a case that records none.
+    ///
+    /// The harness program (`harness_program`): the absolute path the sessions start it by, the
+    /// sha256 of its bytes and the first line its `--version` printed ([`crate::harness::ProgramRecord`]);
+    /// absent for a harness that starts none, a name found nowhere and on a line written before.
     Opened {
         case: String,
         protocol: String,
@@ -118,6 +122,8 @@ pub enum Event {
         protocol_source: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         input_sources: Option<BTreeMap<String, String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        harness_program: Option<crate::harness::ProgramRecord>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
