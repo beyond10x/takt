@@ -491,6 +491,9 @@ fn context<'a>(
         offered: &offer.offered,
         approvals: &offer.approvals,
         choices: &offer.choices,
+        // A replay gives the recorded harness its prompt, which shows no grant, and the offer a
+        // run records names none: a replayed step is given none.
+        granted: &[],
         decision: &start.decision,
         protocol: &start.protocol,
         step: usize::try_from(start.step).unwrap_or(usize::MAX),
