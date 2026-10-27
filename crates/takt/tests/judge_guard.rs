@@ -1200,6 +1200,107 @@ fn a_forge_that_cannot_report_the_target_tip_merges_nothing() {
     assert!(summary.contains("tip"), "{summary}");
 }
 
+/// The runner of a command forge over the scratch repository: `read` answers the pull request
+/// as open until `merge` ran, then as merged; `git ls-remote` answers `tip`; every line is kept.
+struct Scripted {
+    calls: Rc<RefCell<Vec<Vec<String>>>>,
+    tip: String,
+    head: String,
+    branch: String,
+}
+
+impl takt::forge::Runner for Scripted {
+    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<takt::forge::Exit> {
+        let merged = self.calls.borrow().iter().any(|call| call[1] == "merge");
+        self.calls.borrow_mut().push(argv.to_vec());
+        let stdout = match (argv[0].as_str(), argv[1].as_str()) {
+            ("tool", "read") => format!(
+                r#"{{"state": "{}", "head": "{}", "branch": "{}", "base": "main"}}"#,
+                if merged { "merged" } else { "open" },
+                self.head,
+                self.branch
+            ),
+            ("git", _) => format!("{}\trefs/heads/main\n", self.tip),
+            _ => String::new(),
+        };
+        Ok(takt::forge::Exit {
+            code: Some(0),
+            stdout,
+            stderr: String::new(),
+        })
+    }
+
+    fn run_env(
+        &self,
+        tree: &Path,
+        argv: &[String],
+        _: &[(&str, &str)],
+    ) -> anyhow::Result<takt::forge::Exit> {
+        self.run(tree, argv)
+    }
+}
+
+/// story:the-command-forge-merges-through-its-merge-entry: a granted case on the command forge
+/// reads the merge target's tip through git, runs the run file's `merge` entry exactly once, at
+/// the head, and records the merge.
+#[test]
+fn a_command_forge_case_runs_its_merge_entry_once_and_records_the_merge() {
+    let (_scratch, tree) = repository("command-forge", None);
+    let (revision, _) = at_the_gate(&tree, "command-forge", &[&[("docs/guide.md", "more\n")]]);
+    grant(&tree, "command-forge", "repository.merge", "human:owner").expect("granted");
+    git(
+        &tree,
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://forge.example/group/project.git",
+        ],
+    );
+    let argv = |words: &[&str]| Some(words.iter().map(|word| (*word).to_owned()).collect());
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let forge = takt::forge::command::CommandForge::for_tree(
+        &tree,
+        takt::forge::command::ForgeCommands {
+            open: argv(&["tool", "open", "{branch}"]),
+            read: argv(&["tool", "read", "{number}"]),
+            checks: argv(&["tool", "checks", "{number}", "{head}"]),
+            merge: argv(&["tool", "merge", "{number}", "{head}"]),
+            ..Default::default()
+        },
+        &["pr.open", "ci.read", "repository.merge"].map(str::to_owned),
+        _scratch.join("state"),
+        takt::scan::Scan::None {
+            declared_in: _scratch.join("run.yaml"),
+        },
+        Box::new(Scripted {
+            calls: calls.clone(),
+            tip: git(&tree, &["rev-parse", "refs/heads/main"]),
+            head: revision.clone(),
+            branch: "takt/command-forge".to_owned(),
+        }),
+    )
+    .expect("a forge");
+    let observation = PrMerged::new(Rc::new(forge))
+        .observe(&tree, &revision, 20)
+        .expect("repository.merge observes");
+    assert_eq!(observation.records.len(), 1, "{}", observation.summary);
+    assert_eq!(observation.records[0].result.as_deref(), Some("merged"));
+    let calls = calls.borrow();
+    let merges: Vec<&Vec<String>> = calls.iter().filter(|call| call[1] == "merge").collect();
+    let expected: Vec<String> = ["tool", "merge", "1", &revision]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(merges, [&expected], "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .any(|call| call.iter().any(|word| word == "ls-remote")),
+        "the tip was read through git: {calls:?}"
+    );
+}
+
 /// A delegation of `JUDGE_SURFACE` to `agent:developer`, as one more entry of a record.
 const DEVELOPER_ENTRY: &str = "  - owner: human:owner\n    role: agent:developer\n    capability: repository.merge.judge_surface\n    given_at: 2026-10-19T08:00:00Z\n";
 

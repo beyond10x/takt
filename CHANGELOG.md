@@ -17,6 +17,12 @@ takt's releases.
 - **Breaking:** takt ships one defaults document: a store story opens on `story.delivery/2` with `tests_first: required` and `gate_on: after_handover`; an `--intent` keeps `software.change/1`.
 - The `protocol-defaults` reference page is generated from that document and a test fails on drift; a case input nobody sets still refuses the case at open, naming it and its values.
 
+### Fixed
+
+- The command forge reads the merge target's tip through git (`ls-remote`, then a fetch into no ref), so `repository.merge` reaches the run file's `merge` entry instead of stopping unknown.
+- Without `id_pattern`, the command forge takes a request number only from a `merge_requests`, `pull` or `pulls` path segment; a URL naming no request gives none and `pr.open` refuses.
+- The command forge reads a request number back through `read` before `pr.open` records it; a request `read` does not confirm as open for the case's branch is refused.
+
 ## [0.15.1] - 2026-10-27
 
 0.15.0 with its macOS test jobs passing, and the first release of that code with binaries: the 0.15.0
