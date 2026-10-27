@@ -2526,7 +2526,8 @@ pub fn outside_import_dirs(runs: &[String], tree: &Path, modules: &Modules) -> V
     dirs.into_iter().filter(|dir| !in_tree(tree, dir)).collect()
 }
 
-/// The file a case keeps its module names in ([`Modules`]), under its directory.
+/// The file a case keeps its module names in when a Python answered at open ([`Modules`]), under
+/// its directory.
 pub const MODULES_FILE: &str = "python-modules.json";
 
 /// What a Python asked at case open prints ([`Modules::ask`]): its path and version (`V`),
@@ -2587,8 +2588,9 @@ for entry in sys.path + sites:
 "#;
 
 /// The top-level module names no step may put in a directory Python imports from: asked at case
-/// open of the Python the test command runs, and kept with the case ([`MODULES_FILE`]); the
-/// built-in lists ([`STDLIB_MODULES`], [`RUNNER_PACKAGES`]) when no Python answered.
+/// open of the Python the test command runs, and kept with the case ([`MODULES_FILE`]) only when
+/// a Python answered or could not be established; the built-in lists ([`STDLIB_MODULES`],
+/// [`RUNNER_PACKAGES`]) when none answered, and then the case keeps no file.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Modules {
     /// Where the names came from: each Python asked, with its version, or the built-in lists.
@@ -2917,17 +2919,32 @@ impl Modules {
         })
     }
 
-    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); asked of the Python the test
-    /// command `runs` in `tree` and kept there when it keeps none.
+    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); else asked of the Python the test
+    /// command `runs` in `tree`, and kept there only when the answer is not the built-in lists
+    /// ([`Modules::default`]): when a Python answered, or one could not be established (it fails
+    /// closed). Otherwise no file is written, and [`Modules::read`] reads the built-in lists.
     pub fn of_case(case_dir: &Path, runs: &[String], tree: &Path) -> Result<Self> {
         let file = case_dir.join(MODULES_FILE);
         if file.is_file() {
             return Ok(Self::read(case_dir));
         }
         let modules = Self::ask(runs, tree);
-        std::fs::write(&file, serde_json::to_vec_pretty(&modules)?)
-            .with_context(|| format!("write {}", file.display()))?;
+        if modules != Self::default() {
+            std::fs::write(&file, serde_json::to_vec_pretty(&modules)?)
+                .with_context(|| format!("write {}", file.display()))?;
+        }
         Ok(modules)
+    }
+
+    /// The names a resumed case guards: the ones it keeps ([`MODULES_FILE`]), else asked again
+    /// and kept by no one, so the file exists only as the case opened with it and a replay of
+    /// any step rebuilds the case as that step found it.
+    #[must_use]
+    pub fn at_resume(case_dir: &Path, runs: &[String], tree: &Path) -> Self {
+        if case_dir.join(MODULES_FILE).is_file() {
+            return Self::read(case_dir);
+        }
+        Self::ask(runs, tree)
     }
 
     /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); the built-in lists when it
@@ -8799,8 +8816,8 @@ pub struct Run<'a> {
     /// The directories outside the tree the test command prepends to `PATH` and what its Python
     /// imports from there, which [`Outside`] snapshots beside what cargo and rustup read.
     outside_dirs: OutsideDirs,
-    /// The module names no step may put in an import directory, kept with the case
-    /// ([`Modules::of_case`]).
+    /// The module names no step may put in an import directory, kept with the case when a Python
+    /// answered ([`Modules::of_case`]).
     modules: Modules,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
@@ -8923,8 +8940,8 @@ impl<'a> Run<'a> {
             case.discard()?;
             return Err(error);
         }
-        // The module names the test command's Python imports from outside the tree, asked once
-        // and kept with the case.
+        // The module names the test command's Python imports from outside the tree, asked once;
+        // kept with the case when a Python answered, else the built-in lists stand in.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
         let modules = match Modules::of_case(&case.dir, &runs, tree) {
             Ok(modules) => modules,
@@ -9205,9 +9222,10 @@ impl<'a> Run<'a> {
         options.inputs = case.inputs();
         options.case_id = Some(id.to_owned());
         options.protocol = case.protocol.id.clone();
-        // A case opened before it kept its module names is asked now and keeps them from here.
+        // A case with no module file (none kept at open: no Python answered, or the case predates
+        // the file) is asked again for this run, and nothing is written.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
-        let modules = Modules::of_case(&case.dir, &runs, tree)?;
+        let modules = Modules::at_resume(&case.dir, &runs, tree);
         let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
         // The identity the case was opened with, whatever the repository configures by now.
         let committer = case.committer()?;
@@ -10017,7 +10035,8 @@ impl<'a> Run<'a> {
     }
 
     /// The latest `test_result` pass record a validator of the case wrote that is about the
-    /// current revision of its subject: its path in the repository and its own `observed_at`.
+    /// current revision of its subject: the reference the store records for it (its path, sha256
+    /// and fields, [`crate::frontier::test_result_reference`]) and its own `observed_at`.
     /// A record counts only when an `evidence` line of the case's record, which the kernel
     /// writes and a step may not, names it under the case's `evidence/`: a record put there by
     /// any other hand is never one the run observed. `None` when there is none.
@@ -10038,20 +10057,24 @@ impl<'a> Run<'a> {
                 continue;
             }
             let full = self.tree.join(relative);
-            let text = std::fs::read_to_string(&full)
+            let bytes = std::fs::read(&full)
                 .with_context(|| format!("read the record {}", full.display()))?;
-            let record: serde_json::Value = serde_json::from_str(&text)
+            let record: serde_json::Value = serde_json::from_slice(&bytes)
                 .with_context(|| format!("read the record {}", full.display()))?;
             let current = record["subject"]
                 .as_str()
                 .and_then(|subject| self.case.revision(subject));
             if record["kind"] == TEST_RESULT
-                && record["result"] == "pass"
-                && current.is_some()
-                && record["subject_revision"].as_str() == current.as_deref()
+                && let Some(result) = record["result"].as_str().filter(|result| *result == "pass")
+                && let Some(revision) = record["subject_revision"].as_str()
+                && current.as_deref() == Some(revision)
+                && let Some(producer) = record["producer"].as_str()
                 && let Some(at) = record["observed_at"].as_str()
             {
-                return Ok(Some((path.to_owned(), at.to_owned())));
+                let reference = crate::frontier::test_result_reference(
+                    path, &bytes, result, revision, producer,
+                );
+                return Ok(Some((reference, at.to_owned())));
             }
         }
         Ok(None)

@@ -44,7 +44,9 @@ pub const NOT_REBUILT: [&str; 4] = ["authority.yaml", "artifacts/", "riders/", "
 
 /// The files of a case directory a replay copies as they are now: written when the case opened
 /// and changed by no step (`branch.yaml` gains the push and the pull request once they are
-/// made, which a replay of an earlier step sees as they are now).
+/// made, which a replay of an earlier step sees as they are now). The module names are among
+/// them only when a Python answered at open; a file not there is not copied, and the replay's
+/// tree reads the built-in lists.
 const OPENING_FILES: [&str; 9] = [
     "intent.md",
     "protocol.yaml",

@@ -24,6 +24,9 @@ takt's releases.
 - `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
 - `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
 - `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
+- A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
+- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
+- The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 
 ### Fixed
 
