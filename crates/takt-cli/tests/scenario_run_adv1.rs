@@ -197,6 +197,7 @@ exit 2
         bin,
         "claude",
         r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 echo "the work" >> work.txt
 printf '{"result":"{\\"action\\": \\"implementation.edit\\", \\"summary\\": \\"the double\\"}","usage":{"input_tokens":1}}'
 "#,
