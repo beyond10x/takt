@@ -922,7 +922,7 @@ pub fn story_status_at(tree: &Path, revision: &str, story: &str) -> Result<Optio
 /// The front matter of `.engineering/planning/<kind>/<name>.md` for `story` in the commit
 /// `revision`, read as the store reads it ([`front_matter`]); `None` when the commit holds no
 /// such file or its front matter does not read.
-fn story_front_at(
+pub(crate) fn story_front_at(
     tree: &Path,
     revision: &str,
     story: &str,

@@ -274,6 +274,10 @@ fn every_commit_of_a_delivery_carries_the_configured_identity_over_the_operators
 
     // The tests, then one judgement step: the edit, committed by the run.
     let mut run = Run::resume(&repo, options(2), &id, &Editor, &validators).expect("resumes");
+    run.commit_settings(takt::commit_style::Settings {
+        style: takt::commit_style::Style::Action,
+        ..takt::commit_style::Settings::default()
+    });
     let mut out = Vec::new();
     let stop = run.run(&mut out).expect("the run stops");
     let text = String::from_utf8_lossy(&out).into_owned();

@@ -315,14 +315,6 @@ pub const ACCEPTED: &str = "accepted";
 /// record attests the harness's choice, not an observation's outcome.
 pub const CHOICE_PRODUCER: &str = "takt.choice";
 
-/// `text` on one line: every run of white space, line breaks among them, as one space. A
-/// judgement step's commit message is `<action>: <summary>`, the summary the harness reported;
-/// a line of its own there could read as one of takt's (`takt: take`, `takt: approve`) to what
-/// reads commit messages.
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 /// The first eight characters of a revision, as the loop prints one.
 fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
@@ -8898,6 +8890,10 @@ pub struct Run<'a> {
     /// What the change so far and each proposal pass: the scan adapter's
     /// ([`Scan::change_scan`]), unless [`Run::scan_change_with`] gives another.
     change_scan: Option<ChangeScan>,
+    /// What the run is configured to write as a step commit's message ([`Run::commit_settings`]).
+    commit_settings: crate::commit_style::Settings,
+    /// The commit style in effect, decided when the run starts ([`Run::commit_plan_now`]).
+    commit_plan: Option<crate::commit_style::Plan>,
 }
 
 impl<'a> Run<'a> {
@@ -9053,6 +9049,8 @@ impl<'a> Run<'a> {
             committer,
             scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
+            commit_settings: crate::commit_style::Settings::default(),
+            commit_plan: None,
         })
     }
 
@@ -9350,6 +9348,8 @@ impl<'a> Run<'a> {
             committer,
             scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
+            commit_settings: crate::commit_style::Settings::default(),
+            commit_plan: None,
         })
     }
 
@@ -9720,6 +9720,42 @@ impl<'a> Run<'a> {
     /// without this call.
     pub fn continue_past_red_base(&mut self) {
         self.stops_red_base = false;
+    }
+
+    /// Writes each step commit's message as `settings` say ([`crate::commit_style`]); without
+    /// this call, `semantic` with the trailer `Refs`. The repository's own commit rule, read at
+    /// the case's base, wins over the style given here.
+    pub fn commit_settings(&mut self, settings: crate::commit_style::Settings) {
+        self.commit_settings = settings;
+        self.commit_plan = None;
+    }
+
+    /// The commit style in effect for this run, decided on first use from the settings, the
+    /// instruction files at the case's base and the story's tags there, and kept.
+    fn commit_plan_now(&mut self) -> crate::commit_style::Plan {
+        if let Some(plan) = &self.commit_plan {
+            return plan.clone();
+        }
+        let base = crate::case::Branch::read(&self.case.dir)
+            .ok()
+            .and_then(|branch| branch.base_commit);
+        let rule = base.as_deref().and_then(|base| {
+            crate::commit_style::rule_in(&self.tree, base, &self.harness.instruction_paths())
+        });
+        let bug = self.case.story().ok().flatten().is_some_and(|story| {
+            crate::case::story_front_at(&self.tree, base.as_deref().unwrap_or("HEAD"), &story)
+                .ok()
+                .flatten()
+                .is_some_and(|front| {
+                    front["tags"].as_sequence().is_some_and(|tags| {
+                        tags.iter()
+                            .any(|tag| tag.as_str() == Some(crate::commit_style::BUG_TAG))
+                    })
+                })
+        });
+        let plan = crate::commit_style::Plan::new(&self.commit_settings, rule, bug);
+        self.commit_plan = Some(plan.clone());
+        plan
     }
 
     /// Asks for the records profile the case keeps its decisions under: `default` keeps the
@@ -10963,7 +10999,8 @@ impl<'a> Run<'a> {
         // The adapter every child of this run starts through, named on the first line and
         // in the record so a reader knows what confined the evidence.
         let confinement = crate::confinement::current().name().to_owned();
-        events.emit_opened(
+        let commit_record = self.commit_plan_now().record();
+        events.emit_opened_with(
             self.steps,
             &Event::Opened {
                 case: self.case.id.clone(),
@@ -10986,6 +11023,7 @@ impl<'a> Run<'a> {
                 scan: Some(self.scan.name().to_owned()),
             },
             self.llm_digest.as_deref(),
+            &commit_record,
         )?;
         writeln!(
             out,
@@ -11461,6 +11499,7 @@ impl<'a> Run<'a> {
         let failed = failed_checks(&events.read()?);
         // The repository's instruction files are read at the commit the case forked from.
         let base = crate::case::Branch::read(&self.case.dir)?.base_commit;
+        let ask = self.commit_plan_now().ask();
         let mut context = StepContext {
             tree: &self.tree,
             intent: &self.options.intent,
@@ -11476,6 +11515,7 @@ impl<'a> Run<'a> {
             failed: &failed,
             scope_revision: None,
             base_revision: base.as_deref(),
+            commit: ask.as_ref(),
         };
         // The step is judged by what it did to the tree, against a checkpoint taken just
         // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -12444,30 +12484,47 @@ impl<'a> Run<'a> {
             writeln!(out, "  effect: no file changed")?;
             return Ok((false, None));
         }
+        // The message is the harness's `commit` when it passes its check, else the fallback,
+        // said in the record before the step's effect; the trailer is takt's, from the case's
+        // story, never from the reply.
+        let plan = self.commit_plan_now();
+        let reply = self.harness.take_commit();
+        let story = self.case.story()?;
+        let title = match &self.unit {
+            Unit::Story(story) => story.title.clone(),
+            Unit::Intent(intent) => intent.lines().next().unwrap_or_default().to_owned(),
+        };
+        let message = crate::commit_style::message(
+            &plan,
+            &report.action,
+            &report.summary,
+            &title,
+            reply.as_ref(),
+            story.as_deref(),
+        );
         // A commit that fails (a hook of the repository's own refused it) leaves nothing
         // of the step behind either.
-        let head = match crate::git::commit_paths(
-            &self.tree,
-            &self.committer,
-            changed,
-            &format!("{}: {}", report.action, one_line(&report.summary)),
-        ) {
-            Ok(head) => head,
-            Err(error) => {
-                let moved = undo_step(&self.tree, &proposed.held.kept())
-                    .map(|undone| undone.aside.named())?;
-                self.record_proposed(events, proposed)?;
-                return Err(error.context(format!(
+        let head =
+            match crate::git::commit_paths(&self.tree, &self.committer, changed, &message.text) {
+                Ok(head) => head,
+                Err(error) => {
+                    let moved = undo_step(&self.tree, &proposed.held.kept())
+                        .map(|undone| undone.aside.named())?;
+                    self.record_proposed(events, proposed)?;
+                    return Err(error.context(format!(
                     "step {}: the commit of {}'s change failed; the change was discarded{moved}",
                     self.steps, report.action
                 )));
-            }
-        };
+                }
+            };
         // The step is on record before anything that can end the run, so the tokens it spent
         // are kept whatever follows: a case that declares no implementation artifact ends
         // the run here.
         self.record_proposed(events, proposed)?;
         self.case.set_revision("implementation", &head)?;
+        if let Some(reason) = message.fallback {
+            events.emit(self.steps, &Event::CommitFallback { reason })?;
+        }
         events.emit(
             self.steps,
             &Event::Effect {

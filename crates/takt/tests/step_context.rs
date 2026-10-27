@@ -111,6 +111,7 @@ fn step(
         failed: &[],
         scope_revision: None,
         base_revision: base,
+        commit: None,
     })
 }
 

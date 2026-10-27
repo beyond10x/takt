@@ -444,6 +444,7 @@ pub fn rebuilt_prompt_line(
     let change = change_of(start, &start.case_dir, repo, &start.revision)?;
     let failed = failed_of(start);
     // The scope files as the revision the step started at holds them, in the repository.
+    let ask = commit_ask(start);
     let context = context(
         start,
         repo,
@@ -452,6 +453,7 @@ pub fn rebuilt_prompt_line(
         &failed,
         Some(&start.revision),
         None,
+        ask.as_ref(),
     );
     let _ = probe.step(&context);
     let transcript = probe
@@ -487,6 +489,7 @@ fn change_of(start: &Start, case_dir: &Path, tree: &Path, revision: &str) -> Res
 /// The context the step `start` describes was given, in `tree`, with `offer` and the change so
 /// far ([`change_of`]), its scope files read at `scope_revision` when one is given, else in
 /// `tree` as it stands ([`crate::harness::scope_files`]).
+#[allow(clippy::too_many_arguments)]
 fn context<'a>(
     start: &'a Start,
     tree: &'a Path,
@@ -495,10 +498,12 @@ fn context<'a>(
     failed: &'a [crate::validator::FailedCheck],
     scope_revision: Option<&'a str>,
     base_revision: Option<&'a str>,
+    commit: Option<&'a crate::commit_style::Ask>,
 ) -> StepContext<'a> {
     StepContext {
         scope_revision,
         base_revision,
+        commit,
         tree,
         intent: &start.intent,
         offered: &offer.offered,
@@ -514,6 +519,18 @@ fn context<'a>(
         change,
         failed,
     }
+}
+
+/// What the step `start` describes was asked of the reply's `commit`: the `commit` member of the
+/// last `opened` line of its record ([`crate::commit_style::Ask::of_record`]); none for a record
+/// written before the member, whose prompt asked for none.
+fn commit_ask(start: &Start) -> Option<crate::commit_style::Ask> {
+    start
+        .record
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+        .rfind(|line| line["event"] == "opened")
+        .and_then(|line| crate::commit_style::Ask::of_record(&line["commit"]))
 }
 
 /// What the step `start` describes was shown of the checks that failed before it, read from its
@@ -734,6 +751,7 @@ pub fn replay_once(
     let base = crate::case::Branch::read(&start.case_dir)
         .ok()
         .and_then(|branch| branch.base_commit);
+    let ask = commit_ask(start);
     let stepped = harness.step(&context(
         start,
         &tree,
@@ -742,6 +760,7 @@ pub fn replay_once(
         &failed,
         None,
         base.as_deref(),
+        ask.as_ref(),
     ));
     let transcript = harness.last_transcript();
     if let Some(bytes) = &transcript {

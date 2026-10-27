@@ -42,6 +42,7 @@ for `_`; `scan` has no flag.
 | `state_dir` | path: the state directory, as `--state-dir`: the run's transcripts go to `<state_dir>/transcripts` and what a discarded step sets aside to `<state_dir>/set-aside` ([The state directory](#the-state-directory)); a relative path is read beside the configuration file |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
+| `commit` | mapping of `style` (`semantic`, the default, `repository` or `action`), `trailer` (default `Refs`; empty for none) and `types` (an action to its commit type), as `--commit-style`, `--commit-trailer` and `--commit-types`: how a step commit's message is written ([Commit messages](#commit-messages)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
 
@@ -361,6 +362,37 @@ every decision kept. `takt replay` refuses a step whose decision a `default` run
 `--records trial`: replay a step of a run made with it. The [case files](./case-files.md) page
 lists the file.
 
+## Commit messages
+
+A step's commit takes the message the run's style asks for. Flags win over the `commit` section of
+the file, and the file over the defaults.
+
+| style | the message |
+|---|---|
+| `semantic` | the default: the harness's reply carries `commit: {subject, body}`, a subject `<type>: <imperative subject>` of at most 72 characters and a body of 3 or 4 lines saying the intent |
+| `repository` | the harness writes the message as the repository's instruction files require; its subject is one line of at most 72 characters |
+| `action` | `<action>: <summary>`, as takt wrote it before styles |
+
+The repository wins. When a line of an instruction file read at the case's base (`AGENTS.md` and
+`CLAUDE.md` unless configured) matches `(?i)commit (message|style|convention)`, the style in effect
+is `repository` whatever `style` says, so `style` chooses between `semantic` and `action` only for a
+repository whose instructions say nothing. The case's `opened` event records it as `commit`: the
+style in effect (`style`), the one configured (`configured`), the `trailer`, the `types` and, when
+a line made the repository's style the effective one, its `rule` with the file and the line number.
+
+The type of an action defaults to `test` for `tests.write` and to `feat` for `implementation.edit`,
+which is `fix` for a story tagged `bug`; any other action is `chore`, and `types` overrides each.
+
+takt checks the shape of the reply under every style but `action`: a `commit` with a subject and a
+body, the subject on one line of at most 72 characters and, under `semantic`, opening with the
+action's type, the body 3 or 4 lines with none blank and none opening with a word and a colon (the
+shape of a trailer, or of one of takt's own lines). A reply that fails the check, or has no
+`commit`, is not used: the message is `<type>: <story title>` (the intent's first line for a case
+opened on an intent) with the summary as its body, and a `commit.fallback` event says why.
+
+takt writes the trailer itself, after a blank line, as `<trailer>: <story id>` from the case's
+story; it never reads one from the reply, and a case opened on an intent has none.
+
 ## Every takt run flag
 
 One line each, from `takt run --help` at 0.14.0. The generated [CLI reference](./cli.md) has the
@@ -451,6 +483,14 @@ which is `--model`) need `--harness harness`, and an `llm` section may not sit b
 | flag | meaning |
 |---|---|
 | `--records <default\|trial>` | the decisions the case keeps: `default` the run's latest alone, `trial` every one ([Records profiles](#records-profiles)); default `default` |
+
+### Commit messages
+
+| flag | meaning |
+|---|---|
+| `--commit-style <STYLE>` | `semantic` (default), `repository` or `action` ([Commit messages](#commit-messages)); the repository's own rule wins over it |
+| `--commit-trailer <KEY>` | the trailer takt writes from the case's story, `Refs` by default; an empty key writes none |
+| `--commit-types <ACTION=TYPE>` | the commit type of an action, repeatable or comma-separated |
 
 ### Confinement and identity
 

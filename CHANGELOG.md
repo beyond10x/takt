@@ -28,6 +28,9 @@ takt's releases.
 - `scan: none` with `B10X_GATES_POLICY` set is refused before the case opens: a run has one scan adapter.
 - `takt scenario run --config` refuses a file that declares `scan: none`, naming the file, before anything is cut or opened.
 - `--forge gitlab` scans what it publishes with the run's scan adapter, and under `scan: none` pushes unscanned; `--forge bot` always scans with `b10x-gates`.
+- A step commit is a semantic message by default: a `<type>: <subject>` of at most 72 characters and a 3-4 line body from the harness, `Refs: <story id>` written by takt, never from the reply.
+- `--commit-style semantic|repository|action`, `--commit-trailer`, `--commit-types` and a `commit` run-file section; a commit rule in the repository's instruction files wins over the style.
+- A reply with a missing or ill-shaped `commit` falls back to `<type>: <story title>` and a `commit.fallback` event; `opened` records the style in effect as `commit`.
 - `b10x-loom-sdk` moves from loom 0.43.0 to 0.45.0 with metaharness 0.20.0: a Codex step on a codex off metaharness's pin proposes its change, H9 advisory (story:codex-off-pin-proposes).
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
 - `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).

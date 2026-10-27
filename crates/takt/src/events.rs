@@ -168,6 +168,12 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         revision: Option<String>,
     },
+    /// A step commit's message is not the harness's: its reply held no `commit`, or one that
+    /// failed the check of its shape ([`crate::commit_style::message`]), so the message is the
+    /// fallback. The reason names the check, never the reply's text. Written before the step's
+    /// `effect` line.
+    #[serde(rename = "commit.fallback")]
+    CommitFallback { reason: String },
     /// An evidence record a validator wrote under the case: its id, kind and result, and its
     /// path relative to the tree; and, when the observation failed checks, what each printed
     /// that names what failed ([`crate::validator::FailedCheck`]), absent when none did.
@@ -235,6 +241,8 @@ struct Line<'a> {
     event: &'a Event,
     #[serde(skip_serializing_if = "Option::is_none")]
     llm_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<&'a serde_json::Value>,
 }
 
 /// The run record of one case.
@@ -265,19 +273,37 @@ impl Events {
     /// the reader knows the torn one was skipped. A symbolic link at the path is refused, never
     /// written through ([`Events::open`]).
     pub fn emit(&self, step: u64, event: &Event) -> Result<()> {
-        self.append(step, event, None)
+        self.append(step, event, None, None)
     }
 
     /// Appends the `opened` line of a run: `event` as [`Events::emit`] appends it, with the digest
     /// of the `llm.routes/1` document the run ran under as its `llm_digest` member; no member when
     /// the run had no such document.
     pub fn emit_opened(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
-        self.append(step, event, llm_digest)
+        self.append(step, event, llm_digest, None)
+    }
+
+    /// [`Events::emit_opened`], the line also carrying `commit`, the commit style in effect
+    /// ([`crate::commit_style::Plan::record`]) as its `commit` member.
+    pub fn emit_opened_with(
+        &self,
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: &serde_json::Value,
+    ) -> Result<()> {
+        self.append(step, event, llm_digest, Some(commit))
     }
 
     /// The write [`Events::emit`] and [`Events::emit_opened`] make: `event` at `step`, after the
     /// torn line ends when there is one.
-    fn append(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
+    fn append(
+        &self,
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: Option<&serde_json::Value>,
+    ) -> Result<()> {
         let mut file = self
             .open(
                 std::fs::OpenOptions::new()
@@ -299,9 +325,10 @@ impl Events {
                     reason: "the line was cut short, without its end, and is skipped".to_owned(),
                 },
                 None,
+                None,
             )?);
         }
-        text.push_str(&Self::line(step, event, llm_digest)?);
+        text.push_str(&Self::line(step, event, llm_digest, commit)?);
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", self.path.display()))
     }
@@ -325,12 +352,18 @@ impl Events {
     }
 
     /// `event` at `step`, the instant now, as one line with its end.
-    fn line(step: u64, event: &Event, llm_digest: Option<&str>) -> Result<String> {
+    fn line(
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: Option<&serde_json::Value>,
+    ) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
             at: instant(),
             step,
             event,
             llm_digest,
+            commit,
         })
         .context("write an event")?;
         line.push('\n');
