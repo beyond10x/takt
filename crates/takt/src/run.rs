@@ -10174,6 +10174,7 @@ impl<'a> Run<'a> {
                 Err(why) => writeln!(out, "candidate: none: {why:#}")?,
             }
         }
+        self.close_obligations(events, stop, out)?;
         events.emit(
             self.steps,
             &Event::Stop {
@@ -10183,6 +10184,34 @@ impl<'a> Run<'a> {
                 completed: Some(matches!(stop, Stop::Completed(_))),
             },
         )
+    }
+
+    /// The repository's obligations at the stop ([`crate::obligations`]): the table recorded as
+    /// the run's last, and a line naming the ones not met. Nothing for a run with no gates
+    /// document; a table that cannot be read is left out, and the stop stays the one reached.
+    fn close_obligations(&self, events: &Events, stop: &Stop, out: &mut dyn Write) -> Result<()> {
+        let Ok(record) = events.read() else {
+            return Ok(());
+        };
+        let Ok(obligations) = crate::obligations::of_run(self, &record) else {
+            return Ok(());
+        };
+        if obligations.is_empty() {
+            return Ok(());
+        }
+        if let Ok(revision) = crate::git::head(&self.tree) {
+            events.emit(
+                self.steps,
+                &Event::Obligations {
+                    revision,
+                    obligations: obligations.clone(),
+                },
+            )?;
+        }
+        if let Some(line) = crate::obligations::summary(&obligations, stop.hands_over()) {
+            writeln!(out, "obligations: {line}")?;
+        }
+        Ok(())
     }
 
     /// Records the case's story in `store`, before the step the grant authorises or once the
@@ -10841,6 +10870,7 @@ impl<'a> Run<'a> {
             .observe_within(&self.tree, &revision, seq, self.deadline())
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
         let failed = validator.take_failed();
+        let gates = validator.take_obligations();
         let returned = Instant::now();
         // The way to the case's directory is read before anything is written under it: a test
         // command that put a link on it (`.takt`, a cases root) is refused and undone below.
@@ -11068,6 +11098,15 @@ impl<'a> Run<'a> {
                 "  evidence: {} {}",
                 record.kind,
                 record.result.as_deref().unwrap_or("-")
+            )?;
+        }
+        if let Some(obligations) = gates {
+            events.emit(
+                self.steps,
+                &Event::Obligations {
+                    revision: revision.to_string(),
+                    obligations,
+                },
             )?;
         }
         Ok(Taken::Observed {
@@ -11746,7 +11785,9 @@ impl<'a> Run<'a> {
             self.change_scan.as_ref(),
             out,
         )?;
-        let failed = failed_checks(&events.read()?);
+        let record = events.read()?;
+        let failed = failed_checks(&record);
+        let obligations = crate::obligations::of_run(self, &record).unwrap_or_default();
         // The repository's instruction files are read at the commit the case forked from.
         let base = crate::case::Branch::read(&self.case.dir)?.base_commit;
         let ask = self.commit_plan_now().ask();
@@ -11766,6 +11807,7 @@ impl<'a> Run<'a> {
             scope_revision: None,
             base_revision: base.as_deref(),
             commit: ask.as_ref(),
+            obligations: &obligations,
         };
         // The step is judged by what it did to the tree, against a checkpoint taken just
         // before it: `HEAD`, the index, every path already uncommitted (a validator's run

@@ -128,6 +128,17 @@ pub trait Validator {
     fn take_failed(&self) -> Vec<FailedCheck> {
         Vec::new()
     }
+    /// The repository's obligations the last observation judged ([`crate::obligations`]): each
+    /// gate with its status at the revision observed, taken once; the run records them as an
+    /// `obligations` line. None by default, and for an observation that judged no gate.
+    fn take_obligations(&self) -> Option<Vec<crate::obligations::Obligation>> {
+        None
+    }
+    /// The gates document this validator evaluates, relative to the tree: its gates are the
+    /// repository's obligations, read from the case's base revision. None by default.
+    fn gates_document(&self) -> Option<&Path> {
+        None
+    }
 }
 
 /// The most bytes [`failing_lines`] keeps of one failed check's output, 4 KiB, each kept line
@@ -1465,6 +1476,8 @@ pub struct GateRun {
     pub project: Option<PathBuf>,
     /// The failed gates of the last observation ([`Validator::take_failed`]).
     failed: RefCell<Vec<FailedCheck>>,
+    /// The obligations of the last observation ([`Validator::take_obligations`]).
+    obligations: RefCell<Option<Vec<crate::obligations::Obligation>>>,
 }
 
 /// The directory under the case's that holds the base revision's gate inputs while the gate
@@ -1496,6 +1509,38 @@ fn base_revision(tree: &Path, case_dir: &Path) -> Result<Option<(String, String)
         format!("{shown} at {}, pinned at open", short(&at)),
         at,
     )))
+}
+
+/// What the gate runner is told of the change: its `base` the case's pinned base commit `at`, its
+/// `subject` the `revision` observed, and the story the case works (`story_id`) with the tags the
+/// planning store gives it at the base; a case with no story, or one whose story file the base
+/// does not hold, tells the runner no tags, so a gate that asks for one is unknown, not false.
+fn change_of(
+    tree: &Path,
+    case_dir: &Path,
+    at: &str,
+    revision: &str,
+) -> Result<canon_engineering_assertions::Change> {
+    let story = crate::case::story_of(case_dir)?;
+    let tags = match &story {
+        Some(story) => crate::case::story_front_at(tree, at, story)?.map(|front| {
+            front["tags"]
+                .as_sequence()
+                .map(|tags| {
+                    tags.iter()
+                        .filter_map(|tag| tag.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default()
+        }),
+        None => None,
+    };
+    Ok(canon_engineering_assertions::Change {
+        base: Some(at.to_owned()),
+        subject: Some(revision.to_owned()),
+        story_id: story,
+        story_tags: tags,
+    })
 }
 
 /// The files a project file names that decide what a gate runs: the executables of the
@@ -2142,7 +2187,7 @@ fn object_at(tree: &Path, at: &str, path: &str) -> Result<Option<String>> {
 
 /// The text of `path`, relative to the tree, at the commit `at`; `None` when it has no such
 /// file.
-fn file_at(tree: &Path, at: &str, path: &Path) -> Result<Option<String>> {
+pub(crate) fn file_at(tree: &Path, at: &str, path: &Path) -> Result<Option<String>> {
     let relative = path
         .to_str()
         .filter(|path| path.split('/').all(|part| part != ".."))
@@ -2168,6 +2213,7 @@ impl GateRun {
             gates: gates.into(),
             project: None,
             failed: RefCell::new(Vec::new()),
+            obligations: RefCell::new(None),
         }
     }
 
@@ -2213,6 +2259,14 @@ impl Validator for GateRun {
 
     fn take_failed(&self) -> Vec<FailedCheck> {
         self.failed.take()
+    }
+
+    fn take_obligations(&self) -> Option<Vec<crate::obligations::Obligation>> {
+        self.obligations.take()
+    }
+
+    fn gates_document(&self) -> Option<&Path> {
+        Some(&self.gates)
     }
 }
 
@@ -2322,6 +2376,7 @@ impl GateRun {
         deadline: Option<std::time::Instant>,
     ) -> Result<Observation> {
         self.failed.take();
+        self.obligations.take();
         let dir = current(tree)?;
         let unpinned = || {
             Ok(nothing_recorded(format!(
@@ -2437,6 +2492,7 @@ impl GateRun {
             }
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        let change = change_of(tree, &dir, &at, revision)?;
         // The case directory, which the loop writes every pass, stays out of the bundle's
         // source identity: that identity is the repository tree's. The base revision's two
         // files are evaluated from there, the paths relative to the tree as the library takes
@@ -2476,11 +2532,15 @@ impl GateRun {
                 .as_ref()
                 .map(|(path, text)| copy("project", path, &home.admitting(text, tree)?))
                 .transpose()?;
-            let mut prepared = canon_engineering_assertions::prepare(
+            let mut prepared = canon_engineering_assertions::prepare_with(
                 tree,
                 &gates,
                 copied.as_deref(),
                 Some(cases),
+                &canon_engineering_assertions::Admission {
+                    change: change.clone(),
+                    ..Default::default()
+                },
             )
             .with_context(|| match &project {
                 Some((project, _)) => format!(
@@ -2596,6 +2656,18 @@ impl GateRun {
         }
         drop(home);
         *self.failed.borrow_mut() = failed;
+        let results = canon_engineering_assertions::evaluate_gates(&bundle, now, None, None)
+            .with_context(|| format!("evaluate the gates of {document}"))?;
+        let mut obligations = Vec::new();
+        for (gate, outcome) in bundle.document.gates.iter().zip(&results.gates) {
+            let result = serde_json::to_value(outcome.result)?;
+            obligations.push(crate::obligations::Obligation {
+                id: gate.id.clone(),
+                text: gate.text.split_whitespace().collect::<Vec<_>>().join(" "),
+                status: crate::obligations::status_of(result.as_str().unwrap_or_default())?,
+            });
+        }
+        *self.obligations.borrow_mut() = Some(obligations);
         // The report holds the gates' assertions in declaration order; the gate that decided
         // is the first whose assertion shares the report's truth.
         let decided = bundle

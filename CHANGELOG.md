@@ -6,6 +6,17 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
+- A run lists each gate of the repository's gates document with its status in the prompt, the last line of the run and `takt report` (`--format json`); the gate runner is told base, subject and story.
+
+### Changed
+
+- Engineering protocols 0.11.0: `takt protocols` lists `story.delivery/2`, which declares the case inputs `tests_first` and `gate_on`; `story.delivery/1` is unchanged.
+- **Breaking:** takt ships one defaults document: a store story opens on `story.delivery/2` with `tests_first: required` and `gate_on: after_handover`; an `--intent` keeps `software.change/1`.
+- The `protocol-defaults` reference page is generated from that document and a test fails on drift; a case input nobody sets still refuses the case at open, naming it and its values.
+
 ## [0.15.1] - 2026-10-27
 
 0.15.0 with its macOS test jobs passing, and the first release of that code with binaries: the 0.15.0
@@ -30,7 +41,6 @@ does not qualify it, so a trial on a GitHub repository can end with its pull req
 
 ### Added
 
-- `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
 - `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
 - `takt run` asks metaharness whether the harness binary qualifies before its first session, on open and on every resume: an unqualified binary stops `HarnessUnqualified`, exit 1, the case resumable.
 - `forge: command` with a `forge_commands` section in the `takt run --config` file: the forge actions `open`, `read`, `checks` and `merge` are the argument lists the file names, run without a shell.
@@ -73,9 +83,6 @@ does not qualify it, so a trial on a GitHub repository can end with its pull req
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
 - New cases open under `.takt/cases`, with a `.takt/.gitignore` of `*` when absent; a case already under `.engineering/cases` resumes where it is, and every guard covers both roots.
 - A new `.takt/` also gets `.takt/.worktreekeep` (`cases/`), so `worktree` 0.19.0 cleanup keeps every case and its archive holds them; an existing file is left alone.
-- Engineering protocols 0.11.0: `takt protocols` lists `story.delivery/2`, which declares the case inputs `tests_first` and `gate_on`; `story.delivery/1` is unchanged.
-- takt ships one defaults document: a store story opens on `story.delivery/2` with `tests_first: required` and `gate_on: after_handover`; an `--intent` keeps `software.change/1`.
-- The `protocol-defaults` reference page is generated from that document and a test fails on drift; a case input nobody sets still refuses the case at open, naming it and its values.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 - A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
