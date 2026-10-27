@@ -695,7 +695,11 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
                             ))),
                         );
                     }
-                    if tried >= NO_ACTION_TRIES {
+                    // The run's own stop is asked before the try limit: a try that spent the
+                    // budget stops the run on the budget, the last try included. Said once it was
+                    // asked: the step is told as tried again only when it is.
+                    let stopped = turn.host_stop();
+                    if stopped.is_none() && tried >= NO_ACTION_TRIES {
                         break (
                             started,
                             Err(error.context(format!(
@@ -703,13 +707,10 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
                             ))),
                         );
                     }
-                    // Said once the run's own stop was asked: the step is told as tried again
-                    // only when it is.
-                    let stopped = turn.host_stop();
-                    let then = if stopped.is_some() {
-                        "the run stops before another try"
-                    } else {
-                        "the step is tried again"
+                    let then = match (&stopped, tried >= NO_ACTION_TRIES) {
+                        (Some(_), true) => "the run stops",
+                        (Some(_), false) => "the run stops before another try",
+                        (None, _) => "the step is tried again",
                     };
                     if let Err(unsaid) = writeln!(
                         turn.out,
