@@ -18,6 +18,7 @@ takt's releases.
 
 ### Changed
 
+- `b10x-loom-sdk` moves from loom 0.43.0 to 0.45.0 with metaharness 0.20.0: a Codex step on a codex off metaharness's pin proposes its change, H9 advisory (story:codex-off-pin-proposes).
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
 
 ### Changed

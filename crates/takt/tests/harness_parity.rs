@@ -842,26 +842,31 @@ fn a_codex_step_without_a_token_report_charges_none() {
     }
 }
 
-/// H9 gates for Codex: a session whose codex is not the version metaharness's adapter is pinned
-/// to proposes nothing and says so, the tree as it was; on the pinned version the step's summary
-/// records the hermetic verdict, every row with its state.
+/// H9 is advisory for Codex (story:codex-off-pin-proposes): a session whose codex is not the
+/// version metaharness's adapter is pinned to proposes its change like a pinned one, and its
+/// step's summary records H9 as a `gap`; on the pinned version the summary records the hermetic
+/// verdict, every row with its state.
 #[test]
-fn a_codex_session_on_another_version_proposes_nothing() {
+fn a_codex_session_on_another_version_proposes_its_change() {
     let scratch = repository("version");
     let tree = scratch.tree();
-    let before = work(&tree);
     let script = Script {
         version: "0.143.0",
         ..Script::fixing()
     };
     let (other, _) = harness(Kind::Codex, &script);
     let (stop, text) = run(&tree, "parity-version", 2, &other);
-    let said = match &stop {
-        Err(error) => format!("{error:#}"),
-        Ok(stop) => format!("{stop:?}"),
-    };
-    assert!(said.contains("H9"), "{said}\n{text}");
-    assert_eq!(work(&tree), before, "the tree is unchanged\n{text}");
+    assert!(
+        stop.is_ok(),
+        "story:codex-off-pin-proposes: {stop:?}\n{text}"
+    );
+    let steps = harness_steps(&tree, "parity-version");
+    let summary = steps[0]["summary"].as_str().expect("a summary");
+    assert!(
+        summary.contains("H9 gap"),
+        "story:codex-off-pin-proposes: H9 gap in the summary: {summary}"
+    );
+    assert_eq!(steps[0]["version"], "0.143.0", "{:?}", steps[0]);
 
     let scratch = repository("verdict");
     let tree = scratch.tree();
@@ -1216,14 +1221,13 @@ fn the_codex_session_has_a_home_of_its_own() {
     assert!(!home.exists(), "removed with the scratch copy");
 }
 
-/// F-A2: a Codex session that H9 holds back (a codex other than the pinned one) proposes
-/// nothing, and the tokens it reported are still charged: its step line carries them, their
-/// components and the version that ran; the tree is as it was.
+/// F-A2: a Codex session on a codex other than the pinned one is not held back by H9
+/// (story:codex-off-pin-proposes), and the tokens it reported are charged: its step line
+/// carries them, their components and the version that ran.
 #[test]
-fn a_codex_session_held_back_by_h9_charges_its_tokens() {
+fn a_codex_session_off_the_pin_charges_its_tokens() {
     let scratch = repository("held");
     let tree = scratch.tree();
-    let before = work(&tree);
     let script = Script {
         version: "0.143.0",
         ..Script::fixing()
@@ -1231,14 +1235,12 @@ fn a_codex_session_held_back_by_h9_charges_its_tokens() {
     let (harness, _) = harness(Kind::Codex, &script);
     let id = "parity-held";
     let (stop, said) = run(&tree, id, 2, &harness);
-    let ended = match &stop {
-        Err(error) => format!("{error:#}"),
-        Ok(stop) => format!("{stop:?}"),
-    };
-    assert!(ended.contains("H9"), "{ended}\n{said}");
-    assert_eq!(work(&tree), before, "the tree is unchanged\n{said}");
+    assert!(
+        stop.is_ok(),
+        "story:codex-off-pin-proposes: {stop:?}\n{said}"
+    );
     let steps = harness_steps(&tree, id);
-    assert_eq!(steps.len(), 1, "the held step is recorded\n{said}");
+    assert!(!steps.is_empty(), "the step is recorded\n{said}");
     assert_eq!(steps[0]["tokens"].as_u64(), Some(120), "{:?}", steps[0]);
     assert_eq!(steps[0]["usage"]["input"], 60, "{:?}", steps[0]);
     assert_eq!(steps[0]["usage"]["cache_read"], 40, "{:?}", steps[0]);
@@ -1261,7 +1263,12 @@ fn codex_is_the_one_on_the_childs_path() {
         harness.credentials = CredentialSource::None;
         harness.timeout = std::time::Duration::from_secs(60);
         let (stop, said) = run(&tree, "parity-resolve", 2, &harness);
-        assert!(stop.is_err(), "the fake proposes nothing: {stop:?}\n{said}");
+        // H9 no longer holds an unpinned codex back (story:codex-off-pin-proposes): the fake
+        // names no action and the run stops at its iterations, or it fails.
+        assert!(
+            stop.is_err() || said.contains("the session named no action"),
+            "story:codex-off-pin-proposes: the fake proposes nothing: {stop:?}\n{said}"
+        );
         assert!(
             dir.join("ran-child-path").exists(),
             "the codex in HOME ran: {stop:?}\n{said}"
