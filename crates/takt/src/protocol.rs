@@ -357,21 +357,103 @@ pub struct Setting {
     pub source: Source,
 }
 
-/// takt's built-in defaults, `(protocol id, input, value)`: the values a case takes for a declared
-/// input nobody sets, the least demanding a change can carry.
-const BUILTIN_DEFAULTS: &[(&str, &str, &str)] = &[
-    ("software.change/1", "risk", "standard"),
-    ("software.change/1", "change_kind", "feature"),
-    ("software.change/1", "affects_security_boundary", "false"),
-];
+/// takt's one defaults document, shipped with the binary: the protocol a story and an intent open
+/// on, and the value a case takes for each declared input nobody sets. It is data; no protocol is
+/// special-cased in Rust.
+const DEFAULTS_DOCUMENT: &str = include_str!("protocol_defaults.yaml");
+
+/// The document `protocol_defaults.yaml` holds.
+#[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Defaults {
+    format: String,
+    protocol_for_story: String,
+    protocol_for_intent: String,
+    inputs: std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+}
+
+/// The shipped document, read once. It is compiled in, so one that does not read is a defect the
+/// unit tests catch, never a run's error.
+fn defaults() -> &'static Defaults {
+    static DEFAULTS: std::sync::OnceLock<Defaults> = std::sync::OnceLock::new();
+    DEFAULTS.get_or_init(|| {
+        let document: Defaults = serde_yaml_ng::from_str(DEFAULTS_DOCUMENT)
+            .expect("takt's protocol_defaults.yaml reads");
+        assert_eq!(
+            document.format, "takt-protocol-defaults/1",
+            "takt's protocol_defaults.yaml has the format it names"
+        );
+        document
+    })
+}
+
+/// The protocol a case opens on when nothing names one: for a story of the planning store, or, with
+/// `story` false, for an intent.
+#[must_use]
+pub fn default_protocol(story: bool) -> &'static str {
+    let document = defaults();
+    if story {
+        &document.protocol_for_story
+    } else {
+        &document.protocol_for_intent
+    }
+}
 
 /// takt's built-in default for `input` of the protocol `protocol`, an id, when it ships one.
 #[must_use]
 pub fn builtin_default(protocol: &str, input: &str) -> Option<&'static str> {
-    BUILTIN_DEFAULTS
-        .iter()
-        .find(|(id, name, _)| *id == protocol && *name == input)
-        .map(|(_, _, value)| *value)
+    defaults()
+        .inputs
+        .get(protocol)
+        .and_then(|inputs| inputs.get(input))
+        .map(String::as_str)
+}
+
+/// The configuration reference page of the defaults, generated from the shipped document and the
+/// protocols' declarations: the protocol a story and an intent open on, and per protocol each
+/// declared input with its values and takt's default. The site holds it as
+/// `website/docs/reference/protocol-defaults.md`, and a test fails when the two differ.
+pub fn defaults_page() -> Result<String> {
+    let document = defaults();
+    let mut page = String::from(
+        "---\n\
+         title: Protocol defaults\n\
+         sidebar_position: 9\n\
+         description: The protocol a story and an intent open on, and the value takt gives each case input nobody sets.\n\
+         ---\n\n\
+         # Protocol defaults\n\n\
+         takt ships one defaults document, `crates/takt/src/protocol_defaults.yaml`; this page is generated from it. A case takes each declared input from the first of \
+         `--input`, a story tag `input:<name>=<value>`, the run file's `protocols` section and \
+         this document. An input none of them sets refuses the case at open, naming the input and \
+         its values.\n\n",
+    );
+    page.push_str(&format!(
+        "| opens | on |\n|---|---|\n| a story of the planning store | `{}` |\n| an `--intent` | `{}` |\n\n",
+        document.protocol_for_story, document.protocol_for_intent
+    ));
+    page.push_str(
+        "A `--protocol`, a story tag `protocol:<name>/<major>` or the run file's `protocol` \
+         chooses another.\n\n| protocol | input | values | default |\n|---|---|---|---|\n",
+    );
+    for (id, inputs) in &document.inputs {
+        let protocol = LoadedProtocol::builtin(id)?;
+        for declared in protocol.declared_inputs() {
+            let set = inputs
+                .get(&declared.name)
+                .map_or_else(|| "none".to_owned(), |value| format!("`{value}`"));
+            page.push_str(&format!(
+                "| `{id}` | `{}` | {} | {set} |\n",
+                declared.name,
+                declared
+                    .values
+                    .iter()
+                    .map(|value| format!("`{value}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    Ok(page)
 }
 
 /// What a case opens on: the protocol and each declared input that something sets, with sources.

@@ -491,6 +491,9 @@ impl World {
             "--test-cmd",
             TEST_COMMAND,
         ];
+        if !extra.contains(&"--protocol") {
+            args.extend(["--protocol", "story.delivery/1"]);
+        }
         args.extend_from_slice(extra);
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)

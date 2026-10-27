@@ -46,6 +46,9 @@ takt's releases.
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
 - New cases open under `.takt/cases`, with a `.takt/.gitignore` of `*` when absent; a case already under `.engineering/cases` resumes where it is, and every guard covers both roots.
 - A new `.takt/` also gets `.takt/.worktreekeep` (`cases/`), so `worktree` 0.19.0 cleanup keeps every case and its archive holds them; an existing file is left alone.
+- Engineering protocols 0.11.0: `takt protocols` lists `story.delivery/2`, which declares the case inputs `tests_first` and `gate_on`; `story.delivery/1` is unchanged.
+- takt ships one defaults document: a store story opens on `story.delivery/2` with `tests_first: required` and `gate_on: after_handover`; an `--intent` keeps `software.change/1`.
+- The `protocol-defaults` reference page is generated from that document and a test fails on drift; a case input nobody sets still refuses the case at open, naming it and its values.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 - A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.

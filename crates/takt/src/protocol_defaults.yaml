@@ -1,0 +1,11 @@
+format: takt-protocol-defaults/1
+protocol_for_story: story.delivery/2
+protocol_for_intent: software.change/1
+inputs:
+  story.delivery/2:
+    tests_first: required
+    gate_on: after_handover
+  software.change/1:
+    risk: standard
+    change_kind: feature
+    affects_security_boundary: "false"

@@ -651,7 +651,7 @@ struct RunArgs {
     story_from: Option<PathBuf>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
     /// the planning store gives opens on its tag `protocol:<name>/<major>`, else the run file's
-    /// `protocol`, else `story.delivery/1`, an --intent on `software.change/1`,
+    /// `protocol`, else `story.delivery/2`, an --intent on `software.change/1` (takt's defaults document),
     /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
     /// another is refused before the run, nothing changed.
     #[arg(long)]
@@ -1598,11 +1598,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     flag_protocol: protocol.as_deref(),
                     flag_inputs: &inputs,
                     tags: &[],
-                    default_protocol: if intent.is_some() {
-                        SOFTWARE_CHANGE
-                    } else {
-                        STORY_DELIVERY
-                    },
+                    default_protocol: takt::protocol::default_protocol(intent.is_none()),
                     file_protocol_applies: intent.is_none() && case.is_none(),
                 })?;
             // The case this run resumes, found before anything is resumed: resuming checks the
@@ -2234,11 +2230,7 @@ fn settings_for(
         flag_protocol,
         flag_inputs,
         tags,
-        default_protocol: if story {
-            STORY_DELIVERY
-        } else {
-            SOFTWARE_CHANGE
-        },
+        default_protocol: takt::protocol::default_protocol(story),
         file_protocol_applies: story,
     })
 }
@@ -3543,7 +3535,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             None => "not pushed: no forge".to_owned(),
         }
     )?;
-    let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
+    let options = looping.options(SCENARIO_PROTOCOL.to_owned(), Vec::new(), Some(case_id));
     let store = Aep::default();
     let set_aside = looping.state_dir.as_deref().map(state_set_aside);
     let mut run = take_story(
@@ -3770,10 +3762,9 @@ fn running_binary() -> Result<PathBuf> {
     }
 }
 
-/// The protocol a store story opens on when `--protocol` is not given.
-const STORY_DELIVERY: &str = "story.delivery/1";
-/// The protocol an `--intent` opens on when `--protocol` is not given.
-const SOFTWARE_CHANGE: &str = "software.change/1";
+/// The protocol a scenario run opens its trial case on: a trial's case sets no input, so the one
+/// that declares none.
+const SCENARIO_PROTOCOL: &str = "story.delivery/1";
 
 /// The case a run resumes, read without resuming it.
 struct Resuming {
@@ -4242,6 +4233,8 @@ mod tests {
             "1",
             "--test-cmd",
             "true",
+            "--input",
+            "gate_on=each_revision",
         ]);
         assert!(out.contains("frontier: took story:ready-one"), "{out}");
         // After the tests, the gate is left with no gates document to run it: the run stops
