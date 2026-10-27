@@ -1078,6 +1078,12 @@ impl Opened {
         if facts.serves(&ContractFamily::Limits) {
             profile.process_bounds = Some(bounds);
         }
+        if !self.candidate.paths_are_host_paths() && Path::new(ALTERNATIVES).is_dir() {
+            profile.read_only_roots.push(ReadOnlyRoot {
+                host_path: ALTERNATIVES.to_owned(),
+                mount: ALTERNATIVES.to_owned(),
+            });
+        }
         profile
     }
 }
@@ -1368,6 +1374,9 @@ const INSIDE_RUST: &str = "/toolchain/rust";
 const INSIDE_CARGO: &str = "/toolchain/cargo";
 /// Where a Linux adapter shows the workspace.
 const INSIDE_WORKSPACE: &str = "/workspace";
+/// The alternatives directory of a Debian or Ubuntu host, shown read-only at its own path on a
+/// Linux adapter where it exists: `/usr/bin/cc`, the linker cargo calls, links through it.
+const ALTERNATIVES: &str = "/etc/alternatives";
 
 impl TestPlan {
     /// `cargo <args>` in `tree` on `opened`, the toolchain at `toolchain`.

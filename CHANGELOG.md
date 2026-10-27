@@ -28,6 +28,7 @@ takt confines every test command through Substrate on Linux and macOS, and a sto
 - The `protocol-defaults` reference page is generated from that document and a test fails on drift; a case input nobody sets still refuses the case at open, naming it and its values.
 - **Breaking:** takt confines through Substrate's confinement contract, `b10x-substrate-host` 0.14.0, on Linux and macOS (story:confinement-through-substrate-on-linux-and-macos).
 - Under `linux` and `systemd` around it a test command writes only its tree's `target`; a host without `exec.workspace-scoped-write` refuses `--confinement substrate` by that name.
+- On a Debian or Ubuntu host the `linux` adapter shows `/etc/alternatives` read-only, so cargo finds the linker `cc` in a test command and a promotion build.
 - There a test command that would write `Cargo.lock` fails naming the read-only file: commit a current `Cargo.lock`, as ignoring it in `.gitignore` no longer serves.
 - A test command's run keeps the last bytes of each output stream within Substrate's 1 MiB bound, so a run that printed more is still summarised from its `test result:` lines.
 - `--confinement substrate` runs the test command through the first of Substrate's `systemd` around `linux`, `linux` and `macos` adapters that serves it, or refuses it by name.

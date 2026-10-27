@@ -3527,8 +3527,8 @@ types:
   # read from: .engineering/planning/story/confinement-seam.md:78
   # read from: crates/takt/src/confinement.rs:276-287
   # read from: crates/takt/src/confinement.rs:342-348
-  # read from: crates/takt/src/confinement.rs:1202-1227
-  # read from: crates/takt/src/confinement.rs:1230-1236
+  # read from: crates/takt/src/confinement.rs:1208-1233
+  # read from: crates/takt/src/confinement.rs:1236-1242
   # read from: crates/takt/src/validator.rs:2563-2582
   # read from: crates/takt-cli/src/main.rs:1141-1158
   - name: takt.work.ConfinementName
