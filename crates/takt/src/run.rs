@@ -8227,15 +8227,19 @@ fn cases_with_story(tree: &Path) -> Result<Vec<(String, String)>> {
     Ok(found)
 }
 
-/// Whether the tree is on a case's branch, `takt/<id>`: where [`to_base`] moves it, or refuses.
+/// Whether the tree is on a case's branch, `takt/<id>` of an existing case: where [`to_base`]
+/// moves it, or refuses. A branch under the prefix that is no case's is refused by name.
 fn on_a_case_branch(tree: &Path) -> Result<bool> {
-    Ok(crate::git::current_branch(tree)?
-        .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX)))
+    let Some(branch) = crate::git::current_branch(tree)? else {
+        return Ok(false);
+    };
+    Ok(crate::case::case_of_branch(tree, &branch)?.is_some())
 }
 
 /// Puts the tree on the base of the case whose branch it is on, so that the store is read as
 /// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
-/// on any other branch, or detached, stays where it is. Refused when the branch names no case
+/// on any other branch, or detached, stays where it is. Refused when the branch is under takt's
+/// reserved prefix and is no case's ([`crate::case::case_of_branch`]), when it names no case
 /// ([`crate::case::check_id`], checked before the name is joined to a path), when the case's
 /// base is not known, or when the tree has uncommitted work, which the checkout would carry
 /// along.
@@ -8243,12 +8247,9 @@ fn to_base(tree: &Path) -> Result<()> {
     let Some(branch) = crate::git::current_branch(tree)? else {
         return Ok(());
     };
-    let Some(case) = branch.strip_prefix(crate::case::BRANCH_PREFIX) else {
+    let Some(case) = crate::case::case_of_branch(tree, &branch)? else {
         return Ok(());
     };
-    // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
-    crate::case::check_id(case)
-        .with_context(|| format!("the branch {} names no case", crate::case::shown(&branch)))?;
     let Some(base) = crate::case::Branch::read(&CaseDir::locate(tree, case))
         .ok()
         .and_then(|recorded| recorded.base)

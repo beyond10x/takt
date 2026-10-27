@@ -37,6 +37,7 @@ takt's releases.
 
 ### Fixed
 
+- A base branch under takt's reserved prefix `takt/` that is no case's is refused before a case opens, exit 1, naming the prefix and a rename; it was refused as a case's branch with no base recorded.
 - A gate's command finds a bare program name on `/usr/local/bin:/usr/bin:/bin`, or on the `PATH` its `env` declares, never on the user's `PATH`; a name found nowhere refuses the gate.
 - A gate whose script holds the shell's `:` builtin is run and judged on its own exit; a path a gate names that starts with `:` is looked up literally.
 - The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.
