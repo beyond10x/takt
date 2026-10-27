@@ -667,7 +667,9 @@ struct RunArgs {
     /// read only when the harness is `harness`. Any other key, or a `scan` that is neither
     /// `gates` nor `none`, is refused before the case opens, naming the file and the line, never
     /// a value written there. A container takes its run from a mounted one. `takt scenario run
-    /// --config` reads the same file, and refuses one that declares `scan: none`.
+    /// --config` reads the same file, and refuses one that declares `scan: none`. `llm`, the
+    /// model routes, an `llm.routes/1` document or `{path: <file>}` naming one beside the file,
+    /// which no flag gives; llm validates it, and a refused section opens no case.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
     /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
@@ -716,6 +718,7 @@ impl LoopArgs {
     fn configured(&mut self, file: takt::run_config::RunConfig, matches: &clap::ArgMatches) {
         let unset = |id: &str| unset(matches, id);
         let looping = self;
+        looping.llm_digest = file.llm_digest;
         if unset("iterations") && file.iterations.is_some() {
             looping.iterations = file.iterations;
         }
@@ -927,6 +930,10 @@ struct LoopArgs {
     /// whose tests fail on purpose.
     #[arg(long)]
     continue_past_red_base: bool,
+    /// The digest of the `llm.routes/1` document `--config` gave, recorded on the run's `opened`
+    /// line; set from the file, never from a flag.
+    #[arg(skip)]
+    llm_digest: Option<String>,
     /// The records profile the case keeps its decisions under: `default` keeps the latest
     /// `decisions/NNNN.json` alone and goes on numbering from it, `trial` keeps every one. A
     /// scenario run and an improvement case (`self.improvement/1`, `loop.improvement/1`) keep
@@ -941,12 +948,13 @@ struct LoopArgs {
     records_of_file: Option<String>,
 }
 
-/// A harness that performs nothing. Asked while an approval is pending, it requests the gate
-/// action, changing no file, so the run stops `ApprovalRequired` and `takt approve` is the
-/// next step; offered an action that records a choice (`change.handover`), it takes it,
-/// changing no file, so the work committed by hand is handed over as it stands; asked for any
-/// other judgement step, it ends the run with an error, `stopped: error:`, because nothing
-/// performs that step.
+/// A harness that performs nothing. Offered an action the case holds a grant for, it takes that
+/// action, changing no file (story:harness-none-takes-a-granted-action). Asked while an approval
+/// is pending, it requests the gate action, changing no file, so the run stops
+/// `ApprovalRequired` and `takt approve` is the next step; offered an action that records a
+/// choice (`change.handover`), it takes it, changing no file, so the work committed by hand is
+/// handed over as it stands; asked for any other judgement step, it ends the run with an error,
+/// `stopped: error:`, because nothing performs that step.
 struct NoHarness;
 
 impl Harness for NoHarness {
@@ -955,6 +963,13 @@ impl Harness for NoHarness {
     }
 
     fn step(&self, context: &takt::StepContext<'_>) -> Result<takt::StepReport> {
+        if let Some(granted) = context.granted.first() {
+            return Ok(takt::StepReport {
+                action: granted.clone(),
+                summary: "no harness: the action the case is granted is taken".to_owned(),
+                tokens: None,
+            });
+        }
         if let Some(gate) = context.approvals.first() {
             return Ok(takt::StepReport {
                 action: gate.clone(),
@@ -2305,6 +2320,7 @@ fn finish(
     }
     run.scan_with(scan);
     run.binary = Some(REVISION.to_owned());
+    run.llm_digest = looping.llm_digest.clone();
     // The transcripts directory is made now, before any step; one that cannot be (a read-only
     // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
     // as a step whose transcript could not be kept does. --state-dir, or the configuration's
@@ -3926,8 +3942,9 @@ mod tests {
     /// `ApprovalRequired`. `takt approve` writes the grant into that case, records the approval
     /// on the story and commits that record on the case's branch; the run after it resumes the
     /// case at the revision the grant was given at, on a clean tree, and reads the grant: the
-    /// merge is no longer approval-required but admitted, a judgement step that no harness
-    /// takes here. A grant is given only to a case at the gate.
+    /// merge is no longer approval-required but admitted, the granted action `--harness none`
+    /// takes (story:harness-none-takes-a-granted-action). A grant is given only to a case at the
+    /// gate.
     #[test]
     fn approve_writes_the_grant_and_the_next_run_resumes_the_open_case() {
         let repo = repository("one-ready", "approve");
@@ -4032,7 +4049,10 @@ mod tests {
             ""
         );
         let (code, out) = takt(&resume);
-        assert_eq!(code, 5, "{out}");
+        assert_eq!(
+            code, 3,
+            "story:harness-none-takes-a-granted-action: the granted merge is taken, and nothing moves after it: {out}"
+        );
         assert!(
             out.contains(&format!(
                 "frontier: resumed story:ready-one: Make the check pass (case {id})"
@@ -4043,10 +4063,16 @@ mod tests {
         assert!(!out.contains("ApprovalRequired"), "{out}");
         assert!(out.contains("repository.merge (admissible)"), "{out}");
         assert!(
-            out.contains(
-                "no harness: a judgement step among implementation.edit, repository.merge, tests.write is left"
-            ),
-            "{out}"
+            out.contains("step 1: repository.merge (none)"),
+            "story:harness-none-takes-a-granted-action: the granted merge is the harness's step: {out}"
+        );
+        assert!(
+            out.contains("stopped: NoProgress"),
+            "story:harness-none-takes-a-granted-action: no forge performs the merge, so nothing moves: {out}"
+        );
+        assert!(
+            !out.contains("no harness: a judgement step"),
+            "story:harness-none-takes-a-granted-action: the granted merge is not left: {out}"
         );
         assert_eq!(the_case(&repo), case, "no second case was opened");
     }
