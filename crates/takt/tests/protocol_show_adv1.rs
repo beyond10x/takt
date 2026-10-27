@@ -1,5 +1,6 @@
-//! Adversarial cases for story:takt-lists-a-protocols-settings: the listing against the story's
-//! own acceptance example, a run-file value `takt run` refuses, and a TOML run file's lines.
+//! Adversarial cases for story:takt-lists-a-protocols-settings: a run-file value `takt run` refuses,
+//! and a TOML run file's lines. The story's own acceptance example moved with
+//! story:takt-ships-default-protocol-settings.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -28,34 +29,6 @@ fn file_settings(name: &str, file: &str, text: &str) -> (Scratch, PathBuf, Proto
         .expect("a readable run file")
         .protocol_settings;
     (Scratch(dir), path, settings)
-}
-
-/// Acceptance 1 as the story writes it: `story.delivery/2` with a run file setting
-/// `gate_on: each_revision` lists `tests_first` (default `required`) and `gate_on` (default
-/// `after_handover`, run file `each_revision`). `story.delivery/2` ships with the engineering
-/// protocols' next release (story:takt-ships-default-protocol-settings), so today the listing
-/// refuses it naming the protocols takt knows; the case turns red when that revision arrives,
-/// and is then to assert the example itself.
-#[test]
-fn the_acceptance_example_lists_story_delivery_2() {
-    let (_dir, _path, settings) = file_settings(
-        "acceptance",
-        "run.yaml",
-        "protocols:\n  story.delivery:\n    gate_on: each_revision\n",
-    );
-    let refusal = match list_settings("story.delivery/2", &settings) {
-        Err(error) => format!("{error:#}"),
-        Ok(listing) => panic!(
-            "story:takt-ships-default-protocol-settings: story.delivery/2 is listed now, so this case asserts the example: {}",
-            listing.text()
-        ),
-    };
-    assert!(
-        refusal.contains("no protocol story.delivery/2")
-            && refusal.contains("story.delivery/1")
-            && refusal.contains("software.change/1"),
-        "story:takt-ships-default-protocol-settings: the refusal names no known protocol: {refusal}"
-    );
 }
 
 /// A run file value outside the declared set is what `takt run` refuses at its line; the listing
