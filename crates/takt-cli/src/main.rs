@@ -608,13 +608,16 @@ struct RunArgs {
     #[arg(skip)]
     story_from: Option<PathBuf>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
-    /// the planning store gives opens on `story.delivery/1`, an --intent on `software.change/1`,
+    /// the planning store gives opens on its tag `protocol:<name>/<major>`, else the run file's
+    /// `protocol`, else `story.delivery/1`, an --intent on `software.change/1`,
     /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
     /// another is refused before the run, nothing changed.
     #[arg(long)]
     protocol: Option<String>,
-    /// A case input, `name=value`; repeatable. One the protocol a case opens on does not declare
-    /// is refused before the case is opened. Given for a resumed case, any input is refused
+    /// A case input, `name=value`; repeatable. It wins over a story tag `input:<name>=<value>`,
+    /// which wins over the run file's `protocols` section, which wins over takt's built-in
+    /// default; each value is recorded with its source in `case.yaml`. One the protocol a case
+    /// opens on does not declare is refused before the case is opened. Given for a resumed case, any input is refused
     /// before the case is resumed: the case keeps the inputs it was opened with. A
     /// `loop.improvement/1` case requires `loop_baseline=<full commit id>`, the promoted revision
     /// its baseline is, a commit of the repository: it opens the case's baseline and is no case
@@ -676,11 +679,17 @@ struct RunArgs {
     /// which no flag gives; llm validates it, and a refused section opens no case. With `--harness
     /// harness`, `model` names a route or alias of the section, and that route is the endpoint:
     /// no `--endpoint-*` flag, `endpoint_file` or `endpoint_token_env` may sit beside it.
+    /// `protocol`, the protocol a story from the planning store opens on, and `protocols`, a mapping
+    /// of a protocol to the values of its declared case inputs; an unknown protocol, input or
+    /// value is refused naming the file and the line.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
     /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
     #[arg(skip)]
     declared_scan: Option<takt::scan::ScanName>,
+    /// The protocol and the inputs `--config`'s file sets, read by [`RunArgs::configured`]; no flag.
+    #[arg(skip)]
+    protocol_settings: takt::run_config::ProtocolSettings,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -716,6 +725,7 @@ impl RunArgs {
             self.story_from = Some(path.clone());
         }
         self.declared_scan = file.scan;
+        self.protocol_settings = file.protocol_settings.clone();
         self.looping.configured(file, matches)?;
         Ok(())
     }
@@ -1422,6 +1432,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 install_root,
                 config,
                 declared_scan,
+                protocol_settings,
                 mut looping,
             } = *args;
             looping.check()?;
@@ -1452,15 +1463,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 .as_deref()
                 .map(LoadedProtocol::resolve)
                 .transpose()?;
-            let opening = match (&protocol, &intent) {
-                (Some(protocol), _) => protocol.clone(),
-                (None, Some(_)) => SOFTWARE_CHANGE.to_owned(),
-                (None, None) => STORY_DELIVERY.to_owned(),
-            };
-            let opens_on = match &given {
-                Some(given) => given.clone(),
-                None => LoadedProtocol::builtin(&opening)?,
-            };
+            // `--protocol`, else the run file's `protocol` for a story of the store, else the
+            // default for the unit. A story's own `protocol:` tag is read once the story is known.
+            let (opening, _, opens_on) =
+                takt::protocol::choose_protocol(&takt::protocol::SettingsRequest {
+                    file: &protocol_settings,
+                    flag_protocol: protocol.as_deref(),
+                    flag_inputs: &inputs,
+                    tags: &[],
+                    default_protocol: if intent.is_some() {
+                        SOFTWARE_CHANGE
+                    } else {
+                        STORY_DELIVERY
+                    },
+                    file_protocol_applies: intent.is_none() && case.is_none(),
+                })?;
             // The case this run resumes, found before anything is resumed: resuming checks the
             // tree out onto the case's branch and records its head, so every refusal of what was
             // given for it comes first. A resumed case keeps the protocol and the inputs it was
@@ -1635,39 +1652,30 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 None
             };
             let intent = intent.or_else(|| turn.as_ref().map(|turn| turn.title.clone()));
-            // A case keeps only the inputs its protocol declares: one it does not declare would
-            // be dropped without a word, so a case to be opened refuses it before anything is.
-            if case.is_none()
-                && resuming.is_none()
-                && let Some((name, _)) = inputs
-                    .iter()
-                    .find(|(name, _)| !opens_on.inputs.iter().any(|(declared, _)| declared == name))
-            {
-                let declared: Vec<&str> = opens_on.inputs.iter().map(|(d, _)| d.as_str()).collect();
-                return Err(anyhow!(
-                    "--input {name}: {} declares no input {name}; it declares {}",
-                    opens_on.id,
-                    if declared.is_empty() {
-                        "none".to_owned()
-                    } else {
-                        declared.join(", ")
-                    }
-                ));
-            }
-            // The software change's inputs select the obligations it owes; left out, they take
-            // the least demanding values a change can carry, said on the first line of the run.
-            if opens_on.id == SOFTWARE_CHANGE {
-                for (name, value) in [
-                    ("risk", "standard"),
-                    ("change_kind", "feature"),
-                    ("affects_security_boundary", "false"),
-                ] {
-                    if !inputs.iter().any(|(k, _)| k == name) {
-                        inputs.push((name.to_owned(), value.to_owned()));
-                    }
+            // A fresh case on an intent opens on settings resolved here: `--protocol`, the run
+            // file, the default, and each declared input from `--input`, the run file or takt's
+            // default, each with its source. One it does not declare is refused before anything is
+            // opened. A fresh case on a story resolves them per story below, once its tags are
+            // known; a resumed case keeps its own.
+            let fresh = case.is_none() && resuming.is_none();
+            let story_unit = fresh && intent.is_none();
+            let mut applied = if fresh && !story_unit {
+                Some(settings_for(
+                    &protocol_settings,
+                    protocol.as_deref(),
+                    &inputs,
+                    &[],
+                    false,
+                )?)
+            } else {
+                None
+            };
+            let options = match &applied {
+                Some(settings) => {
+                    looping.options(settings.spec.clone(), settings.pairs(), case_id.clone())
                 }
-            }
-            let options = looping.options(opening, inputs, case_id);
+                None => looping.options(opening, inputs.clone(), case_id.clone()),
+            };
             let harness = harness_of(&looping)?;
             let harness = harness.as_ref();
             // A session that may read outside its copy proposes what a scan must pass: under
@@ -1784,17 +1792,37 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         }),
                         None => None,
                     };
-                    match Run::take_next_as_in(
+                    match take_next_with_settings(
                         &repo,
-                        options,
                         frontier,
+                        &store,
+                        &|tags| {
+                            settings_for(
+                                &protocol_settings,
+                                protocol.as_deref(),
+                                &inputs,
+                                tags,
+                                true,
+                            )
+                        },
+                        &|settings| {
+                            looping.options(
+                                settings.spec.clone(),
+                                settings.pairs(),
+                                case_id.clone(),
+                            )
+                        },
+                        options,
                         &commit_as,
                         set_aside.as_deref(),
                         harness,
                         &validators,
                         out,
                     )? {
-                        Some(run) => run,
+                        Some((run, settings)) => {
+                            applied = Some(settings);
+                            run
+                        }
                         None => {
                             if let (Some(story), Some(left)) = (&story, &left) {
                                 let refusal =
@@ -1825,6 +1853,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // independence before any step.
             if let Some(turn) = &turn {
                 run.case.open_turn(turn)?;
+            }
+            // The case just opened records where its protocol and each input's value came from.
+            if let Some(settings) = &applied {
+                run.case
+                    .record_settings(settings.protocol_source.as_str(), &settings.sources())?;
+                writeln!(out, "{}", settings.line())?;
             }
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
@@ -2047,6 +2081,176 @@ impl LoopArgs {
             gate: self.gate.clone(),
         }
     }
+}
+
+/// What a case opens on, resolved from the command line, the run file and the tags of the story it
+/// opens on (none for an intent): [`takt::protocol::resolve_settings`].
+fn settings_for(
+    file: &takt::run_config::ProtocolSettings,
+    flag_protocol: Option<&str>,
+    flag_inputs: &[(String, String)],
+    tags: &[String],
+    story: bool,
+) -> Result<takt::protocol::Settings> {
+    takt::protocol::resolve_settings(&takt::protocol::SettingsRequest {
+        file,
+        flag_protocol,
+        flag_inputs,
+        tags,
+        default_protocol: if story {
+            STORY_DELIVERY
+        } else {
+            SOFTWARE_CHANGE
+        },
+        file_protocol_applies: story,
+    })
+}
+
+/// A frontier that lists the candidates of `inner` into `seen` and offers none, so that
+/// [`Run::take_next_as_in`] puts the tree on the base, reads them as it reads them, and opens
+/// nothing.
+struct Listing<'a> {
+    inner: &'a dyn takt::Frontier,
+    seen: std::cell::RefCell<Vec<String>>,
+}
+
+impl takt::Frontier for Listing<'_> {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        *self.seen.borrow_mut() = self.inner.candidates(repo)?;
+        Ok(Vec::new())
+    }
+
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        self.inner.active(repo)
+    }
+
+    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
+        self.inner.show(repo, id)
+    }
+
+    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
+        self.inner.take(repo, id)
+    }
+
+    fn record_approval(
+        &self,
+        repo: &Path,
+        story: &str,
+        approval: &takt::case::Approval,
+    ) -> Result<()> {
+        self.inner.record_approval(repo, story, approval)
+    }
+}
+
+/// A frontier narrowed to the one candidate `story` of `inner`, which is then taken exactly as
+/// `inner` would take it.
+struct Only<'a> {
+    inner: &'a dyn takt::Frontier,
+    story: &'a str,
+}
+
+impl takt::Frontier for Only<'_> {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        let mut candidates = self.inner.candidates(repo)?;
+        candidates.retain(|id| id == self.story);
+        Ok(candidates)
+    }
+
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        self.inner.active(repo)
+    }
+
+    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
+        self.inner.show(repo, id)
+    }
+
+    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
+        self.inner.take(repo, id)
+    }
+
+    fn record_approval(
+        &self,
+        repo: &Path,
+        story: &str,
+        approval: &takt::case::Approval,
+    ) -> Result<()> {
+        self.inner.record_approval(repo, story, approval)
+    }
+
+    fn record_test_result(
+        &self,
+        repo: &Path,
+        story: &str,
+        reference: &str,
+        at: &str,
+    ) -> Result<takt::frontier::Written> {
+        self.inner.record_test_result(repo, story, reference, at)
+    }
+
+    fn implemented(&self, repo: &Path, story: &str) -> Result<takt::frontier::Written> {
+        self.inner.implemented(repo, story)
+    }
+}
+
+/// [`Run::take_next_as_in`] with each story's settings resolved from its own tags: the candidates
+/// are listed as the run reads them (the tree put on the base), then each is offered alone, with
+/// the options `options_for` makes of the settings `resolve` makes of its tags, until one is
+/// taken. A story whose tags or whose settings are refused is the error, before its case is
+/// opened. The settings of the story taken come back with its run.
+#[allow(clippy::too_many_arguments)]
+fn take_next_with_settings<'a>(
+    repo: &Path,
+    frontier: &dyn takt::Frontier,
+    store: &Aep,
+    resolve: &dyn Fn(&[String]) -> Result<takt::protocol::Settings>,
+    options_for: &dyn Fn(&takt::protocol::Settings) -> RunOptions,
+    listing: RunOptions,
+    commit_as: &takt::case::CommitAs,
+    set_aside: Option<&Path>,
+    harness: &'a dyn Harness,
+    validators: &'a [Box<dyn Validator>],
+    out: &mut dyn Write,
+) -> Result<Option<(Run<'a>, takt::protocol::Settings)>> {
+    let listed = Listing {
+        inner: frontier,
+        seen: std::cell::RefCell::new(Vec::new()),
+    };
+    if Run::take_next_as_in(
+        repo, listing, &listed, commit_as, set_aside, harness, validators, out,
+    )?
+    .is_some()
+    {
+        return Err(anyhow!("listing the ready stories opened a case"));
+    }
+    for id in listed.seen.into_inner() {
+        let tags = store.tags(repo, &id)?;
+        let settings = resolve(&tags).with_context(|| format!("the story {id}"))?;
+        let only = Only {
+            inner: frontier,
+            story: &id,
+        };
+        if let Some(run) = Run::take_next_as_in(
+            repo,
+            options_for(&settings),
+            &only,
+            commit_as,
+            set_aside,
+            harness,
+            validators,
+            out,
+        )? {
+            return Ok(Some((run, settings)));
+        }
+    }
+    Ok(None)
 }
 
 /// The harness `--harness` names, each through the metaharness session executor, proposing from

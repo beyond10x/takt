@@ -1278,6 +1278,45 @@ pub fn inputs_of(case_dir: &Path) -> Result<Vec<(String, String)>> {
     Ok(inputs_in(&doc))
 }
 
+/// The `case.yaml` member that holds where each input's value came from.
+const INPUT_SOURCES: &str = "input_sources";
+
+/// The inputs of the case at `case_dir` with the source of each value as its `case.yaml` holds
+/// them, `(name, value, source)`; the source is empty for a case that records none.
+pub fn settings_of(case_dir: &Path) -> Result<Vec<(String, String, String)>> {
+    let path = case_dir.join("case.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    let sources = sources_in(&doc);
+    Ok(inputs_in(&doc)
+        .into_iter()
+        .map(|(name, value)| {
+            let source = sources
+                .iter()
+                .find(|(input, _)| *input == name)
+                .map(|(_, source)| source.clone())
+                .unwrap_or_default();
+            (name, value, source)
+        })
+        .collect())
+}
+
+/// The `(input, source)` pairs a `case.yaml` document records, none when it records none.
+fn sources_in(doc: &serde_yaml_ng::Value) -> Vec<(String, String)> {
+    doc[INPUT_SOURCES]
+        .as_mapping()
+        .map(|map| {
+            map.iter()
+                .filter_map(|(key, value)| {
+                    Some((key.as_str()?.to_owned(), value.as_str()?.to_owned()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// The inputs a `case.yaml` document holds, `name=value` pairs, a boolean as `true` or `false`.
 fn inputs_in(doc: &serde_yaml_ng::Value) -> Vec<(String, String)> {
     doc["inputs"]
@@ -3123,6 +3162,41 @@ impl CaseDir {
     #[must_use]
     pub fn inputs(&self) -> Vec<(String, String)> {
         inputs_in(&self.doc)
+    }
+
+    /// Records in `case.yaml`, beside `inputs`, where each input's value came from and where the
+    /// protocol was chosen: `input_sources`, each input of `inputs` to `flag`, `tag`, `run-file`
+    /// or `default`, and `protocol_source`. Written once, as the case is opened; an input the case
+    /// does not hold is refused with nothing written.
+    pub fn record_settings(
+        &mut self,
+        protocol_source: &str,
+        sources: &[(String, String)],
+    ) -> Result<()> {
+        let held = self.inputs();
+        if let Some((name, _)) = sources
+            .iter()
+            .find(|(name, _)| !held.iter().any(|(input, _)| input == name))
+        {
+            bail!(
+                "the case {} holds no input {name} to record a source for",
+                self.id
+            );
+        }
+        let mut recorded = serde_yaml_ng::Mapping::new();
+        for (name, source) in sources {
+            recorded.insert(name.as_str().into(), source.as_str().into());
+        }
+        self.doc["protocol_source"] = protocol_source.into();
+        self.doc[INPUT_SOURCES] = recorded.into();
+        self.write()
+    }
+
+    /// Where each input of the case's value came from, `(input, source)`, as the case record holds
+    /// it; none for a case opened before the record was kept.
+    #[must_use]
+    pub fn input_sources(&self) -> Vec<(String, String)> {
+        sources_in(&self.doc)
     }
 
     /// Creates the directory and writes the case's files, `case.yaml` last.
