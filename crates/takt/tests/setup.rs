@@ -246,10 +246,11 @@ fn setup_runs_before_the_red_base_check() {
 }
 
 /// A resume on the base the setup ran at runs it no more; one on another base runs it again.
+/// The counter is in the tree's `.takt`: on macOS a setup command writes only in its tree.
 #[test]
 fn a_resume_on_the_same_base_skips_setup() {
     let world = world("resume");
-    let counter = world.elsewhere.join("counter");
+    let counter = world.tree.join(".takt/setup-counter");
     let setup = || {
         vec![command(
             "count",
