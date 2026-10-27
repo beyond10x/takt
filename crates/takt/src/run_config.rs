@@ -250,6 +250,120 @@ impl SessionRequest {
     }
 }
 
+impl SessionRequest {
+    /// The request a run takes: `base`, the file's mapping, with each flag's setting written over
+    /// its key, under `harness`, the harness the run takes and its `kind`. `None` when neither the
+    /// file nor a flag gives a setting, and when `harness` is `none`, which starts no session. A
+    /// setting refused under `harness` is an error, named as the file's refusal names it.
+    pub fn with_flags(
+        base: Option<&Self>,
+        harness: &str,
+        flags: SessionFlags<'_>,
+    ) -> Result<Option<Self>> {
+        let mut settings = base
+            .map(|request| request.settings.clone())
+            .unwrap_or_default();
+        for (key, value) in flags.settings() {
+            settings.insert(key.to_owned(), value);
+        }
+        if let Some(detail) = refused_setting(&settings, harness) {
+            return Err(anyhow!(detail));
+        }
+        let (harness, kind) = match harness {
+            "claude" => ("claude", "claude"),
+            "codex" => ("codex", "codex"),
+            "harness" => ("harness", "b10x"),
+            _ => {
+                let given: Vec<&str> = flags.settings().iter().map(|(key, _)| *key).collect();
+                if given.is_empty() {
+                    return Ok(None);
+                }
+                return Err(anyhow!(
+                    "the session settings {} are given with --harness {harness}, which starts no session, so they would be dropped; nothing was started",
+                    given.join(", ")
+                ));
+            }
+        };
+        if base.is_none() && settings.is_empty() {
+            return Ok(None);
+        }
+        settings.insert("kind".to_owned(), serde_json::Value::from(kind));
+        Ok(Some(Self { harness, settings }))
+    }
+}
+
+/// The session settings a command line's flags give, under the names metaharness's `run` takes
+/// them by. A flag not given is `None`, `false` or empty.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SessionFlags<'a> {
+    /// `--effort`.
+    pub effort: Option<&'a str>,
+    /// `--max-turns`.
+    pub max_turns: Option<u32>,
+    /// `--max-budget-usd`.
+    pub max_budget_usd: Option<&'a str>,
+    /// `--strict-version`.
+    pub strict_version: bool,
+    /// `--context`, each file given.
+    pub context: &'a [PathBuf],
+}
+
+impl SessionFlags<'_> {
+    /// Each setting given, under its key.
+    fn settings(&self) -> Vec<(&'static str, serde_json::Value)> {
+        let mut settings = Vec::new();
+        if let Some(effort) = self.effort {
+            settings.push(("effort", serde_json::Value::from(effort)));
+        }
+        if let Some(turns) = self.max_turns {
+            settings.push(("max-turns", serde_json::Value::from(turns)));
+        }
+        if let Some(usd) = self.max_budget_usd {
+            settings.push(("max-budget-usd", serde_json::Value::from(usd)));
+        }
+        if self.strict_version {
+            settings.push(("strict-version", serde_json::Value::from(true)));
+        }
+        if !self.context.is_empty() {
+            let files: Vec<serde_json::Value> = self
+                .context
+                .iter()
+                .map(|path| serde_json::Value::from(path.to_string_lossy().into_owned()))
+                .collect();
+            settings.push(("context", serde_json::Value::Array(files)));
+        }
+        settings
+    }
+}
+
+/// The refusal of a key the mapping admits but takt's launch does not carry yet, naming it, or
+/// `None` for a key it carries. A file's key and a flag's are refused alike.
+fn not_carried_yet(key: &str) -> Option<String> {
+    HARNESS_KEYS_NOT_CARRIED.contains(&key).then(|| {
+        format!(
+            "`{key}` in its `harness` mapping is admitted but takt's launch does not carry it yet, so the run is refused rather than run without it"
+        )
+    })
+}
+
+/// The refusal of `max-turns` under `kind: codex`, the same for a file's key and a flag's.
+const CODEX_MAX_TURNS_REFUSED: &str = "`max-turns` under `kind: codex` in its `harness` mapping is refused: takt's Codex launch takes no turn ceiling, so the value would be dropped";
+
+/// The refusal of the first setting `settings` holds that `harness` does not take, or `None`.
+fn refused_setting(
+    settings: &serde_json::Map<String, serde_json::Value>,
+    harness: &str,
+) -> Option<String> {
+    HARNESS_KEYS_NOT_CARRIED
+        .iter()
+        .filter(|key| settings.contains_key(**key))
+        .find_map(|key| not_carried_yet(key))
+        .or_else(|| {
+            (harness == "codex" && settings.contains_key("max-turns"))
+                .then(|| CODEX_MAX_TURNS_REFUSED.to_owned())
+        })
+}
+
 /// The keys a `harness` mapping admits: metaharness's `run` settings, under their own names.
 const HARNESS_KEYS: &[&str] = &[
     "kind",
@@ -410,22 +524,8 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
             }
         },
     };
-    if let Some(key) = HARNESS_KEYS_NOT_CARRIED
-        .iter()
-        .find(|key| settings.contains_key(**key))
-    {
-        return Err(harness_refused(
-            path,
-            &format!(
-                "`{key}` in its `harness` mapping is admitted but takt's launch does not carry it yet, so the run is refused rather than run without it"
-            ),
-        ));
-    }
-    if harness == "codex" && settings.contains_key("max-turns") {
-        return Err(harness_refused(
-            path,
-            "`max-turns` under `kind: codex` in its `harness` mapping is refused: takt's Codex launch takes no turn ceiling, so the value would be dropped",
-        ));
+    if let Some(detail) = refused_setting(&settings, harness) {
+        return Err(harness_refused(path, &detail));
     }
     let request = SessionRequest { harness, settings };
     if request.settings.contains_key("max-turns") && request.max_turns().is_none() {

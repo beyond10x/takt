@@ -749,14 +749,20 @@ impl LoopArgs {
         if unset("forge") && file.forge.is_some() {
             looping.forge = file.forge;
         }
-        if let Some(setting) = &file.harness {
-            if unset("harness") {
-                looping.harness = setting.harness().to_owned();
-            }
-            if let takt::run_config::HarnessSetting::Session(request) = setting {
-                looping.session = Some(request.clone());
-            }
+        if let Some(setting) = &file.harness
+            && unset("harness")
+        {
+            looping.harness = setting.harness().to_owned();
         }
+        let base = match &file.harness {
+            Some(takt::run_config::HarnessSetting::Session(request)) => Some(request),
+            _ => None,
+        };
+        looping.session = takt::run_config::SessionRequest::with_flags(
+            base,
+            &looping.harness,
+            looping.session_flags(),
+        )?;
         // The file's endpoint is b10x-harness's: under another harness, which a flag may have
         // chosen over the file's, it is left out rather than refused as a flag nobody gave.
         if unset("endpoint_file") && file.endpoint_file.is_some() && looping.harness == "harness" {
@@ -807,6 +813,17 @@ impl LoopArgs {
         }
         looping.records_of_file = file.records.filter(|_| unset("records"));
         Ok(())
+    }
+
+    /// The session settings the command line's flags give, under their metaharness names.
+    fn session_flags(&self) -> takt::run_config::SessionFlags<'_> {
+        takt::run_config::SessionFlags {
+            effort: self.effort.as_deref(),
+            max_turns: self.max_turns,
+            max_budget_usd: self.max_budget_usd.as_deref(),
+            strict_version: self.strict_version,
+            context: &self.context,
+        }
     }
 
     /// The `llm` section `file` holds, when the run may use it, refused before any case opens
@@ -937,6 +954,26 @@ struct LoopArgs {
     /// its digest as `llm_digest`. Given with or without `--config`.
     #[arg(long, value_name = "FILE")]
     llm_config: Option<PathBuf>,
+    /// The reasoning effort the session asks of the model, in the vendor's own vocabulary, as
+    /// `metaharness run --effort` takes it. Refused until takt's launch carries it.
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
+    /// A ceiling on the session's turns, as `metaharness run --max-turns` takes it. Refused under
+    /// `--harness codex`, whose launch takes no turn ceiling.
+    #[arg(long, value_name = "N")]
+    max_turns: Option<u32>,
+    /// A ceiling in US dollars on what the session may spend, as `metaharness run
+    /// --max-budget-usd` takes it. Refused until takt's launch carries it.
+    #[arg(long, value_name = "USD")]
+    max_budget_usd: Option<String>,
+    /// Refuse before the run when the installed vendor version is outside metaharness's pin, as
+    /// `metaharness run --strict-version` takes it. Refused until takt's launch carries it.
+    #[arg(long)]
+    strict_version: bool,
+    /// A file whose text the prompt carries, as `metaharness run --context` takes it, repeatable.
+    /// Refused until takt's launch carries it.
+    #[arg(long, value_name = "FILE")]
+    context: Vec<PathBuf>,
     #[command(flatten)]
     endpoint: EndpointArgs,
     /// The approval gate the harness may request to end the run. Not given, the case's
@@ -1038,8 +1075,9 @@ struct LoopArgs {
     /// a new case.
     #[arg(skip)]
     records_of_file: Option<String>,
-    /// The session request the run file's `harness` mapping gives: metaharness's settings the
-    /// session is started with. Set from the file, never from a flag.
+    /// The session request the run file's `harness` mapping gives, with each flag's setting over
+    /// its key ([`takt::run_config::SessionRequest::with_flags`]): metaharness's settings the
+    /// session is started with.
     #[arg(skip)]
     session: Option<takt::run_config::SessionRequest>,
 }
