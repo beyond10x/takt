@@ -6,6 +6,23 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.15.1] - 2026-10-27
+
+0.15.0 with its macOS test jobs passing, and the first release of that code with binaries: the 0.15.0
+tag has no release, because its macOS jobs failed and nothing was published.
+
+### Changed
+
+- **Breaking:** Carried from 0.15.0, which has no release: a harness binary metaharness does not qualify stops the run `HarnessUnqualified`, exit 1.
+- **Breaking:** Carried from 0.15.0: `--harness codex` or `--harness harness` with neither `B10X_GATES_POLICY` nor `scan: none` is refused, exit 1.
+- Everything else 0.15.0 lists below ships for the first time in 0.15.1.
+- Known limit: an `llm` route whose key is `{file: ...}` is refused on macOS; llm 0.16.0 reads file credentials on Linux only. Its two tests run on Linux.
+- Known limit: the fresh-home step guard is unproven on macOS; its five cases run on Linux until story:the-fresh-home-cases-hold-on-macos.
+
+### Fixed
+
+- The darwin test job also runs on `integration/**` pushes, so a macOS failure is seen before a tag.
+
 ## [0.15.0] - 2026-10-27
 
 A run names the Claude Code binary it starts and stops before the first session when metaharness
@@ -623,7 +640,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.15.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.15.1...HEAD
+[0.15.1]: https://github.com/beyond10x/takt/compare/0.15.0...0.15.1
 [0.15.0]: https://github.com/beyond10x/takt/compare/0.14.0...0.15.0
 [0.14.0]: https://github.com/beyond10x/takt/compare/0.13.1...0.14.0
 [0.13.1]: https://github.com/beyond10x/takt/compare/0.13.0...0.13.1

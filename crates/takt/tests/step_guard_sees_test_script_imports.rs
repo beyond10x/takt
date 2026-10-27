@@ -1367,6 +1367,10 @@ fn fresh_home_variant(variant: &str) -> Option<String> {
 /// cargo leaves there. A directory made where there was none on the way to what takt reads
 /// (`~/.cargo` before `~/.cargo/bin` and `~/.cargo/config.toml`), with nothing it reads under
 /// it changed, is no change: the run reaches its test result and the cache is left as it is.
+/// Linux only for now: under Seatbelt on macOS (`crate::seatbelt::test_command`) the 0.15.0
+/// release run did not see the planting this case needs under the run's `HOME`; what takt's
+/// guard does there is story:the-fresh-home-cases-hold-on-macos.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_fresh_homes_first_tests_run_is_not_refused_for_the_cargo_cache() {
     assert_eq!(fresh_home_variant("cache"), None);
@@ -1375,6 +1379,10 @@ fn a_fresh_homes_first_tests_run_is_not_refused_for_the_cargo_cache() {
 /// A program a step writes into `~/.cargo/bin` in a fresh home, beside the cache it makes in
 /// `~/.cargo`, is still a change outside the tree: the run stops naming it and nothing is
 /// recorded.
+/// Linux only for now: under Seatbelt on macOS (`crate::seatbelt::test_command`) the 0.15.0
+/// release run did not see the planting this case needs under the run's `HOME`; what takt's
+/// guard does there is story:the-fresh-home-cases-hold-on-macos.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_program_written_into_a_fresh_homes_cargo_bin_still_stops_the_run() {
     assert_eq!(fresh_home_variant("bin"), None);

@@ -2,7 +2,7 @@ name: darwin
 
 on:
   push:
-    branches: ["wave/**"]
+    branches: ["wave/**", "integration/**"]
   workflow_dispatch:
   workflow_call:
     inputs:
