@@ -25,8 +25,8 @@ generated [CLI reference](./cli.md); a walk-through is in
 | `.yaml`, `.yml` | YAML: the fields at the top level, or in the `takt` member of a `loom.agent/1` document |
 | anything else | refused |
 
-Every field is optional. Every field but `scan` is the `takt run` flag of the same name, with `-`
-for `_`; `scan` has no flag.
+Every field is optional. Every field but `scan` and `forge_commands` is the `takt run` flag of the same name, with `-`
+for `_`; `scan` and `forge_commands` have no flag.
 
 | field | meaning |
 |---|---|
@@ -37,12 +37,13 @@ for `_`; `scan` has no flag.
 | `model` | string: the harness's model, when it takes one; with an `llm` section under `--harness harness`, the route or alias of that section it names, whose endpoint, wire and upstream model the session uses |
 | `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
 | `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
-| `forge` | string: `bot`, `gitlab` or `none` |
+| `forge` | string: `bot`, `gitlab`, `command` or `none` |
 | `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
 | `state_dir` | path: the state directory, as `--state-dir`: the run's transcripts go to `<state_dir>/transcripts` and what a discarded step sets aside to `<state_dir>/set-aside` ([The state directory](#the-state-directory)); a relative path is read beside the configuration file |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
+| `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
 | `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says |
 | `protocols` | a mapping of a protocol, by name (every revision) or `<name>/<major>`, to a mapping of its declared case inputs, each set to one of the values the protocol declares; an unknown protocol, input or value is refused at its line before any case opens. An input is taken from `--input`, else a story tag `input:<name>=<value>`, else this section, else takt's built-in default for the protocol; each value is recorded with its source in the case's `case.yaml` |
@@ -131,7 +132,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -321,12 +322,13 @@ Without `--forge`, takt follows `origin`:
 | any other host, with `glab auth status --hostname <host>` exiting 0 | `gitlab` |
 | anything else | `none`, with the reason in one line |
 
-Each forge is an adapter, and the three are peers:
+Each forge is an adapter, and the four are peers:
 
 | forge | what it pushes and opens through | what scans what it publishes |
 |---|---|---|
 | `gitlab` | `git push` over HTTPS with `glab auth git-credential` as its one credential helper; the merge request opened, read and merged through `glab api` | the run's scan adapter ([The scan](#the-scan)) |
 | `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the case's branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its state and checks | `b10x-gates scan-text`, always: it is the `gates` adapter's own forge |
+| `command` | the commands of the run file's `forge_commands`, each an argument list run without a shell; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
 | `none` | nothing | nothing leaves the machine |
 
 `--forge gitlab` without `glab` or its login is refused before the case opens. Under `scan:
@@ -336,8 +338,41 @@ none` it checks that the head is a commit and pushes without a scan. `--forge bo
 commits, replayed on the base branch's tip under the configured identity and named by
 `refs/takt/candidates/<case>`. With no identity configured it makes none and names the setting.
 
-A scenario run creates its trial base only through the bot route: it refuses `--forge gitlab`,
-and on another host it runs with `--forge none`.
+A scenario run creates its trial base only through the bot route: it refuses `--forge gitlab` and
+`--forge command`, and on another host it runs with `--forge none`.
+
+### The command forge
+
+`forge: command` runs the exact commands the run file names, each an argument list and never a
+shell line, so a title holding `;` or `$(...)` is one argument:
+
+```yaml
+forge: command
+forge_commands:
+  open: [glab, mr, create, --source-branch, "{branch}", --target-branch, "{base}", --title, "{title}", --description-file, "{body_file}", --yes]
+  read: [mr-state, "{number}"]
+  checks: [mr-checks, "{number}", "{head}"]
+  merge: [mr-merge, "{number}", "{head}"]
+  id_pattern: '/merge_requests/(\d+)'
+  refused_exit: [3]
+```
+
+- **Placeholders** are substituted once, inside the argument that holds them: `open` takes
+  `{branch}`, `{base}`, `{title}` and `{body_file}` (a file under the state directory holding the
+  body), `read` takes `{number}`, `checks` and `merge` take `{number}` and `{head}`. `merge` receives
+  the head the checks were read on.
+- **Output.** `open` prints the request's URL or number, read by `id_pattern` (default: the last
+  integer of the last URL on standard output). `read` prints JSON with `state` (`open`, `merged` or
+  `closed`), `head` (the commit, or an object with `sha` and `branch`), `branch` (when `head` is the
+  commit alone) and `base`. `checks` prints JSON, a list of `{name, state}`. Output that cannot be
+  read is an error naming the command and the field.
+- **Exit codes.** 0 is success; a code in `refused_exit` is a refusal, any other a failure. Standard
+  error of each command goes to a file under the state directory (`forge-command/`).
+- **Missing entries.** A protocol that opens, reads checks or merges needs the entries for those
+  actions; a missing one is refused before the case opens, naming it.
+- **Push and scan.** The push stays takt's scanned push over HTTPS to the project `origin` names,
+  under the run's scan adapter. No entry reports the merge target's tip, so the judge guard refuses a
+  merge through this forge until one does.
 
 ## The scan
 

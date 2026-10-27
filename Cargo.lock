@@ -635,6 +635,7 @@ dependencies = [
  "llm-credentials",
  "llm-models",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml_ng",

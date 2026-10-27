@@ -42,6 +42,7 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::confinement::Command;
 
 pub mod bot;
+pub mod command;
 pub mod gitlab;
 
 pub use bot::BotRoute;

@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::Frontier as _;
+use takt::forge::command::CommandForge;
 use takt::forge::gitlab::Glab;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
@@ -731,6 +732,9 @@ struct RunArgs {
     /// The protocol and the inputs `--config`'s file sets, read by [`RunArgs::configured`]; no flag.
     #[arg(skip)]
     protocol_settings: takt::run_config::ProtocolSettings,
+    /// The forge settings `--config`'s file sets, read by [`RunArgs::configured`]; no flag.
+    #[arg(skip)]
+    forge_settings: takt::run_config::ForgeSettings,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -767,6 +771,7 @@ impl RunArgs {
         }
         self.declared_scan = file.scan;
         self.protocol_settings = file.protocol_settings.clone();
+        self.forge_settings = file.forge_settings();
         self.looping.configured(file, matches)?;
         Ok(())
     }
@@ -1048,7 +1053,10 @@ struct LoopArgs {
     /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
     /// pipeline and merges it; what it publishes passes the run's scan adapter first, under
     /// `gates` `b10x-gates scan-text`, under a declared `scan: none` no scan; refused before
-    /// any case opens unless `glab auth status --hostname <host>` exits 0) or `none` (no pull
+    /// any case opens unless `glab auth status --hostname <host>` exits 0), `command` (the exact
+    /// argument lists the run file's `forge_commands` section names for `open`, `read`, `checks` and
+    /// `merge`, run without a shell; the push stays takt's scanned push; never a default, and
+    /// refused for a scenario run) or `none` (no pull
     /// request is opened; when `pr.open`,
     /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
     /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
@@ -1491,6 +1499,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 config,
                 declared_scan,
                 protocol_settings,
+                forge_settings,
                 mut looping,
             } = *args;
             looping.check()?;
@@ -1610,7 +1619,17 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 };
             // The forge, read before the turn, whose mainline it reads: the forge's `main`, or the
             // local `main` with none.
-            let forge = forge_of(&repo, looping.forge.as_deref(), &scan)?;
+            let forge = forge_with(
+                &repo,
+                looping.forge.as_deref(),
+                &scan,
+                &forge_settings,
+                &resuming
+                    .as_ref()
+                    .map_or(&opens_on, |resuming| &resuming.protocol)
+                    .actions,
+                looping.state_dir.as_deref(),
+            )?;
             // A resumed turn reads the mainline through the forge it recorded when it opened,
             // as `takt approve` does: a run through another is refused before anything is
             // written.
@@ -2791,6 +2810,46 @@ impl Forged {
     }
 }
 
+/// [`forge_of`] under what the run file says of the forge (`settings`): `forge: command` runs the
+/// commands of its `forge_commands` section, an entry the protocol's `actions` need that is
+/// missing refused here, before any case opens; `state_dir` (else the state home) holds the
+/// command forge's standard error files and body file. Settings that do not fit the forge are
+/// refused, naming their keys.
+fn forge_with(
+    repo: &Path,
+    forge: Option<&str>,
+    scan: &Scan,
+    settings: &takt::run_config::ForgeSettings,
+    actions: &[String],
+    state_dir: Option<&Path>,
+) -> Result<Forged> {
+    settings.check_for(forge)?;
+    if forge == Some("command") {
+        let commands = settings.commands.clone().unwrap_or_default();
+        let state = match state_dir {
+            Some(dir) => state_under(dir, "forge-command"),
+            None => takt::promotion::store()?.with_file_name("forge-command"),
+        };
+        let command = CommandForge::for_tree(
+            repo,
+            commands,
+            actions,
+            state,
+            scan.clone(),
+            Box::new(Process::default()),
+        )?;
+        return Ok(Forged {
+            forge: Some(Rc::new(command)),
+            line: Some(
+                "forge: command; pr.open, ci.read and repository.merge run the commands of the run file's forge_commands"
+                    .to_owned(),
+            ),
+            trials: None,
+        });
+    }
+    forge_of(repo, forge, scan)
+}
+
 /// The forge: the bot route when asked for, or by default when `origin` is a repository on
 /// github.com, the host the bot route serves; `glab` when asked for, or by default when `origin`
 /// is on another host and `glab` is logged in to it. `--forge bot` elsewhere, `--forge gitlab` on
@@ -2872,6 +2931,9 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Fo
     match forge {
         Some("gitlab") => Err(anyhow!(
             "--forge gitlab is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, and glab opens a merge request against a base it cannot create; give --forge bot or --forge none; nothing was changed"
+        )),
+        Some("command") => Err(anyhow!(
+            "--forge command is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, which the configured commands cannot do; give --forge bot or --forge none; nothing was changed"
         )),
         None => match takt::git::remote_url(repo, "origin")
             .ok()
@@ -4513,6 +4575,59 @@ mod tests {
         ));
         assert_eq!(error, "no forge `hub`: bot, gitlab or none");
         assert!(!repo.join(".takt/cases").exists());
+    }
+
+    /// story:a-command-forge-runs-the-configured-commands: `--forge command` with no
+    /// `forge_commands` in the run file is refused before the run opens, naming the section.
+    #[test]
+    fn the_command_forge_needs_its_section_before_the_run() {
+        let repo = gated_repository("forge-command-none", None);
+        let error = takt_error(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "command-none",
+            &["--forge", "command"],
+        ));
+        assert!(error.contains("forge_commands"), "{error}");
+        assert!(!repo.join(".takt/cases").exists());
+    }
+
+    /// An entry the protocol's actions need and the section lacks is refused naming it, by the
+    /// command forge's constructor the run goes through before any case opens.
+    #[test]
+    fn the_command_forge_refuses_a_missing_entry_by_name() {
+        let repo = gated_repository("forge-command-missing", None);
+        let tool = vec!["tool".to_owned()];
+        let settings = takt::run_config::ForgeSettings {
+            commands: Some(takt::forge::command::ForgeCommands {
+                open: Some(tool.clone()),
+                read: Some(tool.clone()),
+                checks: Some(tool),
+                ..Default::default()
+            }),
+        };
+        let actions = takt::protocol::LoadedProtocol::builtin("story.delivery/1")
+            .expect("a built-in")
+            .actions;
+        let state = repo.join("forge-state");
+        let error = super::forge_with(
+            &repo,
+            Some("command"),
+            &takt::scan::Scan::from_env(),
+            &settings,
+            &actions,
+            Some(&state),
+        )
+        .err()
+        .expect("refused");
+        assert!(format!("{error:#}").contains("`merge`"), "{error:#}");
+        assert!(!state.exists());
+        let error = super::scenario_forge_of(&repo, Some("command"), &takt::scan::Scan::from_env())
+            .err()
+            .expect("refused");
+        assert!(
+            format!("{error:#}").contains("--forge command"),
+            "{error:#}"
+        );
     }
 
     /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is

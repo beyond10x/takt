@@ -15,6 +15,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
 
+use crate::forge::command::ForgeCommands;
+
 /// llm's parsed `llm.routes/1` document, the type a run file's `llm` member is validated as; its
 /// [`Routes::digest`] is the `llm_digest` a run records.
 pub use llm_models::routes::Routes;
@@ -248,6 +250,44 @@ pub struct RunConfig {
     /// [`RunConfig::read`], never read from the file.
     #[serde(skip)]
     pub protocol_settings: ProtocolSettings,
+    /// The `forge_commands` section, the argument lists `forge: command` runs.
+    pub forge_commands: Option<ForgeCommands>,
+}
+
+/// What a run file says about the forge beyond its name: the commands of `forge: command`.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ForgeSettings {
+    /// `forge_commands`.
+    pub commands: Option<ForgeCommands>,
+}
+
+impl ForgeSettings {
+    /// Refuses what does not fit the forge `forge` names, before any case opens: `forge_commands`
+    /// belongs to `forge: command` and `forge: command` needs it.
+    /// The refusal names keys, never a value.
+    pub fn check_for(&self, forge: Option<&str>) -> Result<()> {
+        if self.commands.is_some() && forge != Some("command") {
+            return Err(anyhow!(
+                "`forge_commands` is set, and it belongs to `forge: command`, which this run does not use; nothing was opened"
+            ));
+        }
+        if forge == Some("command") && self.commands.is_none() {
+            return Err(anyhow!(
+                "`forge: command` runs the commands of a `forge_commands` section in the run file, and there is none; nothing was opened"
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl RunConfig {
+    /// The forge settings the file holds.
+    #[must_use]
+    pub fn forge_settings(&self) -> ForgeSettings {
+        ForgeSettings {
+            commands: self.forge_commands.clone(),
+        }
+    }
 }
 
 /// A present `llm` member, null included: serde reads a null as absent, so a bare `llm:` would
@@ -623,7 +663,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -927,6 +967,14 @@ impl RunConfig {
         };
         config.endpoint_file = config.endpoint_file.take().map(beside);
         config.state_dir = config.state_dir.take().map(beside);
+        if let Some(commands) = &config.forge_commands {
+            commands.check().map_err(|error| {
+                anyhow!(
+                    "the run configuration file {} is refused: {error}",
+                    path.display()
+                )
+            })?;
+        }
         Ok(config)
     }
 
