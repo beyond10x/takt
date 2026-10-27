@@ -18,7 +18,7 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/src/validator.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:44:48Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-27T01:44:48Z", actor: "human:timo", revision: 4}
@@ -49,15 +49,19 @@ observed at, its producer and its sha256, and the pull request's body carries an
 Each item is a named test, run by `task check`.
 
 1. `evidence_travels::store_record_names_the_evidence`: a story run to green writes a `test_result` record whose
-   source reads `takt.tests-run pass at <subject_revision>` and whose reference ends in `#sha256:<hex>` of the case
-   record's bytes; `aep plan artifact validate` passes.
+   source is still `takt` and whose reference is `<path>#sha256=<hex>&result=<result>&revision=<subject_revision>&producer=<producer>`,
+   `<hex>` the sha256 of the case record's bytes, `<path>` its path in the tree as today; `aep plan artifact validate`
+   passes, and a run that resumes the story finds the record it wrote as done.
 2. `evidence_travels::pull_request_body_summarises_the_case`: the body of the pull request `pr.open` requests lists
-   each evidence record of the case (kind, result, short revision, producer), the run's steps, tokens and stop as
-   `events.jsonl` states them, and states "not stated" for a figure the record does not hold.
+   each evidence record of the case (kind, result, short revision, producer), and the steps and tokens
+   `events.jsonl` states so far, and says "not stated" for a figure the record does not hold.
 3. `evidence_travels::body_is_bounded`: a case with 500 evidence records gives a body under 60,000 characters that
    says how many records it left out.
 4. `evidence_travels::body_passes_scan_text`: the body still passes the scan the bot forge runs before it opens the
    pull request (as today, `forge.rs:2440-2450`).
+
+Decided at implementation (2026-10-27): the source stays `takt`, because the store's existing records and the tests
+that read them match on it; the reference carries the fields instead.
 
 ## Scope
 

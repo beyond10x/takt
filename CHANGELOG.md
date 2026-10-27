@@ -20,6 +20,10 @@ takt's releases.
 
 - A case keeps `python-modules.json` only when a Python answered at case open; with none, no file is written and the step guard uses the built-in lists.
 
+### Changed
+
+- The store's `test_result` record names its case record by path, sha256, result, subject revision and producer, and the pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
+
 ### Fixed
 
 - The first `tests.run` in a fresh `HOME` is no longer refused for the cache cargo makes in `~/.cargo`; a program in `~/.cargo/bin` still stops the run.

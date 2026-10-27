@@ -2675,7 +2675,110 @@ fn claims_held(case_dir: &Path) -> Result<Vec<String>> {
         .unwrap_or_default())
 }
 
-/// The pull request's body: the intent, then the case, the revision and the claims that hold.
+/// The figure a body states as this when the case's record holds none of it.
+const NOT_STATED: &str = "not stated";
+/// The most bytes a pull request body takes; the forge's limit is 65,536 characters.
+const BODY_LIMIT: usize = 60_000;
+/// The most bytes of the intent a body carries; a longer one is cut, and the body says so.
+const INTENT_LIMIT: usize = 20_000;
+/// The most bytes of the evidence list; the records past it are left out, and the body counts them.
+const EVIDENCE_LIMIT: usize = 30_000;
+/// The bytes a body keeps back from its list for the heading and the count of records left out.
+const EVIDENCE_RESERVE: usize = 400;
+
+/// The longest prefix of `text` of at most `limit` bytes, cut on a character boundary.
+fn prefix_within(text: &str, limit: usize) -> &str {
+    let mut end = limit.min(text.len());
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
+/// The evidence records under the case's `evidence/`, each as JSON, in file-name order. A file
+/// that is not JSON reads as `null`, so its figures are [`NOT_STATED`].
+fn evidence_of(case_dir: &Path) -> Result<Vec<serde_json::Value>> {
+    let dir = case_dir.join("evidence");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", dir.display())),
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("read {}", dir.display()))?
+            .path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    Ok(paths
+        .iter()
+        .map(|path| {
+            std::fs::read(path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+                .unwrap_or(serde_json::Value::Null)
+        })
+        .collect())
+}
+
+/// The steps and the tokens `events.jsonl` in the case directory states so far: the step lines
+/// counted, and the `tokens` they state summed. Each is [`NOT_STATED`] when the file is missing,
+/// and the tokens when no step line states any.
+fn run_figures_of(case_dir: &Path) -> (String, String) {
+    let Ok(text) = std::fs::read_to_string(case_dir.join(crate::events::EVENTS_FILE)) else {
+        return (NOT_STATED.to_owned(), NOT_STATED.to_owned());
+    };
+    let mut steps = 0u64;
+    let mut tokens: Option<u64> = None;
+    for line in text.lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if event["event"] != "step" {
+            continue;
+        }
+        steps += 1;
+        if let Some(stated) = event["tokens"].as_u64() {
+            tokens = Some(tokens.unwrap_or(0).saturating_add(stated));
+        }
+    }
+    (
+        steps.to_string(),
+        tokens.map_or_else(|| NOT_STATED.to_owned(), |tokens| tokens.to_string()),
+    )
+}
+
+/// One evidence record as a body line: its kind, result, short revision and producer, each
+/// [`NOT_STATED`] when the record does not hold it.
+fn evidence_line(record: &serde_json::Value) -> String {
+    let figure = |name: &str| {
+        record[name]
+            .as_str()
+            .map_or_else(|| NOT_STATED.to_owned(), str::to_owned)
+    };
+    let revision = record["subject_revision"].as_str().map_or_else(
+        || NOT_STATED.to_owned(),
+        |revision| short(revision).to_owned(),
+    );
+    format!(
+        "- `{}`, result `{}`, revision `{revision}`, producer `{}`.\n",
+        figure("kind"),
+        figure("result"),
+        figure("producer")
+    )
+}
+
+/// The pull request's body: the intent, then the case, the revision and the claims that hold, the
+/// steps and tokens `events.jsonl` states, and the evidence records of the case. The body stays
+/// under [`BODY_LIMIT`] bytes: a longer intent is cut, and the records that do not fit are left
+/// out, the body saying how many.
 fn body_of(case_dir: &Path, intent: &str, revision: &str) -> Result<String> {
     let case = case_dir
         .file_name()
@@ -2687,10 +2790,47 @@ fn body_of(case_dir: &Path, intent: &str, revision: &str) -> Result<String> {
     } else {
         claims.join(", ")
     };
-    Ok(format!(
-        "{}\n\n---\n\nOpened by takt for the case `{case}` at `{revision}`. Claims that hold: {claims}.\n",
-        intent.trim()
-    ))
+    let intent = intent.trim();
+    let kept = prefix_within(intent, INTENT_LIMIT);
+    let cut = if kept.len() < intent.len() {
+        format!(
+            "\n\n(The intent is cut at {INTENT_LIMIT} bytes; the rest is left out of this body.)"
+        )
+    } else {
+        String::new()
+    };
+    let (steps, tokens) = run_figures_of(case_dir);
+    let head = format!(
+        "{kept}{cut}\n\n---\n\nOpened by takt for the case `{case}` at `{revision}`. Claims that hold: {claims}.\n\nSteps: {steps}. Tokens: {tokens}.\n"
+    );
+    let records = evidence_of(case_dir)?;
+    let budget = BODY_LIMIT
+        .saturating_sub(head.len())
+        .saturating_sub(EVIDENCE_RESERVE)
+        .min(EVIDENCE_LIMIT);
+    let mut listed = String::new();
+    let mut count = 0;
+    for record in &records {
+        let line = evidence_line(record);
+        if listed.len() + line.len() > budget {
+            break;
+        }
+        listed.push_str(&line);
+        count += 1;
+    }
+    let mut body = head;
+    body.push_str(&format!(
+        "\nEvidence: {} records in the case.\n\n{listed}",
+        records.len()
+    ));
+    if count < records.len() {
+        body.push_str(&format!(
+            "\n{} of {} evidence records are left out of this body, which is bounded at {BODY_LIMIT} bytes.\n",
+            records.len() - count,
+            records.len()
+        ));
+    }
+    Ok(body)
 }
 
 /// What `pr.open` does after the push: opens the case's pull request, or reads the one it has.
