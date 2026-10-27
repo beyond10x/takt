@@ -264,6 +264,34 @@ $ LLM_API_KEY=<token> takt run --repo ~/demo --intent x --harness harness --endp
 takt: the endpoint's credential variable LLM_API_KEY is given on the wire `anthropic-messages`: only openai-responses is admitted for an environment credential until the session executor can pass an API-key file; nothing was started
 ```
 
+## The llm section
+
+The run file's `llm` member, or `--llm-config <FILE>`, holds an `llm.routes/1` document, inline or
+as `{path: <file>}`. llm validates it, and a refused document opens no case: takt relays llm's
+refusal.
+
+- A `path` is read beside the run file. It is refused when it is absolute, when it has a `..` part,
+  or when it resolves through a symbolic link to a place outside the run file's directory.
+  `--llm-config` names its file from the working directory and has none of these limits.
+- The file must be a regular file of at most 2 MiB (2097152 bytes). A larger file, or one that is
+  not a regular file, is refused.
+- The name ends in `.toml`, `.yaml` or `.yml`: `.toml` is read by llm's TOML parser, the other two
+  by its YAML one. Any other name is refused.
+- Under `--harness harness`, takt runs a route's `responses` protocol only. A route on the
+  `messages` protocol is refused before any case opens, as is any other protocol: a `messages`
+  route maps to the `anthropic-messages` wire, which takes no staged key, so in this release only
+  the `responses` protocol takes a route's key.
+- Under `--harness harness`, takt resolves the key of the route `--model` names with llm before it
+  starts any process, and takes out of its own environment every variable whose value is exactly
+  that key, and every variable an `env:` reference anywhere in the document names, in any endpoint.
+  So neither the test command nor b10x-harness inherits one. A copy of the key with other bytes
+  around it, such as a trailing newline or a prefix, matches no variable and is not removed. Under
+  `--confinement substrate` outside a delegated run, the removal waits until the substrate has
+  opened in the run.
+- Under `--harness none` the document is validated and its digest is recorded, but no route is
+  resolved and no variable is removed. `--harness claude` and `--harness codex` refuse an `llm`
+  section.
+
 ## Commit identity
 
 takt commits as the identity the repository names in `.engineering/commit-identity.conf`, read
@@ -405,7 +433,6 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | `--strict-version` | refuse before the run when the vendor version is outside metaharness's pin; refused until takt's launch carries it |
 | `--context <FILE>` | a file whose text the prompt carries, repeatable, as `metaharness run --context`; refused until takt's launch carries it |
 
-The five flags above take the run file's `harness` mapping's keys under the same names, and a flag wins over the same key in the file.
 | `--endpoint-file <PATH>` | the endpoint file |
 | `--model-endpoint <URL>` | the endpoint's base URL |
 | `--model-wire <WIRE>` | `anthropic-messages` or `openai-responses` |
@@ -413,6 +440,8 @@ The five flags above take the run file's `harness` mapping's keys under the same
 | `--subscription-token-pointer <POINTER>` | a JSON pointer into the token file |
 | `--api-key-secret <NS/NAME>` | a secret's name; takt reads no secret |
 | `--endpoint-token-env <NAME>` | a variable holding the key; `openai-responses` only |
+
+The five flags above that name a session setting (`--effort`, `--max-turns`, `--max-budget-usd`, `--strict-version`, `--context`) take the run file's `harness` mapping's keys under the same names, and a flag wins over the same key in the file. A session setting, from the file's mapping or from a flag, is refused with `--harness none`, which starts no session, unless its only key is `kind`. `max-turns` is a whole number above zero, in the file or on the command line.
 
 The names above are metaharness's and llm's; the old names `--endpoint-base-url`,
 `--endpoint-wire`, `--endpoint-model` (the same flag as `--model`), `--endpoint-token-file`,

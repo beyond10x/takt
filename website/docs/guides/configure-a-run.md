@@ -188,6 +188,6 @@ takt:
 ```
 
 That is the container image's default `/config/agent.yaml`
-([Run in a container](./run-in-a-container.md)). Loom 0.44.0 itself refuses a `takt` member in a
+([Run in a container](./run-in-a-container.md)). Loom 0.45.0 itself refuses a `takt` member in a
 `LoomAgent`'s `spec.agent`, so on a cluster the run's file is a plain `takt.yaml` in
 `spec.configFiles` instead ([Deploy on Kubernetes](./deploy-on-kubernetes.md)).

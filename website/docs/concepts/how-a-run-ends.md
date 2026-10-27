@@ -166,7 +166,7 @@ trial runner discards it rather than resume it.
 
 A run's outcome lives in its files and its exit code, never only in a process, so a script, a CI
 job or an orchestrator can drive takt without parsing its output. Under Loom, a takt container
-deployed as a `LoomAgent` of the `Command` variant runs once as a Job, and Loom 0.44.0 writes the
+deployed as a `LoomAgent` of the `Command` variant runs once as a Job, and Loom 0.45.0 writes the
 program's exit code, end time and reason into the resource's `status.run` and its `Completed`
 condition. A delivery run is built to end on 0 (accepted, or nothing ready), 3 (a budget, or
 tests that need a person), 4 (the merge waits for a grant) or 7 (`forge: none`, with the
