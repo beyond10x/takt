@@ -700,6 +700,160 @@ pub fn resolve_settings(request: &SettingsRequest<'_>) -> Result<Settings> {
     })
 }
 
+/// The value a run file's `protocols` section sets for an input, with where it is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunFileValue {
+    /// The value written.
+    pub value: String,
+    /// The run file's path.
+    pub path: Option<std::path::PathBuf>,
+    /// The line the value is written on, 1-based.
+    pub line: usize,
+}
+
+/// One declared input of a protocol as `takt protocol show` lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputListing {
+    /// The input's name.
+    pub name: String,
+    /// What the protocol says the input is, on one line; empty when it says nothing.
+    pub description: String,
+    /// The values it takes; empty when the protocol lists none, which admits any.
+    pub values: Vec<String>,
+    /// takt's built-in default, when it ships one.
+    pub default: Option<String>,
+    /// The value the run file sets, when it sets one.
+    pub run_file: Option<RunFileValue>,
+}
+
+/// A protocol's declared inputs, each with its values, description, built-in default and the value
+/// the run file sets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolListing {
+    /// The protocol's id, `<name>/<major>`.
+    pub id: String,
+    /// The declared inputs, in declaration order.
+    pub inputs: Vec<InputListing>,
+}
+
+/// Lists the declared inputs of the built-in protocol `spec`, `<name>/<major>` in either spelling,
+/// against `file`, a run file's protocol settings: an unknown protocol is refused naming the ones
+/// takt knows. The run file is not validated here; a value written for the protocol is shown as
+/// written.
+///
+/// # Errors
+/// When `spec` names no built-in protocol.
+pub fn list_settings(
+    spec: &str,
+    file: &crate::run_config::ProtocolSettings,
+) -> Result<ProtocolListing> {
+    let protocol = LoadedProtocol::builtin(spec).map_err(|_| {
+        anyhow!(
+            "no protocol {spec}; takt knows {}",
+            builtin_ids().join(", ")
+        )
+    })?;
+    let inputs = protocol
+        .declared_inputs()
+        .into_iter()
+        .map(|input| {
+            let run_file = file
+                .sections
+                .iter()
+                .filter(|section| names(&section.protocol, &protocol))
+                .flat_map(|section| {
+                    section
+                        .inputs
+                        .iter()
+                        .filter(|set| set.input == input.name)
+                        .map(move |set| (section.protocol.contains('/'), set))
+                })
+                .max_by_key(|(specific, _)| *specific)
+                .map(|(_, set)| RunFileValue {
+                    value: set.value.clone(),
+                    path: file.file.clone(),
+                    line: set.line,
+                });
+            InputListing {
+                default: builtin_default(&protocol.id, &input.name).map(str::to_owned),
+                name: input.name,
+                description: input.description,
+                values: input.values,
+                run_file,
+            }
+        })
+        .collect();
+    Ok(ProtocolListing {
+        id: protocol.id,
+        inputs,
+    })
+}
+
+impl ProtocolListing {
+    /// The listing as text: the protocol, then per input its values, description, default and run
+    /// file value, `unset` for a run file that does not set it and `none` for a default takt does
+    /// not ship.
+    #[must_use]
+    pub fn text(&self) -> String {
+        let mut text = format!("protocol {}\n", self.id);
+        if self.inputs.is_empty() {
+            text.push_str("declares no inputs\n");
+        }
+        for input in &self.inputs {
+            text.push_str(&format!("input {}\n", input.name));
+            if input.values.is_empty() {
+                text.push_str("  values: any\n");
+            } else {
+                text.push_str(&format!("  values: {}\n", input.values.join(", ")));
+            }
+            text.push_str(&format!("  description: {}\n", input.description));
+            text.push_str(&format!(
+                "  default: {}\n",
+                input.default.as_deref().unwrap_or("none")
+            ));
+            match &input.run_file {
+                Some(set) => text.push_str(&format!(
+                    "  run file: {} ({}:{})\n",
+                    set.value,
+                    set.path.as_ref().map_or_else(
+                        || "<run file>".to_owned(),
+                        |path| path.display().to_string()
+                    ),
+                    set.line
+                )),
+                None => text.push_str("  run file: unset\n"),
+            }
+        }
+        text
+    }
+
+    /// [`ProtocolListing::json`] as indented text.
+    #[must_use]
+    pub fn json_text(&self) -> String {
+        serde_json::to_string_pretty(&self.json()).unwrap_or_default()
+    }
+
+    /// The listing as data: `{"protocol", "inputs": [{"name", "description", "values", "default",
+    /// "run_file": {"value", "path", "line"}}]}`, `default` and `run_file` null when there is none.
+    #[must_use]
+    pub fn json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "protocol": self.id,
+            "inputs": self.inputs.iter().map(|input| serde_json::json!({
+                "name": input.name,
+                "description": input.description,
+                "values": input.values,
+                "default": input.default,
+                "run_file": input.run_file.as_ref().map(|set| serde_json::json!({
+                    "value": set.value,
+                    "path": set.path.as_ref().map(|path| path.display().to_string()),
+                    "line": set.line,
+                })),
+            })).collect::<Vec<_>>(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

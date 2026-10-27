@@ -47,6 +47,9 @@ enum Commands {
     Approve(ApproveArgs),
     /// List the built-in protocols.
     Protocols,
+    /// A built-in protocol's declared settings.
+    #[command(subcommand)]
+    Protocol(ProtocolCommands),
     /// The repository's scenarios: a story at a known seed commit, run from a fresh base.
     #[command(subcommand)]
     Scenario(ScenarioCommands),
@@ -488,6 +491,44 @@ const REPORT_EXIT_CODES: &str = "Exit codes:
   0  printed
   1  refused: a case has no events.jsonl, a record, steps file or trace does not read, or --steps is given more often than --case; the reason on stderr
   2  the arguments do not parse, or neither --case nor --trace is given";
+
+#[derive(Subcommand)]
+enum ProtocolCommands {
+    /// Print each case input a built-in protocol declares: its values and description, takt's
+    /// built-in default, and the value the run file `--config` names sets for it, with that
+    /// file's path and line (`unset` when it sets none). `--format json` prints the same as
+    /// data. A protocol takt does not know is refused, naming the ones it knows.
+    #[command(after_help = PROTOCOL_SHOW_EXIT_CODES)]
+    Show(ProtocolShowArgs),
+}
+
+/// What `takt protocol show --help` says about the exit codes.
+const PROTOCOL_SHOW_EXIT_CODES: &str = "Exit codes:
+  0  printed
+  1  refused: the protocol is not one takt knows (the reason names the ones it does), or the run file does not read; the reason on stderr
+  2  the arguments do not parse";
+
+/// How `takt protocol show` prints.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ShowFormat {
+    /// Lines, one block per input.
+    Text,
+    /// One JSON document.
+    Json,
+}
+
+#[derive(clap::Args)]
+struct ProtocolShowArgs {
+    /// The built-in protocol, `<name>/<major>` (`software.change/1`), as `takt protocols` lists it.
+    protocol: String,
+    /// A run file (.toml, .yaml or .yml), the one `takt run --config` reads: the values its
+    /// `protocols` section sets are listed with the file's path and line.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
+    /// How to print.
+    #[arg(long, value_enum, default_value = "text")]
+    format: ShowFormat,
+}
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
@@ -1233,6 +1274,23 @@ fn main() -> ExitCode {
 /// | 8 | `DiskLow`: before a step, a file system it builds on had less free than `--min-free-gib`; a runner discards the trial rather than resume it |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
+        Commands::Protocol(ProtocolCommands::Show(args)) => {
+            let ProtocolShowArgs {
+                protocol,
+                config,
+                format,
+            } = args;
+            let file = match &config {
+                Some(path) => takt::run_config::RunConfig::read(path)?.protocol_settings,
+                None => takt::run_config::ProtocolSettings::default(),
+            };
+            let listing = takt::protocol::list_settings(&protocol, &file)?;
+            match format {
+                ShowFormat::Text => write!(out, "{}", listing.text())?,
+                ShowFormat::Json => writeln!(out, "{}", listing.json_text())?,
+            }
+            Ok(EXIT_DONE)
+        }
         Commands::Protocols => {
             for (name, major) in b10x_canon_engineering_list() {
                 writeln!(out, "{name}/{major}")?;
