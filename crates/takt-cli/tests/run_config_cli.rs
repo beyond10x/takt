@@ -82,7 +82,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(".takt/cases")
     }
 
     /// Writes `text` as `config/run.toml` and returns its path.

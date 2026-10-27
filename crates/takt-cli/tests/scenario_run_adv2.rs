@@ -387,7 +387,7 @@ fn a_new_tag_in_the_push_report_does_not_count_as_the_trial_branch_created() {
     assert!(err.contains("not created"), "stderr {err}");
     assert!(!out.contains("on trial/0 at"), "stdout {out}");
     assert!(
-        !world.repo.join(".engineering/cases").exists(),
+        !world.repo.join(".takt/cases").exists(),
         "a case was opened on the remote's trial/0"
     );
 }

@@ -221,9 +221,13 @@ codes are in [How a run ends](../concepts/how-a-run-ends.md). A finished Job is 
 To run once more, change the resource (a new `args`, for instance): the new generation deletes the
 old Job and creates a new one.
 
-The case is on the claim, under `/workspace/.engineering/cases/`. `HOME` is `/var/lib/agent`, an
-emptyDir of mode 0700, as is `/tmp`, and the root file system is read-only. Transcripts under
-`HOME` go with the pod.
+The case is on the claim, under `/workspace/.takt/cases/`. `HOME` is `/var/lib/agent`, an
+emptyDir of mode 0700, as is `/tmp`, and the root file system is read-only. Transcripts and what a
+discarded step sets aside, which go under `HOME` by default, go with the pod. To keep them, name a
+directory on a kept volume as the state directory: `state_dir` in the run configuration or
+`runtime.state_dir` of the `loom.agent/1` document, a key Loom itself declares and takt reads as the
+default (`--state-dir` wins over both). The run then writes both under it, nothing under
+`HOME` ([The state directory](../reference/configuration.md#the-state-directory)).
 
 ## What still stops it
 

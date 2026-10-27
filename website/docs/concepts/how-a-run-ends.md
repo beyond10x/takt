@@ -94,7 +94,7 @@ frontier: implementation.edit (admissible), release.rollback (approval-required)
 step 1: tests.run {}
   effect: the test command exited 101: fail; 0 passed, 1 failed, 0 ignored over 1 result line; to rerun pass `--lib`; failed: tests::adds_two_numbers
   evidence: test_result fail
-stopped: RedBase (the tests fail at the case's base 4663159f, before any step changed it: tests::adds_two_numbers; to rerun pass `--lib`); steps 1, tokens 0, case ~/red/.engineering/cases/takt-20261026T231110Z
+stopped: RedBase (the tests fail at the case's base 4663159f, before any step changed it: tests::adds_two_numbers; to rerun pass `--lib`); steps 1, tokens 0, case ~/red/.takt/cases/takt-20261026T231110Z
 $ echo $?
 3
 ```
@@ -111,7 +111,7 @@ step 1: tests.run {}
   effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
-stopped: Iterations (1); steps 1, tokens 0, case ~/green/.engineering/cases/takt-20261026T231123Z
+stopped: Iterations (1); steps 1, tokens 0, case ~/green/.takt/cases/takt-20261026T231123Z
 $ echo $?
 3
 ```
@@ -135,7 +135,7 @@ a red base ends here as soon as a judgement step is the only way on:
 $ takt run --repo ~/red --case takt-20261026T231110Z --harness none --forge none --iterations 3 --continue-past-red-base
 case takt-20261026T231110Z on software.change/1 in ~/red; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-stopped: error: step 1: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left; steps 1, tokens 0, case ~/red/.engineering/cases/takt-20261026T231110Z
+stopped: error: step 1: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left; steps 1, tokens 0, case ~/red/.takt/cases/takt-20261026T231110Z
 ```
 
 ### Waiting: exit 6

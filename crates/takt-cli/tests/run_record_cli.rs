@@ -185,7 +185,7 @@ fn value_of(json: &str, key: &str) -> String {
 
 /// The one case directory under the repository's cases directory.
 fn the_case(repo: &Path) -> PathBuf {
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();

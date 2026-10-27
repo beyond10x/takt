@@ -209,7 +209,7 @@ fn adv2_a_grant_on_a_sibling_case_given_during_another_case_s_judgement_step_is_
     );
     match &stop {
         Ok(Stop::StepRefused(why)) => assert!(
-            why.contains(".engineering/cases/b/authority.yaml"),
+            why.contains(".takt/cases/b/authority.yaml"),
             "a's step was refused for something other than b's grant: {why}; if story:case-scoped-step-guard has landed, flip this assertion (a's step is not refused for a sibling's grant)\n{out}"
         ),
         other => panic!(

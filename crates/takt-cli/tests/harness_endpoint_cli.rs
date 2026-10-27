@@ -83,7 +83,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(".takt/cases")
     }
 
     /// `takt run` on the repository with `args` after the intent, HOME the scratch one, the

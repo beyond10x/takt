@@ -381,7 +381,7 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
     assert!(text.contains("evidence: pull_request open"), "{text}");
     let lines = gates.lines();
     assert_eq!(lines.len(), 4, "{lines:?}");
-    let artifacts = tree.join(".engineering/cases/opens/artifacts");
+    let artifacts = tree.join(".takt/cases/opens/artifacts");
     assert_eq!(
         lines[0],
         format!(

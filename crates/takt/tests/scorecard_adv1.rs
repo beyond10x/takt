@@ -345,7 +345,7 @@ fn a_wave_09_store_evidence_line_does_not_stretch_the_runs_wall_time() {
             Event::StoreEvidence {
                 story: "story:scratch-one".to_owned(),
                 kind: "test_result".to_owned(),
-                reference: ".engineering/cases/scenario-1-trial-1/evidence/0001.json".to_owned(),
+                reference: ".takt/cases/scenario-1-trial-1/evidence/0001.json".to_owned(),
                 observed_at: "2026-10-18T09:00:00Z".to_owned(),
                 commit: None,
             },

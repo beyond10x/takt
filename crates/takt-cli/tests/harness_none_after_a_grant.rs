@@ -332,7 +332,7 @@ fn harness_none_takes_the_granted_merge() {
     assert_eq!(
         git_out(
             &repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"]
         ),
         ""
     );
@@ -365,7 +365,7 @@ fn harness_none_no_grant_unchanged() {
     );
     assert!(
         !repo
-            .join(".engineering/cases")
+            .join(takt::case::CASES_DIR)
             .join(&id)
             .join("authority.yaml")
             .exists(),

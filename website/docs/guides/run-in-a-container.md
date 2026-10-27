@@ -107,7 +107,7 @@ Each was run with `--harness none` on the story repository. Under the default se
 ```console
 frontier: took story:add-sub: Add a subtraction
 case story-add-sub-20261026T233237Z on story.delivery/1 in /workspace; inputs none; confinement none
-stopped: error: tests.run (takt.tests-run): run cargo test --quiet --locked: the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed: run cargo: Operation not permitted (os error 1); steps 1, tokens 0, case /workspace/.engineering/cases/story-add-sub-20261026T233237Z
+stopped: error: tests.run (takt.tests-run): run cargo test --quiet --locked: the test command runs in a user and a mount namespace of its own, where no login of the user's is in reach, and this host refuses unprivileged user namespaces (as with `kernel.apparmor_restrict_unprivileged_userns = 1` or `kernel.unprivileged_userns_clone = 0`); allow them, or run takt where they are allowed: run cargo: Operation not permitted (os error 1); steps 1, tokens 0, case /workspace/.takt/cases/story-add-sub-20261026T233237Z
 ```
 
 The message names two kernel settings, but here the cause was the container's default seccomp and
@@ -117,7 +117,7 @@ Unconfined, without the `mkdir`:
 ```console
 step 1: tests.run {}
   refused: tests.run wrote what its validator does not: /var/lib/takt/.cargo; the cases directory was put back, the change discarded and nothing recorded
-stopped: StepRefused (tests.run wrote what its validator does not: /var/lib/takt/.cargo); steps 1, tokens 0, case /workspace/.engineering/cases/story-add-sub-20261026T233241Z
+stopped: StepRefused (tests.run wrote what its validator does not: /var/lib/takt/.cargo); steps 1, tokens 0, case /workspace/.takt/cases/story-add-sub-20261026T233241Z
 ```
 
 Unconfined, with the `mkdir`, the tests and the gate pass and the run goes on to its first
@@ -140,10 +140,12 @@ takt: the endpoint's credential variable LLM_API_KEY is not set; nothing was sta
 
 ## 5. Read the result
 
-The case is in `/workspace/.engineering/cases/` on the volume, and the exit code is the run's
+The case is in `/workspace/.takt/cases/` on the volume, and the exit code is the run's
 ([How a run ends](../concepts/how-a-run-ends.md)). With `forge: none` a delivery ends at
-`pr.opened` with a candidate commit on the volume. Transcripts are under `HOME`, which
-`docker run --rm` drops with the container.
+`pr.opened` with a candidate commit on the volume. Transcripts and what a discarded step sets
+aside are under `HOME`, which `docker run --rm` drops with the container; `--state-dir` (or
+`state_dir`) names a mounted directory to keep both
+([The state directory](../reference/configuration.md#the-state-directory)).
 
 On Kubernetes the same image runs as a Loom agent:
 [Deploy on Kubernetes](./deploy-on-kubernetes.md).

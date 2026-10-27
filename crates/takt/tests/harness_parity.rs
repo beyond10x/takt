@@ -105,7 +105,10 @@ fn work(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         for entry in fs::read_dir(dir).expect("the listing") {
             let path = entry.expect("an entry").path();
             let relative = path.strip_prefix(root).expect("under").to_path_buf();
-            if relative == Path::new(".git") || relative.starts_with(".engineering") {
+            if relative == Path::new(".git")
+                || relative.starts_with(".engineering")
+                || relative.starts_with(".takt")
+            {
                 continue;
             }
             if path.is_dir() {
@@ -434,7 +437,7 @@ fn scanner(tree: &Path, kind: &str) -> ChangeScan {
 
 /// The case directory of `id` in `tree`.
 fn case_dir(tree: &Path, id: &str) -> PathBuf {
-    tree.join(".engineering/cases").join(id)
+    tree.join(".takt/cases").join(id)
 }
 
 /// Every decision the case recorded, as its claim values and obligation, action and outcome

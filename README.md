@@ -28,7 +28,8 @@ takt is one Rust binary, Apache-2.0, an application on the SDK of
 runtime drives the case, Loom's governor decides, the harness proposes. It gives you:
 
 - evidence bound to a revision, and a merge only under a grant recorded for that revision;
-- a case that is files in your repository, which a later run resumes and a reviewer replays;
+- a case that is files under `.takt/cases` in your repository, ignored by git unless you commit its
+  `.gitignore`, which a later run resumes and a reviewer replays;
 - a named stop and its own exit code for every end of a run, so a script can drive it;
 - a measured self-improvement loop: a fix counts when a check failed before it and passes after.
 

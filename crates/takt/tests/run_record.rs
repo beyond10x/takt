@@ -581,7 +581,7 @@ fn a_story_whose_case_terminated_accepted_is_implemented() {
                 "--untracked-files=all",
                 "--",
                 ".",
-                ":!.engineering/cases"
+                ":!.takt/cases"
             ]
         ),
         ""
@@ -1192,7 +1192,7 @@ fn a_judgement_step_that_edits_the_planning_store_is_refused_and_put_back() {
     assert_eq!(
         git(
             &repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"]
         ),
         ""
     );

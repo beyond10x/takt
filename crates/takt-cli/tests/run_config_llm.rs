@@ -62,7 +62,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(takt::case::CASES_DIR)
     }
 
     /// Writes `text` as `config/<name>` and returns its path.

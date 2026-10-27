@@ -288,7 +288,7 @@ fn a_test_command_past_the_hour_budget_is_killed_and_records_nothing() {
         None,
         "no judgement step was taken\n{text}"
     );
-    let case = tree.join(".engineering/cases/validator-hours");
+    let case = tree.join(".takt/cases/validator-hours");
     let records = fs::read_dir(case.join("evidence")).map_or(0, Iterator::count);
     assert_eq!(records, 0, "nothing is recorded\n{text}");
     let events = fs::read_to_string(case.join("events.jsonl")).expect("the run record");

@@ -267,12 +267,8 @@ fn a_credential_in_a_proposed_path_is_refused(label: &str, configure: fn(&mut Ru
         let mut out = Vec::new();
         let stop = run.run(&mut out);
         let said = String::from_utf8_lossy(&out).into_owned();
-        let record = fs::read_to_string(
-            tree.join(".engineering/cases")
-                .join(id)
-                .join("events.jsonl"),
-        )
-        .unwrap_or_default();
+        let record = fs::read_to_string(tree.join(".takt/cases").join(id).join("events.jsonl"))
+            .unwrap_or_default();
         let in_record: Vec<String> = record
             .lines()
             .filter(|line| line.contains(&token))

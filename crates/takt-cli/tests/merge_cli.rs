@@ -355,7 +355,7 @@ fn approve_then_the_resumed_run_merges() {
     assert_eq!(
         git_out(
             &repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"]
         ),
         ""
     );
@@ -392,7 +392,7 @@ fn approve_then_the_resumed_run_merges() {
     assert_eq!(
         git_out(
             &repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"]
         ),
         ""
     );

@@ -767,11 +767,6 @@ const EVIDENCE_LINES: [(&str, &str, &str); 17] = [
         "reads the records (`case_records`)",
     ),
     (
-        "takt/src/run.rs",
-        "let mine = Path::new(CASES_DIR).join(&self.case.id).join(\"evidence\");",
-        "a path compared with a record line's; nothing written",
-    ),
-    (
         "takt/src/replay.rs",
         "let (_, name) = path.rsplit_once(\"/evidence/\")?;",
         "reads a record's name from the record's line",
@@ -805,6 +800,11 @@ const EVIDENCE_LINES: [(&str, &str, &str); 17] = [
         "takt/src/validator.rs",
         "let dir = case_dir.join(\"evidence\");",
         "reads the case's records for the pull request's body (story:the-pull-request-and-the-store-carry-the-evidence)",
+    ),
+    (
+        "takt/src/run.rs",
+        ".join(\"evidence\");",
+        "names the case's own evidence directory, relative to the tree, where observed_pass reads a record it recorded",
     ),
 ];
 

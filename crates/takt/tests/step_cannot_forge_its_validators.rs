@@ -280,6 +280,8 @@ fn assert_refused_and_put_back(tree: &Scratch, ran: &Ran, path: &str) {
             "--",
             ".",
             ":!.engineering/cases",
+            ":!.takt/cases",
+            ":!.takt/.gitignore",
             ":!target",
         ],
     );
@@ -437,8 +439,7 @@ fn a_judge_path_in_another_case_is_refused() {
             "forged\n",
         );
     });
-    let folds_case =
-        tree.join(".engineering/cases").is_dir() && tree.join(".ENGINEERING/cases").is_dir();
+    let folds_case = tree.join(".takt/cases").is_dir() && tree.join(".ENGINEERING/cases").is_dir();
     let written = if folds_case {
         ".engineering/planning/story/blocked-one.md"
     } else {

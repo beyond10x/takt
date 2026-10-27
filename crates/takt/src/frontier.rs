@@ -466,9 +466,8 @@ pub fn approve(
                     frontier.name()
                 )
             })?;
-        let identity =
-            crate::case::commit_identity_of(&tree.join(crate::case::CASES_DIR).join(case))?
-                .unwrap_or_else(crate::git::CommitIdentity::takt);
+        let identity = crate::case::commit_identity_of(&crate::case::CaseDir::locate(tree, case))?
+            .unwrap_or_else(crate::git::CommitIdentity::takt);
         commit_record(tree, &identity, &branch, story, capability)?;
     }
     let reference = pending.approval().reference();

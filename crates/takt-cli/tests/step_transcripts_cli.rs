@@ -134,7 +134,7 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     let said = format!("{stdout}\n{stderr}");
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();
@@ -271,7 +271,7 @@ fn takt_run_on_an_empty_home_keeps_the_transcript_and_refuses_no_step() {
         !stdout.contains("refused:") && !stdout.contains("StepRefused"),
         "no step is refused on an empty home\n{said}"
     );
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();
@@ -408,7 +408,7 @@ impl Home {
     /// The transcript of step `step` of the first run of the repository's one case, under
     /// `root`, the transcripts directory.
     fn transcript(&self, root: &Path, step: u64) -> PathBuf {
-        let cases: Vec<PathBuf> = fs::read_dir(self.repo.join(".engineering/cases"))
+        let cases: Vec<PathBuf> = fs::read_dir(self.repo.join(".takt/cases"))
             .expect("the cases directory")
             .map(|entry| entry.expect("an entry").path())
             .collect();

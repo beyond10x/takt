@@ -91,7 +91,7 @@ impl World {
 
     /// The `opened` lines of the one case, each as JSON.
     fn opened(&self) -> Vec<serde_json::Value> {
-        let cases = self.repo().join(".engineering/cases");
+        let cases = self.repo().join(".takt/cases");
         let case: Vec<PathBuf> = fs::read_dir(&cases)
             .expect("the cases directory")
             .map(|entry| entry.expect("an entry").path())

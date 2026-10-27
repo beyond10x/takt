@@ -74,7 +74,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(".takt/cases")
     }
 
     fn config(&self, name: &str, text: &str) -> PathBuf {

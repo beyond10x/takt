@@ -233,7 +233,7 @@ fn records(case_dir: &Path) -> Vec<serde_json::Value> {
 /// The names of the files in each case directory of `tree`, sorted.
 fn case_files(tree: &Path) -> Vec<String> {
     let mut names = Vec::new();
-    let Ok(cases) = fs::read_dir(tree.join(".engineering/cases")) else {
+    let Ok(cases) = fs::read_dir(tree.join(".takt/cases")) else {
         return names;
     };
     for case in cases {
@@ -327,10 +327,7 @@ fn assert_refused_and_put_back(tree: &Scratch, ran: &Ran, path: &str) {
         "{}",
         ran.text
     );
-    let left = git(
-        tree,
-        &["status", "--porcelain", "--", ".", ":!.engineering/cases"],
-    );
+    let left = git(tree, &["status", "--porcelain", "--", ".", ":!.takt/cases"]);
     assert!(
         left.is_empty(),
         "the step's change is left: {left}\n{}",

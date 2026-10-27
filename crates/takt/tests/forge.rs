@@ -565,7 +565,7 @@ fn a_discarded_case_leaves_no_directory_and_no_branch() {
     case.discard().expect("the case is discarded");
     assert_eq!(git(&tree, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
     assert_eq!(git(&tree, &["branch", "--list", "takt/discard"]), "");
-    assert!(!tree.join(".engineering/cases").exists());
+    assert!(!tree.join(".takt/cases").exists());
 }
 
 /// A runner that records every argument line it is given instead of running it, and answers
