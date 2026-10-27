@@ -145,7 +145,17 @@ jobs:
       - name: task ${{ matrix.part }}
         env:
           PART: ${{ matrix.part }}
-        run: task "$PART"
+        run: |
+          set -euo pipefail
+          ls -l "/proc/$$/fd"
+          for fd in /proc/$$/fd/*; do
+            n=${fd##*/}
+            if [ "$n" -gt 2 ] && [ "$n" -ne 255 ]; then
+              eval "exec $n>&-" 2>/dev/null || true
+            fi
+          done
+          ls -l "/proc/$$/fd"
+          task "$PART"
 
       - name: Disk after the tests
         if: always()
