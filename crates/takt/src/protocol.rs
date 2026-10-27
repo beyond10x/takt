@@ -893,7 +893,7 @@ mod tests {
                 "{id}"
             );
         }
-        assert!(LoadedProtocol::builtin("story.delivery/2").is_err());
+        assert!(LoadedProtocol::builtin("story.delivery/2").is_ok());
     }
 
     /// A protocol given as an id or as a file resolves to the same protocol.
