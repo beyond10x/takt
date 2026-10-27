@@ -8,6 +8,7 @@ tags:
 - adversary-pass
 relations:
 - decides: story:llm-section-is-an-llm-routes-document
+- reviews: story:llm-section-is-an-llm-routes-document
 revision: 1
 ---
 unit: story:llm-section-is-an-llm-routes-document
