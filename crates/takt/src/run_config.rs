@@ -226,6 +226,9 @@ pub struct RunConfig {
     pub continue_past_red_base: Option<bool>,
     /// `--records`: `default` or `trial`, checked when the file is read.
     pub records: Option<String>,
+    /// The `commit` section: `style`, `trailer` and `types`, each a `--commit-*` flag's, checked
+    /// when the file is read ([`crate::commit_style::Settings::check`]).
+    pub commit: Option<crate::commit_style::Section>,
     /// The run's scan adapter, `gates` or `none` ([`crate::scan::Scan`]): the one field no
     /// flag sets, so a run is unscanned only where its file says so. Not set, it is `gates`.
     pub scan: Option<crate::scan::ScanName>,
@@ -974,6 +977,14 @@ impl RunConfig {
                 path.display()
             ));
         }
+        if let Some(section) = &config.commit
+            && let Err(why) = crate::commit_style::Settings::of_section(section).check()
+        {
+            return Err(anyhow!(
+                "the run configuration file {} is refused: {why}",
+                path.display()
+            ));
+        }
         if let Some(member) = config.harness_member.take() {
             config.harness = Some(harness_setting(path, &member)?);
         }
@@ -1418,6 +1429,63 @@ mod tests {
             error.contains("`continue_past_red_base`, a boolean"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn the_commit_section_is_read_in_either_format_and_refused_by_member() {
+        use crate::commit_style::{Settings, Style};
+        let path = scratch(
+            "commit-toml",
+            "[commit]\nstyle = \"action\"\ntrailer = \"Story\"\n[commit.types]\n\"implementation.edit\" = \"build\"\n",
+        );
+        let section = RunConfig::read(&path)
+            .expect("read")
+            .commit
+            .expect("a section");
+        let settings = Settings::of_section(&section);
+        assert_eq!(settings.style, Style::Action);
+        assert_eq!(settings.trailer, "Story");
+        assert_eq!(settings.types["implementation.edit"], "build");
+        let path = scratch_named(
+            "commit-loom",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  commit:\n    trailer: ''\n",
+        );
+        let section = RunConfig::read(&path)
+            .expect("read")
+            .commit
+            .expect("a section");
+        assert_eq!(Settings::of_section(&section).trailer, "");
+        assert_eq!(Settings::of_section(&section).style, Style::Semantic);
+        for (name, text, member) in [
+            (
+                "commit-key",
+                "[commit]\ntrailer = \"not a key\"\n",
+                "commit.trailer",
+            ),
+            (
+                "commit-type",
+                "[commit.types]\n\"tests.write\" = \"takt\"\n",
+                "commit.types",
+            ),
+        ] {
+            let error = format!(
+                "{:#}",
+                RunConfig::read(&scratch(name, text)).expect_err("refused")
+            );
+            assert!(error.contains(member), "{error}");
+            assert!(!error.contains("not a key"), "{error}");
+        }
+        let error = format!(
+            "{:#}",
+            RunConfig::read(&scratch(
+                "commit-style",
+                "[commit]\nstyle = \"MARKER-style\"\n"
+            ))
+            .expect_err("refused")
+        );
+        assert!(error.contains("line"), "{error}");
+        assert!(!error.contains("MARKER-style"), "{error}");
     }
 
     #[test]

@@ -1198,7 +1198,9 @@ pub fn commit_paths(
         ("GIT_COMMITTER_NAME", identity.name.as_str()),
         ("GIT_COMMITTER_EMAIL", identity.email.as_str()),
     ];
-    let mut commit: Vec<&str> = vec!["commit", "-q", "--only", "-m", message];
+    let file = MessageFile::write(tree, message)?;
+    let named = file.path.to_string_lossy().into_owned();
+    let mut commit: Vec<&str> = vec!["commit", "-q", "--only", "-F", &named];
     if paths.is_empty() {
         commit.push("--allow-empty");
         raw_with(tree, &commit, None, &env)?;
@@ -1221,6 +1223,35 @@ pub fn commit_paths(
         raw_with(tree, &literal, Some(&list), &env)?;
     }
     head(tree)
+}
+
+/// A commit message in a file of the repository's own git directory, which `git commit -F` reads:
+/// the message never rides on a command line, whatever its length, and the file is removed when
+/// this is dropped.
+struct MessageFile {
+    path: PathBuf,
+}
+
+impl MessageFile {
+    fn write(tree: &Path, message: &str) -> Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let git_dir = PathBuf::from(run(tree, &["rev-parse", "--absolute-git-dir"])?);
+        let path = git_dir.join(format!(
+            "takt-commit-message.{}.{}",
+            std::process::id(),
+            COUNT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&path, message)
+            .with_context(|| format!("write the commit message to {}", path.display()))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for MessageFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// The paths among `paths`, or under one of them, that the index holds as a gitlink (mode

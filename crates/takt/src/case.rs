@@ -131,19 +131,39 @@ pub const LOOP_PROTOCOL: &str = "loop.improvement/1";
 /// `--input loop_baseline=<full commit id>`, which the protocol declares as no case input.
 pub const LOOP_BASELINE: &str = "loop_baseline";
 
+/// The case a branch of `tree` is the branch of: `Some(id)` for `takt/<id>` with that case's
+/// directory present, `None` for a branch outside [`BRANCH_PREFIX`]. A branch under the prefix
+/// that names no case id is refused as such, and one that names a case id with no case
+/// directory is refused as a base using takt's reserved prefix, naming the prefix and a rename.
+pub(crate) fn case_of_branch<'a>(tree: &Path, branch: &'a str) -> Result<Option<&'a str>> {
+    let Some(case) = branch.strip_prefix(BRANCH_PREFIX) else {
+        return Ok(None);
+    };
+    // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
+    check_id(case).with_context(|| format!("the branch {} names no case", shown(branch)))?;
+    if std::fs::symlink_metadata(CaseDir::locate(tree, case)).is_err() {
+        let name = shown(branch);
+        bail!(
+            "branch `{name}` uses takt's reserved prefix `{BRANCH_PREFIX}`; base branches cannot start with it; rename it (e.g. `git branch -m {name} trial/{}`)",
+            shown(case)
+        );
+    }
+    Ok(Some(case))
+}
+
 /// What a case opened on `tree` now forks from: the branch the tree is on (`left`), the case's
 /// base branch (that branch, or, when the tree is on another case's branch, that case's base),
 /// and the branch its own branch is created at when that differs from `HEAD` (the other case's
-/// base). A tree on a case's branch with no base to fork from is an error.
+/// base). A tree on a case's branch with no base to fork from is an error, and a tree on a
+/// branch under [`BRANCH_PREFIX`] that is no case's is refused ([`case_of_branch`]).
 fn opening_base(tree: &Path) -> Result<(Option<String>, Option<String>, Option<String>)> {
     let left = crate::git::current_branch(tree)?;
     let (base, from) = match left
         .as_deref()
-        .map(|name| (name, name.strip_prefix(BRANCH_PREFIX)))
+        .map(|name| case_of_branch(tree, name).map(|case| (name, case)))
+        .transpose()?
     {
         Some((name, Some(other))) => {
-            // The name is joined to the cases directory only as a case id.
-            check_id(other).with_context(|| format!("the branch {} names no case", shown(name)))?;
             let Some(base) = Branch::read(&CaseDir::locate(tree, other))
                 .ok()
                 .and_then(|branch| branch.base)
@@ -902,7 +922,7 @@ pub fn story_status_at(tree: &Path, revision: &str, story: &str) -> Result<Optio
 /// The front matter of `.engineering/planning/<kind>/<name>.md` for `story` in the commit
 /// `revision`, read as the store reads it ([`front_matter`]); `None` when the commit holds no
 /// such file or its front matter does not read.
-fn story_front_at(
+pub(crate) fn story_front_at(
     tree: &Path,
     revision: &str,
     story: &str,

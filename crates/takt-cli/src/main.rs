@@ -868,7 +868,44 @@ impl LoopArgs {
             looping.continue_past_red_base = go_on;
         }
         looping.records_of_file = file.records.filter(|_| unset("records"));
+        looping.commit = looping.commit_settings(file.commit.as_ref())?;
         Ok(())
+    }
+
+    /// The commit settings of the run: the defaults, the configuration's `commit` section over
+    /// them and the flags over that, refused naming the member when one cannot be used. None
+    /// when neither gives one, so the library's default stands.
+    fn commit_settings(
+        &self,
+        file: Option<&takt::commit_style::Section>,
+    ) -> Result<Option<takt::commit_style::Settings>> {
+        let mut flags = takt::commit_style::Section::default();
+        if let Some(style) = &self.commit_style {
+            flags.style = takt::commit_style::Style::named(style);
+        }
+        flags.trailer.clone_from(&self.commit_trailer);
+        if !self.commit_types.is_empty() {
+            let mut types = std::collections::BTreeMap::new();
+            for pair in &self.commit_types {
+                let (action, kind) = pair
+                    .split_once('=')
+                    .ok_or_else(|| anyhow!("--commit-types takes ACTION=TYPE pairs"))?;
+                types.insert(action.to_owned(), kind.to_owned());
+            }
+            flags.types = Some(types);
+        }
+        if file.is_none() && flags == takt::commit_style::Section::default() {
+            return Ok(None);
+        }
+        let mut settings = takt::commit_style::Settings::default();
+        if let Some(section) = file {
+            settings.apply(section);
+        }
+        settings.apply(&flags);
+        settings
+            .check()
+            .map_err(|why| anyhow!("{why}; nothing was started"))?;
+        Ok(Some(settings))
     }
 
     /// The session settings the command line's flags give, under their metaharness names.
@@ -1134,6 +1171,29 @@ struct LoopArgs {
     /// a new case.
     #[arg(skip)]
     records_of_file: Option<String>,
+    /// How a step commit's message is written: `semantic` (the default: the harness's reply
+    /// carries a `commit` of `<type>: <imperative subject>` and a body of 3 or 4 lines),
+    /// `repository` (the harness writes it as the repository's instruction files require) or
+    /// `action` (`<action>: <summary>`). When a line of an instruction file at the case's base
+    /// matches `(?i)commit (message|style|convention)`, `repository` is the style in effect
+    /// whatever this says; the `opened` line records the style in effect and that line's file and
+    /// number. Over the configuration's `commit.style`.
+    #[arg(long, value_name = "STYLE", value_parser = ["semantic", "repository", "action"])]
+    commit_style: Option<String>,
+    /// The key of the trailer takt writes after the message, from the case's story: `Refs` by
+    /// default, an empty one for none. A case opened on an intent gets none. Over the
+    /// configuration's `commit.trailer`.
+    #[arg(long, value_name = "KEY")]
+    commit_trailer: Option<String>,
+    /// The commit type of an action, `ACTION=TYPE`, repeatable or comma-separated: by default
+    /// `tests.write=test`, and `implementation.edit=fix` for a story tagged `bug`, else `feat`;
+    /// an action not named is `chore`. Over the configuration's `commit.types`.
+    #[arg(long, value_name = "ACTION=TYPE", value_delimiter = ',')]
+    commit_types: Vec<String>,
+    /// The commit settings the configuration file and the flags above give, checked before the
+    /// case opens; set by [`LoopArgs::configured`].
+    #[arg(skip)]
+    commit: Option<takt::commit_style::Settings>,
     /// The session request the run file's `harness` mapping gives, with each flag's setting over
     /// its key ([`takt::run_config::SessionRequest::with_flags`]): metaharness's settings the
     /// session is started with.
@@ -3037,6 +3097,9 @@ fn finish(
     run.stop_when_unperformable();
     if looping.continue_past_red_base {
         run.continue_past_red_base();
+    }
+    if let Some(settings) = &looping.commit {
+        run.commit_settings(settings.clone());
     }
     if let Some(records) = records {
         run.keep_records(records);
