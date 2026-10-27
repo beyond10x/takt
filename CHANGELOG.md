@@ -25,6 +25,10 @@ takt's releases.
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
 - The site says what runs under Seatbelt on macOS since 0.10.0, which scan and forge adapters a run can have, and that `bot` is beyond10x's github.com route.
 
+### Security
+
+- A proposal is refused when a path it names holds text of the shape of a credential, as its content and summary already were, before any refusal that would name the path.
+
 ## [0.14.0] - 2026-10-26
 
 A run whose tests are red stops instead of spending model calls: at a red base before the first
