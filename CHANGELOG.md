@@ -11,6 +11,7 @@ takt's releases.
 - `setup` in the `takt run --config` file lists `{name, argv}` commands run once at open, before the red-base check; a failure is the stop `SetupFailed`, exit 1. A resume reruns them on a moved base.
 - A run lists each gate of the repository's gates document with its status in the prompt, the last line of the run and `takt report` (`--format json`); the gate runner is told base, subject and story.
 - `forge: connectors` with `forge_instance` goes through `connectors operations invoke`; its preflight exits 1 naming a missing operation, and it is never a default.
+- The Workspace seam and a minimal `case.dispatch`: a dispatched child gets a leased managed worktree through the `worktree` CLI, its records stay at the root, and leaving archives or finishes it.
 
 ### Changed
 

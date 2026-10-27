@@ -32,6 +32,7 @@ pub mod seatbelt;
 pub mod trace;
 pub mod validator;
 pub mod view;
+pub mod workspace;
 
 pub use case::{CaseDir, Decision};
 pub use forge::Forge;
