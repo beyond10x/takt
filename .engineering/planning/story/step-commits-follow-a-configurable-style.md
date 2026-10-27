@@ -21,10 +21,10 @@ scope:
 - confidence: inferred
   path: crates/takt/src/run_config.rs
 - confidence: inferred
-  path: crates/takt/tests
+  path: crates/takt/tests/commit_style.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 2
+revision: 4
 ---
 # Story: step-commits-follow-a-configurable-style
 
@@ -41,9 +41,11 @@ The styles:
 - **`semantic`.** The write step's JSON reply gains `commit: {subject, body}`. takt asks for `<type>: <imperative
   subject>` of at most 72 characters, then a body of 3-4 lines saying the intent.
 - **`repository`.** The harness writes the message as the repository's instructions require. Those are the base
-  `AGENTS.md`/`CLAUDE.md` of `story:every-harness-reads-the-repository-instructions-from-the-base`. When `style` is
-  unset and a base instruction file has a line matching `(?i)commit (message|style|convention)`, the effective style is
-  `repository`. That is a deterministic test on the base bytes, recorded on `opened`.
+  `AGENTS.md`/`CLAUDE.md` of `story:every-harness-reads-the-repository-instructions-from-the-base`.
+  - The repository wins whenever it defines a style, as the operator decided. When a base instruction file has a line
+    matching `(?i)commit (message|style|convention)`, the effective style is `repository`, whatever `style` says.
+  - `style` therefore chooses only between `semantic` and `action` for a repository whose instructions say nothing.
+  - The match is a deterministic test on the base bytes, and it is recorded on `opened` with the file and line.
 - **`action`.** Today's form.
 
 In every style:
@@ -74,6 +76,12 @@ Each is a named conformance scenario run by `task check`.
    `commit.fallback` event.
 5. `commit_style::an_intent_case_has_no_trailer`.
 6. `commit_style::action_keeps_todays_subject`: `style: action` gives `<action>: <summary>` plus the trailer.
+7. `commit_style::the_repository_wins_over_an_explicit_style`: `style: semantic` with a base `AGENTS.md` commit rule
+   gives effective style `repository` on `opened`.
+8. `commit_style::a_configured_trailer_and_types_are_used`: `trailer: Story` with `types: {implementation.edit:
+   build}` gives `Story: story:<id>` and a fallback subject starting `build: `. `trailer: ""` gives no trailer.
+9. `commit_style::a_bug_story_is_a_fix`: a story tagged `bug` gives the fallback subject `fix: <story title>` for its
+   implementation commit.
 
 ## Scope
 
@@ -82,4 +90,4 @@ Each is a named conformance scenario run by `task check`.
 - `crates/takt/src/harness.rs` (the reply's `commit` field, prompt text)
 - `crates/takt/src/run_config.rs` (`commit` section)
 - `ess/domains/takt.yaml` (the commit-style setting, before code)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/commit_style.rs`

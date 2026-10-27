@@ -13,16 +13,16 @@ relations:
 - depends_on: story:the-run-file-sets-protocol-settings
 scope:
 - confidence: inferred
-  path: crates/takt/src/main.rs
+  path: crates/takt-cli/src/main.rs
 - confidence: inferred
   path: crates/takt/src/protocol.rs
 - confidence: inferred
   path: crates/takt/src/protocol_defaults.yaml
 - confidence: inferred
-  path: crates/takt/tests
+  path: crates/takt/tests/protocol_defaults.rs
 - confidence: inferred
   path: website/docs
-revision: 2
+revision: 4
 ---
 # Story: takt-ships-default-protocol-settings
 
@@ -57,9 +57,9 @@ Each is a named conformance scenario run by `task check`.
 
 - `crates/takt/src/protocol_defaults.yaml` (new data)
 - `crates/takt/src/protocol.rs` (load defaults)
-- `crates/takt/src/main.rs` (default protocol, replacing `:2715`)
+- `crates/takt-cli/src/main.rs` (default protocol, replacing `:2715`)
 - `website/docs/` (generated configuration reference)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/protocol_defaults.rs`
 
 ## Delivery
 

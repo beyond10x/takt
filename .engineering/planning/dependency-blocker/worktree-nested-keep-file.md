@@ -6,7 +6,7 @@ status: open
 title: worktree reads only the root .worktreekeep
 relations:
 - blocks: story:a-cases-root-survives-worktree-cleanup
-revision: 1
+revision: 2
 ---
 # Dependency blocker: worktree-nested-keep-file
 
@@ -18,5 +18,6 @@ the root file is read (worktree-git `cache.rs:453`).
 
 ## What clears it
 
-`cases_kept::a_finished_tree_keeps_its_case` passes against the `worktree` binary built from that story's working tree
-on `PATH`. The worktree release follows. No intermediate release is needed to clear this.
+Upstream state: the worktree story's named tests (`keep::*`) pass on its working tree, and the `worktree` binary built
+from that tree is on `PATH` for takt's workspace. takt's scenario `cases_kept::a_finished_tree_keeps_its_case` is then
+the end-to-end check, and the worktree release follows. No intermediate release is needed to clear this.

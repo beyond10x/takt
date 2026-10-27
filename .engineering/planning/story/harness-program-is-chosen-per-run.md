@@ -13,31 +13,32 @@ relations:
 - informed_by: story:harness-section-is-metaharness-session-request
 scope:
 - confidence: inferred
-  path: crates/takt/src/harness.rs
+  path: crates/takt-cli/src/main.rs
 - confidence: inferred
-  path: crates/takt/src/main.rs
+  path: crates/takt/src/harness.rs
 - confidence: inferred
   path: crates/takt/src/run.rs
 - confidence: inferred
-  path: crates/takt/src/run_config.rs
-- confidence: inferred
-  path: crates/takt/tests
-revision: 2
+  path: crates/takt/tests/harness_program.rs
+revision: 4
 ---
 # Story: harness-program-is-chosen-per-run
 
 ## Outcome
 
-A run names the harness binary it uses with `--harness-program <path>`. When
-`story:harness-section-is-metaharness-session-request` lands, `program` is also admitted in the run file's `harness:`
-mapping, and the flag wins over the file. The `opened` record gains the program's absolute path, its sha256 and its
-`--version` output. Without either, the binary is resolved from `PATH` as today, and it is recorded the same way.
+A run names the harness binary it uses with `--harness-program <path>`. The `opened` record gains the program's
+absolute path, its sha256 and its `--version` output. Without the flag, the binary is resolved from `PATH` as today,
+and it is recorded the same way.
+
+The run-file form is not part of this story. `story:harness-section-is-metaharness-session-request` admits exactly six
+keys in the `harness:` mapping and puts "a binary path per harness" out of scope, with one story per further key. A
+`program` key is that later story, after harness-section.
 
 ## Context
 
 - A downstream trial (2026-10-27) could select the qualified Claude Code binary only by changing `PATH`.
-- `SessionHarness::program` exists (`crates/takt/src/harness.rs:192-196`, 110251a), but no flag or key sets it.
-- The config-proxy design notes "binary path: none on either side".
+- `SessionHarness::program` exists (`crates/takt/src/harness.rs:192-196`, 110251a), but no flag sets it.
+- `story:an-unqualified-harness-stops-before-the-first-session` names this flag in its stop line.
 
 ## Acceptance
 
@@ -50,8 +51,7 @@ Each is a named conformance scenario run by `task check`.
 
 ## Scope
 
-- `crates/takt/src/main.rs` (`--harness-program`)
+- `crates/takt-cli/src/main.rs` (`--harness-program`)
 - `crates/takt/src/harness.rs` (`program`)
 - `crates/takt/src/run.rs` (`opened` record)
-- `crates/takt/src/run_config.rs` (`program` under `harness:`, after that story lands)
-- `crates/takt/tests/` (conformance scenarios)
+- `crates/takt/tests/harness_program.rs`
