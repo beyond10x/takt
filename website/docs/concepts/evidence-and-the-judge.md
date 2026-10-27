@@ -1,64 +1,118 @@
 ---
 title: Evidence and the judge
-description: Only a validator writes evidence; evidence is bound to the revision it observed; a merge needs a grant at that revision.
+sidebar_position: 5
+description: Only a validator writes evidence; evidence is bound to the revision it observed; whose grant merges a change is decided at the merge target's tip.
+lede: Evidence is a canon-evidence/1 record a validator, a program, writes about the exact revision it observed; a model's text is never evidence, a new commit makes every claim about the implementation unknown again, and a change to a judge surface merges only under the owner's grant or a delegation the owner recorded.
+source: AGENTS.md § Rules; crates/takt/src/validator.rs (TestsRun, GateRun, ChangeRead, PrOpen, CiRead, PrMerged, judge_guard, JUDGE_ALLOW, DELEGATIONS), evidence.rs, improvement.rs, run.rs (CHOICE_PRODUCER); crates/takt/tests/validator_confinement.rs, judge_guard.rs; engineering-protocols 0.10.0 protocols/story-delivery/1.yaml; .engineering/judge-allow.yaml; a scratch run of takt 0.14.0
 ---
 
 # Evidence and the judge
 
 ## Evidence comes from validators
 
-A validator is a program. It turns an observation (a test run's exit status, a gate result, a pull
-request's CI, a merged pull request) into a `canon-evidence/1` record bound to the revision it
-observed. The model never produces an observation. A step that records a choice
-(`change.handover`) gets a `takt.choice` record, which may gate an action but never decides an
-outcome or an obligation alone. After a new commit a claim about the implementation is UNKNOWN
-again, and the merge waits.
+A validator is a program takt runs. It turns an observation (a test run's exit status, a gate
+result, a pull request's CI, a merged pull request) into a `canon-evidence/1` record bound to the
+revision it observed, and the record reaches the case through the case's evidence port. This is
+the record the tests of a one-test repository left, `evidence/0001-test-result-1.json`:
 
-takt 0.1.0's validators for `story.delivery/1`:
+```json
+{
+  "format": "canon-evidence/1",
+  "id": "test-result-1",
+  "kind": "test_result",
+  "result": "pass",
+  "subject": "implementation",
+  "subject_revision": "6074a8e0c3db22c5ff3f95ee8887eec6252c5aeb",
+  "observed_at": "2026-10-26T23:11:24Z",
+  "producer": "takt.tests-run"
+}
+```
 
-| action | validator | evidence |
+`subject_revision` is the commit the tests ran at. Canon applies the record to that revision
+only, so after a new commit every claim about the implementation is unknown again: the tests,
+the gate and CI are observed anew, and the merge waits for them.
+
+The model never produces an observation. A step that records a choice (`change.handover`: the
+harness hands the change over, changing no file) gets a record from the producer `takt.choice`.
+Such a record may gate an action, never decide an outcome or an obligation alone.
+
+## The validators
+
+For `story.delivery/1` and `software.change/1`:
+
+| action | what it runs | evidence |
 |---|---|---|
 | `tests.run` | the test command (`--test-cmd`, default `cargo test --quiet`) | `test_result` pass or fail |
-| `gate.run` | the repository's gates (`.engineering/gates.yaml`) | `gate_result` pass or fail |
-| `change.read` | takt compares, through git, the revision merged into the base branch's tip with that tip, outside `.engineering/` | `change_record` ahead or none |
-| `pr.open` | the bot route opens the pull request | `pull_request` open |
-| `ci.read` | `gh` reads the pull request's checks | `ci_result` pass or fail |
-| `repository.merge` | the merge through the bot route, under a grant | `merge_observation` merged |
+| `gate.run` | the repository's gates (`.engineering/gates.yaml`) through the assertions library | `gate_result` pass or fail |
+| `change.read` | git: would merging the revision into the base tip change it outside `.engineering/`? | `change_record` |
+| `pr.open` | the forge opens the pull request | `pull_request` |
+| `ci.read` | the forge reads the pull request's checks | `ci_result` pass or fail |
+| `repository.merge` | the forge merges, under a grant | `merge_observation` |
 
-A validator observes under the same guard as a judgement step and on a tree with nothing
-uncommitted outside the case. A test command that writes a grant, a record or the gates document
-is refused and its writes are undone. The gates document and the project file are read from the
-case's base revision, not from the tree the harness edits.
+The forge is the repository's bot route on github.com (`b10x-gates` pushes and opens, `gh` reads
+checks), `glab` on a GitLab host, or none (`--forge none`), when the last three have no
+performer. A failing `tests.run` names up to 64 failed tests (cargo, Python unittest, pytest)
+and cargo's rerun hint in its summary; the [two test stops](./how-a-run-ends.md#the-two-test-stops)
+read those names.
+
+For an improvement turn (`self.improvement/1`) takt has validators of its own:
+`finding.file`, `scenario.reproduce`, `scenario.verify`, `scorecard.compare`,
+`candidate.merge` and `binary.promote`.
+
+### What a validator may not do
+
+A validator observes under the same guard as a judgement step, on a tree with nothing
+uncommitted outside the case. A test command that writes a grant, a record or the gates document,
+or any file its validator does not write, is refused and its writes are undone. A real refusal,
+from a repository whose `Cargo.lock` was not committed, so `cargo test` wrote one:
+
+```console
+step 1: tests.run {}
+  refused: tests.run wrote what its validator does not: Cargo.lock; the cases directory was put back, the change discarded and nothing recorded
+stopped: StepRefused (tests.run wrote what its validator does not: Cargo.lock); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231059Z
+```
+
+The gates document and the assertions project file are read from the case's base revision, not
+from the tree the harness edits, so a step cannot change what judges it.
 
 ## A merge needs a grant
 
 The merge validator is the one check written in Rust: it merges only under a grant of
-`repository.merge` recorded for the case's revision. `takt approve` writes that grant. Without it
-the run stops on `ApprovalRequired`, exit 4.
+`repository.merge` recorded for the revision the case reached the gate at, and it checks that
+grant again itself, after Canon admitted the step. `takt approve` writes the grant; without one
+the run stops `ApprovalRequired`, exit 4. How grants work:
+[Capabilities and approvals](./capabilities-and-approvals.md).
 
-## The judge, for takt's own changes
+## The judge: whose grant merges a judge surface
 
-When takt improves takt, the judge is designed as a bundle: a promoted takt binary that names its
-revision in `--version`, and the protocol, the gates and the planning store, all read from the
-promoted base revision rather than from the candidate branch. What is built:
+Before it merges, the merge validator decides whose grant the change needs. It reads two files
+at the merge target's tip as the forge reports it, never from the case's tree:
 
-- the binary names its revision, and `takt promote` installs a binary only when its scorecard
-  shows no regression (0.1.0);
-- the judge guard (`story:judge-guard`, 0.2.0). It refuses a merge that touches a judge surface
-  unless the owner granted it, or a role the owner delegated it to in
-  `.engineering/delegations.yaml`, read at the merge target's tip;
-- a `self.improvement/1` turn is judged by one binary (0.2.2). The turn records the sha256 of the
-  promoted binary that opens it and refuses every resume by another, so the final resume runs
-  with the binary `takt promote` kept when it installed the candidate. The turn's judge-surface
-  merge uses the judge guard's rule.
+- `.engineering/judge-allow.yaml`, a list of path globs that are not judge surfaces. Every
+  other path is one, and so is any path that is a link or a submodule, whatever its name.
+- `.engineering/delegations.yaml`, the owner's delegations of the judge-surface grant to agent
+  roles, each revocable.
 
-Not built: reading the protocol and the store from the base
-(`story:judge-reads-protocol-and-store-from-base`).
+A change that touches a judge surface merges under a person's grant (`human:<id>`), or under an
+agent role's grant (`agent:<role>`) only while the delegation file names an unrevoked delegation
+of `repository.merge.judge_surface` to that role. A change to either of the two files merges
+under the owner's grant alone. In takt's own repository the allow-list is `docs/**`,
+`README.md` and `CHANGELOG.md`, so every other path is a judge surface.
 
-Judge surfaces are every path except `docs/**`, `README.md` and `CHANGELOG.md`. A diff that
-touches one is merged under the owner's grant, or under the grant of a role the owner delegated
-it to on record. The delegation is revocable, and a revoked one grants nothing ([Roles](./roles.md)).
+### The judge, for takt's own changes
 
-Sources: `AGENTS.md` § Rules, `crates/takt/tests/validator_confinement.rs`,
-`crates/takt/src/run.rs` (`CHOICE_PRODUCER`), engineering-protocols 0.10.0 `protocols/story-delivery/1.yaml`,
-`design:recursive-self-improvement` § The judge.
+When takt improves takt, the judge is designed as a bundle: a promoted takt binary, and the
+protocol, the gates and the planning store read from the promoted base. What is built:
+
+- the binary names its revision in `takt --version`, and `takt promote` installs a binary only
+  when its scorecard shows no regression;
+- the judge guard above;
+- a `self.improvement/1` turn is judged by one binary: the turn records the sha256 of the
+  promoted binary that opens it and refuses every resume by another.
+
+:::caution[Planned]
+Reading the protocol and the planning store from the promoted base, rather than from the case's
+tree, is not built.
+:::
+
+The roles that grant and review: [Roles](./roles.md).

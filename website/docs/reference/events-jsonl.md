@@ -1,5 +1,6 @@
 ---
 title: events.jsonl
+sidebar_position: 5
 description: The run record of a case, one JSON object per line, appended and never rewritten.
 ---
 
@@ -24,7 +25,7 @@ A field added to an event later is optional, so older lines still read.
 
 | `event` | fields | written when |
 |---|---|---|
-| `opened` | `case`, `protocol`, `story`?, `inputs` (`name=value`), `base`? (the commit the case's branch forked from), `binary`? (as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`), `layers`? (layer name to revision, read from what ran and never typed: `takt`, the binary's revision; written, empty or not, by every run from 0.6.0 on; a line without it reads as layers not recorded) | a run opened or resumed the case |
+| `opened` | `case`, `protocol`, `story`?, `inputs` (`name=value`), `base`? (the commit the case's branch forked from), `binary`? (as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`), `layers`? (layer name to revision, read from what ran and never typed: `takt`, the binary's revision; written, empty or not, by every run from 0.6.0 on; a line without it reads as layers not recorded), `confinement`? (`none` or `substrate`, the adapter every child of the run starts through), `endpoint`? (a `--harness harness` run only: `base_url`, `wire`, `model` and the credential by reference, a token file's path as `~/…` under HOME and its pointer, a secret's namespace and name, or a variable's name; never a token) | a run opened or resumed the case |
 | `decision` | `seq`, `file` (the decision file in the case), `frontier` | Canon evaluated the case |
 | `step` | `by` (`validator` or `harness`), `name`, `action`, `summary`, `tokens`?, `usage`? (`input`, `output`, `cache_read`, `cache_creation`), `revision`? (a validator's observed revision), `model`?, `version`? (the harness program's own version, as its stream stated it), `cost_usd`?, `duration_ms`?, `api_ms`?, `turns`?, `started_at`?, `transcript`? (the step's transcript, relative to the transcripts directory: `<repo>/<case>/run-<r>/step-<n>.jsonl`), `transcript_refused`? (why takt kept none, such as a file already at that path or a link on the way) | a step ended |
 | `effect` | `paths`, `revision`? | a judgement step committed files, or changed none |
@@ -35,9 +36,35 @@ A field added to an event later is optional, so older lines still read.
 | `waiting` | `on` (actions), `seconds` | the run paused on the forge before observing again |
 | `error` | `error` | the run ended on an error, or met one while recording an accepted case |
 | `skipped` | `line`, `reason` | an earlier line was cut short and is skipped on read |
-| `stop` | `stop`, `steps`, `tokens`, `completed`? (whether the stop is a completion, as the binary that stopped knows its stops; a reader that does not know the stop takes this word for it) | the run stopped |
+| `stop` | `stop` (the stop as printed: its name, then its detail), `steps`, `tokens`, `completed`? (whether the stop is a completion, as the binary that stopped knows its stops; a reader that does not know the stop takes this word for it) | the run stopped |
 
 `?` marks a field that is absent, never 0, when its source did not state it.
+
+## The stop line
+
+`stop` opens with the stop's name, followed by its detail in parentheses. 0.14.0 added no event
+kind: its two new stops are `stop` lines like the others.
+
+| name | the run stopped because | exit |
+|---|---|---|
+| `Completed` | the protocol's outcome is legitimate, `Completed (<outcome>)`; the only stop with `completed: true` | 0 |
+| `Iterations`, `Hours`, `Tokens`, `ActiveTime` | the budget ended | 3 |
+| `NothingAdmissible`, `StepRefused`, `NoProgress` | no admissible step, a step refused, or nothing changed | 3 |
+| `RedBase` | the case's first `tests.run` failed before any step changed the base | 3 |
+| `RepeatedTestFailure` | two `tests.run` results in a row, each at a new revision, failed the same tests | 3 |
+| `ApprovalRequired` | a capability needs a grant (`takt approve`) | 4 |
+| `Waiting` | the forge or a local file the run waits on is not ready and the budget ended | 6 |
+| `Unperformable` | the only action that decides a claim has no performer in this run | 7 |
+| `DiskLow` | less free disk than `--min-free-gib` | 8 |
+
+A run that ends on an error ends with an `error` line and no `stop` line, and exits 5. A red base as `takt run` writes it:
+
+```json
+{"at":"2026-10-26T23:11:31.321393Z","step":1,"event":"stop","stop":"RedBase (the tests fail at the case's base 3f0ec13b, before any step changed it: the output names no failed test)","steps":1,"tokens":0,"completed":false}
+```
+
+[How a run ends](../concepts/how-a-run-ends.md) says what each stop means and what to do.
+The exit codes are in [Exit codes](./exit-codes.md).
 
 `takt trace` renders this file as a [`takt-trace/1`](./takt-trace.md) file, and `takt scorecard`
 reads its runs from it.

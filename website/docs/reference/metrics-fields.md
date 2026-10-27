@@ -1,5 +1,6 @@
 ---
 title: Metrics fields
+sidebar_position: 9
 description: The files of docs/metrics/ and where their fields are defined.
 ---
 

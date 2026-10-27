@@ -1,42 +1,119 @@
 ---
-title: One step at a time
-description: The loop takt runs, what a judgement step may do, and how a run stops.
+title: The step loop and the frontier
+sidebar_label: The step loop and the frontier
+sidebar_position: 3
+description: The loop takt runs, what the frontier is, which step comes next, and what a judgement step may do.
+lede: A run is a loop of evaluate, pick one step, perform it, observe, and evaluate again; the frontier Canon computes decides what may be done, and a harness is offered only what the frontier admits and no validator performs.
+source: crates/takt/src/lib.rs, run.rs (the loop in Run::run_held, Shape::for_harness, Shape::for_stateless), harness.rs (SessionHarness, ClaudeCode::ISOLATION, ClaudeCode::TOOLS), frontier.rs; docs/design/takt.md § 3; takt run --help at 0.14.0; a scratch run of takt 0.14.0
 ---
 
-# One step at a time
+# The step loop and the frontier
 
 A run is a loop:
 
 ```text
-evaluate → frontier → step → effect → observation → validator → evidence → evaluate
+evaluate → frontier → one step → effect → observation → validator → evidence → evaluate
 ```
 
-until it reaches a named [stop](#stop).
+It goes round until an outcome is legitimate or the run reaches a named stop
+([How a run ends](./how-a-run-ends.md)).
 
 ## Evaluate
 
-Canon's `evaluate` is a pure function from the protocol, the case, the evidence records, the
-authority and the instant to the claims (TRUE, FALSE or UNKNOWN), the obligations, the admissible
-actions and the legitimate outcomes. takt writes each result as a decision file in the case.
+Before every step, Loom's governor evaluates the case with
+[Canon](https://beyond10x.github.io/canon/) ([GitHub](https://github.com/beyond10x/canon)). The
+evaluation is a pure function from the protocol, the case, its evidence records, its authority
+and the instant to:
 
-## Step
+- each **claim**: `true`, `false` or `unknown`;
+- the open **obligations**;
+- each **action**'s status;
+- the **legitimate outcomes**.
 
-- A **judgement step**: the harness performs one admissible action in the worktree and reports.
-  It is offered only the actions the frontier admits. A step that does more is refused and
-  reverted. What the harness says is a trace, never evidence.
-- A **deterministic step**: a command takt runs itself, such as the tests, the gate, opening the
-  pull request, reading CI, or the merge under a grant.
+takt writes each evaluation as `decisions/NNNN.json` in the case and prints it as one line.
 
-The harness child loads no project or user settings, hooks or plugins, and its file tools are
-confined to the tree. Every child takt starts gets an environment without credentials it does not
-need, a timeout and a bounded tail of its output. takt adds no operating-system sandbox; the
-confinement seam is not built.
+## The frontier
 
-## Stop
+The frontier is the actions of the protocol with their status at this evaluation:
 
-Every run ends on a named stop, each with its own exit code, so a script or an orchestrator can
-drive takt without reading its output. The stops and their codes are in
-[Exit codes](../reference/exit-codes.md).
+| status | meaning |
+|---|---|
+| `admissible` | may be taken now |
+| `approval-required` | its precondition holds, but it requires a capability the case holds no grant of |
+| `blocked` | its precondition does not hold, or the capability is denied |
 
-Sources: `docs/design/takt.md` § 3, `crates/takt/tests/validator_confinement.rs`,
-`crates/takt/src/harness.rs`, `takt run --help`.
+Here is a real run on a repository whose one test passes. Before the tests ran, the merge was
+`blocked`; once a `test_result` pass is recorded at this revision, `implementation.verified` is
+true and the merge becomes `approval-required`:
+
+```console
+$ takt run --repo ~/demo --intent "make the failing test pass" --harness none --forge none --iterations 1
+case takt-20261026T231123Z on software.change/1 in ~/demo; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
+frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
+step 1: tests.run {}
+  effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
+  evidence: test_result pass
+frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
+stopped: Iterations (1); steps 1, tokens 0, case ~/demo/.engineering/cases/takt-20261026T231123Z
+```
+
+The word frontier has a second use in takt: the `Frontier` seam is the planning store, which
+answers which stories are ready. It is a list of units of work, not of actions, and no model takes
+part in it.
+
+## Which step comes next
+
+Each turn of the loop takes at most one step. takt picks it in this order:
+
+1. **A due validator.** A deterministic step whose action is admissible and whose evidence the
+   case lacks at this revision: `tests.run`, `gate.run`, `change.read`, `pr.open`, `ci.read`,
+   `repository.merge`. After a stop on the tests, `tests.run` is observed again first.
+2. **A wait.** When a validator waits on the forge (checks still running, a pull request's head
+   not yet shown), the run pauses, observes again, and offers no judgement step meanwhile.
+3. **Two pre-checks.** When only a grant stands between the case and its outcome, the run stops
+   `ApprovalRequired` without asking anyone. When the only action that decides a claim left has
+   no performer in this run (`--forge none`, no gates document), it stops `Unperformable`.
+4. **A judgement step.** The harness is offered the admissible actions no validator owns, such
+   as `implementation.edit`, `tests.write` or `change.handover`. An action that may produce
+   evidence only a validator writes is never offered to a harness. A harness that keeps no state
+   between steps is offered a read-only action only when taking it records a choice.
+
+The step itself is one call of Commission's runtime (`run_until_blocked`) with a budget of one
+step. The budgets and the free disk are checked before it; the governor admits the proposal;
+an action that requires a capability is asked of the case's authority; then the effect performs
+it.
+
+## A judgement step
+
+- The harness works in a scratch copy of the tree: tracked and untracked files, not ignored
+  ones, and the cases directory. It never edits the tree itself.
+- It names one offered action and proposes a change. takt's edit effect applies the change to
+  the tree under the step guard and commits it on the case's branch, so the implementation
+  moves to a new revision and every claim about it is unknown again.
+- A proposal that names an action not offered, or changes what that action may not change, is
+  refused and nothing of it is kept ([Capabilities and approvals](./capabilities-and-approvals.md)).
+- What the harness says is a trace in the record, never evidence.
+
+The harness session is hermetic. metaharness builds the child's environment from its own
+allowlist, so no variable takt withholds reaches it, and every child takt starts gets a timeout
+and a bounded tail of its output. Claude Code runs with `--restricted`, `--strict-mcp-config`
+and hooks turned off, so it loads no project or user settings, hooks, plugins or MCP servers,
+and it is offered only the file tools `Read,Edit,Write,Glob,Grep`.
+
+:::caution[Planned]
+No operating-system sandbox holds the harness session yet. `--confinement substrate` holds the
+test command only.
+:::
+
+## A deterministic step
+
+A validator runs a program takt starts itself: the test command (`--test-cmd`, default
+`cargo test --quiet`, split at white space and run without a shell), the repository's gates,
+the forge's pull request, CI read and merge. It observes under the same guard as a judgement
+step, and a write it makes outside what its validator is allowed is undone and refused.
+What it observed becomes evidence: [Evidence and the judge](./evidence-and-the-judge.md).
+
+## No progress
+
+When a pass of the loop changes nothing (a judgement step changed no file and the decision is
+the same as before), another pass would not either, and the run stops `NoProgress`.

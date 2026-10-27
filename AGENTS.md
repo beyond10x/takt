@@ -2,7 +2,8 @@
 
 Composable agentic work: one binary that drives a repository's work through engineering protocols,
 every step validated by Canon over evidence. This file is for agents working on this repository.
-`README.md` is for people.
+`README.md` is for people: what takt is, its status and links to the site, whose pages carry the
+detail (`website/docs/`); it duplicates none of them.
 
 ## Serves
 
@@ -35,8 +36,9 @@ every step validated by Canon over evidence. This file is for agents working on 
 | `docs/design/` | design documents |
 | `docs/waves/`, `docs/runs/`, `docs/handoff/` | wave pages, recorded runs, handoff notes |
 | `website/` | the public site: Docusaurus pages in `website/docs/`, the landing in `product.json`, and `scripts/generate.mjs`, which writes the status, charts, CLI reference and protocol viewer from the records at build time |
+| `examples/loom-agent/` | the placeholder-named `LoomAgent` manifests the deploy guide (`website/docs/guides/deploy-on-kubernetes.md`) uses; `crates/takt/tests/examples_config.rs` reads them through takt's config reader |
 | `.engineering/planning` | the AEP planning store; change it only through `aep plan artifact` verbs |
-| `.engineering/cases` | in a repository takt runs on: the cases a run writes; never edited by hand (absent here until takt runs on this repository) |
+| `.engineering/cases` | in a repository takt runs on: the cases a run writes; never edited by hand (here: the recorded improvement turns) |
 
 ## Commands
 
@@ -57,8 +59,9 @@ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:<version> .   # 
 ```
 
 The image's mount contract (`/workspace`, `/config/agent.yaml`, `/config/endpoint.toml`) is in
-`README.md` § Container. `agent.yaml` is `takt run --config` (`crates/takt/src/run_config.rs`); a
-key added there is a flag of `takt run` first, and the README table moves with it. `Dockerfile`
+`website/docs/reference/container-image.md`. `agent.yaml` is `takt run --config`
+(`crates/takt/src/run_config.rs`); a key added there is a flag of `takt run` first, and the field
+table of `website/docs/reference/configuration.md` moves with it. `Dockerfile`
 pins `aep`, `b10x-harness`, `b10x-gates` and `ess` by version and SHA256: move `ESS_VERSION`
 with `check.yml`, `HARNESS_VERSION` with the harness wire the `Cargo.lock` holds, and
 `GATES_VERSION` to the newest gates release. The toolchain under `/opt/rust` stays unwritable
