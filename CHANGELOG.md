@@ -30,6 +30,7 @@ takt's releases.
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
+- A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
 
 ### Fixed
 

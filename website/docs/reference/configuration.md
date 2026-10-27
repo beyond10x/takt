@@ -320,11 +320,13 @@ naming the file, and with a harness that may read outside its copy it needs `B10
 ## Records profiles
 
 `--records default|trial`, or `records` in the file, names which `decisions/NNNN.json` files the
-case keeps. The flag wins over the file, and the file over the default, `default`.
+case keeps. The flag wins over the file, and the file over the default, `default`. A resumed
+case (`--case`) keeps the profile its first run was opened under unless `--records` says
+otherwise; the file's `records` counts only for a new case.
 
 | profile | what the case keeps |
 |---|---|
-| `default` | the latest decision alone; the numbering goes on from it, so the next decision is the next number, not `0001` again |
+| `default` | the latest decision of this run alone, and every decision an earlier run kept; the numbering goes on from it, so the next decision is the next number, not `0001` again |
 | `trial` | every decision, as the case kept them before the profile existed |
 
 A scenario run (`takt scenario run`) and an improvement case (`self.improvement/1`,
@@ -408,7 +410,7 @@ All `--endpoint-*` flags need `--harness harness`.
 
 | flag | meaning |
 |---|---|
-| `--records <default\|trial>` | the decisions the case keeps: `default` the latest alone, `trial` every one ([Records profiles](#records-profiles)); default `default` |
+| `--records <default\|trial>` | the decisions the case keeps: `default` the run's latest alone, `trial` every one ([Records profiles](#records-profiles)); default `default` |
 
 ### Confinement and identity
 

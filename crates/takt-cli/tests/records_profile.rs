@@ -183,7 +183,10 @@ fn text(output: &Output) -> String {
 }
 
 /// Acceptance 1: a run of three evaluations with no `--records` leaves one decision, the
-/// latest, numbered 0003; a resumed run reads it and goes on from its number.
+/// latest, numbered 0003; a resumed run reads it and goes on from its number. The resume keeps
+/// the decision the earlier run kept, since it wrote none of it, and leaves only its own latest
+/// (story:a-run-keeps-every-decision-only-on-a-trial). `takt approve` reads the kept latest
+/// decision.
 #[test]
 fn default_keeps_the_latest_decision() {
     let world = World::new("default");
@@ -200,8 +203,31 @@ fn default_keeps_the_latest_decision() {
     let resumed = world.resume(&case);
     let said = text(&resumed);
     let kept = world.decisions();
-    assert_eq!(kept.len(), 1, "{said}");
-    assert!(kept[0].as_str() > "0003.json", "{kept:?}\n{said}");
+    assert_eq!(
+        kept.len(),
+        2,
+        "story:a-run-keeps-every-decision-only-on-a-trial: {kept:?}\n{said}"
+    );
+    assert_eq!(
+        kept[0], "0003.json",
+        "story:a-run-keeps-every-decision-only-on-a-trial: an earlier run's decision was removed: {kept:?}\n{said}"
+    );
+    assert!(kept[1].as_str() > "0003.json", "{kept:?}\n{said}");
+    let approved = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(["approve", "--repo"])
+        .arg(world.repo())
+        .args([&case, "repository.merge", "--by", "human:operator"])
+        .env("PATH", world.path())
+        .env("XDG_STATE_HOME", world.0.join("xdg-state"))
+        .env_remove("B10X_GATES_POLICY")
+        .output()
+        .expect("takt approve runs");
+    let said = text(&approved);
+    assert_eq!(approved.status.code(), Some(1), "{said}");
+    assert!(
+        said.contains("its latest decision finds repository.merge blocked, not approval-required"),
+        "takt approve reads the kept latest decision and names its status: {said}"
+    );
 }
 
 /// Acceptance 2: the same run with `--records trial` leaves every decision, 0001 to 0003.
@@ -270,7 +296,9 @@ fn config_key_and_flag() {
 /// Acceptance 4, the scenario run: `takt scenario run` keeps every decision whatever
 /// `--records default` says, and so does a `loop.improvement/1` case, which is an improvement
 /// case and reads every decision for its scorecard. A `self.improvement/1` turn keeps them by
-/// the same rule (`records_keeps_every_decision` in `crates/takt/src/run.rs`).
+/// the same rule, which the unit test `improvement_cases_keep_every_decision_whatever_is_asked`
+/// in `crates/takt/src/case.rs` covers: a turn's CLI run needs the install root and scorecard
+/// fixture of `self_improvement_cli.rs`, so no turn is run here.
 #[test]
 fn scenario_and_improvement_cases_keep_every_decision() {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))

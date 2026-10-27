@@ -8828,9 +8828,10 @@ pub struct Run<'a> {
     stops_unperformable: bool,
     /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
     stops_red_base: bool,
-    /// The records profile asked for the case's decisions ([`Records`]), `trial` until
-    /// [`Run::keep_records`]; what the case keeps is [`Records::for_protocol`] of it. The CLI asks
-    /// for `default` unless told otherwise; a library caller keeps every decision.
+    /// The records profile the case keeps its decisions under ([`Records`]): the profile the
+    /// case was opened under on a resume ([`CaseDir::opened_profile`]), `trial` on a new run,
+    /// until [`Run::keep_records`]; what the case keeps is [`Records::for_case`] of it. The CLI
+    /// asks for `default` on a new run unless told otherwise; a library caller keeps every decision.
     records: Records,
     /// The least free space, in bytes, a step needs on the file system of the tree and of the
     /// build directory; 0 reads nothing, and is the default until [`Run::stop_when_disk_below`].
@@ -9240,6 +9241,9 @@ impl<'a> Run<'a> {
         let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
         // The identity the case was opened with, whatever the repository configures by now.
         let committer = case.committer()?;
+        // The profile the case was opened under: a resume keeps it unless the caller asks for
+        // another ([`Run::keep_records`]).
+        let records = case.opened_profile()?;
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -9263,7 +9267,7 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
-            records: Records::Trial,
+            records,
             min_free: 0,
             build_dir: None,
             read_free: Box::new(free_space),
@@ -9597,18 +9601,19 @@ impl<'a> Run<'a> {
     }
 
     /// Asks for the records profile the case keeps its decisions under: `default` keeps the
-    /// latest decision alone, after each decision is written; `trial` keeps every one. A case of
-    /// an improvement protocol keeps every one whatever is asked ([`Records::for_protocol`]).
-    /// `trial` until this call.
+    /// latest decision alone, after each decision is written; `trial` keeps every one. A scenario
+    /// case or an improvement case keeps every one whatever is asked ([`Records::for_case`]).
+    /// A resumed case runs under the profile it was opened under until this call; a new one
+    /// runs under `trial` until this call.
     pub fn keep_records(&mut self, records: Records) {
         self.records = records;
     }
 
-    /// The records profile this run's case keeps: the one asked, or every decision for an
-    /// improvement case.
+    /// The records profile this run's case keeps: the one asked, or every decision for a scenario
+    /// case or an improvement case ([`Records::for_case`]), a new run and a resumed one alike.
     #[must_use]
     pub fn kept_records(&self) -> Records {
-        self.records.for_protocol(&self.case.protocol.id)
+        self.records.for_case(&self.case.protocol.id, &self.case.id)
     }
 
     /// Stops the run [`Stop::DiskLow`] before a step (a harness step, a deterministic step, the
@@ -10847,6 +10852,9 @@ impl<'a> Run<'a> {
         // so the latest by name is the latest written, and a record id, numbered by the same
         // sequence, never repeats.
         let mut seq = self.case.evaluations()?;
+        // The first decision this run writes: the `default` profile removes only the decisions
+        // from here on, never one an earlier run wrote.
+        let first_decision = seq + 1;
         let mut last_idle: Option<String> = None;
         let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
         let keeps_state = self.harness.keeps_state();
@@ -10889,11 +10897,6 @@ impl<'a> Run<'a> {
         loop {
             seq += 1;
             let decision = self.case.evaluate(seq)?;
-            // The `default` profile keeps the decision just written and none before it; the
-            // sequence goes on from it, so no later decision reuses a number.
-            if self.kept_records() == Records::Default {
-                self.case.keep_only_decision(seq)?;
-            }
             // Each fact is recorded before it is printed, here and below: an `out` that fails
             // ends the run on an error, never with a fact it printed missing from the record.
             events.emit(
@@ -10904,6 +10907,12 @@ impl<'a> Run<'a> {
                     frontier: decision.frontier_line(),
                 },
             )?;
+            // The `default` profile keeps the decision just written and none this run wrote before
+            // it, once its `decision` line is in the record; the sequence goes on from it, so no
+            // later decision reuses a number.
+            if self.kept_records() == Records::Default {
+                self.case.keep_only_decision(first_decision, seq)?;
+            }
             writeln!(out, "{}", decision.frontier_line())?;
             let state = format!(
                 "{:?}{:?}{:?}",

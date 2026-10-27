@@ -782,18 +782,20 @@ impl LoopArgs {
         {
             looping.continue_past_red_base = go_on;
         }
-        if let Some(records) = file.records.filter(|_| unset("records")) {
-            looping.records = Some(records);
-        }
+        looping.records_of_file = file.records.filter(|_| unset("records"));
     }
 
-    /// The records profile asked for: `--records` or the file's `records`, else `default`. The
-    /// value was checked by the flag's parser or when the file was read.
-    fn records_profile(&self) -> takt::case::Records {
-        self.records
-            .as_deref()
-            .and_then(takt::case::Records::named)
-            .unwrap_or_default()
+    /// The records profile given: `--records`, else, for a new case only, the configuration
+    /// file's `records`; `None` when neither gives one. A resumed case keeps the profile it was
+    /// opened under (story:a-run-keeps-every-decision-only-on-a-trial). The value was checked by
+    /// the flag's parser or when the file was read.
+    fn records_profile(&self, resumed: bool) -> Option<takt::case::Records> {
+        let named = self.records.as_deref().or(if resumed {
+            None
+        } else {
+            self.records_of_file.as_deref()
+        });
+        named.and_then(takt::case::Records::named)
     }
 }
 
@@ -935,10 +937,15 @@ struct LoopArgs {
     /// The records profile the case keeps its decisions under: `default` keeps the latest
     /// `decisions/NNNN.json` alone and goes on numbering from it, `trial` keeps every one. A
     /// scenario run and an improvement case (`self.improvement/1`, `loop.improvement/1`) keep
-    /// every one whatever this says; `default` when neither this nor the file's `records` says.
-    /// The `opened` line names the profile the case keeps.
+    /// every one whatever this says. Not given, a new case runs under `default` (or the file's
+    /// `records`), and a resumed case under the profile it was opened under. The `opened` line
+    /// names the profile the run keeps.
     #[arg(long, value_name = "default|trial", value_parser = ["default", "trial"])]
     records: Option<String>,
+    /// The configuration file's `records`, kept apart from the flag: it counts as given only for
+    /// a new case.
+    #[arg(skip)]
+    records_of_file: Option<String>,
 }
 
 /// A harness that performs nothing. Asked while an approval is pending, it requests the gate
@@ -1550,6 +1557,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // The unit: the case to resume, the intent given, or else the open case of an
             // active story or the next ready story of the planning store; a case is opened
             // before the store is told, so a run that cannot open its case takes nothing.
+            let resumed = case.is_some() || resuming.is_some();
             let mut run = match (case, intent, resuming) {
                 (Some(_), Some(_), _) => {
                     return Err(anyhow!(
@@ -1647,7 +1655,13 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
             run.record_on(&store);
-            let records = looping.records_profile();
+            // A new case runs under `default` unless the flag or the file says otherwise; a resumed
+            // one keeps the profile it was opened under unless the flag says otherwise.
+            let records = match looping.records_profile(resumed) {
+                Some(records) => Some(records),
+                None if resumed => None,
+                None => Some(takt::case::Records::default()),
+            };
             finish(
                 &mut run,
                 forge_line.as_deref(),
@@ -2280,14 +2294,14 @@ fn state_transcripts(dir: &Path) -> PathBuf {
 /// and `DiskLow` before a step when the tree's or `CARGO_TARGET_DIR`'s file system has less
 /// free than `--min-free-gib` ([`Run::stop_when_disk_below`]). The run goes under `scan`
 /// ([`Run::scan_with`]); a declared `none` is said in one line after the forge's, before the
-/// run's first line. `records` is the profile the case keeps its decisions under
-/// ([`Run::keep_records`]).
+/// run's first line. `records` is the profile the case keeps its decisions under when one is
+/// given ([`Run::keep_records`]); none keeps the run's own.
 fn finish(
     run: &mut Run<'_>,
     forge_line: Option<&str>,
     scan: Scan,
     looping: &LoopArgs,
-    records: takt::case::Records,
+    records: Option<takt::case::Records>,
     out: &mut dyn Write,
 ) -> Result<u8> {
     if let Some(line) = forge_line {
@@ -2321,7 +2335,9 @@ fn finish(
     if looping.continue_past_red_base {
         run.continue_past_red_base();
     }
-    run.keep_records(records);
+    if let Some(records) = records {
+        run.keep_records(records);
+    }
     run.stop_when_disk_below(
         looping.min_free_gib.saturating_mul(1 << 30),
         std::env::var_os("CARGO_TARGET_DIR")
@@ -2764,16 +2780,10 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     let mut run = take_story(&repo, options, story, &commit_as, harness, &validators, out)?;
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch. A scenario run keeps every decision whatever `--records`
-    // says: the trial's record is what the scenario's scorecard reads.
+    // says, a resume of it too: the trial's record is what the scenario's scorecard reads, and
+    // the library's rule for a scenario case says so (`Records::for_case`).
     run.record_on(&store);
-    finish(
-        &mut run,
-        forge.line.as_deref(),
-        scan,
-        &looping,
-        takt::case::Records::Trial,
-        out,
-    )
+    finish(&mut run, forge.line.as_deref(), scan, &looping, None, out)
 }
 
 /// Why `story`, `proposed`, is not ready among `all`, as [`takt::frontier::is_ready`] reads it:

@@ -31,7 +31,7 @@ and the instant to:
 - the **legitimate outcomes**.
 
 takt writes each evaluation as `decisions/NNNN.json` in the case and prints it as one line. A
-case keeps the latest alone by default; `--records trial` keeps every one ([Records
+case keeps each run's latest alone by default; `--records trial` keeps every one ([Records
 profiles](../reference/configuration.md#records-profiles)).
 
 ## The frontier
