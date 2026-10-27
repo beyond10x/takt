@@ -127,9 +127,9 @@ spec:
       - --
       - /bin/sh
       - -c
-      - mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace --config /config/takt.yaml "$@"
+      - mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace "$@"
       - takt
-    args: [--story, story:add-sub]
+    args: [--config, /config/takt.yaml]
   secretRef: {name: takt-demo-env}
   secretFiles: {name: takt-demo-files, mountPath: /var/run/secrets/takt}
   env:
@@ -138,19 +138,23 @@ spec:
   configFiles:
     - name: takt.yaml
       content: |
+        story: story:add-sub
         hours: 1
         harness: harness
-        endpoint_file: endpoint.toml
+        model: agent
+        llm: {path: llm.yaml}
         forge: none
         test_cmd: cargo test --quiet --locked
-    - name: endpoint.toml
+    - name: llm.yaml
       content: |
-        base_url = "https://llm.example.com/v1"
-        wire = "openai-responses"
-        model = "example-model"
-
-        [credential]
-        env = "LLM_API_KEY"
+        format: llm.routes/1
+        endpoints:
+          llm:
+            base_url: https://llm.example.com/v1
+            protocol: responses
+            auth: {kind: bearer, secret: env:LLM_API_KEY}
+        routes:
+          agent: llm/example-model
   agent:
     format: loom.agent/1
     agent:
@@ -181,10 +185,10 @@ What each part does:
 
 | part | what it gives takt |
 |---|---|
-| `command.entrypoint` | creates `~/.cargo/bin`, then runs `takt run` on `/config/takt.yaml` |
-| `command.args` | `--story`, a flag only: the story is not a key of the run's file |
-| `configFiles` | `/config/takt.yaml` and `/config/endpoint.toml`, written verbatim |
-| `secretRef` | `LLM_API_KEY` in the environment, which the endpoint file names |
+| `command.entrypoint` | creates `~/.cargo/bin`, then runs `takt run`, the image's own program |
+| `command.args` | `--config /config/takt.yaml`: the run file, the same one a host run takes with `takt run --config` |
+| `configFiles` | `/config/takt.yaml` and `/config/llm.yaml`, written verbatim; the run file reads `llm.yaml` beside it |
+| `secretRef` | `LLM_API_KEY` in the environment, which `llm.yaml`'s `auth.secret` names as `env:LLM_API_KEY` |
 | `secretFiles`, `env` | the gates policy file and `B10X_GATES_POLICY` naming it, for the default `gates` scan adapter; a `takt.yaml` that declares `scan: none` needs neither |
 | `workspace` | the claim at `/workspace` |
 | `agent.deploy.kubernetes` | the service account, the pod's resources and the egress |
