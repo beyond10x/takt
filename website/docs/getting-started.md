@@ -112,7 +112,7 @@ it.
 ## A run with no model
 
 Make a crate with one passing test and commit it, `Cargo.lock` included. A test run that writes a
-lock file the commit lacks is refused as a change the validator may not make; the refusal names the three ways out: commit `Cargo.lock`, ignore it in `.gitignore`, or give `--test-cmd` a command that does not write it.
+lock file the commit lacks is refused as a change the validator may not make; the refusal names the three ways out: commit `Cargo.lock`, ignore it in `.gitignore`, or give `--test-cmd` a command that does not write it. Under `--confinement substrate` on Linux the second does not work: the test command cannot write the tree outside `target`, so a lock it would write fails the run with a read-only `Cargo.lock`, and a dependency change needs its `Cargo.lock` committed with it.
 
 ```sh
 cargo new --lib takt-demo
