@@ -239,6 +239,18 @@ pub struct RunConfig {
     /// The document `llm` holds, parsed by llm. Set by [`RunConfig::read`], never read from the file.
     #[serde(skip)]
     pub llm_routes: Option<LlmRoutes>,
+    /// The protocol a store story opens on, `<name>/<major>` or a `protocol/1` file: `--protocol`'s.
+    /// [`RunConfig::read`] checks its shape and keeps it with its line in
+    /// [`RunConfig::protocol_settings`].
+    pub protocol: Option<String>,
+    /// The `protocols` member as written, a mapping of protocol to a mapping of its declared
+    /// inputs, which [`RunConfig::read`] parses into [`RunConfig::protocol_settings`].
+    #[serde(rename = "protocols")]
+    protocols_member: Option<serde_yaml_ng::Value>,
+    /// What the file's `protocol` and `protocols` members set, each with its line. Set by
+    /// [`RunConfig::read`], never read from the file.
+    #[serde(skip)]
+    pub protocol_settings: ProtocolSettings,
 }
 
 /// A present `llm` member, null included: serde reads a null as absent, so a bare `llm:` would
@@ -614,7 +626,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -908,6 +920,13 @@ impl RunConfig {
         if let Some(member) = config.harness_member.take() {
             config.harness = Some(harness_setting(path, &member)?);
         }
+        config.protocol_settings = ProtocolSettings::read(
+            path,
+            text,
+            extension == Some("toml"),
+            config.protocol.as_deref(),
+            config.protocols_member.take().as_ref(),
+        )?;
         if let Some(llm) = &config.llm {
             let (routes, variables) = llm_document(path, llm)?;
             config.llm_digest = Some(routes.digest().to_owned());
@@ -970,6 +989,257 @@ impl RunConfig {
         self.llm_routes = Some(LlmRoutes::new(routes, secret_variables(&document)));
         Ok(())
     }
+}
+
+/// One input a run file's `protocols` section sets, with the line it is written on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputSetting {
+    /// The declared input's name.
+    pub input: String,
+    /// The value as text, a boolean as `true` or `false`.
+    pub value: String,
+    /// The line the input is written on, 1-based; the line of its section when it cannot be told.
+    pub line: usize,
+}
+
+/// One protocol's entry of a run file's `protocols` section.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SettingsSection {
+    /// The protocol as the key writes it: `<name>` for every revision, or `<name>/<major>`.
+    pub protocol: String,
+    /// The line the key is written on, 1-based.
+    pub line: usize,
+    /// The inputs it sets, in the file's order.
+    pub inputs: Vec<InputSetting>,
+}
+
+/// The protocol a run file names and the inputs it sets, as [`RunConfig::read`] keeps them, with the
+/// file's path and each entry's line, so that a refusal made later, once the protocol the case
+/// opens on is known, names the file and the line.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProtocolSettings {
+    /// The file they were read from; none when no file was.
+    pub file: Option<PathBuf>,
+    /// The `protocol` key and its line.
+    pub protocol: Option<(String, usize)>,
+    /// The `protocols` section's entries.
+    pub sections: Vec<SettingsSection>,
+}
+
+impl ProtocolSettings {
+    /// The refusal of the entry written on `line`, naming the file and the line and repeating no
+    /// value written there.
+    #[must_use]
+    pub fn refusal(&self, line: usize, detail: &str) -> anyhow::Error {
+        match &self.file {
+            Some(file) => anyhow!(
+                "the run configuration file {} is refused at line {line}: {detail}",
+                file.display()
+            ),
+            None => anyhow!("the run configuration is refused: {detail}"),
+        }
+    }
+
+    /// The settings the members hold, `protocol` and `protocols` as [`RunConfig`] read them from
+    /// the file at `path`, whose text is `text`, TOML when `toml` says so. The shape is checked
+    /// here: the protocol is `<name>/<major>`, and `protocols` is a mapping of a protocol to a
+    /// mapping of inputs to a string or a boolean. A value is checked against the protocol's
+    /// declared values later, by [`crate::protocol::resolve_settings`].
+    fn read(
+        path: &Path,
+        text: &str,
+        toml: bool,
+        protocol: Option<&str>,
+        protocols: Option<&serde_yaml_ng::Value>,
+    ) -> Result<Self> {
+        if protocol.is_none() && protocols.is_none() {
+            return Ok(Self::default());
+        }
+        let mut settings = Self {
+            file: Some(path.to_owned()),
+            ..Self::default()
+        };
+        let at = |keys: &[&str]| locate(text, toml, keys).unwrap_or(1);
+        if let Some(protocol) = protocol {
+            let line = at(&["protocol"]);
+            let well_formed = protocol.rsplit_once('/').is_some_and(|(name, major)| {
+                !name.is_empty() && !major.is_empty() && major.chars().all(|c| c.is_ascii_digit())
+            });
+            if !well_formed {
+                return Err(settings.refusal(
+                    line,
+                    "`protocol` names a protocol by its id, `<name>/<major>`, as `takt protocols` lists them",
+                ));
+            }
+            settings.protocol = Some((protocol.to_owned(), line));
+        }
+        let Some(protocols) = protocols else {
+            return Ok(settings);
+        };
+        let shape = "`protocols` is a mapping of a protocol to a mapping of its declared inputs, each set to a string or a boolean";
+        let Some(mapping) = protocols.as_mapping() else {
+            return Err(settings.refusal(at(&["protocols"]), shape));
+        };
+        for (name, inputs) in mapping {
+            let Some(name) = name.as_str() else {
+                return Err(settings.refusal(at(&["protocols"]), shape));
+            };
+            let line = at(&["protocols", name]);
+            let Some(inputs) = inputs.as_mapping() else {
+                return Err(settings.refusal(line, shape));
+            };
+            let mut section = SettingsSection {
+                protocol: name.to_owned(),
+                line,
+                inputs: Vec::new(),
+            };
+            for (input, value) in inputs {
+                let Some(input) = input.as_str() else {
+                    return Err(settings.refusal(line, shape));
+                };
+                let line = at(&["protocols", name, input]);
+                let value = match value {
+                    serde_yaml_ng::Value::String(text) => text.clone(),
+                    serde_yaml_ng::Value::Bool(flag) => flag.to_string(),
+                    _ => return Err(settings.refusal(line, shape)),
+                };
+                if section.inputs.iter().any(|set| set.input == input) {
+                    return Err(settings.refusal(line, "an input is set twice in one protocol"));
+                }
+                section.inputs.push(InputSetting {
+                    input: input.to_owned(),
+                    value,
+                    line,
+                });
+            }
+            settings.sections.push(section);
+        }
+        Ok(settings)
+    }
+}
+
+/// The 1-based line a member of the file is written on, `keys` the path from the top of the
+/// document to it: the line of the last key found, or of the deepest one when a flow mapping
+/// holds the rest on its line. `None` when not even the first key is found.
+fn locate(text: &str, toml: bool, keys: &[&str]) -> Option<usize> {
+    if toml {
+        locate_toml(text, keys)
+    } else {
+        locate_yaml(text, keys)
+    }
+}
+
+/// Whether `trimmed`, a line without its indentation, starts with the key `key` followed by
+/// `separator`, the key bare or quoted.
+fn starts_with_key(trimmed: &str, key: &str, separators: &[char]) -> bool {
+    [key.to_owned(), format!("\"{key}\""), format!("'{key}'")]
+        .iter()
+        .any(|candidate| {
+            trimmed
+                .strip_prefix(candidate.as_str())
+                .is_some_and(|rest| {
+                    rest.trim_start()
+                        .chars()
+                        .next()
+                        .is_some_and(|next| separators.contains(&next))
+                })
+        })
+}
+
+/// [`locate`] in a YAML document: each key is looked for below the line of the one before, in the
+/// lines indented deeper than it.
+fn locate_yaml(text: &str, keys: &[&str]) -> Option<usize> {
+    let lines: Vec<&str> = text.lines().collect();
+    let mut found = None;
+    let mut from = 0;
+    let mut parent: Option<usize> = None;
+    for key in keys {
+        let mut hit = None;
+        for (number, line) in lines.iter().enumerate().skip(from) {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                continue;
+            }
+            let indent = line.len() - trimmed.len();
+            if parent.is_some_and(|parent| indent <= parent) {
+                break;
+            }
+            if starts_with_key(trimmed, key, &[':']) {
+                hit = Some((number, indent, trimmed));
+                break;
+            }
+        }
+        let (number, indent, trimmed) = hit?;
+        found = Some(number + 1);
+        let after_colon = trimmed.split_once(':').map_or("", |(_, rest)| rest.trim());
+        if !after_colon.is_empty() && !after_colon.starts_with('#') {
+            return found;
+        }
+        from = number + 1;
+        parent = Some(indent);
+    }
+    found
+}
+
+/// [`locate`] in a TOML document: a `[protocols.<name>]` table's own lines, a `[protocols]` table's,
+/// or the top level's dotted and inline forms.
+fn locate_toml(text: &str, keys: &[&str]) -> Option<usize> {
+    let wanted: String = keys.join(".");
+    let mut header = String::new();
+    let mut best: Option<usize> = None;
+    for (number, line) in text.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some(table) = trimmed
+            .strip_prefix('[')
+            .and_then(|rest| rest.trim_end().strip_suffix(']'))
+        {
+            header = table
+                .trim_matches(['[', ']'])
+                .chars()
+                .filter(|c| !matches!(c, '"' | '\'' | ' '))
+                .collect();
+            let depth = keys.len();
+            if depth > 0 && header == keys[..depth].join(".") {
+                return Some(number + 1);
+            }
+            if keys.len() > 1 && header == keys[..keys.len() - 1].join(".") && best.is_none() {
+                best = Some(number + 1);
+            }
+            continue;
+        }
+        let flat: String = trimmed
+            .chars()
+            .filter(|c| !matches!(c, '"' | '\'' | ' '))
+            .collect();
+        let qualified = if header.is_empty() {
+            flat.clone()
+        } else {
+            format!("{header}.{flat}")
+        };
+        if qualified.starts_with(&wanted)
+            && qualified[wanted.len()..]
+                .chars()
+                .next()
+                .is_some_and(|next| matches!(next, '=' | '.'))
+        {
+            return Some(number + 1);
+        }
+        let (table_key, member) = (keys.first().copied().unwrap_or(""), keys.last().copied());
+        if header == table_key
+            && keys.len() > 1
+            && starts_with_key(trimmed, keys[1], &['=', '.'])
+            && (keys.len() == 2 || member.is_some_and(|member| trimmed.contains(member)))
+        {
+            return Some(number + 1);
+        }
+        if header.is_empty() && starts_with_key(trimmed, table_key, &['=', '.']) && best.is_none() {
+            best = Some(number + 1);
+        }
+    }
+    best
 }
 
 #[cfg(test)]

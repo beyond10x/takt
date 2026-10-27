@@ -69,14 +69,16 @@ at case open ([case files](./case-files.md)).
 | user | `10001:10001`, `takt` |
 | `HOME` | `/var/lib/takt` |
 | working directory | `/workspace` |
-| entrypoint | `tini -- takt run --repo /workspace --config /config/agent.yaml` |
+| entrypoint | `tini -- takt run --repo /workspace` |
+| default argument (`CMD`) | `--config /config/agent.yaml`; any arguments after the image name replace it |
 
 takt runs under `tini`, so a stop signal reaches a takt that is not PID 1: `docker stop` or a
-pod's stop ends it on SIGTERM, not SIGKILL. Arguments after the image name are flags of
-`takt run` and win over the file:
+pod's stop ends it on SIGTERM, not SIGKILL. Arguments after the image name replace the default
+argument, so the configuration file is read only when they name it again. The arguments are flags
+of `takt run` and win over the file:
 
 ```console
-$ docker run --rm takt:0.14.0 --story <story-id> --hours 1
+$ docker run --rm takt:0.14.0 --config /config/agent.yaml --story <story-id> --hours 1
 ```
 
 A `LABEL` names the source (`org.opencontainers.image.source`), the licence (`Apache-2.0`) and the
@@ -101,7 +103,7 @@ has no group or other bits and the directory is not group- or other-writable.
 ### Under Loom
 
 A `LoomAgent` of the `Command` variant gets `/config/agent.yaml` from its `spec.agent`, written
-verbatim. Loom 0.44.0 runs the image once, as a Job. Loom keeps `/config` for its ConfigMap and
+verbatim. Loom 0.45.0 runs the image once, as a Job. Loom keeps `/config` for its ConfigMap and
 mounts it read-only. What reaches `/config/endpoint.toml` depends on the Loom release:
 
 | Loom | endpoint |
@@ -140,7 +142,7 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
   ```
 
   In Kubernetes that is `seccompProfile` and `appArmorProfile` of type `Unconfined` on the pod.
-  Loom 0.44.0 renders `seccompProfile: RuntimeDefault` on the pod of a `Command` resource and has
+  Loom 0.45.0 renders `seccompProfile: RuntimeDefault` on the pod of a `Command` resource and has
   no spec field for another (read in its `render.rs`; not run in a cluster here), so whether the
   test command runs there depends on the cluster's runtime default.
 - **No registry.** Nothing is pushed.

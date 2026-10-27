@@ -8,9 +8,10 @@ source: Dockerfile at 0.14.0; examples/loom-agent/agent.yaml and endpoint.toml (
 
 # Run in a container
 
-The image runs `takt run --repo /workspace --config /config/agent.yaml` under `tini`, as uid
-10001. You supply two mounts: the repository at `/workspace`, and the configuration at
-`/config`. What the image holds is in [Container image](../reference/container-image.md).
+The image's entrypoint runs `takt run --repo /workspace` under `tini`, as uid 10001. Its default
+argument is `--config /config/agent.yaml`, which any argument after the image name replaces. You
+supply two mounts: the repository at `/workspace`, and the configuration at `/config`. What the
+image holds is in [Container image](../reference/container-image.md).
 
 ## 1. Build the image
 

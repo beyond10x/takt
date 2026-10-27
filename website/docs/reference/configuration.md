@@ -45,10 +45,12 @@ for `_`; `scan` has no flag.
 | `commit` | mapping of `style` (`semantic`, the default, `repository` or `action`), `trailer` (default `Refs`; empty for none) and `types` (an action to its commit type), as `--commit-style`, `--commit-trailer` and `--commit-types`: how a step commit's message is written ([Commit messages](#commit-messages)); checked when the file is read |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
+| `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says |
+| `protocols` | a mapping of a protocol, by name (every revision) or `<name>/<major>`, to a mapping of its declared case inputs, each set to one of the values the protocol declares; an unknown protocol, input or value is refused at its line before any case opens. An input is taken from `--input`, else a story tag `input:<name>=<value>`, else this section, else takt's built-in default for the protocol; each value is recorded with its source in the case's `case.yaml` |
 
-`takt scenario run --config <FILE>` reads the same file, without `story`.
+`takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
 
-Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--protocol`, `--input`,
+Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
 `--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
 `--commit-identity`, `--confinement`, `--llm-config`, `--model-endpoint`, `--model-wire`,
 `--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
@@ -130,7 +132,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` and `records`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, and `llm`, an `llm.routes/1` document or `{path: <file>}`, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -264,6 +266,34 @@ takt: the endpoint's credential variable LLM_API_KEY is not set; nothing was sta
 $ LLM_API_KEY=<token> takt run --repo ~/demo --intent x --harness harness --endpoint-file nocred.toml --endpoint-token-env LLM_API_KEY --endpoint-wire anthropic-messages
 takt: the endpoint's credential variable LLM_API_KEY is given on the wire `anthropic-messages`: only openai-responses is admitted for an environment credential until the session executor can pass an API-key file; nothing was started
 ```
+
+## The llm section
+
+The run file's `llm` member, or `--llm-config <FILE>`, holds an `llm.routes/1` document, inline or
+as `{path: <file>}`. llm validates it, and a refused document opens no case: takt relays llm's
+refusal.
+
+- A `path` is read beside the run file. It is refused when it is absolute, when it has a `..` part,
+  or when it resolves through a symbolic link to a place outside the run file's directory.
+  `--llm-config` names its file from the working directory and has none of these limits.
+- The file must be a regular file of at most 2 MiB (2097152 bytes). A larger file, or one that is
+  not a regular file, is refused.
+- The name ends in `.toml`, `.yaml` or `.yml`: `.toml` is read by llm's TOML parser, the other two
+  by its YAML one. Any other name is refused.
+- Under `--harness harness`, takt runs a route's `responses` protocol only. A route on the
+  `messages` protocol is refused before any case opens, as is any other protocol: a `messages`
+  route maps to the `anthropic-messages` wire, which takes no staged key, so in this release only
+  the `responses` protocol takes a route's key.
+- Under `--harness harness`, takt resolves the key of the route `--model` names with llm before it
+  starts any process, and takes out of its own environment every variable whose value is exactly
+  that key, and every variable an `env:` reference anywhere in the document names, in any endpoint.
+  So neither the test command nor b10x-harness inherits one. A copy of the key with other bytes
+  around it, such as a trailing newline or a prefix, matches no variable and is not removed. Under
+  `--confinement substrate` outside a delegated run, the removal waits until the substrate has
+  opened in the run.
+- Under `--harness none` the document is validated and its digest is recorded, but no route is
+  resolved and no variable is removed. `--harness claude` and `--harness codex` refuse an `llm`
+  section.
 
 ## Commit identity
 
@@ -437,7 +467,6 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | `--strict-version` | refuse before the run when the vendor version is outside metaharness's pin; refused until takt's launch carries it |
 | `--context <FILE>` | a file whose text the prompt carries, repeatable, as `metaharness run --context`; refused until takt's launch carries it |
 
-The five flags above take the run file's `harness` mapping's keys under the same names, and a flag wins over the same key in the file.
 | `--endpoint-file <PATH>` | the endpoint file |
 | `--model-endpoint <URL>` | the endpoint's base URL |
 | `--model-wire <WIRE>` | `anthropic-messages` or `openai-responses` |
@@ -445,6 +474,8 @@ The five flags above take the run file's `harness` mapping's keys under the same
 | `--subscription-token-pointer <POINTER>` | a JSON pointer into the token file |
 | `--api-key-secret <NS/NAME>` | a secret's name; takt reads no secret |
 | `--endpoint-token-env <NAME>` | a variable holding the key; `openai-responses` only |
+
+The five flags above that name a session setting (`--effort`, `--max-turns`, `--max-budget-usd`, `--strict-version`, `--context`) take the run file's `harness` mapping's keys under the same names, and a flag wins over the same key in the file. A session setting, from the file's mapping or from a flag, is refused with `--harness none`, which starts no session, unless its only key is `kind`. `max-turns` is a whole number above zero, in the file or on the command line.
 
 The names above are metaharness's and llm's; the old names `--endpoint-base-url`,
 `--endpoint-wire`, `--endpoint-model` (the same flag as `--model`), `--endpoint-token-file`,

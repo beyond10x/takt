@@ -8,6 +8,8 @@ takt's releases.
 
 ### Added
 
+- The run file takes `protocol`, the protocol a store story opens on, and `protocols`, the values of that protocol's declared inputs. Each input takes the first of `--input`, the story's tag `input:<name>=<value>`, the run file and takt's built-in default; a story's tag `protocol:<name>/<major>` chooses its protocol. A value the protocol does not list is refused at its line. `case.yaml` records each value with its source.
+- `takt protocol show <name/rev>` prints each case input a built-in protocol declares: its values, description, built-in default and the value the run file `--config` sets, with that file's path and line; `--format json` prints the same as data. An unknown protocol exits 1 and names the known ones.
 - `examples/loom-agent/`: placeholder manifests that run takt as a Loom 0.44.0 `LoomAgent` on a kind cluster, read by a test through takt's own configuration reader.
 - Site guides: install, configure a run, approve a capability, read a case, run in a container, deploy on Kubernetes.
 - Site pages: what takt is built on, capabilities and approvals, how a run ends, the configuration file, the case files, the image, known limitations.
