@@ -64,6 +64,9 @@ fn opened(case: &str) -> Event {
         endpoint: None,
         records: None,
         scan: None,
+        protocol_source: None,
+        input_sources: None,
+        harness_program: None,
     }
 }
 

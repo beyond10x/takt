@@ -89,6 +89,7 @@ fn world(name: &str) -> World {
         &path,
         format!(
             r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo double; exit 0; fi
 echo call >> '{}'
 echo "the work" >> work.txt
 printf '{{"result":"{{\\"action\\": \\"implementation.edit\\", \\"summary\\": \\"the double\\"}}","usage":{{"input_tokens":1}}}}'

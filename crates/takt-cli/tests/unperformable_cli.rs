@@ -92,6 +92,7 @@ fn world(name: &str) -> World {
         &path,
         format!(
             r#"#!/bin/sh
+if [ "$1" = "--version" ]; then echo double; exit 0; fi
 echo call >> '{}'
 case "$2" in
   *"- change.handover:"*)

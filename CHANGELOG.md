@@ -8,6 +8,7 @@ takt's releases.
 
 ### Added
 
+- `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
 - `forge: command` with a `forge_commands` section in the `takt run --config` file: the forge actions `open`, `read`, `checks` and `merge` are the argument lists the file names, run without a shell.
 - Placeholders of `forge_commands`: `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
 - `transport: api` with a `credential` (`{env: NAME}` or `{file: PATH}`, a mode 600 file outside the tree): the `gitlab` forge calls the GitLab REST API over HTTPS. `glab` stays the default transport.
@@ -54,6 +55,12 @@ takt's releases.
 
 ### Fixed
 
+- A commit body or summary line git reads as a trailer, `Key : value` included, is refused: a reply cannot add `Signed-off-by`; a fallback summary of that shape follows `reported - `.
+- A base branch `takt/<a>/<b>` is refused naming the reserved prefix and a rename, with the old "names no case" in front.
+- A Claude step whose intent names `AGENTS.md` or `CLAUDE.md` is given its bytes at the base once, with no `@` mention of the step's copy.
+- `opened` records `protocol_source` and `input_sources`, and the run's first line says each input's source after its value.
+- A resumed case and an intent run refuse a run file whose `protocols` or `protocol` names what takt does not know, at its line.
+- `takt protocol show` lists a run-file value that `takt run` refuses as `refused`, with the reason, never as set.
 - A base branch under takt's reserved prefix `takt/` that is no case's is refused before a case opens, exit 1, naming the prefix and a rename; it was refused as a case's branch with no base recorded.
 - A gate's command finds a bare program name on `/usr/local/bin:/usr/bin:/bin`, or on the `PATH` its `env` declares, never on the user's `PATH`; a name found nowhere refuses the gate.
 - A gate whose script holds the shell's `:` builtin is run and judged on its own exit; a path a gate names that starts with `:` is looked up literally.
