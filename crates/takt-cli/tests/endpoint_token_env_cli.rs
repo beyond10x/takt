@@ -432,7 +432,7 @@ fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() 
             "--endpoint-token-env",
             VARIABLE,
             "--iterations",
-            "4",
+            "5",
             "--test-cmd",
             "sh probe.sh",
         ],
@@ -472,7 +472,11 @@ fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() 
         Some(MARKER),
         "the staged file holds the value"
     );
-    assert_eq!(output.status.code(), Some(5), "{stdout}\n{stderr}");
+    assert_eq!(
+        output.status.code(),
+        Some(5),
+        "story:a-harness-step-without-an-action-is-retried: three tries inside a budget of 5 steps end on the error, exit 5:\n{stdout}\n{stderr}"
+    );
     assert!(
         !stdout.contains(MARKER) && !stderr.contains(MARKER),
         "{stdout}\n{stderr}"

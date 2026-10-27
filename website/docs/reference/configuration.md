@@ -30,20 +30,26 @@ for `_`; `scan` has no flag.
 
 | field | meaning |
 |---|---|
+| `story` | string: the story to deliver, by id; taken only when none of `--story`, `--intent` and `--case` is given; refused by `takt scenario run`, whose scenario names the story |
 | `iterations` | integer: stop after this many steps |
 | `hours` | number: stop after this many hours |
 | `harness` | string: `claude`, `codex`, `harness` or `none`; default `claude` |
 | `model` | string: the harness's model, when it takes one |
-| `endpoint_file` | path: the endpoint file for `--harness harness` |
+| `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
+| `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
 | `forge` | string: `bot`, `gitlab` or `none` |
 | `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
+| `state_dir` | path: the state directory, as `--state-dir`; a relative path is read beside the configuration file |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 
-Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--story`, `--protocol`,
-`--input`, `--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
-`--commit-identity`, `--confinement` and the `--endpoint-*` flags. A key for one of them is
-refused.
+`takt scenario run --config <FILE>` reads the same file, without `story`.
+
+Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--protocol`, `--input`,
+`--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
+`--commit-identity`, `--confinement`, `--endpoint-base-url`, `--endpoint-wire`,
+`--endpoint-model`, `--endpoint-token-file`, `--endpoint-token-pointer` and `--endpoint-secret`.
+A key for one of them is refused.
 
 ### A minimal TOML file
 
@@ -372,6 +378,12 @@ All `--endpoint-*` flags need `--harness harness`.
 |---|---|
 | `--test-cmd <TEST_CMD>` | the test command, no shell; default `cargo test --quiet` |
 | `--continue-past-red-base` | go on past a red base, for a base whose tests fail on purpose |
+
+### State
+
+| flag | meaning |
+|---|---|
+| `--state-dir <DIR>` | the state directory the run keeps its session transcripts in (`<DIR>/transcripts`), in place of `$XDG_STATE_HOME/takt`; for a container, a directory on a kept volume |
 
 ### Confinement and identity
 

@@ -37,17 +37,11 @@ stopped: Iterations (1); steps 1, tokens 0, case ~/cfg-demo/.engineering/cases/t
 (The `case` and `frontier` lines are left out.) `--iterations 1` on the command line won over the
 file's `4`. A flag wins over the file, and the file wins over the default.
 
-The file holds nine keys: `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `forge`,
-`test_cmd`, `continue_past_red_base` and `scan`. `scan` is the one key with no flag; everything
-else is a flag only. That includes the story (`--story`) and the key's variable
-(`--endpoint-token-env`).
-
-:::caution[Planned]
-
-`story` and `endpoint_token_env` as keys of the file, and `--config` for `takt scenario run`, are
-planned and not in 0.14.0. Pass them as flags today ([Known limitations](../known-limitations.md#takt)).
-
-:::
+The file holds twelve keys: `story`, `iterations`, `hours`, `harness`, `model`, `endpoint_file`,
+`endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `continue_past_red_base` and `scan`.
+`scan` is the one key with no flag; everything else is a flag only. The file's `story` is taken
+only when none of `--story`, `--intent` and `--case` is given. `takt scenario run --config` reads
+the same file and refuses a `story` in it, since the scenario names the story.
 
 ## 2. Pick the harness
 
@@ -159,15 +153,15 @@ opens, exit 1. The refusal names the line and never the value written there:
 
 | the file | refused at |
 |---|---|
-| an unknown key, such as `story` on line 4 of a TOML file | line 4 |
+| an unknown key, such as `stroy` on line 4 of a TOML file | line 4 |
 | a TOML key written twice, the second on line 2 | line 2, the duplicate's own line |
 | a YAML key written twice at the top level | line 1, where the mapping starts |
 | a YAML key written twice under `takt:`, whose keys start on line 4 | line 4, where that mapping starts |
 | a `loom.agent/1` member that is neither Loom's nor `takt` | no line; the message lists Loom's members |
 
 ```console
-$ takt run --repo . --intent x --config story.toml
-takt: the run configuration file story.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
+$ takt run --repo . --intent x --config stroy.toml
+takt: the run configuration file stroy.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd` and `state_dir`, strings, `continue_past_red_base`, a boolean, and `scan`, `gates` or `none`, each optional
 ```
 
 In YAML the line is where the mapping holding the duplicate starts, not the duplicate itself.
@@ -176,7 +170,7 @@ Naming the duplicate's own line in YAML is planned.
 ## The same file under Loom
 
 A YAML file may also be a `loom.agent/1` document, the format Loom mounts at
-`/config/agent.yaml`. Its `takt` member holds the same eight keys, and takt reads nothing else of
+`/config/agent.yaml`. Its `takt` member holds the same twelve keys, and takt reads nothing else of
 it:
 
 ```yaml
