@@ -10805,7 +10805,7 @@ impl<'a> Run<'a> {
             .dir
             .starts_with(self.tree.join(crate::case::CASES_DIR))
         {
-            crate::case::write_takt_gitignore(&self.tree)
+            crate::case::write_takt_files(&self.tree)
         } else {
             Ok(())
         };

@@ -144,8 +144,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-assertion-providers"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.10.0#2a416427ec2502467248cf9a17a3a3b04322016f"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.11.0#de3df40554ffb5f9d8750cb8278acb8a0343c1db"
 dependencies = [
  "clap",
  "jsonschema 0.33.0",
@@ -182,11 +182,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-canon-engineering"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.10.0#2a416427ec2502467248cf9a17a3a3b04322016f"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.11.0#de3df40554ffb5f9d8750cb8278acb8a0343c1db"
 dependencies = [
  "b10x-canon",
- "b10x-canon-engineering-assertions 0.10.0",
+ "b10x-canon-engineering-assertions 0.11.0",
  "clap",
  "serde",
  "serde_yaml_ng",
@@ -210,11 +210,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-canon-engineering-assertions"
-version = "0.10.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.10.0#2a416427ec2502467248cf9a17a3a3b04322016f"
+version = "0.11.0"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.11.0#de3df40554ffb5f9d8750cb8278acb8a0343c1db"
 dependencies = [
  "anyhow",
- "b10x-assertion-providers 0.10.0",
+ "b10x-assertion-providers 0.11.0",
  "b10x-canon-expr",
  "clap",
  "rustix",
@@ -626,8 +626,8 @@ version = "0.14.0"
 dependencies = [
  "anyhow",
  "b10x-canon",
- "b10x-canon-engineering 0.10.0",
- "b10x-canon-engineering-assertions 0.10.0",
+ "b10x-canon-engineering 0.11.0",
+ "b10x-canon-engineering-assertions 0.11.0",
  "b10x-canon-expr",
  "b10x-loom-sdk",
  "libc",
@@ -653,8 +653,8 @@ name = "b10x-takt-cli"
 version = "0.14.0"
 dependencies = [
  "anyhow",
- "b10x-canon-engineering 0.10.0",
- "b10x-canon-engineering-assertions 0.10.0",
+ "b10x-canon-engineering 0.11.0",
+ "b10x-canon-engineering-assertions 0.11.0",
  "b10x-takt",
  "clap",
  "serde_json",

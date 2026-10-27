@@ -282,6 +282,7 @@ fn assert_refused_and_put_back(tree: &Scratch, ran: &Ran, path: &str) {
             ":!.engineering/cases",
             ":!.takt/cases",
             ":!.takt/.gitignore",
+            ":!.takt/.worktreekeep",
             ":!target",
         ],
     );

@@ -57,6 +57,14 @@ pub const TAKT_GITIGNORE: &str = ".gitignore";
 /// The text of [`TAKT_GITIGNORE`] that takt writes: every path under [`TAKT_DIR`] ignored.
 const TAKT_GITIGNORE_TEXT: &str = "*\n";
 
+/// The file in [`TAKT_DIR`] that tells `worktree`'s cleanup to keep the cases, written when it is
+/// absent beside [`TAKT_GITIGNORE`]. A repository's own is left alone.
+pub const TAKT_WORKTREEKEEP: &str = ".worktreekeep";
+
+/// The text of [`TAKT_WORKTREEKEEP`] that takt writes: the cases directory, matched relative to
+/// [`TAKT_DIR`].
+const TAKT_WORKTREEKEEP_TEXT: &str = "cases/\n";
+
 /// The prefix of a case's branch: `takt/<case id>`.
 pub const BRANCH_PREFIX: &str = "takt/";
 
@@ -2510,18 +2518,34 @@ pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Resul
 }
 
 /// Writes [`TAKT_GITIGNORE`] under `tree`'s [`TAKT_DIR`] when there is none, creating the
-/// directory as needed. A file already there, a link or a directory included, is left as it is,
-/// byte for byte. Called at open, on resume and after each observation; an observation that
-/// changes or removes it is refused and undone first (`run.rs`, the observation path), so after
-/// one it is written only when it is absent.
-pub fn write_takt_gitignore(tree: &Path) -> Result<()> {
+/// directory as needed, and [`TAKT_WORKTREEKEEP`] beside it when there is none. A file already
+/// there, a link or a directory included, is left as it is, byte for byte, and a repository's
+/// own `.gitignore` of other content, which takes the cases out of the ignore, gets no keep file:
+/// it would be an untracked file the repository did not ask for. Called at open, on resume and
+/// after each observation; an observation that changes or removes either file is refused and
+/// undone first (`run.rs`, the observation path), so after one they are written only when absent.
+pub fn write_takt_files(tree: &Path) -> Result<()> {
     let takt = tree.join(TAKT_DIR);
-    let path = takt.join(TAKT_GITIGNORE);
-    if std::fs::symlink_metadata(&path).is_ok() {
-        return Ok(());
+    let ignore = takt.join(TAKT_GITIGNORE);
+    let own = match std::fs::symlink_metadata(&ignore) {
+        Err(_) => true,
+        Ok(meta) => {
+            meta.is_file()
+                && std::fs::read(&ignore).is_ok_and(|bytes| bytes == TAKT_GITIGNORE_TEXT.as_bytes())
+        }
+    };
+    for (name, text, wanted) in [
+        (TAKT_GITIGNORE, TAKT_GITIGNORE_TEXT, true),
+        (TAKT_WORKTREEKEEP, TAKT_WORKTREEKEEP_TEXT, own),
+    ] {
+        let path = takt.join(name);
+        if !wanted || std::fs::symlink_metadata(&path).is_ok() {
+            continue;
+        }
+        std::fs::create_dir_all(&takt).with_context(|| format!("create {}", takt.display()))?;
+        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
     }
-    std::fs::create_dir_all(&takt).with_context(|| format!("create {}", takt.display()))?;
-    std::fs::write(&path, TAKT_GITIGNORE_TEXT).with_context(|| format!("write {}", path.display()))
+    Ok(())
 }
 
 /// The records profile a run keeps its case's decisions under: `default` keeps the latest
@@ -2897,7 +2921,7 @@ impl CaseDir {
             {
                 case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
-            write_takt_gitignore(tree)?;
+            write_takt_files(tree)?;
             case.create(intent, &branch)?;
             if let Some(identity) = &identity {
                 let path = case.dir.join(COMMIT_IDENTITY_RECORD);
@@ -3000,7 +3024,7 @@ impl CaseDir {
                 .with_context(|| format!("check out the branch of the case {id}"))?;
         }
         if dir.starts_with(tree.join(CASES_DIR)) {
-            write_takt_gitignore(tree)?;
+            write_takt_files(tree)?;
         }
         let mut case = Self {
             id: id.to_owned(),
