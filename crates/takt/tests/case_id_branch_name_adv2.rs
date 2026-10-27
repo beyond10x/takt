@@ -235,7 +235,7 @@ fn take_next_skips_a_story_whose_minted_case_id_is_too_long_and_takes_the_next()
 fn on_a_nested_branch(name: &str) -> Scratch {
     let tree = repository(name);
     git(&tree.0, &["checkout", "-q", "-b", "takt/x/y"]);
-    let planted = tree.0.join(".engineering/cases/x/y");
+    let planted = tree.0.join(".takt/cases/x/y");
     fs::create_dir_all(&planted).expect("a directory");
     fs::write(planted.join("branch.yaml"), "name: takt/x/y\nbase: main\n").expect("a file");
     git(&tree.0, &["add", "-A"]);
@@ -300,5 +300,5 @@ fn a_case_opened_on_a_branch_that_names_no_case_is_refused_before_reading_a_path
         "{error}"
     );
     assert_eq!(git(&tree.0, &["branch", "--show-current"]), "takt/x/y");
-    assert!(!tree.0.join(".engineering/cases/fresh").exists());
+    assert!(!tree.0.join(".takt/cases/fresh").exists());
 }

@@ -91,6 +91,22 @@ jobs:
           tar -xzf "$asset"
           echo "$RUNNER_TEMP/aep-$AEP_VERSION-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
 
+      - name: Install worktree
+        env:
+          WORKTREE_VERSION: "0.19.0"
+          WORKTREE_SHA256: c7c1f92717850a9f55cc31831b127e0f257a9ef4852cc67a455953929b538ee8
+        run: |
+          set -euo pipefail
+          asset="worktree-$WORKTREE_VERSION-x86_64-unknown-linux-gnu.tar.gz"
+          release="https://github.com/beyond10x/worktree/releases/download/$WORKTREE_VERSION"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --output "$asset" "$release/$asset"
+          curl --fail --silent --show-error --location --output WORKTREE-SHA256SUMS "$release/SHA256SUMS"
+          grep -Fx "$WORKTREE_SHA256  $asset" WORKTREE-SHA256SUMS
+          grep -F "  $asset" WORKTREE-SHA256SUMS | sha256sum --check --strict
+          tar -xzf "$asset"
+          echo "$RUNNER_TEMP/worktree-$WORKTREE_VERSION-x86_64-unknown-linux-gnu" >> "$GITHUB_PATH"
+
       - name: Fill aep's protocol cache
         run: aep plan artifact validate
 

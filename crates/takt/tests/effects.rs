@@ -720,7 +720,7 @@ fn the_port_guard_finds_a_record_written_past_it_in_any_crate() {
 /// case's `evidence/` ([`evidence_lines`]), with what it does: the port's one write, and
 /// otherwise a read, a name, the empty directory a case opens with, or replay's copy into a
 /// scratch tree. A line found and not here, or here and not found, fails the guard.
-const EVIDENCE_LINES: [(&str, &str, &str); 16] = [
+const EVIDENCE_LINES: [(&str, &str, &str); 17] = [
     (
         "takt/src/evidence.rs",
         "match self.case.borrow_mut().add_evidence(&record) {",
@@ -767,11 +767,6 @@ const EVIDENCE_LINES: [(&str, &str, &str); 16] = [
         "reads the records (`case_records`)",
     ),
     (
-        "takt/src/run.rs",
-        "let mine = Path::new(CASES_DIR).join(&self.case.id).join(\"evidence\");",
-        "a path compared with a record line's; nothing written",
-    ),
-    (
         "takt/src/replay.rs",
         "let (_, name) = path.rsplit_once(\"/evidence/\")?;",
         "reads a record's name from the record's line",
@@ -800,6 +795,16 @@ const EVIDENCE_LINES: [(&str, &str, &str); 16] = [
         "takt/src/replay.rs",
         "write_plain(&dir.join(\"evidence\").join(name), &bytes)?;",
         "copies that record, byte for byte, into the scratch case only",
+    ),
+    (
+        "takt/src/validator.rs",
+        "let dir = case_dir.join(\"evidence\");",
+        "reads the case's records for the pull request's body (story:the-pull-request-and-the-store-carry-the-evidence)",
+    ),
+    (
+        "takt/src/run.rs",
+        ".join(\"evidence\");",
+        "names the case's own evidence directory, relative to the tree, where observed_pass reads a record it recorded",
     ),
 ];
 

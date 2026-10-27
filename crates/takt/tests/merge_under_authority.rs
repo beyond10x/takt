@@ -893,7 +893,7 @@ fn status(repo: &Path, id: &str) -> String {
         .unwrap_or_else(|| panic!("{id} is listed"))
 }
 
-/// The names under `<repo>/.engineering/cases`, sorted.
+/// The names under `<repo>/.takt/cases`, sorted.
 fn case_names(repo: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(repo.join(takt::case::CASES_DIR))
         .expect("a readable cases directory")
@@ -1952,7 +1952,7 @@ impl Harness for SiblingGranting {
 /// tree (an intent run while a story's case waits for its grant) has a harness with the same
 /// tree and the same write access, and its steps are compared against its own directory only:
 /// a grant it writes into the waiting case's `authority.yaml` is neither refused nor put back
-/// (the whole of `.engineering/cases` is outside the change set, the commit and the clean), and
+/// (the whole of `.takt/cases` is outside the change set, the commit and the clean), and
 /// the next run on the waiting case merges under it. The story: an unattended run never merges
 /// without the operator's grant.
 #[test]
@@ -2181,7 +2181,7 @@ fn adv2_a_decision_that_does_not_read_does_not_fail_the_frontier() {
 }
 
 /// A harness that writes a test file and, beside it, a path whose first characters are the
-/// cases directory's, `.engineering/cases-smuggled.txt`, and reports `tests.write`.
+/// cases directory's, `.takt/cases-smuggled.txt`, and reports `tests.write`.
 struct Smuggling;
 
 impl Harness for Smuggling {
@@ -2193,7 +2193,7 @@ impl Harness for Smuggling {
         fs::create_dir_all(context.tree.join("tests"))?;
         fs::write(context.tree.join("tests/new_test.txt"), "a test\n")?;
         fs::write(
-            context.tree.join(".engineering/cases-smuggled.txt"),
+            context.tree.join(".takt/cases-smuggled.txt"),
             "not a test\n",
         )?;
         Ok(StepReport {
@@ -2206,8 +2206,8 @@ impl Harness for Smuggling {
 
 /// `tests.write` may change test paths only, and the change set a step is judged by leaves
 /// out the case directory. That exemption is a prefix of the path string, not the directory:
-/// `.engineering/cases-smuggled.txt` is left out of the change set, so the refusal does not
-/// see it, and it is not under `.engineering/cases`, so the commit takes it: a non-test path
+/// `.takt/cases-smuggled.txt` is left out of the change set, so the refusal does not
+/// see it, and it is not under `.takt/cases`, so the commit takes it: a non-test path
 /// committed under `tests.write`.
 #[test]
 fn adv2_tests_write_does_not_commit_a_non_test_path_beside_the_cases_directory() {
@@ -2220,7 +2220,7 @@ fn adv2_tests_write_does_not_commit_a_non_test_path_beside_the_cases_directory()
     let text = String::from_utf8(out).expect("utf-8");
     let committed = git(&tree, &["ls-tree", "-r", "--name-only", "HEAD"]);
     assert!(
-        !committed.contains(".engineering/cases-smuggled.txt"),
+        !committed.contains(".takt/cases-smuggled.txt"),
         "a non-test path was committed under tests.write; the run stopped {stop}; committed:\n{committed}\n{text}"
     );
 }

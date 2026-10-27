@@ -252,6 +252,12 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 layers: None,
                 confinement: None,
                 endpoint: None,
+                records: None,
+                scan: None,
+                protocol_source: None,
+                input_sources: None,
+                harness_program: None,
+                preflight: None,
             },
         ),
         (

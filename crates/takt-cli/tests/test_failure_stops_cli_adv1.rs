@@ -159,6 +159,7 @@ fn world(name: &str, files: &[(&str, &str, bool)]) -> World {
         &path,
         format!(
             r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 echo call >> '{}'
 echo "the work" >> work.txt
 printf '{{"result":"{{\\"action\\": \\"implementation.edit\\", \\"summary\\": \\"the double\\"}}","usage":{{"input_tokens":1}}}}'
@@ -218,6 +219,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
         ];
         args.extend_from_slice(extra);
         self.takt(&args)
@@ -235,6 +238,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
             "--min-free-gib",
             "0",
         ];

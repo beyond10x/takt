@@ -327,10 +327,7 @@ fn a_trial_branch_the_remote_holds_but_the_checkout_never_fetched_is_not_reused(
         "the run took trial/0, which the remote held already: exit {code}, stdout {out} stderr {err}"
     );
     assert!(
-        !world
-            .repo
-            .join(".engineering/cases/scenario-1-trial-0")
-            .exists(),
+        !world.repo.join(".takt/cases/scenario-1-trial-0").exists(),
         "a case was opened on the remote's existing trial/0: stdout {out} stderr {err}"
     );
     // The fetch is what tells the run of the remote's trial/0: it takes the next number, not
@@ -344,10 +341,7 @@ fn a_trial_branch_the_remote_holds_but_the_checkout_never_fetched_is_not_reused(
         world.seed
     );
     assert!(
-        world
-            .repo
-            .join(".engineering/cases/scenario-1-trial-1")
-            .exists(),
+        world.repo.join(".takt/cases/scenario-1-trial-1").exists(),
         "stdout {out} stderr {err}"
     );
 }
@@ -431,7 +425,7 @@ fn a_remote_trial_number_at_the_top_of_u64_is_counted_past_it() {
     assert!(
         world
             .repo
-            .join(".engineering/cases/scenario-1-trial-18446744073709551616")
+            .join(".takt/cases/scenario-1-trial-18446744073709551616")
             .exists(),
         "stdout {out} stderr {err}"
     );

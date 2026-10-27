@@ -24,6 +24,7 @@ use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow};
 use serde::Deserialize;
+use sha2::{Digest as _, Sha256};
 
 use crate::case::Approval;
 use crate::confinement::Command;
@@ -106,8 +107,9 @@ pub trait Frontier {
     /// never edited: the trail of the grant written into the case.
     fn record_approval(&self, repo: &Path, story: &str, approval: &Approval) -> Result<()>;
     /// Records on the story `story` one [`TEST_RESULT`] evidence record, source [`SOURCE`],
-    /// referring to `reference`, the record's path in the repository, at `at`, that record's
-    /// `observed_at`; the store's refusal, verbatim, when it would not. An adapter that records
+    /// referring to `reference`, the record's path in the repository with its sha256 and fields
+    /// ([`test_result_reference`]), at `at`, that record's `observed_at`; the store's refusal,
+    /// verbatim, when it would not. An adapter that records
     /// none refuses.
     fn record_test_result(
         &self,
@@ -215,6 +217,70 @@ pub enum Written {
 #[must_use]
 pub fn test_result_subject(story: &str) -> String {
     format!("takt: {TEST_RESULT} {story}")
+}
+
+/// The reference the store records for a `test_result` pass record of the case: the record's
+/// path in the repository, then `#sha256=<hex>&result=<result>&revision=<revision>&producer=<producer>`,
+/// the sha256 lower-case hex of the record's `bytes` and the other three the record's own fields.
+/// The path and each of the other three are [`reference_part`]-encoded, so a case id holding `#`
+/// or a producer holding `&` or `=` adds no separator and changes no field; a plain path reads
+/// as it is. A reader of the store's line finds the record's bytes and what they say without the
+/// case directory, which another clone does not hold, and decodes each part with
+/// [`decode_reference_part`].
+#[must_use]
+pub fn test_result_reference(
+    path: &str,
+    bytes: &[u8],
+    result: &str,
+    revision: &str,
+    producer: &str,
+) -> String {
+    let digest = Sha256::digest(bytes);
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!(
+        "{}#sha256={hex}&result={}&revision={}&producer={}",
+        reference_part(path),
+        reference_part(result),
+        reference_part(revision),
+        reference_part(producer)
+    )
+}
+
+/// One part of a reference, percent-encoded: `%`, `#`, `&`, `=`, a space and every byte outside
+/// printable ASCII as `%XX` in upper-case hex, every other byte as it is. So a part holds no
+/// separator of the reference, and a part of plain ASCII (a plain path, a revision) is itself.
+#[must_use]
+pub fn reference_part(text: &str) -> String {
+    let mut encoded = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if matches!(byte, b'%' | b'#' | b'&' | b'=') || !(0x21..=0x7e).contains(&byte) {
+            encoded.push_str(&format!("%{byte:02X}"));
+        } else {
+            encoded.push(char::from(byte));
+        }
+    }
+    encoded
+}
+
+/// The text of one encoded part of a reference, as [`reference_part`] wrote it: each `%XX`
+/// decoded, the bytes read as UTF-8. `None` when an escape is not two hex digits or the bytes
+/// are not UTF-8, which no [`reference_part`] of a text yields.
+#[must_use]
+pub fn decode_reference_part(encoded: &str) -> Option<String> {
+    let mut bytes = Vec::with_capacity(encoded.len());
+    let mut rest = encoded.as_bytes();
+    while let Some((&byte, after)) = rest.split_first() {
+        if byte == b'%' {
+            let [high, low] = <[u8; 2]>::try_from(after.get(..2)?).ok()?;
+            let value = char::from(high).to_digit(16)? * 16 + char::from(low).to_digit(16)?;
+            bytes.push(u8::try_from(value).ok()?);
+            rest = after.get(2..)?;
+        } else {
+            bytes.push(byte);
+            rest = after;
+        }
+    }
+    String::from_utf8(bytes).ok()
 }
 
 /// The subject of the commit that holds a story's move to [`IMPLEMENTED`] on the case's branch:
@@ -400,9 +466,8 @@ pub fn approve(
                     frontier.name()
                 )
             })?;
-        let identity =
-            crate::case::commit_identity_of(&tree.join(crate::case::CASES_DIR).join(case))?
-                .unwrap_or_else(crate::git::CommitIdentity::takt);
+        let identity = crate::case::commit_identity_of(&crate::case::CaseDir::locate(tree, case))?
+            .unwrap_or_else(crate::git::CommitIdentity::takt);
         commit_record(tree, &identity, &branch, story, capability)?;
     }
     let reference = pending.approval().reference();
@@ -537,6 +602,24 @@ impl Aep {
                 repo.display()
             ))
         }
+    }
+
+    /// The tags of the story `id`, as the store holds them: what a run reads `input:<name>=<value>`
+    /// and `protocol:<name>/<major>` from. Read on the tree as it stands; the caller has put it on
+    /// the base.
+    pub fn tags(&self, repo: &Path, id: &str) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct Shown {
+            #[serde(default)]
+            tags: Vec<String>,
+        }
+        Self::store(repo)?;
+        let json = self
+            .plan(repo, &["show", id, "--format", "json"])?
+            .map_err(|refusal| anyhow!("aep plan artifact show {id}: {refusal}"))?;
+        let shown: Shown =
+            serde_json::from_str(&json).with_context(|| format!("read the tags of {id}"))?;
+        Ok(shown.tags)
     }
 
     /// Every artifact the store lists.
@@ -842,5 +925,42 @@ mod tests {
         let listed: Vec<Listed> = serde_json::from_str(json).expect("reads");
         assert_eq!(listed[0].relations[0].target, "story:b");
         assert_eq!(listed[0].blocked_by[0].blocker, "decision-blocker:q");
+    }
+
+    /// story:the-pull-request-and-the-store-carry-the-evidence: a plain path reads as it is, and
+    /// a part holding a separator is encoded, so the reference has one `#` and its fields are
+    /// the four it names, each part decoding to what was given.
+    #[test]
+    fn a_reference_part_round_trips_and_no_separator_survives_in_a_part() {
+        assert_eq!(
+            reference_part(".engineering/cases/c-1/record-0001.json"),
+            ".engineering/cases/c-1/record-0001.json"
+        );
+        for text in [
+            "issue#42",
+            "lab.tests&result=fail&sha256=00#x=y",
+            "100% sure",
+            "naïve é",
+            "tab\there",
+        ] {
+            let encoded = reference_part(text);
+            assert!(!encoded.contains(['#', '&', '=', ' ']), "{encoded}");
+            assert!(
+                encoded.bytes().all(|byte| (0x21..=0x7e).contains(&byte)),
+                "{encoded}"
+            );
+            assert_eq!(decode_reference_part(&encoded).as_deref(), Some(text));
+        }
+        assert_eq!(decode_reference_part("%2"), None);
+        assert_eq!(decode_reference_part("%+1"), None);
+        assert_eq!(decode_reference_part("%FF"), None);
+        let reference = test_result_reference(
+            ".engineering/cases/issue%2342/record-0001.json",
+            b"{}",
+            "pass",
+            "0123456789abcdef0123456789abcdef01234567",
+            "takt&x=y",
+        );
+        assert_eq!(reference.matches('#').count(), 1, "{reference}");
     }
 }

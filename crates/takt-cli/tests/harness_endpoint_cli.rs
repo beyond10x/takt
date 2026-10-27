@@ -55,7 +55,7 @@ impl World {
         let double = world.bin().join("b10x-harness");
         fs::write(
             &double,
-            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", world.started().display()),
+            format!("#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo double; exit 0; fi\ntouch '{}'\nexit 1\n", world.started().display()),
         )
         .expect("a double");
         fs::set_permissions(&double, fs::Permissions::from_mode(0o755)).expect("exec bit");
@@ -83,7 +83,7 @@ impl World {
     }
 
     fn cases(&self) -> PathBuf {
-        self.repo().join(".engineering/cases")
+        self.repo().join(".takt/cases")
     }
 
     /// `takt run` on the repository with `args` after the intent, HOME the scratch one, the
@@ -122,7 +122,9 @@ impl World {
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("B10X_GATES_POLICY")
+            // A harness run opens only under a policy or a declared `scan: none`
+            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
+            .env("B10X_GATES_POLICY", self.outer().join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .output()
             .expect("takt runs")
@@ -180,11 +182,16 @@ fn run_help_names_every_endpoint_flag() {
 #[test]
 fn an_endpoint_flag_with_another_harness_is_refused_before_any_case() {
     let world = World::new("other-harness");
-    let output = world.run(&["--harness", "none", "--endpoint-model", "m"]);
+    let output = world.run(&[
+        "--harness",
+        "none",
+        "--model-endpoint",
+        "http://127.0.0.1:9/v1",
+    ]);
     let (stdout, stderr) = text(&output);
     assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
     assert!(
-        stderr.contains("--endpoint-model") && stderr.contains("--harness none"),
+        stderr.contains("--model-endpoint") && stderr.contains("--harness none"),
         "{stderr}"
     );
     assert_eq!(stderr.trim().lines().count(), 1, "one line: {stderr}");

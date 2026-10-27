@@ -735,7 +735,7 @@ fn granted(turn: &Turn, capability: &str) {
 /// Grants `capability` to the turn's case at the candidate revision by `approver`, in place of
 /// any grant of it before.
 fn granted_by(turn: &Turn, capability: &str, approver: &str) {
-    let dir = turn.tree.join(".engineering/cases/turn");
+    let dir = turn.tree.join(".takt/cases/turn");
     let mut authority = takt::case::Authority::read(&dir)
         .expect("the authority reads")
         .unwrap_or_default();
@@ -907,7 +907,7 @@ fn a_judge_surface_merge_holds_only_the_owners_grant_or_a_delegated_roles() {
 /// `takt approve` writes it: given at `granted_at`, with `tip` the commit `main` was at when it
 /// was given, or none recorded. Written as the file's text, the one grant the case holds.
 fn judge_grant(turn: &Turn, granted_at: &str, tip: Option<&str>) {
-    let dir = turn.tree.join(".engineering/cases/turn");
+    let dir = turn.tree.join(".takt/cases/turn");
     let mut text = format!(
         "- capability: repository.merge.judge_surface\n  decision: granted\n  approver: human:owner\n  granted_at: '{granted_at}'\n  revision: {}\n",
         turn.candidate
@@ -1165,7 +1165,7 @@ fn a_judge_surface_grant_records_the_mainline_tip_through_the_turns_forge() {
         "human:owner",
     )
     .expect("granted");
-    let dir = turn.tree.join(".engineering/cases/turn");
+    let dir = turn.tree.join(".takt/cases/turn");
     let authority = takt::case::Authority::read(&dir)
         .expect("the authority reads")
         .expect("an authority");
@@ -1188,7 +1188,7 @@ fn a_judge_surface_grant_records_the_mainline_tip_through_the_turns_forge() {
         "human:owner",
     )
     .expect("granted");
-    let dir = turn.tree.join(".engineering/cases/turn");
+    let dir = turn.tree.join(".takt/cases/turn");
     let authority = takt::case::Authority::read(&dir)
         .expect("the authority reads")
         .expect("an authority");
@@ -1440,7 +1440,7 @@ fn opened_through(
         mainline,
     );
     let status = git(&tree, &["status", "--porcelain", "--untracked-files=all"]);
-    let cases = tree.join(".engineering/cases").exists();
+    let cases = tree.join(".takt/cases").exists();
     (opened, status, cases)
 }
 

@@ -287,6 +287,7 @@ exit 2
         bin,
         "claude",
         r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 case "$2" in
   *"These need an approval"*) action=repository.merge ;;
   *"- change.handover:"*)
@@ -397,7 +398,7 @@ impl World {
     fn changed_outside_cases(&self) -> String {
         git_out(
             &self.repo,
-            &["status", "--porcelain", "--", ".", ":!.engineering/cases"],
+            &["status", "--porcelain", "--", ".", ":!.takt/cases"],
         )
     }
 
@@ -502,9 +503,11 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
     }
     // Each case records its own trial branch as its base.
     for n in [0, 1] {
-        let branch = fs::read_to_string(world.repo.join(format!(
-            ".engineering/cases/scenario-1-trial-{n}/branch.yaml"
-        )))
+        let branch = fs::read_to_string(
+            world
+                .repo
+                .join(format!(".takt/cases/scenario-1-trial-{n}/branch.yaml")),
+        )
         .expect("the case records its branch");
         assert!(branch.contains(&format!("base: trial/{n}")), "{branch}");
     }
@@ -576,7 +579,7 @@ fn a_dirty_tree_is_refused_and_left_as_it_is() {
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert!(world.trial_branches().is_empty());
     assert!(world.calls().is_empty(), "{:?}", world.calls());
-    assert!(!world.repo.join(".engineering/cases").exists());
+    assert!(!world.repo.join(".takt/cases").exists());
 }
 
 /// A push the bot route refuses ends the run before any case is opened: the trial branch it
@@ -595,7 +598,7 @@ fn a_refused_push_leaves_no_trial_branch_and_the_tree_where_it_was() {
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
     assert_eq!(world.changed_outside_cases(), "");
-    assert!(!world.repo.join(".engineering/cases").exists());
+    assert!(!world.repo.join(".takt/cases").exists());
 }
 
 /// The next trial number follows the highest one the checkout knows, a local branch or one its
@@ -871,7 +874,7 @@ fn every_origin_form_fetches_from_the_one_https_url_and_a_refusal_changes_nothin
         assert!(world.trial_branches().is_empty(), "origin {origin}");
         assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
         assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
-        assert!(!world.repo.join(".engineering/cases").exists());
+        assert!(!world.repo.join(".takt/cases").exists());
     }
 }
 
@@ -899,7 +902,7 @@ fn a_trial_fetch_that_does_not_end_is_killed_within_30_s() {
     assert!(world.trial_branches().is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
-    assert!(!world.repo.join(".engineering/cases").exists());
+    assert!(!world.repo.join(".takt/cases").exists());
 }
 
 /// The remote already holds `trial/0`, pushed by a run from another checkout that this one
@@ -958,7 +961,7 @@ fn a_push_that_finds_the_trial_branch_already_there_is_refused() {
     assert!(world.trial_branches().is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
-    assert!(!world.repo.join(".engineering/cases").exists());
+    assert!(!world.repo.join(".takt/cases").exists());
     assert_eq!(
         git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
         world.seed
@@ -1001,7 +1004,7 @@ fn a_trial_branch_at_an_ancestor_of_the_seed_is_not_moved_by_the_push() {
     assert!(err.contains("rejected"), "stderr {err}");
     assert!(world.trial_branches().is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
-    assert!(!world.repo.join(".engineering/cases").exists());
+    assert!(!world.repo.join(".takt/cases").exists());
 }
 
 /// A seed whose store shows the scenario's story `proposed` but not ready, here because it
@@ -1192,7 +1195,7 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
             "{name}: trial/{trial} is not all digits"
         );
         let case = clone
-            .join(".engineering/cases")
+            .join(".takt/cases")
             .join(format!("scenario-1-trial-{trial}"));
         assert!(
             case.join("events.jsonl").is_file(),
@@ -1214,7 +1217,7 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
     let scores = scratch.0.join("scores");
     for case in &cases {
         let id = case.file_name().expect("a case id");
-        let into = scores.join(".engineering/cases").join(id);
+        let into = scores.join(".takt/cases").join(id);
         assert!(!into.exists(), "{} twice", into.display());
         copy_dir(case, &into);
         let events = fs::read_to_string(into.join("events.jsonl")).expect("the record");

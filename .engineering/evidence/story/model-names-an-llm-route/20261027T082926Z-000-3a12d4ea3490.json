@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-27T08:29:26Z",
+  "actor": "human:timo",
+  "artifact": "story:model-names-an-llm-route",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test -p b10x-takt -p b10x-takt-cli on integration/takt 964254f: 206 binaries, 1975 passed, 2 load-timing failures in active_time_budget (3 of 3 pass solo). Acceptance 2, 3, 5, 7 tested; 6 unchanged endpoint tests pass; 1 and 4 not run (need a loopback b10x-harness session); the ESS conformance runner is not built."
+  }
+}

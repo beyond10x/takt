@@ -1,16 +1,16 @@
 ---
 title: Configure a run
 sidebar_position: 2
-description: Put a run's harness, endpoint, forge, test command and budget in one file, take the API key from a variable, and read the refusals a wrong file gets.
+description: Put a run's harness, scan, endpoint, forge, test command and budget in one file, take the API key from a variable, and read the refusals a wrong file gets.
 lede: One file passed with --config holds what stays the same from run to run, flags hold what changes, and takt refuses a file it does not fully understand before it starts anything.
-source: takt run --help at 0.14.0; crates/takt/src/run_config.rs; crates/takt/src/harness.rs (EndpointFields); runs of takt 0.14.0 against the files on this page, 2026-10-26; CHANGELOG.md 0.12.0 to 0.14.0
+source: takt run --help at 0.14.0; crates/takt/src/run_config.rs; crates/takt/src/scan.rs; crates/takt/src/harness.rs (EndpointFields); runs of takt 0.14.0 against the files on this page, 2026-10-26; CHANGELOG.md 0.12.0 to 0.14.0
 ---
 
 # Configure a run
 
-Every setting is a `takt run` flag. The ones you repeat on every run can go in a file. The full
-list of keys and flags is in [Configuration](../reference/configuration.md). This page goes
-through the usual choices in order.
+Every setting but the scan adapter is a `takt run` flag. The ones you repeat on every run can go in
+a file. The full list of keys and flags is in [Configuration](../reference/configuration.md). This
+page goes through the usual choices in order.
 
 ## 1. Write the file
 
@@ -31,22 +31,17 @@ takt run --repo . --intent "keep the tests green" --config takt.toml --iteration
 step 1: tests.run {}
   effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
-stopped: Iterations (1); steps 1, tokens 0, case ~/cfg-demo/.engineering/cases/takt-20261026T233456Z
+stopped: Iterations (1); steps 1, tokens 0, case ~/cfg-demo/.takt/cases/takt-20261026T233456Z
 ```
 
 (The `case` and `frontier` lines are left out.) `--iterations 1` on the command line won over the
 file's `4`. A flag wins over the file, and the file wins over the default.
 
-The file holds eight keys: `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `forge`,
-`test_cmd` and `continue_past_red_base`. Everything else is a flag only. That includes the story
-(`--story`) and the key's variable (`--endpoint-token-env`).
-
-:::caution[Planned]
-
-`story` and `endpoint_token_env` as keys of the file, and `--config` for `takt scenario run`, are
-planned and not in 0.14.0. Pass them as flags today ([Known limitations](../known-limitations.md#takt)).
-
-:::
+The file holds thirteen keys: `story`, `iterations`, `hours`, `harness`, `model`, `endpoint_file`,
+`endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records`, `continue_past_red_base` and
+`scan`. `scan` is the one key with no flag; everything else is a flag only. The file's `story` is taken
+only when none of `--story`, `--intent` and `--case` is given. `takt scenario run --config` reads
+the same file and refuses a `story` in it, since the scenario names the story.
 
 ## 2. Pick the harness
 
@@ -57,8 +52,24 @@ planned and not in 0.14.0. Pass them as flags today ([Known limitations](../know
 | `harness` | b10x-harness, talking to the LLM endpoint you name |
 | `none` | nothing: only the validators run, and the run stops at the first judgement step |
 
-`model` names the model for harnesses that take one. Codex and b10x-harness need
-`B10X_GATES_POLICY` before an edit is accepted ([Getting started](../getting-started.md#what-it-needs)).
+`model` names the model for harnesses that take one.
+
+Codex and b10x-harness sessions may read outside their copy, so what they propose is accepted
+only after a scan passed it. The scan is an adapter, `scan` in the file:
+
+| `scan` | what scans a proposal |
+|---|---|
+| `gates` (default) | `b10x-gates`, beyond10x's scanner, under the policy file `B10X_GATES_POLICY` names |
+| `none` | nothing; each proposal is still checked for the shape of a credential |
+
+```toml
+harness = "codex"
+scan = "none"
+```
+
+A Codex or b10x-harness run with neither the policy nor `scan = "none"` is refused before its case
+opens, and the refusal names both ways on. `scan = "none"` with `B10X_GATES_POLICY` set is refused
+too. Claude Code needs neither ([The scan](../reference/configuration.md#the-scan)).
 
 ## 3. Name the endpoint for b10x-harness
 
@@ -115,8 +126,8 @@ takt: the endpoint's credential variable LLM_API_KEY is empty; nothing was start
 | `forge` | what happens at the pull request |
 |---|---|
 | not set | `bot` for a github.com `origin`, `gitlab` for another host `glab` is logged in to, else `none` |
-| `bot` | `b10x-gates` pushes the branch and opens and merges the pull request; `gh` reads its checks |
-| `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request |
+| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its checks |
+| `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request, after the run's scan adapter scanned what it publishes |
 | `none` | no pull request: a story stops `Unperformable` at `pr.opened`, exit 7, and prints its candidate commit |
 
 How each forge is set up: [Configuration](../reference/configuration.md#the-forge).
@@ -142,15 +153,15 @@ opens, exit 1. The refusal names the line and never the value written there:
 
 | the file | refused at |
 |---|---|
-| an unknown key, such as `story` on line 4 of a TOML file | line 4 |
+| an unknown key, such as `stroy` on line 4 of a TOML file | line 4 |
 | a TOML key written twice, the second on line 2 | line 2, the duplicate's own line |
 | a YAML key written twice at the top level | line 1, where the mapping starts |
 | a YAML key written twice under `takt:`, whose keys start on line 4 | line 4, where that mapping starts |
 | a `loom.agent/1` member that is neither Loom's nor `takt` | no line; the message lists Loom's members |
 
 ```console
-$ takt run --repo . --intent x --config story.toml
-takt: the run configuration file story.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `harness`, `model`, `endpoint_file`, `forge` and `test_cmd`, strings, and `continue_past_red_base`, a boolean, each optional
+$ takt run --repo . --intent x --config stroy.toml
+takt: the run configuration file stroy.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 In YAML the line is where the mapping holding the duplicate starts, not the duplicate itself.
@@ -159,7 +170,7 @@ Naming the duplicate's own line in YAML is planned.
 ## The same file under Loom
 
 A YAML file may also be a `loom.agent/1` document, the format Loom mounts at
-`/config/agent.yaml`. Its `takt` member holds the same eight keys, and takt reads nothing else of
+`/config/agent.yaml`. Its `takt` member holds the same thirteen keys, and takt reads nothing else of
 it:
 
 ```yaml
@@ -177,6 +188,6 @@ takt:
 ```
 
 That is the container image's default `/config/agent.yaml`
-([Run in a container](./run-in-a-container.md)). Loom 0.44.0 itself refuses a `takt` member in a
+([Run in a container](./run-in-a-container.md)). Loom 0.45.0 itself refuses a `takt` member in a
 `LoomAgent`'s `spec.agent`, so on a cluster the run's file is a plain `takt.yaml` in
 `spec.configFiles` instead ([Deploy on Kubernetes](./deploy-on-kubernetes.md)).

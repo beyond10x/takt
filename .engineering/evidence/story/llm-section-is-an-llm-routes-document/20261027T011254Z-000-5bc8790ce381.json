@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-27T01:12:54Z",
+  "actor": "human:timo",
+  "artifact": "story:llm-section-is-an-llm-routes-document",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:config-proxy-scope-round-1",
+    "review": "review-result:config-proxy-scope-round-1",
+    "outcome": "fixed"
+  }
+}

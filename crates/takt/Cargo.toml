@@ -16,13 +16,19 @@ b10x-canon-engineering = { workspace = true }
 b10x-canon-engineering-assertions = { workspace = true }
 b10x-canon-expr = { workspace = true }
 b10x-loom-sdk = { workspace = true }
+llm-core = { git = "https://github.com/beyond10x/llm", tag = "0.16.0" }
+llm-credentials = { git = "https://github.com/beyond10x/llm", tag = "0.16.0" }
+llm-models = { git = "https://github.com/beyond10x/llm", tag = "0.16.0", features = ["environment", "file"] }
 anyhow = { workspace = true }
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true }
 sha1-checked = { workspace = true }
 sha2 = { workspace = true }
 time = { workspace = true }
+tokio = { version = "1.54", features = ["rt"] }
 toml = { workspace = true }
 unsafe-libyaml = { workspace = true }
 

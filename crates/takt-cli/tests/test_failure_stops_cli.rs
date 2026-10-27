@@ -33,7 +33,8 @@ fn broken_todo() -> String {
     todo.replace(marked, "items[number - 1][\"done\"] = False")
 }
 
-/// A test script that passes until a harness step committed (the subject of `HEAD` opens with
+/// A test script that passes until a harness step committed (the run pins `--commit-style action`, so
+/// the subject of `HEAD` opens with
 /// `implementation.edit`; the script names no file the step writes, which would put it on the
 /// judge surface), then prints a cargo run whose failed tests are `failing` (none: a failure
 /// that names no test) and exits 101; `$n` is the number of commits.
@@ -144,6 +145,7 @@ fn world(name: &str, files: &[(&str, &str, bool)]) -> World {
         &path,
         format!(
             r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 echo call >> '{}'
 echo "the work" >> work.txt
 printf '{{"result":"{{\\"action\\": \\"implementation.edit\\", \\"summary\\": \\"the double\\"}}","usage":{{"input_tokens":1}}}}'
@@ -188,6 +190,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
             "--iterations",
             iterations,
         ];
@@ -208,6 +212,8 @@ impl World {
             test_cmd,
             "--forge",
             "none",
+            "--commit-style",
+            "action",
             "--iterations",
             iterations,
         ])
@@ -330,6 +336,41 @@ fn a_run_goes_on_past_a_red_base_by_flag_or_configuration() {
             "toml" => config_run("continue_past_red_base = true\n"),
             _ => config_run("format: loom.agent/1\ntakt:\n  continue_past_red_base: true\n"),
         };
+        assert!(
+            out.contains("evidence: test_result fail"),
+            "{by}: stdout {out} stderr {err}"
+        );
+        assert!(!out.contains("RedBase"), "{by}: {out}");
+        assert!(world.calls() >= 1, "{by}: no harness call: {out} {err}");
+    }
+}
+
+/// story:scenario-run-takes-config: `takt scenario run` takes the opt-out as `takt run` does, by
+/// its flag or by its `--config` file's `continue_past_red_base`: the red base is recorded, and the
+/// run goes on to the harness.
+#[test]
+fn a_scenario_run_goes_on_past_a_red_base_by_flag_or_configuration() {
+    let files = scenario_1(&broken_todo());
+    for by in ["flag", "toml", "yaml"] {
+        let world = world(&format!("scenario-red-base-{by}"), &borrowed(&files));
+        let config = world.state.join(format!("run.{by}"));
+        let extra: Vec<String> = match by {
+            "flag" => vec!["--continue-past-red-base".to_owned()],
+            "toml" => {
+                fs::write(&config, "continue_past_red_base = true\n").expect("a file");
+                vec!["--config".to_owned(), config.display().to_string()]
+            }
+            _ => {
+                fs::write(
+                    &config,
+                    "format: loom.agent/1\ntakt:\n  continue_past_red_base: true\n",
+                )
+                .expect("a file");
+                vec!["--config".to_owned(), config.display().to_string()]
+            }
+        };
+        let extra: Vec<&str> = extra.iter().map(String::as_str).collect();
+        let (_, out, err) = world.scenario_with("./check.sh", "3", &extra);
         assert!(
             out.contains("evidence: test_result fail"),
             "{by}: stdout {out} stderr {err}"

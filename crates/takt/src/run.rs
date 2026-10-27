@@ -36,7 +36,8 @@ use loom_sdk::commission::ports::executor::AgentExecutor;
 use loom_sdk::{CanonGovernor, EffectPort, LoopContext, run_until_blocked};
 
 use crate::case::{
-    CASES_DIR, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT,
+    CASE_ROOTS, CaseAuthority, CaseDir, CaseFiles, CommitAs, KEPT_MOVE, KEPT_TEST_RESULT, Records,
+    is_under_cases,
 };
 use crate::events::{BY_STORE, BY_TAKT, Event, Events};
 use crate::evidence::{CaseEvidence, uuid_from};
@@ -44,6 +45,8 @@ use crate::frontier::{Frontier, IMPLEMENTED, Story, TEST_RESULT, Take, Unit};
 use crate::git::{BoundedDiff, DiffContext};
 use crate::harness::{CHANGE_SHOWN_BYTES, ChangeSoFar, Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
+use crate::scan::Scan;
+pub use crate::scan::gates::ChangeScan;
 use crate::validator::{ChoiceEffect, Effect, Step, Validator, ValidatorEffect, outcome};
 
 /// What a run is given.
@@ -165,6 +168,19 @@ pub enum Stop {
         /// The results in a row.
         count: u64,
     },
+    /// The harness binary the run would start does not qualify under the run's hermetic mode:
+    /// asked of metaharness before the first session, on open and on every resume, with no model
+    /// call ([`Harness::preflight`]). The case stays open, and the next run asks again.
+    HarnessUnqualified {
+        /// The harness as `--harness` names it.
+        kind: String,
+        /// The version its `--version` printed, when it printed one that reads as one.
+        version: Option<String>,
+        /// Each row that stops the run, as `<row> <verdict>: <what was read>`.
+        rows: Vec<String>,
+        /// The versions that qualify: the ones the adapter is pinned to.
+        qualified: Vec<String>,
+    },
 }
 
 /// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
@@ -174,7 +190,7 @@ pub const REPEATED_FAILURES: u64 = 2;
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 13] = [
+pub const STOP_KINDS: [&str; 14] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -188,6 +204,7 @@ pub const STOP_KINDS: [&str; 13] = [
     "ActiveTime",
     "RedBase",
     "RepeatedTestFailure",
+    "HarnessUnqualified",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -271,6 +288,18 @@ impl std::fmt::Display for Stop {
                 "RepeatedTestFailure ({count} tests.run results in a row, each at a new revision, failed the same tests: {})",
                 tests.join(", ")
             ),
+            Stop::HarnessUnqualified {
+                kind,
+                version,
+                rows,
+                qualified,
+            } => write!(
+                f,
+                "HarnessUnqualified ({kind} {}: {}; qualified versions: {}; select another binary with --harness-program)",
+                version.as_deref().unwrap_or("with no readable version"),
+                rows.join("; "),
+                qualified.join(", ")
+            ),
         }
     }
 }
@@ -311,14 +340,6 @@ pub const ACCEPTED: &str = "accepted";
 /// The producer of a record takt writes from a judgement step that records a choice: the
 /// record attests the harness's choice, not an observation's outcome.
 pub const CHOICE_PRODUCER: &str = "takt.choice";
-
-/// `text` on one line: every run of white space, line breaks among them, as one space. A
-/// judgement step's commit message is `<action>: <summary>`, the summary the harness reported;
-/// a line of its own there could read as one of takt's (`takt: take`, `takt: approve`) to what
-/// reads commit messages.
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
 
 /// The first eight characters of a revision, as the loop prints one.
 fn short(revision: &str) -> &str {
@@ -526,10 +547,18 @@ impl Step for GuardedStep<'_, '_> {
 }
 
 /// What a judgement step came to before Commission's runtime hands its action on
-/// ([`Run::harness_turn`]): a stop that ends the run, or the action proposed, its change held.
+/// ([`Run::harness_turn`]): a stop that ends the run, or the action proposed, its change held;
+/// or a session that ended without the line naming its action
+/// ([`crate::harness::NoActionLine`]), its change discarded and nothing recorded of it yet: the
+/// error the run ends on unless the step is tried again ([`NO_ACTION_TRIES`]), and the
+/// transcript kept of it.
 enum Judgement {
     Stop(Stop),
     Propose(Box<Proposed>),
+    NoAction {
+        error: anyhow::Error,
+        transcript: Option<std::result::Result<String, String>>,
+    },
 }
 
 /// A judgement step's proposal: what the harness reported, the transcript kept of it, the paths
@@ -546,7 +575,7 @@ struct Proposed {
 /// ([`Kept`] borrows it).
 struct StepKept {
     checkpoint: crate::git::Checkpoint,
-    cases: PathBuf,
+    tree: PathBuf,
     cases_kept: BTreeMap<PathBuf, Entry>,
     surface: JudgeSurface,
     surface_kept: BTreeMap<PathBuf, Entry>,
@@ -558,7 +587,7 @@ impl StepKept {
     fn kept(&self) -> Kept<'_> {
         Kept {
             checkpoint: &self.checkpoint,
-            cases: &self.cases,
+            tree: &self.tree,
             cases_kept: &self.cases_kept,
             surface: &self.surface,
             surface_kept: &self.surface_kept,
@@ -646,23 +675,77 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
             Taker::Validator(validator) => step(proposal(validator.action())),
             Taker::Nobody => step(ExecutorOutcome::NoUsefulAction(LoomUnit(true))),
             Taker::Harness => {
-                let started = Instant::now();
-                let judged = turn.run.harness_turn(
-                    turn.events,
-                    &mut *turn.out,
-                    turn.decision,
-                    turn.offered,
-                    turn.approvals,
-                    turn.shape,
-                    turn.run_number,
-                );
-                // The session Loom's executor recorded for the step, whatever became of its
-                // proposal, is observed into the case before the step's own outcome.
-                let judged = match turn.run.harness.take_session() {
-                    Some(session) => {
-                        observe_session(&turn.run.case, frontier, &session).and(judged)
+                let mut tried = 0;
+                let (started, judged) = loop {
+                    tried += 1;
+                    let started = Instant::now();
+                    let judged = turn.run.harness_turn(
+                        turn.events,
+                        &mut *turn.out,
+                        turn.decision,
+                        turn.offered,
+                        turn.approvals,
+                        turn.shape,
+                        turn.run_number,
+                    );
+                    // The session Loom's executor recorded for the step, whatever became of its
+                    // proposal, is observed into the case before the step's own outcome.
+                    let judged = match turn.run.harness.take_session() {
+                        Some(session) => {
+                            observe_session(&turn.run.case, frontier, &session).and(judged)
+                        }
+                        None => judged,
+                    };
+                    // A session that ended without the line naming its action, its change put
+                    // back, is a try, recorded with its tokens; the step is tried again from the
+                    // tree it was put back to, a step of its own, unless the run's own stop (a
+                    // budget, the free disk) comes first, and after [`NO_ACTION_TRIES`] tries the
+                    // run ends on its error. A refused step, or any other failure, is not retried.
+                    let Ok(Judgement::NoAction { error, transcript }) = judged else {
+                        break (started, judged);
+                    };
+                    if let Err(unrecorded) =
+                        turn.run.charge_no_action(turn.events, transcript, tried)
+                    {
+                        break (
+                            started,
+                            Err(error.context(format!(
+                                "and the tokens its session reported could not be recorded: {unrecorded:#}"
+                            ))),
+                        );
                     }
-                    None => judged,
+                    // The run's own stop is asked before the try limit: a try that spent the
+                    // budget stops the run on the budget, the last try included. Said once it was
+                    // asked: the step is told as tried again only when it is.
+                    let stopped = turn.host_stop();
+                    if stopped.is_none() && tried >= NO_ACTION_TRIES {
+                        break (
+                            started,
+                            Err(error.context(format!(
+                                "{tried} tries of the step ended without the line naming its action, {NO_ACTION_TRIES} at most"
+                            ))),
+                        );
+                    }
+                    let then = match (&stopped, tried >= NO_ACTION_TRIES) {
+                        (Some(_), true) => "the run stops",
+                        (Some(_), false) => "the run stops before another try",
+                        (None, _) => "the step is tried again",
+                    };
+                    if let Err(unsaid) = writeln!(
+                        turn.out,
+                        "step {}: the session named no action (try {tried} of {NO_ACTION_TRIES}); {then}",
+                        turn.run.steps
+                    ) {
+                        break (
+                            started,
+                            Err(error.context(format!("and the try could not be told: {unsaid}"))),
+                        );
+                    }
+                    if let Some(stop) = stopped {
+                        return step(ExecutorOutcome::Suspended(ExecutorOutcomeSuspended {
+                            reason: SuspensionReason::HostStop(stop),
+                        }));
+                    }
                 };
                 let suspended = |detail: String| {
                     step(ExecutorOutcome::Suspended(ExecutorOutcomeSuspended {
@@ -673,7 +756,7 @@ impl AgentExecutor for TurnExecutor<'_, '_, '_> {
                     }))
                 };
                 match judged {
-                    Err(error) => {
+                    Err(error) | Ok(Judgement::NoAction { error, .. }) => {
                         let detail = format!("{error:#}");
                         turn.failed = Some(error);
                         suspended(detail)
@@ -952,8 +1035,17 @@ impl LoopContext for TurnContext<'_, '_, '_> {
     }
 
     fn host_stop(&mut self) -> Option<LoomHostStop> {
-        let mut guard = self.turn.borrow_mut();
-        let turn = &mut *guard;
+        self.turn.borrow_mut().host_stop()
+    }
+}
+
+impl Turn<'_, '_> {
+    /// The host's stop before a step ([`TurnContext::host_stop`]), asked again before a judgement
+    /// step is tried again ([`NO_ACTION_TRIES`]): the run's budget spent, then, for a step
+    /// somebody takes, a file system under its threshold; kept in `host`, or the error the check
+    /// failed on in `failed`.
+    fn host_stop(&mut self) -> Option<LoomHostStop> {
+        let turn = self;
         let stop = match turn.run.budget_spent() {
             Some(stop) => (stop, true),
             None if matches!(turn.taker, Taker::Nobody) => return None,
@@ -1711,6 +1803,32 @@ fn snapshot(dir: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
     snapshot_without(dir, None)
 }
 
+/// Whether `path`, relative to the tree and as git names it, is the directory that holds the cases
+/// root (`.takt`) or the ignore file that keeps it out of version control (`.takt/.gitignore`).
+/// An observation may not change either, whatever the judge surface: git ignores what they keep,
+/// so the surface does not show a change to them.
+fn takt_guard(path: &str) -> bool {
+    let path = path.trim_end_matches('/');
+    path == crate::case::TAKT_DIR
+        || path
+            .strip_prefix(crate::case::TAKT_DIR)
+            .and_then(|rest| rest.strip_prefix('/'))
+            == Some(crate::case::TAKT_GITIGNORE)
+}
+
+/// [`snapshot`] of both cases roots under `tree` ([`CASE_ROOTS`]), each entry keyed by its path
+/// relative to `tree`: one map holds a case under either root, and [`restore`] puts it back from
+/// `tree`. A root that is absent contributes nothing.
+fn snapshot_cases(tree: &Path) -> Result<BTreeMap<PathBuf, Entry>> {
+    let mut entries = BTreeMap::new();
+    for root in CASE_ROOTS {
+        for (path, entry) in snapshot(&tree.join(root))? {
+            entries.insert(Path::new(root).join(path), entry);
+        }
+    }
+    Ok(entries)
+}
+
 /// [`snapshot`] of `dir` without what lies under `without`, a path relative to it.
 fn snapshot_without(dir: &Path, without: Option<&Path>) -> Result<BTreeMap<PathBuf, Entry>> {
     fn walk(
@@ -1827,16 +1945,26 @@ fn restore(
     changed: &[PathBuf],
 ) -> Result<()> {
     no_link_on_the_way(root, dir)?;
-    let all: Vec<PathBuf>;
-    let changed = match std::fs::symlink_metadata(dir) {
-        Ok(meta) if !meta.is_dir() => {
-            std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
-            all = before.keys().cloned().collect();
-            &all
+    let mut changed = changed.to_vec();
+    if std::fs::symlink_metadata(dir).is_ok_and(|meta| !meta.is_dir()) {
+        std::fs::remove_file(dir).with_context(|| format!("remove {}", dir.display()))?;
+        changed = before.keys().cloned().collect();
+    }
+    // A cases root that is no longer a directory (a file, a link, another kind) is removed, and
+    // every path of `before` under it put back, whichever root the step replaced.
+    for case_root in CASE_ROOTS {
+        let at = dir.join(case_root);
+        if std::fs::symlink_metadata(&at).is_ok_and(|meta| !meta.is_dir()) {
+            no_link_on_the_way(root, &at)?;
+            std::fs::remove_file(&at).with_context(|| format!("remove {}", at.display()))?;
+            for path in before.keys().filter(|path| path.starts_with(case_root)) {
+                if !changed.contains(path) {
+                    changed.push(path.clone());
+                }
+            }
         }
-        _ => changed,
-    };
-    for path in changed {
+    }
+    for path in &changed {
         let full = dir.join(path);
         no_link_on_the_way(root, &full)?;
         if let Ok(meta) = std::fs::symlink_metadata(&full) {
@@ -2454,7 +2582,8 @@ pub fn outside_import_dirs(runs: &[String], tree: &Path, modules: &Modules) -> V
     dirs.into_iter().filter(|dir| !in_tree(tree, dir)).collect()
 }
 
-/// The file a case keeps its module names in ([`Modules`]), under its directory.
+/// The file a case keeps its module names in when a Python answered at open ([`Modules`]), under
+/// its directory.
 pub const MODULES_FILE: &str = "python-modules.json";
 
 /// What a Python asked at case open prints ([`Modules::ask`]): its path and version (`V`),
@@ -2515,8 +2644,9 @@ for entry in sys.path + sites:
 "#;
 
 /// The top-level module names no step may put in a directory Python imports from: asked at case
-/// open of the Python the test command runs, and kept with the case ([`MODULES_FILE`]); the
-/// built-in lists ([`STDLIB_MODULES`], [`RUNNER_PACKAGES`]) when no Python answered.
+/// open of the Python the test command runs, and kept with the case ([`MODULES_FILE`]) only when
+/// a Python answered or could not be established; the built-in lists ([`STDLIB_MODULES`],
+/// [`RUNNER_PACKAGES`]) when none answered, and then the case keeps no file.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Modules {
     /// Where the names came from: each Python asked, with its version, or the built-in lists.
@@ -2845,17 +2975,32 @@ impl Modules {
         })
     }
 
-    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); asked of the Python the test
-    /// command `runs` in `tree` and kept there when it keeps none.
+    /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); else asked of the Python the test
+    /// command `runs` in `tree`, and kept there only when the answer is not the built-in lists
+    /// ([`Modules::default`]): when a Python answered, or one could not be established (it fails
+    /// closed). Otherwise no file is written, and [`Modules::read`] reads the built-in lists.
     pub fn of_case(case_dir: &Path, runs: &[String], tree: &Path) -> Result<Self> {
         let file = case_dir.join(MODULES_FILE);
         if file.is_file() {
             return Ok(Self::read(case_dir));
         }
         let modules = Self::ask(runs, tree);
-        std::fs::write(&file, serde_json::to_vec_pretty(&modules)?)
-            .with_context(|| format!("write {}", file.display()))?;
+        if modules != Self::default() {
+            std::fs::write(&file, serde_json::to_vec_pretty(&modules)?)
+                .with_context(|| format!("write {}", file.display()))?;
+        }
         Ok(modules)
+    }
+
+    /// The names a resumed case guards: the ones it keeps ([`MODULES_FILE`]), else asked again
+    /// and kept by no one, so the file exists only as the case opened with it and a replay of
+    /// any step rebuilds the case as that step found it.
+    #[must_use]
+    pub fn at_resume(case_dir: &Path, runs: &[String], tree: &Path) -> Self {
+        if case_dir.join(MODULES_FILE).is_file() {
+            return Self::read(case_dir);
+        }
+        Self::ask(runs, tree)
     }
 
     /// The names the case at `case_dir` keeps ([`MODULES_FILE`]); the built-in lists when it
@@ -7100,8 +7245,12 @@ impl Outside {
     /// The paths at which `now` differs from this, in path order: a part of the way (`.cargo`)
     /// before what is under it. A path this holds and `now` does not list (a directory that
     /// did not exist, `~/.local` on the way to `~/.local/bin`, now made; a program that is no
-    /// longer executable) is compared with what is at it now.
+    /// longer executable) is compared with what is at it now. A directory made where there was
+    /// nothing, on the way to other paths this or `now` reads (`~/.cargo`, which cargo makes for
+    /// its cache, before `~/.cargo/bin` and `~/.cargo/config.toml`), holds nothing read of its
+    /// own: it differs only with a path under it that differs.
     fn differing(&self, now: &Self) -> Vec<PathBuf> {
+        use std::ops::Bound::{Excluded, Unbounded};
         let entry = |outside: &Self, path: &PathBuf| {
             outside.0.get(path).and_then(|(_, entry, _)| entry.clone())
         };
@@ -7109,13 +7258,35 @@ impl Outside {
             Some((_, entry, _)) => entry.clone(),
             None => Self::entry_at(path).unwrap_or(Some(Entry::Other("unreadable"))),
         };
-        self.0
+        // Whether the first path after `path` in path order is under it: a path's descendants
+        // follow it directly.
+        let read_under = |outside: &Self, path: &PathBuf| {
+            outside
+                .0
+                .range::<PathBuf, _>((Excluded(path), Unbounded))
+                .next()
+                .is_some_and(|(next, _)| next.starts_with(path))
+        };
+        let differ: BTreeSet<PathBuf> = self
+            .0
             .keys()
             .chain(now.0.keys())
             .filter(|path| entry(self, path) != current(path))
             .cloned()
-            .collect::<BTreeSet<_>>()
-            .into_iter()
+            .collect();
+        differ
+            .iter()
+            .filter(|path| {
+                let made_on_the_way = entry(self, path).is_none()
+                    && current(path) == Some(Entry::Other("directory"))
+                    && (read_under(self, path) || read_under(now, path));
+                !made_on_the_way
+                    || differ
+                        .range::<PathBuf, _>((Excluded(*path), Unbounded))
+                        .next()
+                        .is_some_and(|next| next.starts_with(path))
+            })
+            .cloned()
             .collect()
     }
 
@@ -7728,11 +7899,11 @@ fn surface_refusal(action: &str, touched: &[String]) -> String {
 }
 
 /// What a judgement step or an observation is checked against and put back to when it is
-/// discarded: the checkpoint, the cases directory, the judge surface and what lies outside the
-/// tree, each as it was just before.
+/// discarded: the checkpoint, the cases roots (`cases_kept`, keyed relative to `tree`), the judge
+/// surface and what lies outside the tree, each as it was just before.
 struct Kept<'k> {
     checkpoint: &'k crate::git::Checkpoint,
-    cases: &'k Path,
+    tree: &'k Path,
     cases_kept: &'k BTreeMap<PathBuf, Entry>,
     surface: &'k JudgeSurface,
     surface_kept: &'k BTreeMap<PathBuf, Entry>,
@@ -7765,12 +7936,12 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
         .restore(tree)
         .context("discard the step's change");
     let surface = kept.surface.put_back(tree, kept.surface_kept);
-    let cases = snapshot(kept.cases).and_then(|now| {
+    let cases = snapshot_cases(kept.tree).and_then(|now| {
         let again = differing(kept.cases_kept, &now);
         if again.is_empty() {
             Ok(())
         } else {
-            restore(tree, kept.cases, kept.cases_kept, &again)
+            restore(tree, kept.tree, kept.cases_kept, &again)
         }
     });
     let outside = kept.outside.put_back(tree, kept.outside_dirs);
@@ -7791,7 +7962,7 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
         // The way to the cases directory and to every case is read again first, as a run reads
         // it before it writes there ([`crate::case::CaseDir::check_way`]): past a link or a part that
         // is not a directory, nothing is moved out of the tree, and each file is named with why.
-        let aside = match cases_way(tree, kept.cases, kept.cases_kept) {
+        let aside = match cases_way(tree, kept.cases_kept) {
             Ok(()) => kept.checkpoint.set_aside(tree, &due),
             Err(way) => crate::git::SetAside::not_moved(
                 &due,
@@ -7836,37 +8007,40 @@ fn undo_step(tree: &Path, kept: &Kept<'_>) -> Result<Undone> {
     }
 }
 
-/// That every part of the way from `tree` down to the cases directory `cases`, and down to each
+/// That every part of the way from `tree` down to each cases root that is there, and down to each
 /// directory a file of `kept` lies in, is a real directory, none a link, each read with
-/// `symlink_metadata` and never followed; the error names the first that is not.
-fn cases_way(tree: &Path, cases: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
-    let mut dirs = BTreeSet::from([cases.to_path_buf()]);
+/// `symlink_metadata` and never followed; the error names the first that is not. The keys of
+/// `kept` are relative to `tree` ([`snapshot_cases`]).
+fn cases_way(tree: &Path, kept: &BTreeMap<PathBuf, Entry>) -> Result<()> {
+    let mut dirs: BTreeSet<PathBuf> = CASE_ROOTS
+        .iter()
+        .filter(|root| std::fs::symlink_metadata(tree.join(root)).is_ok())
+        .map(PathBuf::from)
+        .collect();
     for path in kept.keys() {
         let mut at = path.parent();
         while let Some(dir) = at.filter(|dir| !dir.as_os_str().is_empty()) {
-            dirs.insert(cases.join(dir));
+            dirs.insert(dir.to_path_buf());
             at = dir.parent();
         }
     }
     for dir in &dirs {
-        no_link_on_the_way(tree, dir)?;
+        let full = tree.join(dir);
+        no_link_on_the_way(tree, &full)?;
         let meta =
-            std::fs::symlink_metadata(dir).with_context(|| format!("read {}", dir.display()))?;
+            std::fs::symlink_metadata(&full).with_context(|| format!("read {}", full.display()))?;
         if !meta.is_dir() {
-            bail!(
-                "{} is not a directory",
-                dir.strip_prefix(tree).unwrap_or(dir).display()
-            );
+            bail!("{} is not a directory", dir.display());
         }
     }
     Ok(())
 }
 
-/// The paths of the cases directory `cases` a step or an observation changed, as a refusal names
-/// them, under [`CASES_DIR`]: the directory itself first when something else stands in its
-/// place (a link, with where it leads), then each of `paths`, one that is a link now with where
-/// it leads. Read before the directory is put back.
-fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
+/// The paths under the cases roots of `tree` that a step or an observation changed, as a refusal
+/// names them: each root that is not a directory first (a link, with where it leads, or a file),
+/// then each of `paths`, relative to `tree`, one that is a link now with where it leads. Read
+/// before the roots are put back.
+fn cases_named<'p>(tree: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -> Vec<String> {
     let link = |at: &Path| {
         std::fs::symlink_metadata(at)
             .ok()
@@ -7877,24 +8051,46 @@ fn cases_named<'p>(cases: &Path, paths: impl IntoIterator<Item = &'p PathBuf>) -
             })
     };
     let mut named = Vec::new();
-    let replaced = match std::fs::symlink_metadata(cases) {
-        Ok(meta) if !meta.is_dir() => {
+    let mut replaced: Vec<&str> = Vec::new();
+    for root in CASE_ROOTS {
+        let at = tree.join(root);
+        if let Ok(meta) = std::fs::symlink_metadata(&at)
+            && !meta.is_dir()
+        {
             named.push(format!(
-                "{CASES_DIR}{}",
-                link(cases).unwrap_or_else(|| ", replaced by a file".to_owned())
+                "{root}{}",
+                link(&at).unwrap_or_else(|| ", replaced by a file".to_owned())
             ));
-            true
+            replaced.push(root);
         }
-        _ => false,
-    };
+    }
     named.extend(paths.into_iter().map(|path| {
-        let shown = Path::new(CASES_DIR).join(path).display().to_string();
-        match (!replaced).then(|| link(&cases.join(path))).flatten() {
+        let shown = path.display().to_string();
+        let under_replaced = replaced.iter().any(|root| path.starts_with(root));
+        match (!under_replaced).then(|| link(&tree.join(path))).flatten() {
             Some(link) => format!("{shown}{link}"),
             None => shown,
         }
     }));
     named
+}
+
+/// What a refusal says after an untracked `Cargo.lock`: a cargo test command writes one into a
+/// repository that commits none, and each of the three ways out is named on the same line.
+const CARGO_LOCK_REMEDY: &str = "commit Cargo.lock, or ignore it (.gitignore), or give --test-cmd a command that does not write it";
+
+/// Whether one of the `paths` a step changed is a `Cargo.lock` at any directory level that the
+/// repository does not track: git lists it under neither the index nor a commit. The path is
+/// looked up literally (`--literal-pathspecs`): a directory named `:` or holding a glob
+/// character is no pathspec magic (story:untracked-cargo-lock-remedy).
+fn untracked_cargo_lock(tree: &Path, paths: &[String]) -> bool {
+    paths.iter().any(|path| {
+        Path::new(path)
+            .file_name()
+            .is_some_and(|name| name == "Cargo.lock")
+            && crate::git::run(tree, &["--literal-pathspecs", "ls-files", "-z", "--", path])
+                .is_ok_and(|listed| listed.is_empty())
+    })
 }
 
 /// How a refusal names ignored paths ([`crate::git::paths_named`]).
@@ -7915,6 +8111,18 @@ fn opening_set_aside(tree: &Path) -> Result<Option<PathBuf>> {
     default_set_aside()
         .map(|dir| crate::git::set_aside_root(&dir, tree).context("the run does not start"))
         .transpose()
+}
+
+/// The set-aside root a run on `tree` opens with: the directory `given` names, checked as
+/// [`opening_set_aside`] checks the default, when the caller gives one; the default otherwise.
+/// A run given a directory reads neither `XDG_STATE_HOME` nor `HOME`.
+fn opening_set_aside_given(tree: &Path, given: Option<&Path>) -> Result<Option<PathBuf>> {
+    match given {
+        Some(dir) => crate::git::set_aside_root(dir, tree)
+            .context("the run does not start")
+            .map(Some),
+        None => opening_set_aside(tree),
+    }
 }
 
 /// Where discarding a harness step moves the files inside an ignored directory it rewrote,
@@ -8025,40 +8233,31 @@ fn taken_on_case_branches(tree: &Path) -> Result<Vec<String>> {
 
 /// Every case under `tree` that records a story, as `(case id, story id)` in case order.
 fn cases_with_story(tree: &Path) -> Result<Vec<(String, String)>> {
-    let cases = tree.join(CASES_DIR);
-    if !cases.is_dir() {
-        return Ok(Vec::new());
-    }
-    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&cases)
-        .with_context(|| format!("read {}", cases.display()))?
-        .map(|entry| entry.map(|e| e.path()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    dirs.sort();
     let mut found = Vec::new();
-    for dir in dirs {
+    for (id, dir) in crate::case::case_dirs(tree)? {
         if !dir.join("case.yaml").is_file() {
             continue;
         }
         if let Some(story) = crate::case::story_of(&dir)? {
-            let id = dir
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_default();
             found.push((id, story));
         }
     }
     Ok(found)
 }
 
-/// Whether the tree is on a case's branch, `takt/<id>`: where [`to_base`] moves it, or refuses.
+/// Whether the tree is on a case's branch, `takt/<id>` of an existing case: where [`to_base`]
+/// moves it, or refuses. A branch under the prefix that is no case's is refused by name.
 fn on_a_case_branch(tree: &Path) -> Result<bool> {
-    Ok(crate::git::current_branch(tree)?
-        .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX)))
+    let Some(branch) = crate::git::current_branch(tree)? else {
+        return Ok(false);
+    };
+    Ok(crate::case::case_of_branch(tree, &branch)?.is_some())
 }
 
 /// Puts the tree on the base of the case whose branch it is on, so that the store is read as
 /// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
-/// on any other branch, or detached, stays where it is. Refused when the branch names no case
+/// on any other branch, or detached, stays where it is. Refused when the branch is under takt's
+/// reserved prefix and is no case's ([`crate::case::case_of_branch`]), when it names no case
 /// ([`crate::case::check_id`], checked before the name is joined to a path), when the case's
 /// base is not known, or when the tree has uncommitted work, which the checkout would carry
 /// along.
@@ -8066,13 +8265,10 @@ fn to_base(tree: &Path) -> Result<()> {
     let Some(branch) = crate::git::current_branch(tree)? else {
         return Ok(());
     };
-    let Some(case) = branch.strip_prefix(crate::case::BRANCH_PREFIX) else {
+    let Some(case) = crate::case::case_of_branch(tree, &branch)? else {
         return Ok(());
     };
-    // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
-    crate::case::check_id(case)
-        .with_context(|| format!("the branch {} names no case", crate::case::shown(&branch)))?;
-    let Some(base) = crate::case::Branch::read(&tree.join(CASES_DIR).join(case))
+    let Some(base) = crate::case::Branch::read(&CaseDir::locate(tree, case))
         .ok()
         .and_then(|recorded| recorded.base)
     else {
@@ -8156,33 +8352,8 @@ pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
     }
 }
 
-/// What the change a case has made so far passes before a judgement step's prompt shows it
-/// ([`crate::harness::ChangeSoFar`]): `<program> scan-text --repo <tree> --policy <policy>
-/// <file>`, the diff written to `<file>` outside the tree. A scan that refuses or cannot run (the
-/// program not there, a policy that does not load, any exit but 0) shows nothing.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ChangeScan {
-    /// The `b10x-gates` program.
-    pub program: PathBuf,
-    /// The policy file.
-    pub policy: PathBuf,
-}
-
-impl ChangeScan {
-    /// The scan the environment names: `b10x-gates` under the policy `B10X_GATES_POLICY`
-    /// names, when it is set (empty or not); none when it is not, and then the change so far is
-    /// shown unscanned.
-    #[must_use]
-    pub fn from_env() -> Option<Self> {
-        std::env::var_os(crate::forge::POLICY_VAR).map(|policy| Self {
-            program: PathBuf::from("b10x-gates"),
-            policy: PathBuf::from(policy),
-        })
-    }
-}
-
 /// How [`scan_change`] says a scan that never ran.
-const SCAN_DID_NOT_RUN: &str = "the scan could not run";
+pub(crate) const SCAN_DID_NOT_RUN: &str = "the scan could not run";
 
 /// The summary a harness step's line carries in place of the session's own when its proposal
 /// did not pass the content scan before the edit effect: what the session wrote is never
@@ -8194,6 +8365,18 @@ pub const PROPOSAL_NOT_RECORDED: &str =
 /// with the tokens its session reported ([`Run::charge_unproposed`]).
 pub const UNPROPOSED_SUMMARY: &str =
     "the harness failed and proposed nothing; the tokens its session reported are charged";
+
+/// How many times one judgement step is tried in a run while its session ends without the line
+/// naming its action ([`crate::harness::NoActionLine`]): each try is a step, counted by
+/// `--iterations`, its step line written with the tokens its session reported
+/// ([`Run::charge_no_action`]), and starts from the tree the try before it was discarded to; the
+/// run ends on the error (exit 5) after the last. A run whose budget a try spent stops on the
+/// budget instead (exit 3).
+pub const NO_ACTION_TRIES: u32 = 3;
+
+/// The summary of the step line of a try whose session named no action
+/// ([`Run::charge_no_action`]), followed by the try and the bound.
+pub const NO_ACTION_SUMMARY: &str = "the session named no action: it ended without the line naming its action; everything it changed was discarded and the tokens it reported are charged";
 
 /// The shapes of a credential [`credential_shape`] knows, each a login a session could read in
 /// the user's home: a private key block (`~/.ssh`); a JWT (Codex's `auth.json` tokens); an
@@ -8352,27 +8535,59 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
     None
 }
 
+/// Why a path `proposal` names may not reach the tree, the record or a refusal: it holds text of
+/// the shape of a credential ([`credential_shape`]). Read before any refusal that names a path,
+/// and naming none. None when every path passes.
+fn proposed_path_refusal(proposal: &crate::harness::Proposal) -> Option<String> {
+    let shape = proposal
+        .files
+        .iter()
+        .find_map(|file| credential_shape(&file.path))?;
+    Some(format!(
+        "{} proposes a path that holds text of the shape of a credential ({shape})",
+        proposal.action
+    ))
+}
+
 /// Why the content of `proposal` may not reach the tree or the record, read before the edit
 /// effect writes a byte of it: each proposed file's content and the session's summary, each
-/// apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`
-/// (`b10x-gates scan-text` under the gates policy, [`ChangeScan`]); a scan that cannot run (no
-/// program, a policy that does not load, any exit but 0) refuses as a match does. With no scan
-/// set, the proposal of a harness whose session may have read outside its copy (`unscanned_refused`,
-/// [`crate::harness::Harness::reads_outside_its_copy`]) is refused: not scanned is never passed.
-/// A refusal names the file or the summary and the shape or the scan's exit, never the text
-/// matched. None when it passes.
+/// apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`, the
+/// scan of the run's adapter `adapter` ([`Scan::change_scan`], [`ChangeScan`]); a scan that
+/// cannot run (no program, a policy that does not load, any exit but 0) refuses as a match does.
+/// With no scan set, the proposal of a harness whose session may have read outside its copy
+/// (`unscanned_refused`, [`crate::harness::Harness::reads_outside_its_copy`]) is refused, as
+/// [`Scan::unscanned`] says: not scanned is never passed. A run under a declared `none` passes
+/// `unscanned_refused` false, and its proposals are checked for the shape of a credential alone.
+/// The paths the proposal names are read first ([`proposed_path_refusal`]) and, under a scan,
+/// scanned as one text. A refusal names the file or the summary and the shape or the scan's
+/// exit, never the text matched. None when it passes.
 fn proposal_scan_refusal(
     tree: &Path,
+    adapter: &Scan,
     scan: Option<&ChangeScan>,
     unscanned_refused: bool,
     proposal: &crate::harness::Proposal,
 ) -> Option<String> {
+    if let Some(why) = proposed_path_refusal(proposal) {
+        return Some(why);
+    }
     let action = &proposal.action;
-    let mut texts: Vec<(&str, &str)> = proposal
+    let paths: Vec<&str> = proposal
         .files
         .iter()
-        .filter_map(|file| Some((file.path.as_str(), file.content.as_deref()?)))
+        .map(|file| file.path.as_str())
         .collect();
+    let paths = paths.join("\n");
+    let mut texts: Vec<(&str, &str)> = Vec::new();
+    if !paths.is_empty() {
+        texts.push(("the paths it names", paths.as_str()));
+    }
+    texts.extend(
+        proposal
+            .files
+            .iter()
+            .filter_map(|file| Some((file.path.as_str(), file.content.as_deref()?))),
+    );
     texts.push(("the step's summary", proposal.summary.as_str()));
     for (what, text) in &texts {
         if let Some(shape) = credential_shape(text) {
@@ -8382,12 +8597,7 @@ fn proposal_scan_refusal(
         }
     }
     let Some(scan) = scan else {
-        return unscanned_refused.then(|| {
-            format!(
-                "{action} proposes a change of a session that could read outside its copy, and no gates policy is set ({}): not scanned, which is not passed",
-                crate::forge::POLICY_VAR
-            )
-        });
+        return unscanned_refused.then(|| adapter.unscanned(action));
     };
     texts.iter().find_map(|(what, text)| {
         scan_bytes(tree, scan, "proposed.txt", text.as_bytes())
@@ -8453,12 +8663,7 @@ fn scan_bytes(
         .and_then(|mut handle| handle.write_all(bytes))
         .map_err(|error| format!("{SCAN_DID_NOT_RUN}: write {}: {error}", file.display()))?;
     let ran = crate::confinement::Command::new(&scan.program)
-        .arg("scan-text")
-        .arg("--repo")
-        .arg(tree)
-        .arg("--policy")
-        .arg(&scan.policy)
-        .arg(&file)
+        .args(scan.args(tree, &file))
         .current_dir(tree)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -8473,6 +8678,40 @@ fn scan_bytes(
             scan.program.display()
         ))
     }
+}
+
+/// What the last observation of each validator's action failed, as `record` (the case's record
+/// so far) holds it: for each action a validator's `step` line names, the `failed` entries of
+/// the `evidence` lines of that action's last such step ([`crate::validator::FailedCheck`]), in
+/// the record's order. A later observation of the same action that failed nothing, or wrote no
+/// record, leaves its action nothing; a judgement step's line leaves it as it was. A run reads
+/// it before each judgement step; a replay reads it the same way for the step it rebuilds.
+#[must_use]
+pub fn failed_checks(record: &[serde_json::Value]) -> Vec<crate::validator::FailedCheck> {
+    let mut last: Vec<(&str, Vec<crate::validator::FailedCheck>)> = Vec::new();
+    // The action of the validator's step the lines that follow belong to, and its step.
+    let mut current: Option<(&str, &serde_json::Value)> = None;
+    for line in record {
+        if line["event"] == "step" {
+            current = None;
+            if line["by"] == "validator"
+                && let Some(action) = line["action"].as_str()
+            {
+                last.retain(|(seen, _)| *seen != action);
+                last.push((action, Vec::new()));
+                current = Some((action, &line["step"]));
+            }
+        } else if line["event"] == "evidence"
+            && let Some((action, step)) = current
+            && line["step"] == *step
+            && let Ok(checks) =
+                serde_json::from_value::<Vec<crate::validator::FailedCheck>>(line["failed"].clone())
+            && let Some((_, failed)) = last.iter_mut().find(|(seen, _)| *seen == action)
+        {
+            failed.extend(checks);
+        }
+    }
+    last.into_iter().flat_map(|(_, failed)| failed).collect()
 }
 
 /// The change the case at `case_dir` has made so far, as a judgement step is shown it
@@ -8617,6 +8856,10 @@ pub struct Run<'a> {
     /// on the `opened` line; none unless the caller sets it, since this library does not know
     /// the build it is linked into.
     pub binary: Option<String>,
+    /// The digest of the `llm.routes/1` document the run's configuration file gave, recorded on
+    /// the `opened` line as `llm_digest`; none unless the caller sets it, as it does
+    /// [`Run::binary`].
+    pub llm_digest: Option<String>,
     /// Where discarding a harness step moves the files inside an ignored directory it rewrote,
     /// under the case's id and the step's number: [`default_set_aside`], checked when the run
     /// opens, unless [`Run::set_aside_in`] gives another; none when nothing names one, and then
@@ -8642,13 +8885,18 @@ pub struct Run<'a> {
     /// The directories outside the tree the test command prepends to `PATH` and what its Python
     /// imports from there, which [`Outside`] snapshots beside what cargo and rustup read.
     outside_dirs: OutsideDirs,
-    /// The module names no step may put in an import directory, kept with the case
-    /// ([`Modules::of_case`]).
+    /// The module names no step may put in an import directory, kept with the case when a Python
+    /// answered ([`Modules::of_case`]).
     modules: Modules,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
     /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
     stops_red_base: bool,
+    /// The records profile the case keeps its decisions under ([`Records`]): the profile the
+    /// case was opened under on a resume ([`CaseDir::opened_profile`]), `trial` on a new run,
+    /// until [`Run::keep_records`]; what the case keeps is [`Records::for_case`] of it. The CLI
+    /// asks for `default` on a new run unless told otherwise; a library caller keeps every decision.
+    records: Records,
     /// The least free space, in bytes, a step needs on the file system of the tree and of the
     /// build directory; 0 reads nothing, and is the default until [`Run::stop_when_disk_below`].
     min_free: u64,
@@ -8662,9 +8910,16 @@ pub struct Run<'a> {
     /// The author and committer of every commit the run makes, the case's
     /// ([`CaseDir::committer`]), read when the run is opened or resumed.
     committer: crate::git::CommitIdentity,
-    /// What the change so far passes before a prompt shows it: [`ChangeScan::from_env`] when
-    /// the run opens, unless [`Run::scan_change_with`] gives another.
+    /// The run's scan adapter ([`Scan`]), named on its `opened` line: [`Scan::from_env`] when
+    /// the run opens, unless [`Run::scan_with`] gives another.
+    scan: Scan,
+    /// What the change so far and each proposal pass: the scan adapter's
+    /// ([`Scan::change_scan`]), unless [`Run::scan_change_with`] gives another.
     change_scan: Option<ChangeScan>,
+    /// What the run is configured to write as a step commit's message ([`Run::commit_settings`]).
+    commit_settings: crate::commit_style::Settings,
+    /// The commit style in effect, decided when the run starts ([`Run::commit_plan_now`]).
+    commit_plan: Option<crate::commit_style::Plan>,
 }
 
 impl<'a> Run<'a> {
@@ -8700,9 +8955,24 @@ impl<'a> Run<'a> {
     /// anything is written.
     pub fn open_unit_as(
         tree: &Path,
+        options: RunOptions,
+        unit: Unit,
+        commit_as: &CommitAs,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        Self::open_unit_in(tree, options, unit, commit_as, None, harness, validators)
+    }
+
+    /// [`Run::open_unit_as`], the discarded steps' set-aside directory given as `set_aside`
+    /// (checked as [`Run::set_aside_in`] checks one) in place of the default
+    /// ([`opening_set_aside`]), which is then not read. None is the default.
+    pub fn open_unit_in(
+        tree: &Path,
         mut options: RunOptions,
         unit: Unit,
         commit_as: &CommitAs,
+        set_aside: Option<&Path>,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
@@ -8724,7 +8994,7 @@ impl<'a> Run<'a> {
         // branch exists for it.
         Shape::of(&protocol, &options.inputs)?;
         // Nor does a run start that a harness step's rewrite could not be moved out of.
-        let set_aside = opening_set_aside(tree)?;
+        let set_aside = opening_set_aside_given(tree, set_aside)?;
         let id = options
             .case_id
             .clone()
@@ -8763,8 +9033,8 @@ impl<'a> Run<'a> {
             case.discard()?;
             return Err(error);
         }
-        // The module names the test command's Python imports from outside the tree, asked once
-        // and kept with the case.
+        // The module names the test command's Python imports from outside the tree, asked once;
+        // kept with the case when a Python answered, else the built-in lists stand in.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
         let modules = match Modules::of_case(&case.dir, &runs, tree) {
             Ok(modules) => modules,
@@ -8784,6 +9054,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            llm_digest: None,
             set_aside,
             transcripts: None,
             store: None,
@@ -8796,12 +9067,16 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            records: Records::Trial,
             min_free: 0,
             build_dir: None,
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
+            commit_settings: crate::commit_style::Settings::default(),
+            commit_plan: None,
         })
     }
 
@@ -8998,9 +9273,19 @@ impl<'a> Run<'a> {
     }
 
     /// Scans the change so far with `scan` before a prompt shows it, or, given none, shows it
-    /// unscanned; the run opens with [`ChangeScan::from_env`].
+    /// unscanned; the run opens with [`ChangeScan::from_env`]. The run's scan adapter stays.
     pub fn scan_change_with(&mut self, scan: Option<ChangeScan>) {
         self.change_scan = scan;
+    }
+
+    /// Runs under the scan adapter `scan`: its scan ([`Scan::change_scan`]) for the change so
+    /// far and each proposal, and its name on the `opened` line. Under a declared `none`
+    /// ([`Scan::None`]) nothing is scanned, the proposal of a harness whose session may read
+    /// outside its copy is not refused as unscanned, and each is still checked for the shape of
+    /// a credential ([`credential_shape`]). The run opens under [`Scan::from_env`].
+    pub fn scan_with(&mut self, scan: Scan) {
+        self.change_scan = scan.change_scan();
+        self.scan = scan;
     }
 
     /// Prepares a run on the case `id` a run before this one opened under `tree`: the case's
@@ -9010,12 +9295,26 @@ impl<'a> Run<'a> {
     /// are not read: the case's own rule.
     pub fn resume(
         tree: &Path,
-        mut options: RunOptions,
+        options: RunOptions,
         id: &str,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
-        let set_aside = opening_set_aside(tree)?;
+        Self::resume_in(tree, options, id, None, harness, validators)
+    }
+
+    /// [`Run::resume`], the discarded steps' set-aside directory given as `set_aside` (checked as
+    /// [`Run::set_aside_in`] checks one) in place of the default ([`opening_set_aside`]), which
+    /// is then not read. None is the default.
+    pub fn resume_in(
+        tree: &Path,
+        mut options: RunOptions,
+        id: &str,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
+        let set_aside = opening_set_aside_given(tree, set_aside)?;
         let case = CaseDir::resume(tree, id)?;
         let intent = case.intent()?;
         let unit = match case.story()? {
@@ -9034,12 +9333,16 @@ impl<'a> Run<'a> {
         options.inputs = case.inputs();
         options.case_id = Some(id.to_owned());
         options.protocol = case.protocol.id.clone();
-        // A case opened before it kept its module names is asked now and keeps them from here.
+        // A case with no module file (none kept at open: no Python answered, or the case predates
+        // the file) is asked again for this run, and nothing is written.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
-        let modules = Modules::of_case(&case.dir, &runs, tree)?;
+        let modules = Modules::at_resume(&case.dir, &runs, tree);
         let outside_dirs = OutsideDirs::of(&runs, tree, &modules);
         // The identity the case was opened with, whatever the repository configures by now.
         let committer = case.committer()?;
+        // The profile the case was opened under: a resume keeps it unless the caller asks for
+        // another ([`Run::keep_records`]).
+        let records = case.opened_profile()?;
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -9050,6 +9353,7 @@ impl<'a> Run<'a> {
             tokens: 0,
             poll: Self::POLL,
             binary: None,
+            llm_digest: None,
             set_aside,
             transcripts: None,
             store: None,
@@ -9062,12 +9366,16 @@ impl<'a> Run<'a> {
             modules,
             stops_unperformable: false,
             stops_red_base: true,
+            records,
             min_free: 0,
             build_dir: None,
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
+            scan: Scan::from_env(),
             change_scan: ChangeScan::from_env(),
+            commit_settings: crate::commit_style::Settings::default(),
+            commit_plan: None,
         })
     }
 
@@ -9082,11 +9390,37 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        Self::open_next_in(tree, options, frontier, None, harness, validators, out)
+    }
+
+    /// [`Run::open_next`], the discarded steps' set-aside directory given as `set_aside` (checked
+    /// as [`Run::set_aside_in`] checks one) in place of the default, for the case it resumes or
+    /// opens ([`Run::open_unit_in`]). None is the default.
+    pub fn open_next_in(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
         if let Some((case_id, story_id)) = Self::next_to_resume(tree, frontier, out)? {
-            return Self::resumed(tree, options, &case_id, &story_id, harness, validators, out)
-                .map(Some);
+            return Self::resumed(
+                tree, options, &case_id, &story_id, set_aside, harness, validators, out,
+            )
+            .map(Some);
         }
-        Self::take_next(tree, options, frontier, harness, validators, out)
+        Self::take_next_as_in(
+            tree,
+            options,
+            frontier,
+            &CommitAs::Takt,
+            set_aside,
+            harness,
+            validators,
+            out,
+        )
     }
 
     /// The open case [`Run::open_next`] resumes, as `(case id, story id)`, answered with nothing
@@ -9162,6 +9496,24 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
+        Self::take_next_as_in(
+            tree, options, frontier, commit_as, None, harness, validators, out,
+        )
+    }
+
+    /// [`Run::take_next_as`], each case opened with the discarded steps' set-aside directory
+    /// `set_aside` ([`Run::open_unit_in`]); None is the default.
+    #[allow(clippy::too_many_arguments)]
+    pub fn take_next_as_in(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        commit_as: &CommitAs,
+        set_aside: Option<&Path>,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
         to_base(tree)?;
         let cased = cases_with_story(tree)?;
         for id in frontier.candidates(tree)? {
@@ -9186,11 +9538,12 @@ impl<'a> Run<'a> {
                 }
                 options.case_id = Some(minted);
             }
-            let mut run = Self::open_unit_as(
+            let mut run = Self::open_unit_in(
                 tree,
                 options,
                 Unit::Story(story),
                 commit_as,
+                set_aside,
                 harness,
                 validators,
             )?;
@@ -9234,16 +9587,18 @@ impl<'a> Run<'a> {
     }
 
     /// Resumes the case `case_id` of the story `story_id` and says so on `out`.
+    #[allow(clippy::too_many_arguments)]
     fn resumed(
         tree: &Path,
         options: RunOptions,
         case_id: &str,
         story_id: &str,
+        set_aside: Option<&Path>,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Self> {
-        let run = Self::resume(tree, options, case_id, harness, validators)?;
+        let run = Self::resume_in(tree, options, case_id, set_aside, harness, validators)?;
         let title = match &run.unit {
             Unit::Story(story) => story.title.clone(),
             Unit::Intent(intent) => intent.clone(),
@@ -9391,6 +9746,58 @@ impl<'a> Run<'a> {
     /// without this call.
     pub fn continue_past_red_base(&mut self) {
         self.stops_red_base = false;
+    }
+
+    /// Writes each step commit's message as `settings` say ([`crate::commit_style`]); without
+    /// this call, `semantic` with the trailer `Refs`. The repository's own commit rule, read at
+    /// the case's base, wins over the style given here.
+    pub fn commit_settings(&mut self, settings: crate::commit_style::Settings) {
+        self.commit_settings = settings;
+        self.commit_plan = None;
+    }
+
+    /// The commit style in effect for this run, decided on first use from the settings, the
+    /// instruction files at the case's base and the story's tags there, and kept.
+    fn commit_plan_now(&mut self) -> crate::commit_style::Plan {
+        if let Some(plan) = &self.commit_plan {
+            return plan.clone();
+        }
+        let base = crate::case::Branch::read(&self.case.dir)
+            .ok()
+            .and_then(|branch| branch.base_commit);
+        let rule = base.as_deref().and_then(|base| {
+            crate::commit_style::rule_in(&self.tree, base, &self.harness.instruction_paths())
+        });
+        let bug = self.case.story().ok().flatten().is_some_and(|story| {
+            crate::case::story_front_at(&self.tree, base.as_deref().unwrap_or("HEAD"), &story)
+                .ok()
+                .flatten()
+                .is_some_and(|front| {
+                    front["tags"].as_sequence().is_some_and(|tags| {
+                        tags.iter()
+                            .any(|tag| tag.as_str() == Some(crate::commit_style::BUG_TAG))
+                    })
+                })
+        });
+        let plan = crate::commit_style::Plan::new(&self.commit_settings, rule, bug);
+        self.commit_plan = Some(plan.clone());
+        plan
+    }
+
+    /// Asks for the records profile the case keeps its decisions under: `default` keeps the
+    /// latest decision alone, after each decision is written; `trial` keeps every one. A scenario
+    /// case or an improvement case keeps every one whatever is asked ([`Records::for_case`]).
+    /// A resumed case runs under the profile it was opened under until this call; a new one
+    /// runs under `trial` until this call.
+    pub fn keep_records(&mut self, records: Records) {
+        self.records = records;
+    }
+
+    /// The records profile this run's case keeps: the one asked, or every decision for a scenario
+    /// case or an improvement case ([`Records::for_case`]), a new run and a resumed one alike.
+    #[must_use]
+    pub fn kept_records(&self) -> Records {
+        self.records.for_case(&self.case.protocol.id, &self.case.id)
     }
 
     /// Stops the run [`Stop::DiskLow`] before a step (a harness step, a deterministic step, the
@@ -9845,12 +10252,18 @@ impl<'a> Run<'a> {
     }
 
     /// The latest `test_result` pass record a validator of the case wrote that is about the
-    /// current revision of its subject: its path in the repository and its own `observed_at`.
+    /// current revision of its subject: the reference the store records for it (its path, sha256
+    /// and fields, [`crate::frontier::test_result_reference`]) and its own `observed_at`.
     /// A record counts only when an `evidence` line of the case's record, which the kernel
     /// writes and a step may not, names it under the case's `evidence/`: a record put there by
     /// any other hand is never one the run observed. `None` when there is none.
     fn observed_pass(&self, recorded: &[serde_json::Value]) -> Result<Option<(String, String)>> {
-        let mine = Path::new(CASES_DIR).join(&self.case.id).join("evidence");
+        let mine = self
+            .case
+            .dir
+            .strip_prefix(&self.tree)
+            .with_context(|| format!("locate the case {}", self.case.id))?
+            .join("evidence");
         for line in recorded.iter().rev() {
             if line["event"] != "evidence"
                 || line["kind"] != TEST_RESULT
@@ -9866,20 +10279,24 @@ impl<'a> Run<'a> {
                 continue;
             }
             let full = self.tree.join(relative);
-            let text = std::fs::read_to_string(&full)
+            let bytes = std::fs::read(&full)
                 .with_context(|| format!("read the record {}", full.display()))?;
-            let record: serde_json::Value = serde_json::from_str(&text)
+            let record: serde_json::Value = serde_json::from_slice(&bytes)
                 .with_context(|| format!("read the record {}", full.display()))?;
             let current = record["subject"]
                 .as_str()
                 .and_then(|subject| self.case.revision(subject));
             if record["kind"] == TEST_RESULT
-                && record["result"] == "pass"
-                && current.is_some()
-                && record["subject_revision"].as_str() == current.as_deref()
+                && let Some(result) = record["result"].as_str().filter(|result| *result == "pass")
+                && let Some(revision) = record["subject_revision"].as_str()
+                && current.as_deref() == Some(revision)
+                && let Some(producer) = record["producer"].as_str()
                 && let Some(at) = record["observed_at"].as_str()
             {
-                return Ok(Some((path.to_owned(), at.to_owned())));
+                let reference = crate::frontier::test_result_reference(
+                    path, &bytes, result, revision, producer,
+                );
+                return Ok(Some((reference, at.to_owned())));
             }
         }
         Ok(None)
@@ -9954,22 +10371,59 @@ impl<'a> Run<'a> {
         events: &Events,
         transcript: Option<std::result::Result<String, String>>,
     ) -> Result<()> {
-        let Some(usage) = self.harness.last_usage() else {
+        if self.harness.last_usage().is_none() {
             return Ok(());
-        };
-        let tokens = usage.total();
-        self.tokens += tokens;
+        }
+        self.charge_failed(events, transcript, UNPROPOSED_SUMMARY)
+    }
+
+    /// Records try `tried` of a judgement step whose session ended without the line naming its
+    /// action ([`Judgement::NoAction`]): a harness step line with no action and
+    /// [`NO_ACTION_SUMMARY`], naming the try and the bound, charged the tokens its session
+    /// reported, as [`Run::charge_unproposed`] charges them. Nothing when the session reported
+    /// no tokens, as for any failed step: a harness step line without a count leaves the run's
+    /// tokens unknown to the scorecard, and one counting 0 would claim what nobody reported. Such
+    /// a try is still a step of the record, which its stop line counts and the next line's step
+    /// skips, with its transcript kept under its own step, and on the run's output. Written after
+    /// the step's change was put back.
+    fn charge_no_action(
+        &mut self,
+        events: &Events,
+        transcript: Option<std::result::Result<String, String>>,
+        tried: u32,
+    ) -> Result<()> {
+        if self.harness.last_usage().is_none() {
+            return Ok(());
+        }
+        let summary = format!("{NO_ACTION_SUMMARY} (try {tried} of {NO_ACTION_TRIES})");
+        self.charge_failed(events, transcript, &summary)
+    }
+
+    /// The harness step line of a step that failed and proposed nothing, with `summary`: the
+    /// tokens its session reported, when it reported any, charged to the run and carried with
+    /// their components and what the harness reported of the call.
+    fn charge_failed(
+        &mut self,
+        events: &Events,
+        transcript: Option<std::result::Result<String, String>>,
+        summary: &str,
+    ) -> Result<()> {
+        let usage = self.harness.last_usage();
+        let tokens = usage.map(|usage| usage.total());
+        if let Some(tokens) = tokens {
+            self.tokens += tokens;
+        }
         self.stepped(
             events,
             SteppedBy::Harness(
-                Some(tokens),
-                Some(usage),
+                tokens,
+                usage,
                 self.harness.last_call().map(Box::new),
                 transcript,
             ),
             self.harness.name(),
             "",
-            UNPROPOSED_SUMMARY,
+            summary,
         )
     }
 
@@ -10016,7 +10470,6 @@ impl<'a> Run<'a> {
                 crate::git::paths_named(&named)
             ));
         }
-        let cases = format!("{CASES_DIR}/");
         for file in &proposal.files {
             let path = file.path.as_str();
             if !loom_sdk::session::plain_relative(path) {
@@ -10024,7 +10477,7 @@ impl<'a> Run<'a> {
                     "{action} proposes {path:?}, which is no plain path of the tree"
                 ));
             }
-            if path == CASES_DIR || path.starts_with(&cases) {
+            if is_under_cases(path) {
                 return Some(format!(
                     "{action} proposes a path in the cases directory: {path}"
                 ));
@@ -10204,15 +10657,18 @@ impl<'a> Run<'a> {
             return Ok(Taken::Stop(Stop::StepRefused(why)));
         }
         let checkpoint = self.checkpoint(false)?;
-        let cases = self.tree.join(CASES_DIR);
-        let kept = snapshot(&cases)?;
+        let kept = snapshot_cases(&self.tree)?;
         let globs = self.judge_list()?.unwrap_or_default();
         let (surface, surface_kept) =
             JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
         let observed = validator
             .observe_within(&self.tree, &revision, seq, self.deadline())
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+        let failed = validator.take_failed();
         let returned = Instant::now();
+        // The way to the case's directory is read before anything is written under it: a test
+        // command that put a link on it (`.takt`, a cases root) is refused and undone below.
+        let way = self.case.check_way().err();
         // What the observation left running is killed before anything is looked at;
         // one that could not be killed is named with the rest of what it left.
         let swept = crate::forge::sweep_left();
@@ -10233,7 +10689,7 @@ impl<'a> Run<'a> {
         // error.
         let kept_all = Kept {
             checkpoint: &checkpoint,
-            cases: &cases,
+            tree: &self.tree,
             cases_kept: &kept,
             surface: &surface,
             surface_kept: &surface_kept,
@@ -10242,7 +10698,7 @@ impl<'a> Run<'a> {
         };
         let seen = (|| -> Result<_> {
             let on_surface = differing(&surface_kept, &surface.snapshot(&self.tree)?);
-            let touched = differing(&kept, &snapshot(&cases)?);
+            let touched = differing(&kept, &snapshot_cases(&self.tree)?);
             let change = checkpoint.change(&self.tree)?;
             let moved = outside_kept.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
             Ok((on_surface, touched, change, moved))
@@ -10262,15 +10718,18 @@ impl<'a> Run<'a> {
                 });
             }
         };
-        let own: Vec<PathBuf> = match self.case.dir.file_name() {
-            Some(id) => validator
+        let own: Vec<PathBuf> = match self.case.dir.strip_prefix(&self.tree) {
+            Ok(case) => validator
                 .writes()
                 .iter()
-                .map(|path| Path::new(id).join(path))
+                .map(|path| case.join(path))
                 .collect(),
-            None => Vec::new(),
+            Err(_) => Vec::new(),
         };
-        let mut foreign = cases_named(&cases, touched.iter().filter(|path| !own.contains(path)));
+        let mut foreign = cases_named(
+            &self.tree,
+            touched.iter().filter(|path| !own.contains(path)),
+        );
         let mut outside: Vec<String> = planted;
         outside.extend(change.paths.iter().cloned());
         if change.staged {
@@ -10289,7 +10748,10 @@ impl<'a> Run<'a> {
                     .iter()
                     .chain(&change.ignored_changed)
                     .chain(&change.ignored_removed)
-                    .filter(|path| surface.contains(&path.to_string_lossy()))
+                    .filter(|path| {
+                        let text = path.to_string_lossy();
+                        surface.contains(&text) || takt_guard(&text)
+                    })
                     .map(|path| crate::git::shown(path)),
             )
         {
@@ -10298,7 +10760,11 @@ impl<'a> Run<'a> {
             }
         }
         outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
+        if let Some(way) = &way {
+            outside.push(format!("{way:#}"));
+        }
         if !foreign.is_empty() || !outside.is_empty() {
+            let lock_remedy = untracked_cargo_lock(&self.tree, &change.paths);
             let left = undo_step(&self.tree, &kept_all)?.left;
             foreign.extend(outside);
             foreign.extend(left.iter().map(|path| {
@@ -10309,6 +10775,9 @@ impl<'a> Run<'a> {
                 validator.action(),
                 foreign.join(", ")
             );
+            if lock_remedy {
+                why.push_str(&format!("; {CARGO_LOCK_REMEDY}"));
+            }
             if let Err(error) = &observed {
                 why.push_str(&format!("; the observation failed too: {error:#}"));
             }
@@ -10335,7 +10804,7 @@ impl<'a> Run<'a> {
             && self.deadline().is_some_and(|deadline| returned >= deadline)
             && let Some(h) = self.options.hours
         {
-            restore(&self.tree, &cases, &kept, &touched)?;
+            restore(&self.tree, &self.tree, &kept, &touched)?;
             let why = format!(
                 "step {}: the hour budget ran out during {}; nothing recorded: {error:#}",
                 self.steps,
@@ -10353,7 +10822,21 @@ impl<'a> Run<'a> {
             writeln!(out, "  {why}")?;
             return Ok(Taken::Stop(Stop::Hours(h)));
         }
+        // A test command that changed or removed `.takt/.gitignore` or `.takt` was refused and
+        // undone above, so this writes the ignore file only when it is absent, as at open, which
+        // keeps the case out of `git status`; an observation that failed is written the same way
+        // before its error ends the run.
+        let ignore = if self
+            .case
+            .dir
+            .starts_with(self.tree.join(crate::case::CASES_DIR))
+        {
+            crate::case::write_takt_files(&self.tree)
+        } else {
+            Ok(())
+        };
         let (observation, waits) = observed?;
+        ignore?;
         self.stepped(
             events,
             SteppedBy::Validator(Some(&revision)),
@@ -10397,6 +10880,11 @@ impl<'a> Run<'a> {
                         .unwrap_or(&written)
                         .display()
                         .to_string(),
+                    failed: if record.result.as_deref() == Some("fail") {
+                        failed.clone()
+                    } else {
+                        Vec::new()
+                    },
                 },
             )?;
             writeln!(
@@ -10528,8 +11016,8 @@ impl<'a> Run<'a> {
         }
         // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
         // revision as the caller gave it. The harness's version and the model are read from
-        // the harness's stream at each step, so their layers are on the step lines: takt runs
-        // the harness program in a judgement step and nowhere else, never for its version.
+        // the harness's stream at each step, so their layers are on the step lines; the program's
+        // own path, hash and version are recorded beside them as `harness_program`.
         let mut layers = std::collections::BTreeMap::new();
         if let Some(binary) = &self.binary {
             layers.insert("takt".to_owned(), binary.clone());
@@ -10537,7 +11025,25 @@ impl<'a> Run<'a> {
         // The adapter every child of this run starts through, named on the first line and
         // in the record so a reader knows what confined the evidence.
         let confinement = crate::confinement::current().name().to_owned();
-        events.emit(
+        // Before the first session, on open and on every resume: the harness binary asked of
+        // metaharness, with no model call (`Harness::preflight`).
+        let preflight = self.harness.preflight()?;
+        let commit_record = self.commit_plan_now().record();
+        let harness_program = self.harness.program_record()?;
+        let input_sources = self.case.input_sources();
+        let shown_inputs: Vec<String> = inputs
+            .iter()
+            .map(|input| {
+                let source = input
+                    .split_once('=')
+                    .and_then(|(name, _)| input_sources.iter().find(|(held, _)| held == name));
+                match source {
+                    Some((_, source)) => format!("{input}({source})"),
+                    None => input.clone(),
+                }
+            })
+            .collect();
+        events.emit_opened_with(
             self.steps,
             &Event::Opened {
                 case: self.case.id.clone(),
@@ -10555,7 +11061,17 @@ impl<'a> Run<'a> {
                 confinement: Some(confinement.clone()),
                 // The endpoint the harness is pointed at, by reference: never a token.
                 endpoint: self.harness.endpoint_reference(),
+                records: Some(self.kept_records().name().to_owned()),
+                // The scan adapter every proposal and the change so far pass.
+                scan: Some(self.scan.name().to_owned()),
+                protocol_source: self.case.protocol_source(),
+                input_sources: (!input_sources.is_empty())
+                    .then(|| input_sources.iter().cloned().collect()),
+                harness_program,
+                preflight: preflight.clone().map(Box::new),
             },
+            self.llm_digest.as_deref(),
+            &commit_record,
         )?;
         writeln!(
             out,
@@ -10563,16 +11079,42 @@ impl<'a> Run<'a> {
             self.case.id,
             self.case.protocol.id,
             self.tree.display(),
-            if inputs.is_empty() {
+            if shown_inputs.is_empty() {
                 "none".to_owned()
             } else {
-                inputs.join(" ")
+                shown_inputs.join(" ")
             }
         )?;
+        if let Some(preflight) = &preflight {
+            if preflight.failing.is_empty() {
+                if !preflight.advisory.is_empty() {
+                    writeln!(
+                        out,
+                        "harness: {} {}; advisory: {}",
+                        preflight.kind,
+                        preflight
+                            .version
+                            .as_deref()
+                            .unwrap_or("with no readable version"),
+                        preflight.advisory.join("; ")
+                    )?;
+                }
+            } else {
+                return Ok(Stop::HarnessUnqualified {
+                    kind: preflight.kind.clone(),
+                    version: preflight.version.clone(),
+                    rows: preflight.failing.clone(),
+                    qualified: preflight.qualified.clone(),
+                });
+            }
+        }
         // One sequence per case, continued across its runs: no decision file is overwritten,
         // so the latest by name is the latest written, and a record id, numbered by the same
         // sequence, never repeats.
         let mut seq = self.case.evaluations()?;
+        // The first decision this run writes: the `default` profile removes only the decisions
+        // from here on, never one an earlier run wrote.
+        let first_decision = seq + 1;
         let mut last_idle: Option<String> = None;
         let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
         let keeps_state = self.harness.keeps_state();
@@ -10625,6 +11167,12 @@ impl<'a> Run<'a> {
                     frontier: decision.frontier_line(),
                 },
             )?;
+            // The `default` profile keeps the decision just written and none this run wrote before
+            // it, once its `decision` line is in the record; the sequence goes on from it, so no
+            // later decision reuses a number.
+            if self.kept_records() == Records::Default {
+                self.case.keep_only_decision(first_decision, seq)?;
+            }
             writeln!(out, "{}", decision.frontier_line())?;
             let state = format!(
                 "{:?}{:?}{:?}",
@@ -11003,6 +11551,14 @@ impl<'a> Run<'a> {
             .filter(|a| !shape.choices_of(a).is_empty())
             .cloned()
             .collect();
+        // The offered actions the case holds a grant for at its current revision: admissible now
+        // because they were granted, where each needed an approval before ([`CaseDir::grants`]).
+        let mut granted: Vec<String> = Vec::new();
+        for action in offered {
+            if self.case.grants(action)? {
+                granted.push(action.clone());
+            }
+        }
         let change = change_so_far(
             &self.tree,
             &self.case.dir,
@@ -11011,18 +11567,26 @@ impl<'a> Run<'a> {
             self.change_scan.as_ref(),
             out,
         )?;
+        let failed = failed_checks(&events.read()?);
+        // The repository's instruction files are read at the commit the case forked from.
+        let base = crate::case::Branch::read(&self.case.dir)?.base_commit;
+        let ask = self.commit_plan_now().ask();
         let mut context = StepContext {
             tree: &self.tree,
             intent: &self.options.intent,
             offered,
             approvals,
             choices: &choices,
+            granted: &granted,
             decision,
             protocol: &self.case.protocol,
             step: self.steps as usize,
             time_left: None,
             change: &change,
+            failed: &failed,
             scope_revision: None,
+            base_revision: base.as_deref(),
+            commit: ask.as_ref(),
         };
         // The step is judged by what it did to the tree, against a checkpoint taken just
         // before it: `HEAD`, the index, every path already uncommitted (a validator's run
@@ -11036,8 +11600,7 @@ impl<'a> Run<'a> {
         // would decide what only a validator or the operator decides. It is snapshotted
         // before the step and put back after, whatever the step reported and however it
         // ended; a step that touched it is refused.
-        let cases = self.tree.join(CASES_DIR);
-        let kept = snapshot(&cases)?;
+        let kept = snapshot_cases(&self.tree)?;
         // The judge surface likewise ([`JudgeSurface`]): the planning store and everything
         // else under `.engineering/` but the cases (the project file that says where the
         // store is kept, the gates and the assertions project file among it), whose
@@ -11182,7 +11745,7 @@ impl<'a> Run<'a> {
         let tree = self.tree.clone();
         let kept_all = Kept {
             checkpoint: &checkpoint,
-            cases: &cases,
+            tree: &self.tree,
             cases_kept: &kept,
             surface: &surface,
             surface_kept: &surface_kept,
@@ -11238,27 +11801,33 @@ impl<'a> Run<'a> {
         // step's change.
         //
         // Its content is read before that, whatever the guard says of it: each file and the
-        // summary checked for the shape of a credential and scanned under the gates policy
+        // summary checked for the shape of a credential and scanned by the run's scan adapter
         // ([`proposal_scan_refusal`]). One that does not pass is refused, and its summary is
-        // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first.
+        // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but
+        // after a path of the shape of a credential ([`proposed_path_refusal`]), since a
+        // refusal on its face names the path.
         let stepped = match stepped {
             Ok(report) => match self.harness.take_proposal() {
                 None => Ok(report),
                 Some(proposal) => {
                     let unscanned = proposal_scan_refusal(
                         &self.tree,
+                        &self.scan,
                         self.change_scan.as_ref(),
-                        self.harness.reads_outside_its_copy(),
+                        self.harness.reads_outside_its_copy() && !self.scan.declared_none(),
                         &proposal,
                     );
                     let summary = match unscanned {
                         Some(_) => PROPOSAL_NOT_RECORDED.to_owned(),
                         None => report.summary.clone(),
                     };
-                    match Self::proposal_refusal(
-                        &self.tree, &proposal, offered, approvals, &surface, shape,
-                    )
-                    .or(unscanned)
+                    match proposed_path_refusal(&proposal)
+                        .or_else(|| {
+                            Self::proposal_refusal(
+                                &self.tree, &proposal, offered, approvals, &surface, shape,
+                            )
+                        })
+                        .or(unscanned)
                     {
                         Some(why) => {
                             let moved = undo()?;
@@ -11304,7 +11873,7 @@ impl<'a> Run<'a> {
         // What the step left, read now; a read that fails (a file the run may not read)
         // discards the step before the run ends on the error.
         let seen = (|| -> Result<(Vec<PathBuf>, Vec<String>)> {
-            let touched = differing(&kept, &snapshot(&cases)?);
+            let touched = differing(&kept, &snapshot_cases(&self.tree)?);
             let mut surface_touched: BTreeSet<String> =
                 differing(&surface_kept, &surface.snapshot(&tree)?)
                     .iter()
@@ -11335,7 +11904,7 @@ impl<'a> Run<'a> {
         };
         // Named as the step left them; the cases directory is put back with the rest of the
         // step's change by `undo`, after the reset, on every path below that discards it.
-        let touched_named = cases_named(&cases, &touched);
+        let touched_named = cases_named(&self.tree, &touched);
         // A step that returned when the hour budget ended, failed (killed by it) or not, is
         // discarded whole like any failed step, recorded as a refusal, and the run stops on
         // the budget. One that reported keeps its step line, with its tokens and their
@@ -11398,7 +11967,42 @@ impl<'a> Run<'a> {
             Ok(report) => report,
             Err(error) => {
                 let _ = tell(out);
+                // An instruction file the base tracks that cannot be given: the step was not
+                // started, so nothing is charged; the run stops with the files named, in its
+                // output and its record, and the case stays open.
+                if let Some(refusal) =
+                    error.downcast_ref::<crate::harness::InstructionFilesRefused>()
+                {
+                    let moved = match undo() {
+                        Ok(moved) => moved,
+                        Err(undo) => {
+                            return Err(error.context(format!(
+                                "step {}: the step could not be given its instruction files, and its change could not be discarded: {undo:#}{note}",
+                                self.steps
+                            )));
+                        }
+                    };
+                    let why = format!("step {}: {refusal}{moved}{note}", self.steps);
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "{why}")?;
+                    return Ok(Judgement::Stop(Stop::StepRefused(why)));
+                }
+                // A session that ended without the line naming its action, its change put back
+                // whole, is handed to the executor, which records the try and tries again
+                // ([`NO_ACTION_TRIES`]); one whose change could not be put back is not.
+                let no_action = error
+                    .downcast_ref::<crate::harness::NoActionLine>()
+                    .is_some();
                 return Err(match undo() {
+                    Ok(moved) if no_action => {
+                        return Ok(Judgement::NoAction {
+                            error: error.context(format!(
+                                "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
+                                self.steps
+                            )),
+                            transcript: transcript.clone(),
+                        });
+                    }
                     Ok(moved) => {
                         let error = error.context(format!(
                             "step {}: the harness failed; everything the step changed was discarded{moved}{note}",
@@ -11733,7 +12337,7 @@ impl<'a> Run<'a> {
                 ask: true,
                 held: StepKept {
                     checkpoint,
-                    cases,
+                    tree: self.tree.clone(),
                     cases_kept: kept,
                     surface,
                     surface_kept,
@@ -11787,7 +12391,7 @@ impl<'a> Run<'a> {
             ask: false,
             held: StepKept {
                 checkpoint,
-                cases,
+                tree: self.tree.clone(),
                 cases_kept: kept,
                 surface,
                 surface_kept,
@@ -11932,6 +12536,7 @@ impl<'a> Run<'a> {
                             .unwrap_or(path)
                             .display()
                             .to_string(),
+                        failed: Vec::new(),
                     },
                 )?;
                 writeln!(out, "  evidence: {} -", record.kind)?;
@@ -11950,30 +12555,47 @@ impl<'a> Run<'a> {
             writeln!(out, "  effect: no file changed")?;
             return Ok((false, None));
         }
+        // The message is the harness's `commit` when it passes its check, else the fallback,
+        // said in the record before the step's effect; the trailer is takt's, from the case's
+        // story, never from the reply.
+        let plan = self.commit_plan_now();
+        let reply = self.harness.take_commit();
+        let story = self.case.story()?;
+        let title = match &self.unit {
+            Unit::Story(story) => story.title.clone(),
+            Unit::Intent(intent) => intent.lines().next().unwrap_or_default().to_owned(),
+        };
+        let message = crate::commit_style::message(
+            &plan,
+            &report.action,
+            &report.summary,
+            &title,
+            reply.as_ref(),
+            story.as_deref(),
+        );
         // A commit that fails (a hook of the repository's own refused it) leaves nothing
         // of the step behind either.
-        let head = match crate::git::commit_paths(
-            &self.tree,
-            &self.committer,
-            changed,
-            &format!("{}: {}", report.action, one_line(&report.summary)),
-        ) {
-            Ok(head) => head,
-            Err(error) => {
-                let moved = undo_step(&self.tree, &proposed.held.kept())
-                    .map(|undone| undone.aside.named())?;
-                self.record_proposed(events, proposed)?;
-                return Err(error.context(format!(
+        let head =
+            match crate::git::commit_paths(&self.tree, &self.committer, changed, &message.text) {
+                Ok(head) => head,
+                Err(error) => {
+                    let moved = undo_step(&self.tree, &proposed.held.kept())
+                        .map(|undone| undone.aside.named())?;
+                    self.record_proposed(events, proposed)?;
+                    return Err(error.context(format!(
                     "step {}: the commit of {}'s change failed; the change was discarded{moved}",
                     self.steps, report.action
                 )));
-            }
-        };
+                }
+            };
         // The step is on record before anything that can end the run, so the tokens it spent
         // are kept whatever follows: a case that declares no implementation artifact ends
         // the run here.
         self.record_proposed(events, proposed)?;
         self.case.set_revision("implementation", &head)?;
+        if let Some(reason) = message.fallback {
+            events.emit(self.steps, &Event::CommitFallback { reason })?;
+        }
         events.emit(
             self.steps,
             &Event::Effect {

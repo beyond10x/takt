@@ -17,7 +17,9 @@ use loom_sdk::session::metaharness::{
 };
 use loom_sdk::session::{CredentialSource, Endpoint, Kind};
 use takt::harness::{Harness, SessionHarness};
-use takt::run::{CREDENTIAL_SHAPES, ChangeScan, PROPOSAL_NOT_RECORDED, credential_shape};
+use takt::run::{CREDENTIAL_SHAPES, PROPOSAL_NOT_RECORDED, credential_shape};
+use takt::scan::Scan;
+use takt::scan::gates::ChangeScan;
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -103,7 +105,10 @@ fn work(dir: &Path) -> BTreeMap<PathBuf, Vec<u8>> {
         for entry in fs::read_dir(dir).expect("the listing") {
             let path = entry.expect("an entry").path();
             let relative = path.strip_prefix(root).expect("under").to_path_buf();
-            if relative == Path::new(".git") || relative.starts_with(".engineering") {
+            if relative == Path::new(".git")
+                || relative.starts_with(".engineering")
+                || relative.starts_with(".takt")
+            {
                 continue;
             }
             if path.is_dir() {
@@ -371,6 +376,27 @@ fn run_scanned(
     let validators = validators();
     let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
     run.scan_change_with(scan);
+    // story:a-run-keeps-every-decision-only-on-a-trial: the parity compares every decision the
+    // case holds, so the run keeps every one, as a `--records trial` run does.
+    run.keep_records(takt::case::Records::Trial);
+    let mut out = Vec::new();
+    run.continue_past_red_base();
+    let stop = run.run(&mut out);
+    (stop, String::from_utf8_lossy(&out).into_owned())
+}
+
+/// [`run`] under the scan adapter `none`, declared in a file beside `tree`.
+fn run_declared_none(
+    tree: &Path,
+    id: &str,
+    iterations: u64,
+    harness: &dyn Harness,
+) -> (anyhow::Result<Stop>, String) {
+    let validators = validators();
+    let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
+    run.scan_with(Scan::None {
+        declared_in: tree.with_file_name("run.toml"),
+    });
     let mut out = Vec::new();
     run.continue_past_red_base();
     let stop = run.run(&mut out);
@@ -411,7 +437,7 @@ fn scanner(tree: &Path, kind: &str) -> ChangeScan {
 
 /// The case directory of `id` in `tree`.
 fn case_dir(tree: &Path, id: &str) -> PathBuf {
-    tree.join(".engineering/cases").join(id)
+    tree.join(".takt/cases").join(id)
 }
 
 /// Every decision the case recorded, as its claim values and obligation, action and outcome
@@ -842,26 +868,31 @@ fn a_codex_step_without_a_token_report_charges_none() {
     }
 }
 
-/// H9 gates for Codex: a session whose codex is not the version metaharness's adapter is pinned
-/// to proposes nothing and says so, the tree as it was; on the pinned version the step's summary
-/// records the hermetic verdict, every row with its state.
+/// H9 is advisory for Codex (story:codex-off-pin-proposes): a session whose codex is not the
+/// version metaharness's adapter is pinned to proposes its change like a pinned one, and its
+/// step's summary records H9 as a `gap`; on the pinned version the summary records the hermetic
+/// verdict, every row with its state.
 #[test]
-fn a_codex_session_on_another_version_proposes_nothing() {
+fn a_codex_session_on_another_version_proposes_its_change() {
     let scratch = repository("version");
     let tree = scratch.tree();
-    let before = work(&tree);
     let script = Script {
         version: "0.143.0",
         ..Script::fixing()
     };
     let (other, _) = harness(Kind::Codex, &script);
     let (stop, text) = run(&tree, "parity-version", 2, &other);
-    let said = match &stop {
-        Err(error) => format!("{error:#}"),
-        Ok(stop) => format!("{stop:?}"),
-    };
-    assert!(said.contains("H9"), "{said}\n{text}");
-    assert_eq!(work(&tree), before, "the tree is unchanged\n{text}");
+    assert!(
+        stop.is_ok(),
+        "story:codex-off-pin-proposes: {stop:?}\n{text}"
+    );
+    let steps = harness_steps(&tree, "parity-version");
+    let summary = steps[0]["summary"].as_str().expect("a summary");
+    assert!(
+        summary.contains("H9 gap"),
+        "story:codex-off-pin-proposes: H9 gap in the summary: {summary}"
+    );
+    assert_eq!(steps[0]["version"], "0.143.0", "{:?}", steps[0]);
 
     let scratch = repository("verdict");
     let tree = scratch.tree();
@@ -1180,6 +1211,82 @@ fn a_clean_proposal_passes_the_scan_under_every_kind() {
     }
 }
 
+/// story:scan-and-forge-are-adapters, Acceptance 2: under a declared `scan: none`
+/// ([`Scan::None`]) a Codex or b10x-harness proposal is not refused as unscanned: a clean one is
+/// applied and the `opened` line records `"scan":"none"`. One holding the shape of a
+/// credential, in a file or in the summary, is still refused before the edit effect, the tree
+/// and `HEAD` as they were, the summary not recorded and the credential nowhere in what the run
+/// printed, its refusal or its record.
+#[test]
+fn under_a_declared_scan_none_a_credential_is_still_refused() {
+    for kind in [Kind::Codex, Kind::B10x] {
+        let name = format!("none-clean-{}", kind.as_str());
+        let scratch = repository(&name);
+        let tree = scratch.tree();
+        let script = Script {
+            summary: "made add add",
+            ..Script::fixing()
+        };
+        let (clean, _) = harness(kind, &script);
+        let id = "parity-none-clean";
+        let (stop, said) = run_declared_none(&tree, id, 2, &clean);
+        assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
+        assert_eq!(
+            fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
+            FIXED,
+            "{name}: applied unscanned\n{said}"
+        );
+        let opened: Vec<_> = events(&tree, id)
+            .into_iter()
+            .filter(|line| line["event"] == "opened")
+            .collect();
+        assert_eq!(opened[0]["scan"], "none", "{name}: {}", opened[0]);
+
+        for (login, text, secret) in planted() {
+            for place in ["file", "summary"] {
+                let name = format!("none-planted-{}-{login}-{place}", kind.as_str());
+                let scratch = repository(&name);
+                let tree = scratch.tree();
+                let before = work(&tree);
+                let head = git(&tree, &["rev-parse", "HEAD"]);
+                let summary = format!("copied the login: {}", text.replace('\n', " "));
+                let in_file = [("src/lib.rs", FIXED), ("config/login.txt", text.as_str())];
+                let script = match place {
+                    "file" => Script {
+                        writes: &in_file,
+                        ..Script::fixing()
+                    },
+                    _ => Script {
+                        summary: &summary,
+                        ..Script::fixing()
+                    },
+                };
+                let (harness, _) = harness(kind, &script);
+                let id = "parity-none-planted";
+                let (stop, said) = run_declared_none(&tree, id, 2, &harness);
+                let Ok(Stop::StepRefused(why)) = &stop else {
+                    panic!("{name}: refused, not {stop:?}\n{said}");
+                };
+                assert!(said.contains("before the edit effect"), "{name}: {why}");
+                assert!(why.contains("shape of a credential"), "{name}: {why}");
+                assert_eq!(work(&tree), before, "{name}: the tree is unchanged");
+                assert_eq!(git(&tree, &["rev-parse", "HEAD"]), head, "{name}: HEAD");
+                let record = fs::read_to_string(case_dir(&tree, id).join("events.jsonl"))
+                    .expect("events.jsonl");
+                for (what, text) in [("output", &said), ("refusal", why), ("record", &record)] {
+                    assert!(
+                        !text.contains(&secret),
+                        "{name}: the credential is in the run's {what}"
+                    );
+                }
+                let steps = harness_steps(&tree, id);
+                assert_eq!(steps.len(), 1, "{name}");
+                assert_eq!(steps[0]["summary"], PROPOSAL_NOT_RECORDED, "{name}");
+            }
+        }
+    }
+}
+
 /// F-A1, layer 2: the Codex session's home is not the user's. Its `HOME` and the four XDG base
 /// directories lie in the session's scratch root beside its copy, so `~` reaches nothing of the
 /// user's; `CODEX_HOME` is metaharness's, and `PATH` is metaharness's, built from the user's
@@ -1216,14 +1323,13 @@ fn the_codex_session_has_a_home_of_its_own() {
     assert!(!home.exists(), "removed with the scratch copy");
 }
 
-/// F-A2: a Codex session that H9 holds back (a codex other than the pinned one) proposes
-/// nothing, and the tokens it reported are still charged: its step line carries them, their
-/// components and the version that ran; the tree is as it was.
+/// F-A2: a Codex session on a codex other than the pinned one is not held back by H9
+/// (story:codex-off-pin-proposes), and the tokens it reported are charged: its step line
+/// carries them, their components and the version that ran.
 #[test]
-fn a_codex_session_held_back_by_h9_charges_its_tokens() {
+fn a_codex_session_off_the_pin_charges_its_tokens() {
     let scratch = repository("held");
     let tree = scratch.tree();
-    let before = work(&tree);
     let script = Script {
         version: "0.143.0",
         ..Script::fixing()
@@ -1231,14 +1337,12 @@ fn a_codex_session_held_back_by_h9_charges_its_tokens() {
     let (harness, _) = harness(Kind::Codex, &script);
     let id = "parity-held";
     let (stop, said) = run(&tree, id, 2, &harness);
-    let ended = match &stop {
-        Err(error) => format!("{error:#}"),
-        Ok(stop) => format!("{stop:?}"),
-    };
-    assert!(ended.contains("H9"), "{ended}\n{said}");
-    assert_eq!(work(&tree), before, "the tree is unchanged\n{said}");
+    assert!(
+        stop.is_ok(),
+        "story:codex-off-pin-proposes: {stop:?}\n{said}"
+    );
     let steps = harness_steps(&tree, id);
-    assert_eq!(steps.len(), 1, "the held step is recorded\n{said}");
+    assert!(!steps.is_empty(), "the step is recorded\n{said}");
     assert_eq!(steps[0]["tokens"].as_u64(), Some(120), "{:?}", steps[0]);
     assert_eq!(steps[0]["usage"]["input"], 60, "{:?}", steps[0]);
     assert_eq!(steps[0]["usage"]["cache_read"], 40, "{:?}", steps[0]);
@@ -1261,7 +1365,12 @@ fn codex_is_the_one_on_the_childs_path() {
         harness.credentials = CredentialSource::None;
         harness.timeout = std::time::Duration::from_secs(60);
         let (stop, said) = run(&tree, "parity-resolve", 2, &harness);
-        assert!(stop.is_err(), "the fake proposes nothing: {stop:?}\n{said}");
+        // H9 no longer holds an unpinned codex back (story:codex-off-pin-proposes): the fake
+        // names no action and the run stops at its iterations, or it fails.
+        assert!(
+            stop.is_err() || said.contains("the session named no action"),
+            "story:codex-off-pin-proposes: the fake proposes nothing: {stop:?}\n{said}"
+        );
         assert!(
             dir.join("ran-child-path").exists(),
             "the codex in HOME ran: {stop:?}\n{said}"

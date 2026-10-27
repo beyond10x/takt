@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.14.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.15.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and
 `self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS
 (aarch64). Its harnesses are Claude Code (`--harness claude`), Codex (`codex`) and b10x-harness
@@ -37,6 +37,7 @@ How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGE
 | 0.13.0 | takt runs as a `LoomAgent` with no wrapper: `--config` reads the `loom.agent/1` document at `/config/agent.yaml`, `--endpoint-token-env` takes the key from the environment, `--story` names the story, and the image ships `b10x-gates`, the OpenSSL headers and a toolchain the run cannot write, under `tini`; the protocols are engineering-protocols 0.10.0 built-ins: loom-sdk 0.43.0 with metaharness 0.19.0 and b10x-harness 0.20.0 |
 | 0.13.1 | 0.13.0 with `--endpoint-token-env` staging on macOS, where the system temporary directory sits under a link; 0.13.0 has no GitHub Release, its release run having failed on macOS |
 | 0.14.0 | a run whose tests are red stops instead of spending model calls: `RedBase` at a red base before the first model call, `RepeatedTestFailure` after two test runs in a row at new revisions fail the same tests; `--continue-past-red-base` goes on |
+| 0.15.0 | a run names the Claude Code binary it starts (`--harness-program`, recorded with its sha256 on `opened`) and stops `HarnessUnqualified` before the first session when metaharness does not qualify it; the command forge, the GitLab API transport, protocol settings in the run file and semantic step commits |
 
 | milestone | state |
 |---|---|

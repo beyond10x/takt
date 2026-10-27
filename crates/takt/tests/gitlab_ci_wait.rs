@@ -262,7 +262,7 @@ fn fixture(name: &str, pipelines: &[&str]) -> Fixture {
     let forge = Rc::new(Glab::new(
         "gitlab.example",
         "group/sub/repo",
-        None,
+        takt::scan::Scan::Gates { policy: None },
         Box::new(OnPath { path }),
     ));
     Fixture {

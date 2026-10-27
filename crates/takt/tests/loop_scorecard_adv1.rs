@@ -88,7 +88,7 @@ fn commit(tree: &Path, definitions: &str, message: &str) -> String {
     let path = tree.join(DEFINITIONS);
     fs::create_dir_all(path.parent().expect("a parent")).expect("the directory");
     fs::write(&path, definitions).expect("the definitions");
-    git(tree, &["add", "-A", "--", ".", ":!.engineering/cases"]);
+    git(tree, &["add", "-A", "--", ".", ":!.takt"]);
     git(tree, &["commit", "-q", "--allow-empty", "-m", message]);
     git(tree, &["rev-parse", "HEAD"])
 }
@@ -111,7 +111,7 @@ const OUTCOMES: [&str; 4] = ["accepted", "declined", "unreproducible", "abandone
 
 /// A `self.improvement` case `id` with its decisions; no run record.
 fn turn(tree: &Path, id: &str, decisions: &[At<'_>]) -> PathBuf {
-    let dir = tree.join(".engineering/cases").join(id);
+    let dir = tree.join(".takt/cases").join(id);
     fs::create_dir_all(dir.join("decisions")).expect("the case directory");
     fs::create_dir_all(dir.join("evidence")).expect("the evidence directory");
     fs::write(

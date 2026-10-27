@@ -7,6 +7,7 @@
 //! The design is `docs/design/takt.md`.
 
 pub mod case;
+pub mod commit_style;
 pub mod confinement;
 pub mod events;
 pub mod evidence;
@@ -24,6 +25,7 @@ pub mod replay;
 pub mod report;
 pub mod run;
 pub mod run_config;
+pub mod scan;
 pub mod scorecard;
 pub mod seatbelt;
 pub mod trace;

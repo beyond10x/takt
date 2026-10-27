@@ -9,10 +9,12 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, anyhow};
 use clap::{Parser, Subcommand};
 use takt::Frontier as _;
+use takt::forge::command::CommandForge;
 use takt::forge::gitlab::Glab;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness, Kind, SessionHarness};
+use takt::scan::Scan;
 use takt::validator::{
     ChangeRead, CiRead, DEFAULT_PROJECT, GateRun, PrMerged, PrOpen, TestsRun, Validator,
 };
@@ -46,10 +48,13 @@ enum Commands {
     Approve(ApproveArgs),
     /// List the built-in protocols.
     Protocols,
+    /// A built-in protocol's declared settings.
+    #[command(subcommand)]
+    Protocol(ProtocolCommands),
     /// The repository's scenarios: a story at a known seed commit, run from a fresh base.
     #[command(subcommand)]
     Scenario(ScenarioCommands),
-    /// Print, per run of a case under `.engineering/cases/`, its outcome, steps, tokens,
+    /// Print, per run of a case under `.takt/cases/`, its outcome, steps, tokens,
     /// refusals, `NoProgress`, errors and wall time, read from the case's `events.jsonl` and, for
     /// a scenario run's outcome, from the held-out check beside it; a case without a record is
     /// listed as `no record`. The binary a case's runs were made with is
@@ -115,7 +120,7 @@ enum Commands {
 
 #[derive(clap::Args)]
 struct ReplayArgs {
-    /// The case directory, `<repo>/.engineering/cases/<id>`; only read.
+    /// The case directory, `<repo>/.takt/cases/<id>`; only read.
     #[arg(long, value_name = "DIR")]
     case: PathBuf,
     /// The step to replay, as the case's record numbers it in its run: a judgement step, one
@@ -330,7 +335,7 @@ struct PromoteArgs {
     /// With --baseline-only and --revision: the installed binary's sha256, lower-case hex.
     /// `<root>/bin/takt` must name no revision and hash to it, and every run of the scorecard
     /// must state the same digest in a `binary.txt` beside its record
-    /// (`.engineering/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
+    /// (`.takt/cases/<case>/binary.txt`, first line `<path>\t<sha256>`, every further
     /// line the operator's note, copied into the record); otherwise refused naming the binary's
     /// digest or the run, nothing written. Refused when the binary's `--version` names a
     /// revision, and without --baseline-only or --revision.
@@ -489,6 +494,44 @@ const REPORT_EXIT_CODES: &str = "Exit codes:
   2  the arguments do not parse, or neither --case nor --trace is given";
 
 #[derive(Subcommand)]
+enum ProtocolCommands {
+    /// Print each case input a built-in protocol declares: its values and description, takt's
+    /// built-in default, and the value the run file `--config` names sets for it, with that
+    /// file's path and line (`unset` when it sets none). `--format json` prints the same as
+    /// data. A protocol takt does not know is refused, naming the ones it knows.
+    #[command(after_help = PROTOCOL_SHOW_EXIT_CODES)]
+    Show(ProtocolShowArgs),
+}
+
+/// What `takt protocol show --help` says about the exit codes.
+const PROTOCOL_SHOW_EXIT_CODES: &str = "Exit codes:
+  0  printed
+  1  refused: the protocol is not one takt knows (the reason names the ones it does), or the run file does not read; the reason on stderr
+  2  the arguments do not parse";
+
+/// How `takt protocol show` prints.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ShowFormat {
+    /// Lines, one block per input.
+    Text,
+    /// One JSON document.
+    Json,
+}
+
+#[derive(clap::Args)]
+struct ProtocolShowArgs {
+    /// The built-in protocol, `<name>/<major>` (`software.change/1`), as `takt protocols` lists it.
+    protocol: String,
+    /// A run file (.toml, .yaml or .yml), the one `takt run --config` reads: the values its
+    /// `protocols` section sets are listed with the file's path and line.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
+    /// How to print.
+    #[arg(long, value_enum, default_value = "text")]
+    format: ShowFormat,
+}
+
+#[derive(Subcommand)]
 enum ScenarioCommands {
     /// Run a scenario from a fresh base: on a clean tree, fetch the remote's `trial/*` branches
     /// through the bot route, cut `trial/<n>` from the scenario's seed commit (`<n>` one past
@@ -524,8 +567,46 @@ struct ScenarioRunArgs {
     /// The revision `.engineering/scenarios.conf` is read from, without a checkout.
     #[arg(long, default_value = "main")]
     declared_on: String,
+    /// A file of the run's configuration, as `takt run --config` reads it: the same TOML or
+    /// YAML file, a `loom.agent/1` document's `takt` member included, the same keys, a flag
+    /// given on the command line winning over the file and the file over the flag's default.
+    /// Its `story` is refused, since the scenario names the story, and any key `takt run
+    /// --config` refuses is refused too, before anything is fetched, cut or opened, naming the
+    /// file.
+    #[arg(long, value_name = "FILE")]
+    config: Option<PathBuf>,
     #[command(flatten)]
     looping: LoopArgs,
+}
+
+impl ScenarioRunArgs {
+    /// Fills each loop flag `matches` did not take from the command line with `--config`'s
+    /// value ([`LoopArgs::configured`]); a file that names a `story`, or declares `scan: none`,
+    /// is refused.
+    fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
+        self.looping.renamed(matches);
+        let Some(path) = &self.config else {
+            return self
+                .looping
+                .configured(takt::run_config::RunConfig::default(), matches);
+        };
+        let file = takt::run_config::RunConfig::read(path)?;
+        if file.story.is_some() {
+            return Err(anyhow!(
+                "the run configuration file {} is refused for a scenario run: its `story` is the scenario's to name (`story` in its section of {SCENARIOS}); nothing was changed",
+                path.display()
+            ));
+        }
+        if file.scan == Some(takt::scan::ScanName::None) {
+            return Err(anyhow!(
+                "the run configuration file {} is refused for a scenario run: it declares `scan: none`, and a scenario run scans what a session proposes with the scan adapter `gates` only; leave `scan: none` out and set {}; nothing was changed",
+                path.display(),
+                takt::scan::gates::POLICY_VAR
+            ));
+        }
+        self.looping.configured(file, matches)?;
+        Ok(())
+    }
 }
 
 #[derive(clap::Args)]
@@ -565,14 +646,20 @@ struct RunArgs {
     /// --intent or --case.
     #[arg(long, value_name = "ID", conflicts_with_all = ["intent", "case"])]
     story: Option<String>,
+    /// The run configuration file `story` came from, when --story did not name it.
+    #[arg(skip)]
+    story_from: Option<PathBuf>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
-    /// the planning store gives opens on `story.delivery/1`, an --intent on `software.change/1`,
+    /// the planning store gives opens on its tag `protocol:<name>/<major>`, else the run file's
+    /// `protocol`, else `story.delivery/1`, an --intent on `software.change/1`,
     /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
     /// another is refused before the run, nothing changed.
     #[arg(long)]
     protocol: Option<String>,
-    /// A case input, `name=value`; repeatable. One the protocol a case opens on does not declare
-    /// is refused before the case is opened. Given for a resumed case, any input is refused
+    /// A case input, `name=value`; repeatable. It wins over a story tag `input:<name>=<value>`,
+    /// which wins over the run file's `protocols` section, which wins over takt's built-in
+    /// default; each value is recorded with its source in `case.yaml`. One the protocol a case
+    /// opens on does not declare is refused before the case is opened. Given for a resumed case, any input is refused
     /// before the case is resumed: the case keeps the inputs it was opened with. A
     /// `loop.improvement/1` case requires `loop_baseline=<full commit id>`, the promoted revision
     /// its baseline is, a commit of the repository: it opens the case's baseline and is no case
@@ -610,57 +697,169 @@ struct RunArgs {
     #[arg(long)]
     install_root: Option<PathBuf>,
     /// A file of the run's configuration, TOML (`.toml`) or YAML (`.yaml`, `.yml`):
-    /// `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path read beside
-    /// the file), `forge`, `test_cmd` and `continue_past_red_base` (a boolean), each the flag's
-    /// of that name. A YAML `loom.agent/1`
-    /// document, as Loom mounts it at `/config/agent.yaml`, gives them in its `takt` member, and
-    /// nothing without one. A flag given on the command line wins over the file, the file over
-    /// the flag's default. The file's `endpoint_file` is read only when the harness is `harness`.
-    /// Any other key is refused before the case opens, naming the file and the line, never a
-    /// value written there. A container takes its run from a mounted one.
+    /// `story`, `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path
+    /// read beside the file), `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` (a
+    /// relative path read beside the file), `continue_past_red_base` (a boolean) and `records`
+    /// (`default` or `trial`), each the flag's of that name, and `scan`, which no flag sets: the
+    /// scan adapter what a session
+    /// proposes passes, `gates` (the default: `b10x-gates scan-text` under the policy
+    /// `B10X_GATES_POLICY` names) or `none` (nothing is scanned, each proposal checked only for
+    /// the shape of a credential, said in one line before the first step; refused while
+    /// `B10X_GATES_POLICY` is set). Under `gates` with no policy, `--harness codex` and
+    /// `--harness harness`, whose sessions may read outside their copy, are refused before the
+    /// case opens. A YAML `loom.agent/1` document, as Loom mounts it at `/config/agent.yaml`,
+    /// gives them in its `takt` member, and nothing without one; its `runtime.state_dir` is the
+    /// `state_dir` when `takt` names none. A flag given on the command
+    /// line wins over the file, the file over the flag's default: the file's `story` is taken
+    /// only when neither --story, --intent nor --case is given, and its `endpoint_token_env`
+    /// only when no credential flag is. The file's `endpoint_file` and `endpoint_token_env` are
+    /// read only when the harness is `harness`. Any other key, or a `scan` that is neither
+    /// `gates` nor `none`, is refused before the case opens, naming the file and the line, never
+    /// a value written there. A container takes its run from a mounted one. `takt scenario run
+    /// --config` reads the same file, and refuses one that declares `scan: none`. `llm`, the
+    /// model routes, an `llm.routes/1` document or `{path: <file>}` naming one beside the file,
+    /// which no flag gives; llm validates it, and a refused section opens no case. With `--harness
+    /// harness`, `model` names a route or alias of the section, and that route is the endpoint:
+    /// no `--endpoint-*` flag, `endpoint_file` or `endpoint_token_env` may sit beside it.
+    /// `protocol`, the protocol a story from the planning store opens on, and `protocols`, a mapping
+    /// of a protocol to the values of its declared case inputs; an unknown protocol, input or
+    /// value is refused naming the file and the line.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
+    /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
+    #[arg(skip)]
+    declared_scan: Option<takt::scan::ScanName>,
+    /// The protocol and the inputs `--config`'s file sets, read by [`RunArgs::configured`]; no flag.
+    #[arg(skip)]
+    protocol_settings: takt::run_config::ProtocolSettings,
+    /// The forge settings `--config`'s file sets, read by [`RunArgs::configured`]; no flag.
+    #[arg(skip)]
+    forge_settings: takt::run_config::ForgeSettings,
     #[command(flatten)]
     looping: LoopArgs,
 }
 
+/// Whether the flag `id` was not given on the command line `matches` parsed.
+fn unset(matches: &clap::ArgMatches, id: &str) -> bool {
+    !matches!(
+        matches.value_source(id),
+        Some(clap::parser::ValueSource::CommandLine)
+    )
+}
+
 impl RunArgs {
-    /// Fills each loop flag `matches` did not take from the command line with `--config`'s
-    /// value, when the file sets it; without `--config`, nothing changes.
+    /// Fills each flag `matches` did not take from the command line with `--config`'s value,
+    /// when the file sets it; without `--config`, nothing changes. The file's `story` names
+    /// the work only when no flag does (--story, --intent, --case), and is kept with the file
+    /// it came from, so a refusal names that file; a run that opens no story (a
+    /// `self.improvement/1` turn) leaves it out.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
+        self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return Ok(());
+            return self
+                .looping
+                .configured(takt::run_config::RunConfig::default(), matches);
         };
-        let file = takt::run_config::RunConfig::read(path)?;
-        let unset = |id: &str| {
-            !matches!(
-                matches.value_source(id),
-                Some(clap::parser::ValueSource::CommandLine)
-            )
-        };
-        let looping = &mut self.looping;
+        let mut file = takt::run_config::RunConfig::read(path)?;
+        if let Some(story) = file.story.take()
+            && ["story", "intent", "case"]
+                .into_iter()
+                .all(|id| unset(matches, id))
+        {
+            self.story = Some(story);
+            self.story_from = Some(path.clone());
+        }
+        self.declared_scan = file.scan;
+        self.protocol_settings = file.protocol_settings.clone();
+        self.forge_settings = file.forge_settings();
+        self.looping.configured(file, matches)?;
+        Ok(())
+    }
+}
+
+impl LoopArgs {
+    /// Fills each loop flag `matches` did not take from the command line with `file`'s value,
+    /// when it sets it, for `takt run` and `takt scenario run` alike.
+    fn configured(
+        &mut self,
+        mut file: takt::run_config::RunConfig,
+        matches: &clap::ArgMatches,
+    ) -> Result<()> {
+        if let Some(path) = &self.llm_config {
+            file.set_llm_file(path)?;
+        }
+        let unset = |id: &str| unset(matches, id);
+        let llm = self.llm_section(&file, &unset)?;
+        let looping = self;
+        looping.llm = llm;
+        looping.llm_digest = file.llm_digest;
         if unset("iterations") && file.iterations.is_some() {
             looping.iterations = file.iterations;
         }
         if unset("hours") && file.hours.is_some() {
             looping.hours = file.hours;
         }
-        if unset("model") && file.model.is_some() {
+        if unset("model") && unset("endpoint_model") && file.model.is_some() {
             looping.model = file.model;
         }
         if unset("forge") && file.forge.is_some() {
             looping.forge = file.forge;
         }
-        if let Some(harness) = file.harness.filter(|_| unset("harness")) {
-            looping.harness = harness;
+        if let Some(setting) = &file.harness
+            && unset("harness")
+        {
+            looping.harness = setting.harness().to_owned();
         }
+        let base = match &file.harness {
+            Some(takt::run_config::HarnessSetting::Session(request)) => Some(request),
+            _ => None,
+        };
+        looping.session = takt::run_config::SessionRequest::with_flags(
+            base,
+            &looping.harness,
+            looping.session_flags(),
+        )?;
         // The file's endpoint is b10x-harness's: under another harness, which a flag may have
         // chosen over the file's, it is left out rather than refused as a flag nobody gave.
         if unset("endpoint_file") && file.endpoint_file.is_some() && looping.harness == "harness" {
             looping.endpoint.endpoint_file = file.endpoint_file;
         }
+        // The file's variable is a credential as --endpoint-token-env is: a credential the
+        // command line names wins over it, by a flag (the variable's, a token file's, a
+        // secret's) or by the `[credential]` of an --endpoint-file given there (one that does
+        // not read counts as naming one: its own refusal follows); under another harness it is
+        // left out as the endpoint file is. It is staged as the flag's is
+        // ([`EndpointArgs::take_variable`]), after this.
+        let line_credential = !unset("endpoint_file")
+            && looping
+                .endpoint
+                .endpoint_file
+                .as_deref()
+                .is_some_and(|path| {
+                    takt::harness::EndpointFields::read(path).map_or(true, |fields| {
+                        fields.token_file.is_some()
+                            || fields.secret.is_some()
+                            || fields.env.is_some()
+                    })
+                });
+        if file.endpoint_token_env.is_some()
+            && looping.harness == "harness"
+            && !line_credential
+            && [
+                "endpoint_token_env",
+                "endpoint_token_file",
+                "endpoint_secret",
+            ]
+            .into_iter()
+            .all(unset)
+        {
+            looping.endpoint.endpoint_token_env = file.endpoint_token_env;
+        }
         if let Some(test_cmd) = file.test_cmd.filter(|_| unset("test_cmd")) {
             looping.test_cmd = test_cmd;
+        }
+        if unset("state_dir") && file.state_dir.is_some() {
+            looping.state_dir = file.state_dir;
         }
         if let Some(go_on) = file
             .continue_past_red_base
@@ -668,18 +867,142 @@ impl RunArgs {
         {
             looping.continue_past_red_base = go_on;
         }
+        looping.records_of_file = file.records.filter(|_| unset("records"));
+        looping.commit = looping.commit_settings(file.commit.as_ref())?;
         Ok(())
+    }
+
+    /// The commit settings of the run: the defaults, the configuration's `commit` section over
+    /// them and the flags over that, refused naming the member when one cannot be used. None
+    /// when neither gives one, so the library's default stands.
+    fn commit_settings(
+        &self,
+        file: Option<&takt::commit_style::Section>,
+    ) -> Result<Option<takt::commit_style::Settings>> {
+        let mut flags = takt::commit_style::Section::default();
+        if let Some(style) = &self.commit_style {
+            flags.style = takt::commit_style::Style::named(style);
+        }
+        flags.trailer.clone_from(&self.commit_trailer);
+        if !self.commit_types.is_empty() {
+            let mut types = std::collections::BTreeMap::new();
+            for pair in &self.commit_types {
+                let (action, kind) = pair
+                    .split_once('=')
+                    .ok_or_else(|| anyhow!("--commit-types takes ACTION=TYPE pairs"))?;
+                types.insert(action.to_owned(), kind.to_owned());
+            }
+            flags.types = Some(types);
+        }
+        if file.is_none() && flags == takt::commit_style::Section::default() {
+            return Ok(None);
+        }
+        let mut settings = takt::commit_style::Settings::default();
+        if let Some(section) = file {
+            settings.apply(section);
+        }
+        settings.apply(&flags);
+        settings
+            .check()
+            .map_err(|why| anyhow!("{why}; nothing was started"))?;
+        Ok(Some(settings))
+    }
+
+    /// The session settings the command line's flags give, under their metaharness names.
+    fn session_flags(&self) -> takt::run_config::SessionFlags<'_> {
+        takt::run_config::SessionFlags {
+            effort: self.effort.as_deref(),
+            max_turns: self.max_turns,
+            max_budget_usd: self.max_budget_usd.as_deref(),
+            strict_version: self.strict_version,
+            context: &self.context,
+        }
+    }
+
+    /// The `llm` section `file` holds, when the run may use it, refused before any case opens
+    /// otherwise: under `--harness claude` or `codex`, which takt points at no endpoint (a `none`
+    /// run takes no endpoint, and the section is left unused); beside another endpoint source, a
+    /// flag, `--endpoint-file` or `--endpoint-token-env` alike, or the file's own `endpoint_file`
+    /// or `endpoint_token_env`, naming both; and under `--harness harness` with no `model` to name
+    /// its route. Its route is resolved later, by [`LoopArgs::take_variable`].
+    fn llm_section(
+        &self,
+        file: &takt::run_config::RunConfig,
+        unset: &dyn Fn(&str) -> bool,
+    ) -> Result<Option<takt::run_config::LlmRoutes>> {
+        let Some(llm) = &file.llm_routes else {
+            return Ok(None);
+        };
+        let harness = if unset("harness") {
+            file.harness.as_ref().map_or(
+                self.harness.as_str(),
+                takt::run_config::HarnessSetting::harness,
+            )
+        } else {
+            self.harness.as_str()
+        };
+        if harness == "claude" || harness == "codex" {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section is refused with --harness {harness}: takt points an endpoint at b10x-harness only, so give --harness harness, or leave the `llm` section out; nothing was started"
+            ));
+        }
+        let mut sources: Vec<&str> = self.endpoint.all_given();
+        if file.endpoint_file.is_some() {
+            sources.push("the run file's `endpoint_file`");
+        }
+        if file.endpoint_token_env.is_some() {
+            sources.push("the run file's `endpoint_token_env`");
+        }
+        if !sources.is_empty() {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section and {} both give the run's endpoint: an `llm` section routes `--model` through llm, and an endpoint source gives the endpoint directly; give one of them, not both; nothing was started",
+                sources.join(" and ")
+            ));
+        }
+        let model_given = self.model.is_some() || file.model.is_some();
+        if harness == "harness" && !model_given {
+            return Err(anyhow!(
+                "the run configuration file's `llm` section names its route by `model`, and neither --model nor the file's `model` gives one; nothing was started"
+            ));
+        }
+        Ok(Some(llm.clone()))
+    }
+
+    /// The records profile given: `--records`, else, for a new case only, the configuration
+    /// file's `records`; `None` when neither gives one. A resumed case keeps the profile it was
+    /// opened under (story:a-run-keeps-every-decision-only-on-a-trial). The value was checked by
+    /// the flag's parser or when the file was read.
+    fn records_profile(&self, resumed: bool) -> Option<takt::case::Records> {
+        let named = self.records.as_deref().or(if resumed {
+            None
+        } else {
+            self.records_of_file.as_deref()
+        });
+        named.and_then(takt::case::Records::named)
     }
 }
 
-/// The command line parsed, a `takt run --config` file applied under it.
+/// The command line parsed, a `takt run --config` or `takt scenario run --config` file applied
+/// under it.
 fn parsed() -> Result<Cli> {
     use clap::{CommandFactory as _, FromArgMatches as _};
     let matches = Cli::command().get_matches();
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    if let (Commands::Run(args), Some(run)) = (&mut cli.command, matches.subcommand_matches("run"))
-    {
-        args.configured(run)?;
+    match &mut cli.command {
+        Commands::Run(args) => {
+            if let Some(run) = matches.subcommand_matches("run") {
+                args.configured(run)?;
+            }
+        }
+        Commands::Scenario(ScenarioCommands::Run(args)) => {
+            if let Some(run) = matches
+                .subcommand_matches("scenario")
+                .and_then(|scenario| scenario.subcommand_matches("run"))
+            {
+                args.configured(run)?;
+            }
+        }
+        _ => {}
     }
     Ok(cli)
 }
@@ -710,9 +1033,46 @@ struct LoopArgs {
     /// `harness` (b10x-harness), or `none` (only validators run).
     #[arg(long, default_value = "claude")]
     harness: String,
-    /// The harness's model, when it takes one.
-    #[arg(long)]
+    /// The harness program the run's sessions start, by absolute path, in place of the one found
+    /// on `PATH`; the run records its path, sha256 and `--version` on `opened`, the one found on
+    /// `PATH` too when this is not given. A flag only. A relative path, one that names no
+    /// executable file, or one given with `--harness none` is refused before the case opens.
+    #[arg(long, value_name = "PATH")]
+    harness_program: Option<PathBuf>,
+    /// The harness's model, when it takes one. Under `--harness harness` it names a route of the
+    /// `llm` section, when the run has one.
+    #[arg(long, conflicts_with = "endpoint_model")]
     model: Option<String>,
+    /// The old name of `--model`, kept for one minor release: the same flag, with one line on
+    /// standard error naming `--model`.
+    #[arg(long, value_name = "MODEL", conflicts_with = "model")]
+    endpoint_model: Option<String>,
+    /// The `llm.routes/1` document, a `.toml`, `.yaml` or `.yml` file, as llm's `--config` names
+    /// it. It replaces the run file's `llm` section, with its routes, its digest and its refusals;
+    /// `--model` names one of its routes under `--harness harness`, and the `opened` line records
+    /// its digest as `llm_digest`. Given with or without `--config`.
+    #[arg(long, value_name = "FILE")]
+    llm_config: Option<PathBuf>,
+    /// The reasoning effort the session asks of the model, in the vendor's own vocabulary, as
+    /// `metaharness run --effort` takes it. Refused until takt's launch carries it.
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
+    /// A ceiling on the session's turns, as `metaharness run --max-turns` takes it. Refused under
+    /// `--harness codex`, whose launch takes no turn ceiling.
+    #[arg(long, value_name = "N")]
+    max_turns: Option<u32>,
+    /// A ceiling in US dollars on what the session may spend, as `metaharness run
+    /// --max-budget-usd` takes it. Refused until takt's launch carries it.
+    #[arg(long, value_name = "USD")]
+    max_budget_usd: Option<String>,
+    /// Refuse before the run when the installed vendor version is outside metaharness's pin, as
+    /// `metaharness run --strict-version` takes it. Refused until takt's launch carries it.
+    #[arg(long)]
+    strict_version: bool,
+    /// A file whose text the prompt carries, as `metaharness run --context` takes it, repeatable.
+    /// Refused until takt's launch carries it.
+    #[arg(long, value_name = "FILE")]
+    context: Vec<PathBuf>,
     #[command(flatten)]
     endpoint: EndpointArgs,
     /// The approval gate the harness may request to end the run. Not given, the case's
@@ -734,8 +1094,13 @@ struct LoopArgs {
     /// opens its pull request and merges it, `gh` reads the pull request's state and checks),
     /// `gitlab` (a repository on a GitLab host: git pushes the case's branch over HTTPS under
     /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
-    /// pipeline and merges it; refused before any case opens unless `glab auth status
-    /// --hostname <host>` exits 0) or `none` (no pull request is opened; when `pr.open`,
+    /// pipeline and merges it; what it publishes passes the run's scan adapter first, under
+    /// `gates` `b10x-gates scan-text`, under a declared `scan: none` no scan; refused before
+    /// any case opens unless `glab auth status --hostname <host>` exits 0; the run file's `transport: api` with a `credential` calls the GitLab API instead, `glab` never asked), `command` (the exact
+    /// argument lists the run file's `forge_commands` section names for `open`, `read`, `checks` and
+    /// `merge`, run without a shell; the push stays takt's scanned push; never a default, and
+    /// refused for a scenario run) or `none` (no pull
+    /// request is opened; when `pr.open`,
     /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
     /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
     /// `bot` when the repository's `origin` is a repository on github.com, the host the bot
@@ -774,19 +1139,81 @@ struct LoopArgs {
     /// run does. The first line the run prints and its `opened` event name the adapter.
     #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
     confinement: String,
+    /// The state directory the run keeps its host records in, in place of
+    /// `$XDG_STATE_HOME/takt` (`~/.local/state/takt` without it): each harness step's
+    /// transcript under `<DIR>/transcripts`, where the step's line names it relative to that
+    /// directory (`takt replay --transcripts <DIR>/transcripts` reads it there), and what a
+    /// discarded step sets aside under `<DIR>/set-aside`. A relative path is read against
+    /// the current directory. For a container whose home is not kept, a directory on a volume
+    /// that is.
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<PathBuf>,
     /// Go on past a red base: the case's first `tests.run` failing before any step changed the
     /// tree does not stop the run (`RedBase`), nor does its check again on a resume, for a base
     /// whose tests fail on purpose.
     #[arg(long)]
     continue_past_red_base: bool,
+    /// The digest of the `llm.routes/1` document `--config` gave, recorded on the run's `opened`
+    /// line; set from the file, never from a flag.
+    #[arg(skip)]
+    llm_digest: Option<String>,
+    /// The `llm.routes/1` document `--config` gave, parsed by llm; set from the file, never from a
+    /// flag. Given with `--harness harness`, `--model` names one of its routes.
+    #[arg(skip)]
+    llm: Option<takt::run_config::LlmRoutes>,
+    /// The route `--model` names in `llm`, resolved by llm before any case opens
+    /// ([`LoopArgs::take_variable`]): the endpoint the session is pointed at and the key it takes.
+    #[arg(skip)]
+    route: Option<takt::harness::RouteEndpoint>,
+    /// The records profile the case keeps its decisions under: `default` keeps the latest
+    /// `decisions/NNNN.json` alone and goes on numbering from it, `trial` keeps every one. A
+    /// scenario run and an improvement case (`self.improvement/1`, `loop.improvement/1`) keep
+    /// every one whatever this says. Not given, a new case runs under `default` (or the file's
+    /// `records`), and a resumed case under the profile it was opened under. The `opened` line
+    /// names the profile the run keeps.
+    #[arg(long, value_name = "default|trial", value_parser = ["default", "trial"])]
+    records: Option<String>,
+    /// The configuration file's `records`, kept apart from the flag: it counts as given only for
+    /// a new case.
+    #[arg(skip)]
+    records_of_file: Option<String>,
+    /// How a step commit's message is written: `semantic` (the default: the harness's reply
+    /// carries a `commit` of `<type>: <imperative subject>` and a body of 3 or 4 lines),
+    /// `repository` (the harness writes it as the repository's instruction files require) or
+    /// `action` (`<action>: <summary>`). When a line of an instruction file at the case's base
+    /// matches `(?i)commit (message|style|convention)`, `repository` is the style in effect
+    /// whatever this says; the `opened` line records the style in effect and that line's file and
+    /// number. Over the configuration's `commit.style`.
+    #[arg(long, value_name = "STYLE", value_parser = ["semantic", "repository", "action"])]
+    commit_style: Option<String>,
+    /// The key of the trailer takt writes after the message, from the case's story: `Refs` by
+    /// default, an empty one for none. A case opened on an intent gets none. Over the
+    /// configuration's `commit.trailer`.
+    #[arg(long, value_name = "KEY")]
+    commit_trailer: Option<String>,
+    /// The commit type of an action, `ACTION=TYPE`, repeatable or comma-separated: by default
+    /// `tests.write=test`, and `implementation.edit=fix` for a story tagged `bug`, else `feat`;
+    /// an action not named is `chore`. Over the configuration's `commit.types`.
+    #[arg(long, value_name = "ACTION=TYPE", value_delimiter = ',')]
+    commit_types: Vec<String>,
+    /// The commit settings the configuration file and the flags above give, checked before the
+    /// case opens; set by [`LoopArgs::configured`].
+    #[arg(skip)]
+    commit: Option<takt::commit_style::Settings>,
+    /// The session request the run file's `harness` mapping gives, with each flag's setting over
+    /// its key ([`takt::run_config::SessionRequest::with_flags`]): metaharness's settings the
+    /// session is started with.
+    #[arg(skip)]
+    session: Option<takt::run_config::SessionRequest>,
 }
 
-/// A harness that performs nothing. Asked while an approval is pending, it requests the gate
-/// action, changing no file, so the run stops `ApprovalRequired` and `takt approve` is the
-/// next step; offered an action that records a choice (`change.handover`), it takes it,
-/// changing no file, so the work committed by hand is handed over as it stands; asked for any
-/// other judgement step, it ends the run with an error, `stopped: error:`, because nothing
-/// performs that step.
+/// A harness that performs nothing. Offered an action the case holds a grant for, it takes that
+/// action, changing no file (story:harness-none-takes-a-granted-action). Asked while an approval
+/// is pending, it requests the gate action, changing no file, so the run stops
+/// `ApprovalRequired` and `takt approve` is the next step; offered an action that records a
+/// choice (`change.handover`), it takes it, changing no file, so the work committed by hand is
+/// handed over as it stands; asked for any other judgement step, it ends the run with an error,
+/// `stopped: error:`, because nothing performs that step.
 struct NoHarness;
 
 impl Harness for NoHarness {
@@ -795,6 +1222,13 @@ impl Harness for NoHarness {
     }
 
     fn step(&self, context: &takt::StepContext<'_>) -> Result<takt::StepReport> {
+        if let Some(granted) = context.granted.first() {
+            return Ok(takt::StepReport {
+                action: granted.clone(),
+                summary: "no harness: the action the case is granted is taken".to_owned(),
+                tokens: None,
+            });
+        }
         if let Some(gate) = context.approvals.first() {
             return Ok(takt::StepReport {
                 action: gate.clone(),
@@ -813,6 +1247,12 @@ impl Harness for NoHarness {
             "no harness: a judgement step among {} is left",
             context.offered.join(", ")
         ))
+    }
+
+    /// No session runs, so nothing it read is proposed: a run without a harness is never
+    /// refused for want of a scan.
+    fn reads_outside_its_copy(&self) -> bool {
+        false
     }
 }
 
@@ -840,11 +1280,11 @@ const EXIT_DISK_LOW: u8 = 8;
 /// What `takt run --help` says about the exit codes; each line opens with its code.
 const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
-  1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run
+  1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it
   2  the arguments do not parse
   3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint) or RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
-  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
+  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
   7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)
   8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
@@ -853,11 +1293,11 @@ const EXIT_CODES: &str = "Exit codes:
 /// nothing ready`, which only `takt run` prints; a scenario whose story is not ready is exit 1.
 const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
-  1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run
+  1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it
   2  the arguments do not parse
   3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint) or RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
-  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed); the case stays open
+  5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
   7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)
   8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
@@ -872,10 +1312,14 @@ fn main() -> ExitCode {
     };
     // The endpoint's credential variable leaves takt's environment here, on the one thread
     // takt has, before it starts any process.
-    match &mut cli.command {
+    let taken = match &mut cli.command {
         Commands::Run(args) => args.looping.take_variable(false),
         Commands::Scenario(ScenarioCommands::Run(args)) => args.looping.take_variable(false),
-        _ => {}
+        _ => Ok(()),
+    };
+    if let Err(error) = taken {
+        eprintln!("takt: {error:#}");
+        return ExitCode::from(EXIT_REFUSED);
     }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
@@ -898,12 +1342,29 @@ fn main() -> ExitCode {
 /// | 2 | the arguments do not parse (clap) |
 /// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `RedBase`, `RepeatedTestFailure` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
-/// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed |
+/// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed; a judgement step whose session names no action only after `NO_ACTION_TRIES` tries, each a step |
 /// | 6 | `Waiting`: the run waited on the forge until its budget ended, or waits on something local and stopped at once; the next run resumes the case |
 /// | 7 | `Unperformable`: no step can move the case; a claim left is decided only by an action the run has no performer for |
 /// | 8 | `DiskLow`: before a step, a file system it builds on had less free than `--min-free-gib`; a runner discards the trial rather than resume it |
 fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
     match cli.command {
+        Commands::Protocol(ProtocolCommands::Show(args)) => {
+            let ProtocolShowArgs {
+                protocol,
+                config,
+                format,
+            } = args;
+            let file = match &config {
+                Some(path) => takt::run_config::RunConfig::read(path)?.protocol_settings,
+                None => takt::run_config::ProtocolSettings::default(),
+            };
+            let listing = takt::protocol::list_settings(&protocol, &file)?;
+            match format {
+                ShowFormat::Text => write!(out, "{}", listing.text())?,
+                ShowFormat::Json => writeln!(out, "{}", listing.json_text())?,
+            }
+            Ok(EXIT_DONE)
+        }
         Commands::Protocols => {
             for (name, major) in b10x_canon_engineering_list() {
                 writeln!(out, "{name}/{major}")?;
@@ -1095,21 +1556,30 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 intent,
                 case,
                 story,
+                story_from,
                 protocol,
                 inputs,
                 case_id,
                 scenarios,
                 install_root,
-                config: _,
+                config,
+                declared_scan,
+                protocol_settings,
+                forge_settings,
                 mut looping,
             } = *args;
             looping.check()?;
+            // The run's scan adapter, `gates` unless the configuration file declares `none`:
+            // `none` with a gates policy set too is refused before anything is read or opened.
+            let scan = Scan::of_run(declared_scan.zip(config.as_deref()))?;
             let repo = repo
                 .canonicalize()
                 .with_context(|| format!("the repository {}", repo.display()))?;
             if let Some(code) = looping.confine(&repo)? {
                 return Ok(code);
             }
+            looping.check_set_aside(&repo)?;
+            looping.check_state_dir(&repo)?;
             let inputs = inputs
                 .iter()
                 .map(|pair| {
@@ -1126,15 +1596,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 .as_deref()
                 .map(LoadedProtocol::resolve)
                 .transpose()?;
-            let opening = match (&protocol, &intent) {
-                (Some(protocol), _) => protocol.clone(),
-                (None, Some(_)) => SOFTWARE_CHANGE.to_owned(),
-                (None, None) => STORY_DELIVERY.to_owned(),
-            };
-            let opens_on = match &given {
-                Some(given) => given.clone(),
-                None => LoadedProtocol::builtin(&opening)?,
-            };
+            // `--protocol`, else the run file's `protocol` for a story of the store, else the
+            // default for the unit. A story's own `protocol:` tag is read once the story is known.
+            let (opening, _, opens_on) =
+                takt::protocol::choose_protocol(&takt::protocol::SettingsRequest {
+                    file: &protocol_settings,
+                    flag_protocol: protocol.as_deref(),
+                    flag_inputs: &inputs,
+                    tags: &[],
+                    default_protocol: if intent.is_some() {
+                        SOFTWARE_CHANGE
+                    } else {
+                        STORY_DELIVERY
+                    },
+                    file_protocol_applies: intent.is_none() && case.is_none(),
+                })?;
             // The case this run resumes, found before anything is resumed: resuming checks the
             // tree out onto the case's branch and records its head, so every refusal of what was
             // given for it comes first. A resumed case keeps the protocol and the inputs it was
@@ -1142,6 +1618,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // A turn opens a case whether or not an intent is given: with none, its finding's
             // title is the intent, and no case of the planning store is resumed for it.
             let opens_turn = case.is_none() && opens_on.id == takt::case::TURN_PROTOCOL;
+            // A turn opens no story: the configuration file's `story` is left out for it, where
+            // --story is refused.
+            let story = story.filter(|_| !(opens_turn && story_from.is_some()));
+            // What named the story, for its refusals.
+            let named_by = |story: &str| match &story_from {
+                Some(file) => format!("story {story} from {}", file.display()),
+                None => format!("--story {story}"),
+            };
             if let Some(story) = &story
                 && opens_turn
             {
@@ -1178,7 +1662,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 }
                 takt::case::check_id(&resuming.id)?;
                 if let Some(why) = takt::case::turn_judge_refusal(
-                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &running_binary()?,
                 )? {
                     return Err(anyhow!(why));
@@ -1201,14 +1685,24 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 };
             // The forge, read before the turn, whose mainline it reads: the forge's `main`, or the
             // local `main` with none.
-            let forge = forge_of(&repo, looping.forge.as_deref())?;
+            let forge = forge_with(
+                &repo,
+                looping.forge.as_deref(),
+                &scan,
+                &forge_settings,
+                &resuming
+                    .as_ref()
+                    .map_or(&opens_on, |resuming| &resuming.protocol)
+                    .actions,
+                looping.state_dir.as_deref(),
+            )?;
             // A resumed turn reads the mainline through the forge it recorded when it opened,
             // as `takt approve` does: a run through another is refused before anything is
             // written.
             if let Some(resuming) = &resuming {
                 let run_forge = forge.forge.as_ref().map_or("none", |forge| forge.name());
                 if let Some(why) = takt::case::turn_forge_refusal(
-                    &repo.join(takt::case::CASES_DIR).join(&resuming.id),
+                    &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &resuming.id,
                     run_forge,
                 )? {
@@ -1301,41 +1795,43 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 None
             };
             let intent = intent.or_else(|| turn.as_ref().map(|turn| turn.title.clone()));
-            // A case keeps only the inputs its protocol declares: one it does not declare would
-            // be dropped without a word, so a case to be opened refuses it before anything is.
-            if case.is_none()
-                && resuming.is_none()
-                && let Some((name, _)) = inputs
-                    .iter()
-                    .find(|(name, _)| !opens_on.inputs.iter().any(|(declared, _)| declared == name))
-            {
-                let declared: Vec<&str> = opens_on.inputs.iter().map(|(d, _)| d.as_str()).collect();
-                return Err(anyhow!(
-                    "--input {name}: {} declares no input {name}; it declares {}",
-                    opens_on.id,
-                    if declared.is_empty() {
-                        "none".to_owned()
-                    } else {
-                        declared.join(", ")
-                    }
-                ));
+            // A fresh case on an intent opens on settings resolved here: `--protocol`, the run
+            // file, the default, and each declared input from `--input`, the run file or takt's
+            // default, each with its source. One it does not declare is refused before anything is
+            // opened. A fresh case on a story resolves them per story below, once its tags are
+            // known; a resumed case keeps its own, and its run file is checked all the same.
+            let fresh = case.is_none() && resuming.is_none();
+            let story_unit = fresh && intent.is_none();
+            if !fresh {
+                takt::protocol::check_run_file(&protocol_settings, None)?;
             }
-            // The software change's inputs select the obligations it owes; left out, they take
-            // the least demanding values a change can carry, said on the first line of the run.
-            if opens_on.id == SOFTWARE_CHANGE {
-                for (name, value) in [
-                    ("risk", "standard"),
-                    ("change_kind", "feature"),
-                    ("affects_security_boundary", "false"),
-                ] {
-                    if !inputs.iter().any(|(k, _)| k == name) {
-                        inputs.push((name.to_owned(), value.to_owned()));
-                    }
+            let mut applied = if fresh && !story_unit {
+                Some(settings_for(
+                    &protocol_settings,
+                    protocol.as_deref(),
+                    &inputs,
+                    &[],
+                    false,
+                )?)
+            } else {
+                None
+            };
+            let options = match &applied {
+                Some(settings) => {
+                    looping.options(settings.spec.clone(), settings.pairs(), case_id.clone())
                 }
-            }
-            let options = looping.options(opening, inputs, case_id);
+                None => looping.options(opening, inputs.clone(), case_id.clone()),
+            };
             let harness = harness_of(&looping)?;
             let harness = harness.as_ref();
+            // A session that may read outside its copy proposes what a scan must pass: under
+            // `gates` with no policy nothing would scan it, so the run is refused before its
+            // case opens or resumes, naming the policy and `scan: none` in `--config`.
+            if harness.reads_outside_its_copy()
+                && let Some(why) = scan.refused_at_open(&looping.harness, true)
+            {
+                return Err(anyhow!(why));
+            }
             let mut validators = validators_of(&repo, &looping, scenarios)?;
             forge.register(&mut validators);
             // An improvement turn's merge validators read the mainline, with a forge or without.
@@ -1355,32 +1851,59 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     resuming.as_ref().map(|resuming| resuming.id.as_str()),
                 )?
             {
-                scan_identity_at_open(forge.as_ref(), &repo, &identity, &source, out)?;
+                scan_identity_at_open(
+                    forge.as_ref(),
+                    &scan,
+                    &repo,
+                    &identity,
+                    &source,
+                    looping.state_dir.as_deref(),
+                    out,
+                )?;
             }
             let forge_line = forge.line;
             let store = Aep::default();
             // The unit: the case to resume, the intent given, or else the open case of an
             // active story or the next ready story of the planning store; a case is opened
             // before the store is told, so a run that cannot open its case takes nothing.
+            let resumed = case.is_some() || resuming.is_some();
+            // Where a discarded step sets its files aside: the state directory's, given to the
+            // run at open, so that opening reads neither `XDG_STATE_HOME` nor `HOME`.
+            let set_aside = looping.state_dir.as_deref().map(state_set_aside);
             let mut run = match (case, intent, resuming) {
                 (Some(_), Some(_), _) => {
                     return Err(anyhow!(
                         "--case resumes a case and --intent opens one; give one of them"
                     ));
                 }
-                (Some(case), None, _) => Run::resume(&repo, options, &case, harness, &validators)?,
-                (None, Some(intent), _) => Run::open_unit_as(
+                (Some(case), None, _) => Run::resume_in(
+                    &repo,
+                    options,
+                    &case,
+                    set_aside.as_deref(),
+                    harness,
+                    &validators,
+                )?,
+                (None, Some(intent), _) => Run::open_unit_in(
                     &repo,
                     options,
                     Unit::Intent(intent),
                     &commit_as,
+                    set_aside.as_deref(),
                     harness,
                     &validators,
                 )?,
                 // The open case of an active story, found and checked above: resumed as found,
                 // the store not read again.
                 (None, None, Some(resuming)) => {
-                    let run = Run::resume(&repo, options, &resuming.id, harness, &validators)?;
+                    let run = Run::resume_in(
+                        &repo,
+                        options,
+                        &resuming.id,
+                        set_aside.as_deref(),
+                        harness,
+                        &validators,
+                    )?;
                     let title = match &run.unit {
                         Unit::Story(story) => story.title.clone(),
                         Unit::Intent(intent) => intent.clone(),
@@ -1415,21 +1938,43 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         }),
                         None => None,
                     };
-                    match Run::take_next_as(
+                    match take_next_with_settings(
                         &repo,
-                        options,
                         frontier,
+                        &store,
+                        &|tags| {
+                            settings_for(
+                                &protocol_settings,
+                                protocol.as_deref(),
+                                &inputs,
+                                tags,
+                                true,
+                            )
+                        },
+                        &|settings| {
+                            looping.options(
+                                settings.spec.clone(),
+                                settings.pairs(),
+                                case_id.clone(),
+                            )
+                        },
+                        options,
                         &commit_as,
+                        set_aside.as_deref(),
                         harness,
                         &validators,
                         out,
                     )? {
-                        Some(run) => run,
+                        Some((run, settings)) => {
+                            applied = Some(settings);
+                            run
+                        }
                         None => {
                             if let (Some(story), Some(left)) = (&story, &left) {
-                                let refusal = match story_not_taken(&repo, &store, story) {
-                                    Ok(refusal) | Err(refusal) => refusal,
-                                };
+                                let refusal =
+                                    match story_not_taken(&repo, &store, story, &named_by(story)) {
+                                        Ok(refusal) | Err(refusal) => refusal,
+                                    };
                                 return Err(
                                     match takt::git::run(&repo, &["checkout", "-q", left]) {
                                         Ok(_) => refusal,
@@ -1455,15 +2000,69 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             if let Some(turn) = &turn {
                 run.case.open_turn(turn)?;
             }
+            // The case just opened records where its protocol and each input's value came from.
+            if let Some(settings) = &applied {
+                run.case
+                    .record_settings(settings.protocol_source.as_str(), &settings.sources())?;
+                writeln!(out, "{}", settings.line())?;
+            }
             // A story's case that terminates accepted records its test result and its move
             // in the store; an intent's run has no story and writes nothing there.
             run.record_on(&store);
-            finish(&mut run, forge_line.as_deref(), &looping, out)
+            // A new case runs under `default` unless the flag or the file says otherwise; a resumed
+            // one keeps the profile it was opened under unless the flag says otherwise.
+            let records = match looping.records_profile(resumed) {
+                Some(records) => Some(records),
+                None if resumed => None,
+                None => Some(takt::case::Records::default()),
+            };
+            finish(
+                &mut run,
+                forge_line.as_deref(),
+                scan,
+                &looping,
+                records,
+                out,
+            )
         }
     }
 }
 
 impl LoopArgs {
+    /// Takes the flags given under the names they had for one minor release: each prints one line
+    /// on standard error naming the new name, and `--endpoint-model`, the old name of `--model`, is
+    /// the model it names. Called before anything else reads the loop's flags.
+    fn renamed(&mut self, matches: &clap::ArgMatches) {
+        const RENAMED: [(&str, &str, &str); 6] = [
+            (
+                "endpoint_base_url",
+                "--endpoint-base-url",
+                "--model-endpoint",
+            ),
+            ("endpoint_wire", "--endpoint-wire", "--model-wire"),
+            ("endpoint_model", "--endpoint-model", "--model"),
+            (
+                "endpoint_token_file",
+                "--endpoint-token-file",
+                "--subscription-token-file",
+            ),
+            (
+                "endpoint_token_pointer",
+                "--endpoint-token-pointer",
+                "--subscription-token-pointer",
+            ),
+            ("endpoint_secret", "--endpoint-secret", "--api-key-secret"),
+        ];
+        for (id, old, new) in RENAMED {
+            if !unset(matches, id) {
+                eprintln!("takt: {old} is renamed {new}; the old name works for one minor release");
+            }
+        }
+        if let Some(model) = self.endpoint_model.take() {
+            self.model = Some(model);
+        }
+    }
+
     /// Refuses, before anything of the run is done, an hour budget that is not a finite
     /// positive number: `--hours inf` would never end a wait, `--hours NaN` never compare, and
     /// zero or less would be spent before the first step.
@@ -1483,6 +2082,66 @@ impl LoopArgs {
         Ok(())
     }
 
+    /// Refuses a state directory named by --state-dir or the run configuration's `state_dir`
+    /// that cannot hold the run's transcripts, before anything of the run is opened, naming it
+    /// and why: its `transcripts` must lie outside `repo`, every part of its way a directory
+    /// (or not there yet, then made `0700`, as the run makes it) and writable. Without one,
+    /// nothing is checked: the default location keeps no transcript when it cannot be used,
+    /// said on standard error ([`finish`]).
+    fn check_state_dir(&self, repo: &Path) -> Result<()> {
+        let Some(dir) = &self.state_dir else {
+            return Ok(());
+        };
+        let refused = |why: anyhow::Error| {
+            anyhow!(
+                "the state directory {} (--state-dir, or the run configuration's `state_dir`) cannot be used: {why:#}; nothing was opened",
+                takt::git::shown(dir.as_os_str())
+            )
+        };
+        let root =
+            takt::harness::transcripts_root(&state_transcripts(dir), repo).map_err(refused)?;
+        // What this check makes is taken back when it refuses, so a refused state directory is
+        // left as it was found.
+        let mut made = Vec::new();
+        let checked = takt::harness::make_transcripts_root(&root, &mut made)
+            .map_err(refused)
+            .and_then(|()| {
+                let probe = root.join(format!(".takt-write-check-{}", std::process::id()));
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&probe)
+                    .map_err(|error| {
+                        refused(anyhow!("{} is not writable: {error}", root.display()))
+                    })?;
+                let _ = std::fs::remove_file(&probe);
+                Ok(())
+            });
+        if checked.is_err() {
+            for made in made.iter().rev() {
+                let _ = std::fs::remove_dir(made);
+            }
+        }
+        checked
+    }
+
+    /// Refuses a state directory named by --state-dir or the run configuration's `state_dir`
+    /// whose set-aside directory, `<state_dir>/set-aside`, cannot be used by the run (not
+    /// absolute, inside `repo`, a file on its way), before anything of the run is opened,
+    /// naming it and why; [`LoopArgs::check_state_dir`] checks the transcripts' directory.
+    fn check_set_aside(&self, repo: &Path) -> Result<()> {
+        let Some(dir) = &self.state_dir else {
+            return Ok(());
+        };
+        takt::git::set_aside_root(&state_set_aside(dir), repo).map_err(|why| {
+            anyhow!(
+                "the state directory {} (--state-dir, or the run configuration's `state_dir`) cannot be used: {why:#}; nothing was opened",
+                takt::git::shown(dir.as_os_str())
+            )
+        })?;
+        Ok(())
+    }
+
     /// Installs the adapter --confinement names for a run on `repo`, before anything of the
     /// run is done. For `substrate` outside a delegated cgroup, the same command is run again
     /// inside one and its exit code is this run's: `Some(code)`.
@@ -1492,7 +2151,7 @@ impl LoopArgs {
         }
         match takt::confinement::Substrate::open(repo) {
             Ok(substrate) => {
-                self.take_variable(true);
+                self.take_variable(true)?;
                 takt::confinement::install(std::sync::Arc::new(substrate));
                 Ok(None)
             }
@@ -1511,18 +2170,42 @@ impl LoopArgs {
     }
 
     /// Under `--harness harness`, takes the variable the endpoint's credential names out of
-    /// takt's environment ([`EndpointArgs::take_variable`]). Under `--confinement substrate`
-    /// outside a delegated run it is left until `substrate` has opened in this run
-    /// (`substrate_open`), since a run delegated again under `systemd-run` reads it there.
-    fn take_variable(&mut self, substrate_open: bool) {
+    /// takt's environment ([`EndpointArgs::take_variable`]). With an `llm` section, resolves the
+    /// route `--model` names, before any case opens, and takes out of takt's environment the
+    /// variables holding the key llm resolved for it ([`takt::harness::take_environment_holding`])
+    /// and every variable the document's `env:` references name, in any endpoint.
+    /// Under `--confinement substrate` outside a delegated run it is left until `substrate` has
+    /// opened in this run (`substrate_open`), since a run delegated again under `systemd-run` reads
+    /// it there. Resolved once: a second call keeps the first route.
+    fn take_variable(&mut self, substrate_open: bool) -> Result<()> {
         if self.harness != "harness"
             || (self.confinement == "substrate"
                 && !substrate_open
                 && std::env::var_os(takt::confinement::DELEGATED).is_none())
         {
-            return;
+            return Ok(());
+        }
+        if let Some(llm) = &self.llm {
+            if self.route.is_none() {
+                let model = self.model.as_deref().unwrap_or_default();
+                let home = std::env::var_os("HOME").map(PathBuf::from);
+                let route =
+                    takt::harness::RouteEndpoint::resolve(llm.routes(), model, home.as_deref())?;
+                if let Some(secret) = &route.secret {
+                    // SAFETY: takt has started no thread yet (its callers run before any is
+                    // started), so nothing reads the environment while it changes.
+                    unsafe { takt::harness::take_environment_holding(secret) };
+                }
+                for variable in llm.variables() {
+                    // SAFETY: as above, no thread has started.
+                    unsafe { takt::harness::take_environment_variable(variable) };
+                }
+                self.route = Some(route);
+            }
+            return Ok(());
         }
         self.endpoint.take_variable();
+        Ok(())
     }
 
     /// The run's options: the protocol a case opens on, its inputs and its id, with this loop's
@@ -1546,6 +2229,176 @@ impl LoopArgs {
     }
 }
 
+/// What a case opens on, resolved from the command line, the run file and the tags of the story it
+/// opens on (none for an intent): [`takt::protocol::resolve_settings`].
+fn settings_for(
+    file: &takt::run_config::ProtocolSettings,
+    flag_protocol: Option<&str>,
+    flag_inputs: &[(String, String)],
+    tags: &[String],
+    story: bool,
+) -> Result<takt::protocol::Settings> {
+    takt::protocol::resolve_settings(&takt::protocol::SettingsRequest {
+        file,
+        flag_protocol,
+        flag_inputs,
+        tags,
+        default_protocol: if story {
+            STORY_DELIVERY
+        } else {
+            SOFTWARE_CHANGE
+        },
+        file_protocol_applies: story,
+    })
+}
+
+/// A frontier that lists the candidates of `inner` into `seen` and offers none, so that
+/// [`Run::take_next_as_in`] puts the tree on the base, reads them as it reads them, and opens
+/// nothing.
+struct Listing<'a> {
+    inner: &'a dyn takt::Frontier,
+    seen: std::cell::RefCell<Vec<String>>,
+}
+
+impl takt::Frontier for Listing<'_> {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        *self.seen.borrow_mut() = self.inner.candidates(repo)?;
+        Ok(Vec::new())
+    }
+
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        self.inner.active(repo)
+    }
+
+    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
+        self.inner.show(repo, id)
+    }
+
+    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
+        self.inner.take(repo, id)
+    }
+
+    fn record_approval(
+        &self,
+        repo: &Path,
+        story: &str,
+        approval: &takt::case::Approval,
+    ) -> Result<()> {
+        self.inner.record_approval(repo, story, approval)
+    }
+}
+
+/// A frontier narrowed to the one candidate `story` of `inner`, which is then taken exactly as
+/// `inner` would take it.
+struct Only<'a> {
+    inner: &'a dyn takt::Frontier,
+    story: &'a str,
+}
+
+impl takt::Frontier for Only<'_> {
+    fn name(&self) -> &str {
+        self.inner.name()
+    }
+
+    fn candidates(&self, repo: &Path) -> Result<Vec<String>> {
+        let mut candidates = self.inner.candidates(repo)?;
+        candidates.retain(|id| id == self.story);
+        Ok(candidates)
+    }
+
+    fn active(&self, repo: &Path) -> Result<Vec<String>> {
+        self.inner.active(repo)
+    }
+
+    fn show(&self, repo: &Path, id: &str) -> Result<takt::Story> {
+        self.inner.show(repo, id)
+    }
+
+    fn take(&self, repo: &Path, id: &str) -> Result<takt::frontier::Take> {
+        self.inner.take(repo, id)
+    }
+
+    fn record_approval(
+        &self,
+        repo: &Path,
+        story: &str,
+        approval: &takt::case::Approval,
+    ) -> Result<()> {
+        self.inner.record_approval(repo, story, approval)
+    }
+
+    fn record_test_result(
+        &self,
+        repo: &Path,
+        story: &str,
+        reference: &str,
+        at: &str,
+    ) -> Result<takt::frontier::Written> {
+        self.inner.record_test_result(repo, story, reference, at)
+    }
+
+    fn implemented(&self, repo: &Path, story: &str) -> Result<takt::frontier::Written> {
+        self.inner.implemented(repo, story)
+    }
+}
+
+/// [`Run::take_next_as_in`] with each story's settings resolved from its own tags: the candidates
+/// are listed as the run reads them (the tree put on the base), then each is offered alone, with
+/// the options `options_for` makes of the settings `resolve` makes of its tags, until one is
+/// taken. A story whose tags or whose settings are refused is the error, before its case is
+/// opened. The settings of the story taken come back with its run.
+#[allow(clippy::too_many_arguments)]
+fn take_next_with_settings<'a>(
+    repo: &Path,
+    frontier: &dyn takt::Frontier,
+    store: &Aep,
+    resolve: &dyn Fn(&[String]) -> Result<takt::protocol::Settings>,
+    options_for: &dyn Fn(&takt::protocol::Settings) -> RunOptions,
+    listing: RunOptions,
+    commit_as: &takt::case::CommitAs,
+    set_aside: Option<&Path>,
+    harness: &'a dyn Harness,
+    validators: &'a [Box<dyn Validator>],
+    out: &mut dyn Write,
+) -> Result<Option<(Run<'a>, takt::protocol::Settings)>> {
+    let listed = Listing {
+        inner: frontier,
+        seen: std::cell::RefCell::new(Vec::new()),
+    };
+    if Run::take_next_as_in(
+        repo, listing, &listed, commit_as, set_aside, harness, validators, out,
+    )?
+    .is_some()
+    {
+        return Err(anyhow!("listing the ready stories opened a case"));
+    }
+    for id in listed.seen.into_inner() {
+        let tags = store.tags(repo, &id)?;
+        let settings = resolve(&tags).with_context(|| format!("the story {id}"))?;
+        let only = Only {
+            inner: frontier,
+            story: &id,
+        };
+        if let Some(run) = Run::take_next_as_in(
+            repo,
+            options_for(&settings),
+            &only,
+            commit_as,
+            set_aside,
+            harness,
+            validators,
+            out,
+        )? {
+            return Ok(Some((run, settings)));
+        }
+    }
+    Ok(None)
+}
+
 /// The harness `--harness` names, each through the metaharness session executor, proposing from
 /// a scratch copy what takt's edit effect applies, with `--model`: `claude`, Claude Code on the
 /// user's claude.ai login; `codex`, Codex on the user's ChatGPT login (`~/.codex/auth.json`);
@@ -1555,11 +2408,36 @@ impl LoopArgs {
 /// b10x-harness's own `claude` provider names; or `none`. An `--endpoint-*` flag given with
 /// another harness is refused.
 fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
-    let session = |kind| {
+    let session = |kind| -> Result<SessionHarness> {
         let mut session = SessionHarness::of(kind);
         session.model.clone_from(&looping.model);
-        session
+        if let Some(program) = &looping.harness_program {
+            session.program = program.to_string_lossy().into_owned();
+        }
+        if let Some(max_turns) = looping
+            .session
+            .as_ref()
+            .and_then(|request| request.max_turns())
+        {
+            session.max_turns = max_turns;
+        }
+        session.check_program()?;
+        Ok(session)
     };
+    if let Some(program) = &looping.harness_program {
+        if looping.harness == "none" {
+            return Err(anyhow!(
+                "--harness-program {} names the program a session starts, and --harness none starts none; nothing was started",
+                takt::git::shown(program.as_os_str())
+            ));
+        }
+        if !program.is_absolute() {
+            return Err(anyhow!(
+                "--harness-program {} is not an absolute path; nothing was started",
+                takt::git::shown(program.as_os_str())
+            ));
+        }
+    }
     if looping.harness != "harness"
         && let Some(flag) = looping.endpoint.given()
     {
@@ -1569,22 +2447,48 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         ));
     }
     match looping.harness.as_str() {
-        "claude" => Ok(Box::new(session(Kind::Claude))),
-        "codex" => Ok(Box::new(session(Kind::Codex))),
+        "claude" => Ok(Box::new(session(Kind::Claude)?)),
+        "codex" => Ok(Box::new(session(Kind::Codex)?)),
         "harness" => {
+            use takt::harness::{Credential, StagedToken};
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            let mut session = session(Kind::B10x);
-            let config = looping.endpoint.config(home.as_deref())?;
+            let mut session = session(Kind::B10x)?;
+            let config = match &looping.route {
+                Some(route) => {
+                    session.model = Some(route.config.model.clone());
+                    route.config.clone()
+                }
+                None if looping.llm.is_some() => {
+                    return Err(anyhow!(
+                        "the run's route was not resolved before its case opens; nothing was started"
+                    ));
+                }
+                None => looping.endpoint.config(home.as_deref())?,
+            };
             session.point_at(&config);
-            // A variable's value is staged now, before any case opens, and held by the harness,
-            // so the file goes when the run ends, on success or on an error.
-            if let takt::harness::Credential::Environment { name } = &config.credential {
-                use takt::harness::StagedToken;
-                session.hold_staged(StagedToken::stage(
-                    name,
-                    looping.endpoint.variable.as_ref(),
-                    &StagedToken::candidates(),
-                )?);
+            // A key is staged now, before any case opens, and held by the harness, so the file
+            // goes when the run ends, on success or on an error: a variable's value, or a route's
+            // key as llm resolved it.
+            match &config.credential {
+                Credential::Environment { name } => {
+                    session.hold_staged(StagedToken::stage(
+                        name,
+                        looping.endpoint.variable.as_ref(),
+                        &StagedToken::candidates(),
+                    )?);
+                }
+                Credential::Route { endpoint, .. } => {
+                    let key = looping
+                        .route
+                        .as_ref()
+                        .and_then(|route| route.secret.as_ref());
+                    session.hold_staged(StagedToken::stage(
+                        endpoint,
+                        key,
+                        &StagedToken::candidates(),
+                    )?);
+                }
+                Credential::SubscriptionFile { .. } | Credential::Secret { .. } => {}
             }
             session.home = home;
             Ok(Box::new(session))
@@ -1605,30 +2509,54 @@ struct EndpointArgs {
     /// `--endpoint-file`'s `base_url`, else `https://api.anthropic.com/v1`. `https://`, or
     /// `http://` to a loopback host; no userinfo, query or fragment. Another base URL takes a
     /// credential by flag or file: the default token is sent to the default one alone.
+    #[arg(long, value_name = "URL", conflicts_with = "endpoint_base_url")]
+    model_endpoint: Option<String>,
+    /// The old name of `--model-endpoint`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "URL")]
     endpoint_base_url: Option<String>,
     /// `--harness harness`: the model API the endpoint speaks, `anthropic-messages` or
     /// `openai-responses`. Not given, `--endpoint-file`'s `wire`, else `anthropic-messages`.
+    #[arg(long, value_name = "WIRE", conflicts_with = "endpoint_wire")]
+    model_wire: Option<String>,
+    /// The old name of `--model-wire`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "WIRE")]
     endpoint_wire: Option<String>,
-    /// `--harness harness`: the model the endpoint serves; `--model` wins over it. Not given,
-    /// `--endpoint-file`'s `model`, else `claude-opus-5`.
-    #[arg(long, value_name = "MODEL")]
-    endpoint_model: Option<String>,
     /// `--harness harness`: the file holding a subscription token, which b10x-harness reads;
-    /// not with --endpoint-secret. Not given, `--endpoint-file`'s credential, else
+    /// not with --api-key-secret. Not given, `--endpoint-file`'s credential, else
     /// `~/.claude/.credentials.json` at `/claudeAiOauth/accessToken`. A relative path is read
     /// against the current directory. A file that is missing, or whose pointer resolves to no
     /// token, is refused before the case opens, exit 1.
+    #[arg(long, value_name = "PATH", conflicts_with = "endpoint_token_file")]
+    subscription_token_file: Option<PathBuf>,
+    /// The old name of `--subscription-token-file`, kept for one minor release, with one line on
+    /// standard error naming the new name.
     #[arg(long, value_name = "PATH")]
     endpoint_token_file: Option<PathBuf>,
-    /// `--harness harness`: the JSON pointer to the token inside --endpoint-token-file, given
+    /// `--harness harness`: the JSON pointer to the token inside --subscription-token-file, given
     /// only with it; not given, the whole file is the token.
+    #[arg(
+        long,
+        value_name = "JSON POINTER",
+        conflicts_with = "endpoint_token_pointer"
+    )]
+    subscription_token_pointer: Option<String>,
+    /// The old name of `--subscription-token-pointer`, kept for one minor release, with one line
+    /// on standard error naming the new name.
     #[arg(long, value_name = "JSON POINTER")]
     endpoint_token_pointer: Option<String>,
     /// `--harness harness`: the API key as a secret's name in the owner's secrets store,
     /// `<namespace>/<name>`, handed to b10x-harness by name, which the harness resolves; takt
-    /// reads no secret and opens no store. Not with --endpoint-token-file.
+    /// reads no secret and opens no store. Not with --subscription-token-file.
+    #[arg(
+        long,
+        value_name = "NAMESPACE/NAME",
+        conflicts_with = "endpoint_secret"
+    )]
+    api_key_secret: Option<String>,
+    /// The old name of `--api-key-secret`, kept for one minor release, with one line on standard
+    /// error naming the new name.
     #[arg(long, value_name = "NAMESPACE/NAME")]
     endpoint_secret: Option<String>,
     /// `--harness harness`: the name of the environment variable holding the API key, on the
@@ -1660,32 +2588,65 @@ struct EndpointArgs {
 impl EndpointArgs {
     /// The first `--endpoint-*` flag given, by its name.
     fn given(&self) -> Option<&'static str> {
+        self.all_given().into_iter().next()
+    }
+
+    /// Every endpoint flag given, under the name it was given by, in the order the flags are
+    /// listed. `--endpoint-model` is `--model` and is not among them.
+    fn all_given(&self) -> Vec<&'static str> {
         [
+            ("--model-endpoint", self.model_endpoint.is_some()),
             ("--endpoint-base-url", self.endpoint_base_url.is_some()),
+            ("--model-wire", self.model_wire.is_some()),
             ("--endpoint-wire", self.endpoint_wire.is_some()),
-            ("--endpoint-model", self.endpoint_model.is_some()),
+            (
+                "--subscription-token-file",
+                self.subscription_token_file.is_some(),
+            ),
             ("--endpoint-token-file", self.endpoint_token_file.is_some()),
+            (
+                "--subscription-token-pointer",
+                self.subscription_token_pointer.is_some(),
+            ),
             (
                 "--endpoint-token-pointer",
                 self.endpoint_token_pointer.is_some(),
             ),
+            ("--api-key-secret", self.api_key_secret.is_some()),
             ("--endpoint-secret", self.endpoint_secret.is_some()),
             ("--endpoint-token-env", self.endpoint_token_env.is_some()),
             ("--endpoint-file", self.endpoint_file.is_some()),
         ]
         .into_iter()
-        .find_map(|(flag, given)| given.then_some(flag))
+        .filter_map(|(flag, given)| given.then_some(flag))
+        .collect()
     }
 
-    /// The fields the flags give.
+    /// The fields the flags give: each new name's value, else its old name's. The model is not
+    /// among them: `--model` names it, and the file's `model` is the endpoint's.
     fn fields(&self) -> takt::harness::EndpointFields {
         takt::harness::EndpointFields {
-            base_url: self.endpoint_base_url.clone(),
-            wire: self.endpoint_wire.clone(),
-            model: self.endpoint_model.clone(),
-            token_file: self.endpoint_token_file.clone(),
-            token_pointer: self.endpoint_token_pointer.clone(),
-            secret: self.endpoint_secret.clone(),
+            base_url: self
+                .model_endpoint
+                .clone()
+                .or_else(|| self.endpoint_base_url.clone()),
+            wire: self
+                .model_wire
+                .clone()
+                .or_else(|| self.endpoint_wire.clone()),
+            model: None,
+            token_file: self
+                .subscription_token_file
+                .clone()
+                .or_else(|| self.endpoint_token_file.clone()),
+            token_pointer: self
+                .subscription_token_pointer
+                .clone()
+                .or_else(|| self.endpoint_token_pointer.clone()),
+            secret: self
+                .api_key_secret
+                .clone()
+                .or_else(|| self.endpoint_secret.clone()),
             env: self.endpoint_token_env.clone(),
         }
     }
@@ -1803,10 +2764,10 @@ struct Forged {
 /// another bot-route line keeps whatever transport it uses. It is held to
 /// [`Self::FETCH_TIMEOUT`], and its child can wait on no prompt ([`takt::forge::NO_PROMPT`]).
 struct TrialRoute {
-    /// The remote the bot route pushes to; its remote-tracking refs take the fetched branches.
-    remote: String,
-    /// The remote's HTTPS URL, `https://github.com/<owner>/<repo>.git`, the fetch's source.
-    url: String,
+    /// The bot route the two lines are built by ([`BotRoute::trial_fetch_argv`],
+    /// [`BotRoute::trial_push_argv`]): its remote, whose remote-tracking refs take the fetched
+    /// branches and which the push goes to, and its HTTPS URL, the fetch's source.
+    route: BotRoute,
     /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
     fetcher: Process,
     runner: Box<dyn Runner>,
@@ -1823,9 +2784,14 @@ impl TrialRoute {
     /// The trial route of `bot`: its remote, the HTTPS URL of its repository, the fetch held to
     /// [`Self::FETCH_TIMEOUT`] and the push to the forge's limits.
     fn of(bot: &BotRoute) -> Self {
+        let mut route = BotRoute::new(
+            bot.repository.clone(),
+            bot.policy.clone(),
+            Box::new(Process::default()),
+        );
+        route.remote.clone_from(&bot.remote);
         Self {
-            remote: bot.remote.clone(),
-            url: format!("https://{}/{}.git", BotRoute::HOST, bot.repository),
+            route,
             fetcher: Process {
                 limits: takt::forge::Limits {
                     timeout: Self::FETCH_TIMEOUT,
@@ -1839,29 +2805,13 @@ impl TrialRoute {
     /// The line that fetches the remote's trial branches, from its HTTPS URL, into its
     /// remote-tracking refs.
     fn fetch_argv(&self) -> Vec<String> {
-        let refspec = format!("+refs/heads/trial/*:refs/remotes/{}/trial/*", self.remote);
-        ["b10x-gates", "bot", "--", "fetch", &self.url, &refspec]
-            .map(str::to_owned)
-            .to_vec()
+        self.route.trial_fetch_argv()
     }
 
     /// The line that creates the remote's `trial` from the local one, reporting each ref on
     /// stdout; the lease refuses it when the remote has the branch.
     fn push_argv(&self, trial: &str) -> Vec<String> {
-        let lease = format!("--force-with-lease=refs/heads/{trial}:");
-        let refspec = format!("refs/heads/{trial}:refs/heads/{trial}");
-        [
-            "b10x-gates",
-            "bot",
-            "--",
-            "push",
-            "--porcelain",
-            &lease,
-            &self.remote,
-            &refspec,
-        ]
-        .map(str::to_owned)
-        .to_vec()
+        self.route.trial_push_argv(trial)
     }
 
     /// `exit`, how `argv` ended; a program that did not exit 0 is an error naming the line and
@@ -1947,13 +2897,72 @@ impl Forged {
     }
 }
 
+/// [`forge_of`] under what the run file says of the forge (`settings`): `forge: command` runs the
+/// commands of its `forge_commands` section, an entry the protocol's `actions` need that is
+/// missing refused here, before any case opens; `state_dir` (else a directory of this run under the
+/// state home) holds the command forge's standard error files; the body file is the case's own,
+/// in its artifacts. Settings that do not fit the forge are
+/// refused, naming their keys.
+fn forge_with(
+    repo: &Path,
+    forge: Option<&str>,
+    scan: &Scan,
+    settings: &takt::run_config::ForgeSettings,
+    actions: &[String],
+    state_dir: Option<&Path>,
+) -> Result<Forged> {
+    settings.check_for(forge)?;
+    if forge == Some("command") {
+        let commands = settings.commands.clone().unwrap_or_default();
+        let state = match state_dir {
+            Some(dir) => state_under(dir, "forge-command"),
+            None => takt::promotion::store()?
+                .with_file_name("forge-command")
+                .join(run_directory()),
+        };
+        let command = CommandForge::for_tree(
+            repo,
+            commands,
+            actions,
+            state,
+            scan.clone(),
+            Box::new(Process::default()),
+        )?;
+        return Ok(Forged {
+            forge: Some(Rc::new(command)),
+            line: Some(
+                "forge: command; pr.open, ci.read and repository.merge run the commands of the run file's forge_commands"
+                    .to_owned(),
+            ),
+            trials: None,
+        });
+    }
+    if forge == Some("gitlab")
+        && settings.transport == Some(takt::forge::gitlab::Transport::Api)
+        && let Some(source) = &settings.credential
+    {
+        let glab = Glab::for_tree_api(repo, scan, source)?;
+        let line = format!(
+            "forge: gitlab ({} {}); pr.open, ci.read and repository.merge go through the GitLab API under {source}",
+            glab.host, glab.project
+        );
+        return Ok(Forged {
+            forge: Some(Rc::new(glab)),
+            line: Some(line),
+            trials: None,
+        });
+    }
+    forge_of(repo, forge, scan)
+}
+
 /// The forge: the bot route when asked for, or by default when `origin` is a repository on
 /// github.com, the host the bot route serves; `glab` when asked for, or by default when `origin`
 /// is on another host and `glab` is logged in to it. `--forge bot` elsewhere, `--forge gitlab` on
 /// github.com or without a login are refused in one line before any case is opened; by default
-/// another host without a login gets no forge, said in one line once the case is open.
-fn forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
-    forge_through(repo, forge, &Glab::for_tree)
+/// another host without a login gets no forge, said in one line once the case is open. `glab`
+/// scans through the run's scan adapter `scan`; the bot route scans as it always does.
+fn forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Forged> {
+    forge_through(repo, forge, &|tree| Glab::for_tree(tree, scan))
 }
 
 /// [`forge_of`], the `glab` adapter of a tree, and its login check, made by `glab_of`.
@@ -2015,7 +3024,7 @@ fn forge_through(
                 "forge: none (origin names no <owner>/<repo> on a host)".to_owned(),
             )),
         },
-        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab or none")),
+        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab, command or none")),
     })
 }
 
@@ -2023,10 +3032,13 @@ fn forge_through(
 /// `trial/<n>` is created on the remote only through the bot route ([`TrialRoute`]), so
 /// `--forge gitlab` is refused before anything is fetched, cut or opened, and by default an
 /// `origin` on a host other than github.com gets no forge, said in one line, `glab` never asked.
-fn scenario_forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
+fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Forged> {
     match forge {
         Some("gitlab") => Err(anyhow!(
             "--forge gitlab is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, and glab opens a merge request against a base it cannot create; give --forge bot or --forge none; nothing was changed"
+        )),
+        Some("command") => Err(anyhow!(
+            "--forge command is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, which the configured commands cannot do; give --forge bot or --forge none; nothing was changed"
         )),
         None => match takt::git::remote_url(repo, "origin")
             .ok()
@@ -2042,10 +3054,37 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
                 )),
                 trials: None,
             }),
-            _ => forge_of(repo, None),
+            _ => forge_of(repo, None, scan),
         },
-        Some(_) => forge_of(repo, forge),
+        Some(_) => forge_of(repo, forge, scan),
     }
+}
+
+/// The transcripts directory under the state directory `dir`, `<dir>/transcripts`, a relative
+/// `dir` read against the current directory.
+fn state_transcripts(dir: &Path) -> PathBuf {
+    state_under(dir, "transcripts")
+}
+
+/// The set-aside directory under the state directory `dir`, `<dir>/set-aside`, where what a
+/// discarded step moved aside goes ([`state_transcripts`] for `dir`).
+fn state_set_aside(dir: &Path) -> PathBuf {
+    state_under(dir, "set-aside")
+}
+
+/// A directory name no other run on the machine has: the process and the instant it started.
+fn run_directory() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    format!("{}-{nanos}", std::process::id())
+}
+
+/// `name` under the state directory `dir`, a relative `dir` read against the current directory.
+fn state_under(dir: &Path, name: &str) -> PathBuf {
+    std::path::absolute(dir)
+        .unwrap_or_else(|_| dir.to_path_buf())
+        .join(name)
 }
 
 /// Runs the open case `run` to its stop, `forge_line` said first, the run given this binary's
@@ -2054,21 +3093,37 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>) -> Result<Forged> {
 /// stdout, its own code. Every run the CLI makes stops `Unperformable` when no step can move
 /// its case ([`Run::stop_when_unperformable`], off in the library until a caller turns it on),
 /// and `DiskLow` before a step when the tree's or `CARGO_TARGET_DIR`'s file system has less
-/// free than `--min-free-gib` ([`Run::stop_when_disk_below`]).
+/// free than `--min-free-gib` ([`Run::stop_when_disk_below`]). The run goes under `scan`
+/// ([`Run::scan_with`]); a declared `none` is said in one line after the forge's, before the
+/// run's first line. `records` is the profile the case keeps its decisions under when one is
+/// given ([`Run::keep_records`]); none keeps the run's own.
 fn finish(
     run: &mut Run<'_>,
     forge_line: Option<&str>,
+    scan: Scan,
     looping: &LoopArgs,
+    records: Option<takt::case::Records>,
     out: &mut dyn Write,
 ) -> Result<u8> {
     if let Some(line) = forge_line {
         writeln!(out, "{line}")?;
     }
+    if let Some(line) = scan.declared_line(&looping.harness) {
+        writeln!(out, "{line}")?;
+    }
+    run.scan_with(scan);
     run.binary = Some(REVISION.to_owned());
+    run.llm_digest = looping.llm_digest.clone();
     // The transcripts directory is made now, before any step; one that cannot be (a read-only
     // home, a file on the way) keeps no transcript, said on standard error, and the run goes on
-    // as a step whose transcript could not be kept does.
-    if let Some(transcripts) = takt::run::default_transcripts()
+    // as a step whose transcript could not be kept does. --state-dir, or the configuration's
+    // `state_dir`, holds them in place of the state home.
+    // An explicit one was checked before the run opened ([`LoopArgs::check_state_dir`]).
+    let transcripts = match &looping.state_dir {
+        Some(dir) => Some(state_transcripts(dir)),
+        None => takt::run::default_transcripts(),
+    };
+    if let Some(transcripts) = transcripts
         && let Err(error) = run.transcripts_in(transcripts)
     {
         eprintln!("no step transcript is kept: {error:#}");
@@ -2080,6 +3135,12 @@ fn finish(
     run.stop_when_unperformable();
     if looping.continue_past_red_base {
         run.continue_past_red_base();
+    }
+    if let Some(settings) = &looping.commit {
+        run.commit_settings(settings.clone());
+    }
+    if let Some(records) = records {
+        run.keep_records(records);
     }
     run.stop_when_disk_below(
         looping.min_free_gib.saturating_mul(1 << 30),
@@ -2114,6 +3175,7 @@ fn finish(
         Stop::Waiting { .. } => EXIT_WAITING,
         Stop::Unperformable { .. } => EXIT_UNPERFORMABLE,
         Stop::DiskLow { .. } => EXIT_DISK_LOW,
+        Stop::HarnessUnqualified { .. } => EXIT_REFUSED,
         _ => EXIT_STOPPED,
     })
 }
@@ -2251,7 +3313,7 @@ fn trial_free(repo: &Path, scenario: &str, n: u128) -> Result<String> {
 /// What of the case `case_id` is there already, its directory or its branch `takt/<case>`;
 /// none when neither is. `case_id` is one [`takt::case::check_id`] accepted.
 fn case_taken(repo: &Path, case_id: &str) -> Result<Option<String>> {
-    if repo.join(takt::case::CASES_DIR).join(case_id).exists() {
+    if takt::case::CaseDir::locate(repo, case_id).exists() {
         return Ok(Some(format!("the case {case_id}")));
     }
     let branch = takt::case::Branch::name_of(case_id);
@@ -2342,6 +3404,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         repo,
         scenario,
         declared_on,
+        config: _,
         mut looping,
     } = args;
     looping.check()?;
@@ -2351,9 +3414,19 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     if let Some(code) = looping.confine(&repo)? {
         return Ok(code);
     }
+    looping.check_set_aside(&repo)?;
+    looping.check_state_dir(&repo)?;
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;
     let harness = harness_of(&looping)?;
     let harness = harness.as_ref();
+    // A scenario run cannot declare `scan: none` (its --config refuses it), so its scan adapter is `gates`: a session
+    // that may read outside its copy is refused without a policy before anything is cut.
+    let scan = Scan::from_env();
+    if harness.reads_outside_its_copy()
+        && let Some(why) = scan.refused_at_open(&looping.harness, false)
+    {
+        return Err(anyhow!("scenario {}: {why}", scenario.id));
+    }
     // A tree with uncommitted work is refused, never discarded: a checkout would carry it onto
     // the trial branch, and a store file a stopped run left changed would be read there.
     let uncommitted = takt::git::uncommitted(&repo)?;
@@ -2382,7 +3455,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             repo.display()
         )
     })?;
-    let forge = scenario_forge_of(&repo, looping.forge.as_deref())?;
+    let forge = scenario_forge_of(&repo, looping.forge.as_deref(), &scan)?;
     // The identity the trial's commits carry: the one given, else the one `--declared-on`
     // configures (the pinned seed predates any such file); none through the bot route, which
     // pushes them, is refused before anything is fetched, cut or pushed.
@@ -2475,8 +3548,16 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         // Through the bot route the identity is scanned, as the push would scan it, before the
         // trial base is pushed or any step is taken.
         if let (Some(forge), Some(identity)) = (&forge.forge, &scanned_identity) {
-            scan_identity_at_open(forge.as_ref(), &repo, identity, &identity_source, out)
-                .with_context(|| format!("scenario {}", scenario.id))?;
+            scan_identity_at_open(
+                forge.as_ref(),
+                &scan,
+                &repo,
+                identity,
+                &identity_source,
+                looping.state_dir.as_deref(),
+                out,
+            )
+            .with_context(|| format!("scenario {}", scenario.id))?;
         }
         if let Some(trials) = &forge.trials {
             trials.create(&repo, &trial).with_context(|| {
@@ -2503,11 +3584,23 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     )?;
     let options = looping.options(STORY_DELIVERY.to_owned(), Vec::new(), Some(case_id));
     let store = Aep::default();
-    let mut run = take_story(&repo, options, story, &commit_as, harness, &validators, out)?;
+    let set_aside = looping.state_dir.as_deref().map(state_set_aside);
+    let mut run = take_story(
+        &repo,
+        options,
+        story,
+        &commit_as,
+        set_aside.as_deref(),
+        harness,
+        &validators,
+        out,
+    )?;
     // As `takt run`: a case that terminates accepted records its test result and its move in
-    // the store, on the case's branch.
+    // the store, on the case's branch. A scenario run keeps every decision whatever `--records`
+    // says, a resume of it too: the trial's record is what the scenario's scorecard reads, and
+    // the library's rule for a scenario case says so (`Records::for_case`).
     run.record_on(&store);
-    finish(&mut run, forge.line.as_deref(), &looping, out)
+    finish(&mut run, forge.line.as_deref(), scan, &looping, None, out)
 }
 
 /// Why `story`, `proposed`, is not ready among `all`, as [`takt::frontier::is_ready`] reads it:
@@ -2602,8 +3695,9 @@ impl takt::Frontier for Named<'_> {
 
 /// The refusal of `takt run --story <story>` when the frontier narrowed to it took nothing and
 /// opened no case: why, read from the store as the take read it (on the base), by the frontier's
-/// own rule ([`takt::frontier::is_ready`], [`not_ready`]).
-fn story_not_taken(repo: &Path, store: &Aep, story: &str) -> Result<anyhow::Error> {
+/// own rule ([`takt::frontier::is_ready`], [`not_ready`]); `named` says what named the story
+/// (`--story <story>`, or `story <story> from <file>`).
+fn story_not_taken(repo: &Path, store: &Aep, story: &str, named: &str) -> Result<anyhow::Error> {
     let all = store.list(repo)?;
     let why = match all.iter().find(|listed| listed.id == story) {
         None => format!("the store lists no {story}"),
@@ -2627,7 +3721,7 @@ fn story_not_taken(repo: &Path, store: &Aep, story: &str) -> Result<anyhow::Erro
         Some(_) => format!("{story} is ready but was not taken, as the line above says"),
     };
     Ok(anyhow!(
-        "--story {story}: {why}; the frontier would not take it, so no case was opened"
+        "{named}: {why}; the frontier would not take it, so no case was opened"
     ))
 }
 
@@ -2643,11 +3737,13 @@ fn short(revision: &str) -> &str {
 /// for a case an earlier scenario run opened for the same story on another trial base: each
 /// run of a scenario is a case of its own. The case is opened with, and the take committed by,
 /// the identity `commit_as` says.
+#[allow(clippy::too_many_arguments)]
 fn take_story<'a>(
     repo: &Path,
     options: RunOptions,
     story: takt::Story,
     commit_as: &takt::case::CommitAs,
+    set_aside: Option<&Path>,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
@@ -2656,11 +3752,12 @@ fn take_story<'a>(
     let id = story.id.clone();
     let id = id.as_str();
     let title = story.title.clone();
-    let mut run = Run::open_unit_as(
+    let mut run = Run::open_unit_in(
         repo,
         options,
         Unit::Story(story),
         commit_as,
+        set_aside,
         harness,
         validators,
     )?;
@@ -2768,7 +3865,7 @@ fn case_to_resume(
 /// nothing outside the cases directory is read.
 fn case_protocol(repo: &Path, id: &str) -> Result<Option<LoadedProtocol>> {
     takt::case::check_id(id)?;
-    let dir = repo.join(takt::case::CASES_DIR).join(id);
+    let dir = takt::case::CaseDir::locate(repo, id);
     if !dir.join("case.yaml").is_file() {
         return Ok(None);
     }
@@ -2821,7 +3918,7 @@ fn resume_install_root(repo: &Path, id: &str, protocol: &str, given: &Path) -> R
         )
     };
     let recorded = if protocol == takt::case::TURN_PROTOCOL {
-        takt::case::install_root_of(&repo.join(takt::case::CASES_DIR).join(id))?
+        takt::case::install_root_of(&takt::case::CaseDir::locate(repo, id))?
     } else {
         None
     };
@@ -2853,7 +3950,7 @@ fn refuse_identity_for_resume(
     given: Option<&takt::git::CommitIdentity>,
     pushes: bool,
 ) -> Result<()> {
-    let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+    let recorded = takt::case::commit_identity_of(&takt::case::CaseDir::locate(repo, id))?;
     if let Some(given) = given
         && recorded.as_ref() != Some(given)
     {
@@ -2872,7 +3969,7 @@ fn refuse_identity_for_resume(
         // No command closes or drops a case: the way past one is to finish it without pushing,
         // or to remove its branch and its directory, after which no run finds it and its story
         // is taken again, the take having been committed on that branch only.
-        let dir = repo.join(takt::case::CASES_DIR).join(id);
+        let dir = takt::case::CaseDir::locate(repo, id);
         let base = takt::case::Branch::read(&dir)
             .ok()
             .and_then(|branch| branch.base)
@@ -2904,7 +4001,7 @@ fn identity_at_open(
         return Ok(Some((given.clone(), "--commit-identity".to_owned())));
     }
     if let Some(id) = resuming {
-        let recorded = takt::case::commit_identity_of(&repo.join(takt::case::CASES_DIR).join(id))?;
+        let recorded = takt::case::commit_identity_of(&takt::case::CaseDir::locate(repo, id))?;
         return Ok(recorded.map(|identity| (identity, format!("the case {id}"))));
     }
     let from = takt::git::current_branch(repo)?
@@ -2912,7 +4009,7 @@ fn identity_at_open(
         .and_then(|branch| branch.strip_prefix(takt::case::BRANCH_PREFIX))
         .filter(|other| takt::case::check_id(other).is_ok())
         .and_then(|other| {
-            takt::case::Branch::read(&repo.join(takt::case::CASES_DIR).join(other))
+            takt::case::Branch::read(&takt::case::CaseDir::locate(repo, other))
                 .ok()
                 .and_then(|branch| branch.base)
         });
@@ -2931,17 +4028,22 @@ fn identity_at_open(
 /// scan `forge` runs before a push ([`Forge::scan_identity`]), when the run opens: before step
 /// 1, before its case opens or its trial base is cut. The text scanned is kept under the state
 /// directory while the scan runs, never in `repo`. A refusal ends the run, naming the scan's;
-/// a scan that cannot run (no policy) says "not scanned" on `out`, and the run opens.
+/// a scan that cannot run (no policy), or none under the run's declared `scan: none` (`scan`),
+/// says "not scanned" on `out`, and the run opens.
 fn scan_identity_at_open(
     forge: &dyn Forge,
+    scan: &Scan,
     repo: &Path,
     identity: &takt::git::CommitIdentity,
     source: &str,
+    state_dir: Option<&Path>,
     out: &mut dyn Write,
 ) -> Result<()> {
-    let dir = takt::promotion::store()?
-        .with_file_name("identity-scans")
-        .join(std::process::id().to_string());
+    let root = match state_dir {
+        Some(dir) => state_under(dir, "identity-scans"),
+        None => takt::promotion::store()?.with_file_name("identity-scans"),
+    };
+    let dir = root.join(std::process::id().to_string());
     let scanned = forge.scan_identity(repo, &dir, identity);
     let _ = std::fs::remove_dir_all(&dir);
     let scanned = scanned.with_context(|| {
@@ -2951,9 +4053,16 @@ fn scan_identity_at_open(
         )
     })?;
     if let takt::forge::IdentityScan::NotScanned(why) = scanned {
+        // Under a declared `none` a forge that scans through the run's adapter scans nothing
+        // before the push either; the bot route scans whatever is declared.
+        let after = if scan.not_scanned().as_ref() == Some(&why) {
+            "nothing is scanned before the push either"
+        } else {
+            "the scan before the push still applies"
+        };
         writeln!(
             out,
-            "commit identity: {identity} from {source} not scanned ({why}); the scan before the push still applies"
+            "commit identity: {identity} from {source} not scanned ({why}); {after}"
         )?;
     }
     Ok(())
@@ -3151,7 +4260,7 @@ mod tests {
 
     /// The one case directory under `repo`.
     fn the_case(repo: &Path) -> PathBuf {
-        let mut cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+        let mut cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
             .expect("a cases directory")
             .map(|e| e.expect("an entry").path())
             .collect();
@@ -3213,7 +4322,7 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         assert!(out.contains("frontier: nothing ready"), "{out}");
         assert!(!out.contains("case "), "{out}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
         assert_eq!(status(&repo, "story:blocked-one"), "proposed");
         assert_eq!(status(&repo, "story:waits-one"), "proposed");
     }
@@ -3484,7 +4593,7 @@ mod tests {
             &["--forge", "bot"],
         ));
         assert!(error.contains("origin"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// The bot route pushes under a GitHub App and reads through `gh`: asked for on another
@@ -3507,7 +4616,7 @@ mod tests {
             &["--forge", "bot"],
         ));
         assert!(error.contains("not github.com"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// Answers glab's login check as a glab with no login does, exit 1, and keeps each line
@@ -3552,7 +4661,11 @@ mod tests {
         );
         let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
         let glab_of = |tree: &Path| {
-            takt::forge::gitlab::Glab::for_tree_through(tree, Box::new(NotLoggedIn(asked.clone())))
+            takt::forge::gitlab::Glab::for_tree_through(
+                tree,
+                &takt::scan::Scan::from_env(),
+                Box::new(NotLoggedIn(asked.clone())),
+            )
         };
         let forged = super::forge_through(&repo, None, &glab_of).expect("no forge is no error");
         assert!(forged.forge.is_none() && forged.trials.is_none());
@@ -3577,8 +4690,62 @@ mod tests {
             "unknown",
             &["--forge", "hub"],
         ));
-        assert_eq!(error, "no forge `hub`: bot, gitlab or none");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert_eq!(error, "no forge `hub`: bot, gitlab, command or none");
+        assert!(!repo.join(".takt/cases").exists());
+    }
+
+    /// story:a-command-forge-runs-the-configured-commands: `--forge command` with no
+    /// `forge_commands` in the run file is refused before the run opens, naming the section.
+    #[test]
+    fn the_command_forge_needs_its_section_before_the_run() {
+        let repo = gated_repository("forge-command-none", None);
+        let error = takt_error(&delivery_args(
+            repo.to_str().expect("utf-8"),
+            "command-none",
+            &["--forge", "command"],
+        ));
+        assert!(error.contains("forge_commands"), "{error}");
+        assert!(!repo.join(".takt/cases").exists());
+    }
+
+    /// An entry the protocol's actions need and the section lacks is refused naming it, by the
+    /// command forge's constructor the run goes through before any case opens.
+    #[test]
+    fn the_command_forge_refuses_a_missing_entry_by_name() {
+        let repo = gated_repository("forge-command-missing", None);
+        let tool = vec!["tool".to_owned()];
+        let settings = takt::run_config::ForgeSettings {
+            commands: Some(takt::forge::command::ForgeCommands {
+                open: Some(tool.clone()),
+                read: Some(tool.clone()),
+                checks: Some(tool),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let actions = takt::protocol::LoadedProtocol::builtin("story.delivery/1")
+            .expect("a built-in")
+            .actions;
+        let state = repo.join("forge-state");
+        let error = super::forge_with(
+            &repo,
+            Some("command"),
+            &takt::scan::Scan::from_env(),
+            &settings,
+            &actions,
+            Some(&state),
+        )
+        .err()
+        .expect("refused");
+        assert!(format!("{error:#}").contains("`merge`"), "{error:#}");
+        assert!(!state.exists());
+        let error = super::scenario_forge_of(&repo, Some("command"), &takt::scan::Scan::from_env())
+            .err()
+            .expect("refused");
+        assert!(
+            format!("{error:#}").contains("--forge command"),
+            "{error:#}"
+        );
     }
 
     /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is
@@ -3610,7 +4777,7 @@ mod tests {
                 "HEAD",
             ],
         );
-        fs::create_dir_all(repo.join(".engineering/cases/scenario-1-trial-2026101914253000000044"))
+        fs::create_dir_all(repo.join(".takt/cases/scenario-1-trial-2026101914253000000044"))
             .expect("a case directory");
         git(
             &repo,
@@ -3644,8 +4811,9 @@ mod tests {
     /// `ApprovalRequired`. `takt approve` writes the grant into that case, records the approval
     /// on the story and commits that record on the case's branch; the run after it resumes the
     /// case at the revision the grant was given at, on a clean tree, and reads the grant: the
-    /// merge is no longer approval-required but admitted, a judgement step that no harness
-    /// takes here. A grant is given only to a case at the gate.
+    /// merge is no longer approval-required but admitted, the granted action `--harness none`
+    /// takes (story:harness-none-takes-a-granted-action). A grant is given only to a case at the
+    /// gate.
     #[test]
     fn approve_writes_the_grant_and_the_next_run_resumes_the_open_case() {
         let repo = repository("one-ready", "approve");
@@ -3745,12 +4913,15 @@ mod tests {
         assert_eq!(
             git_out(
                 &repo,
-                &["status", "--porcelain", "--", ".", ":!.engineering/cases"]
+                &["status", "--porcelain", "--", ".", ":!.takt/cases"]
             ),
             ""
         );
         let (code, out) = takt(&resume);
-        assert_eq!(code, 5, "{out}");
+        assert_eq!(
+            code, 3,
+            "story:harness-none-takes-a-granted-action: the granted merge is taken, and nothing moves after it: {out}"
+        );
         assert!(
             out.contains(&format!(
                 "frontier: resumed story:ready-one: Make the check pass (case {id})"
@@ -3761,10 +4932,16 @@ mod tests {
         assert!(!out.contains("ApprovalRequired"), "{out}");
         assert!(out.contains("repository.merge (admissible)"), "{out}");
         assert!(
-            out.contains(
-                "no harness: a judgement step among implementation.edit, repository.merge, tests.write is left"
-            ),
-            "{out}"
+            out.contains("step 1: repository.merge (none)"),
+            "story:harness-none-takes-a-granted-action: the granted merge is the harness's step: {out}"
+        );
+        assert!(
+            out.contains("stopped: NoProgress"),
+            "story:harness-none-takes-a-granted-action: no forge performs the merge, so nothing moves: {out}"
+        );
+        assert!(
+            !out.contains("no harness: a judgement step"),
+            "story:harness-none-takes-a-granted-action: the granted merge is not left: {out}"
         );
         assert_eq!(the_case(&repo), case, "no second case was opened");
     }
@@ -3839,7 +5016,7 @@ mod tests {
         ]);
         assert!(error.contains("--case"), "{error}");
         assert!(error.contains("--intent"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     #[test]
@@ -3855,7 +5032,7 @@ mod tests {
             "operator",
         ]);
         assert!(error.contains("absent"), "{error}");
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 
     /// An hour budget that is not a finite number above 0 is refused before the run, for
@@ -3883,6 +5060,6 @@ mod tests {
                 assert!(error.contains("--hours"), "{args:?}: {error}");
             }
         }
-        assert!(!repo.join(".engineering/cases").exists());
+        assert!(!repo.join(".takt/cases").exists());
     }
 }

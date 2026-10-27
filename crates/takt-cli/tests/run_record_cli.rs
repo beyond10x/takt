@@ -185,7 +185,7 @@ fn value_of(json: &str, key: &str) -> String {
 
 /// The one case directory under the repository's cases directory.
 fn the_case(repo: &Path) -> PathBuf {
-    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".engineering/cases"))
+    let cases: Vec<PathBuf> = fs::read_dir(repo.join(".takt/cases"))
         .expect("the cases directory")
         .map(|entry| entry.expect("an entry").path())
         .collect();
@@ -242,8 +242,8 @@ fn takt_run_on_a_story_whose_case_is_accepted_records_the_test_result_and_moves_
     );
     assert!(recorded.contains("\"source\": \"takt\""), "{recorded}");
     assert!(
-        recorded.contains(&format!("\"reference\": \"{path}\"")),
-        "{recorded}"
+        recorded.contains(&format!("\"reference\": \"{path}#sha256=")),
+        "story:the-pull-request-and-the-store-carry-the-evidence: the reference is the record's path with its sha256 and fields\n{recorded}"
     );
     assert_eq!(status(&repo, STORY), "implemented", "{out}");
     assert!(

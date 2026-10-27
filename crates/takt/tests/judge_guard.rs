@@ -280,7 +280,7 @@ fn at_the_gate_with(
     let mut made = Vec::new();
     for n in 0..count {
         write(n, tree);
-        git(tree, &["add", "-A", "--", ".", ":!.engineering/cases"]);
+        git(tree, &["add", "-A", "--", ".", ":!.takt"]);
         git(tree, &["commit", "-q", "-m", "a candidate commit"]);
         made.push(git(tree, &["rev-parse", "HEAD"]));
     }
@@ -335,7 +335,7 @@ fn at_the_gate_with(
 }
 
 fn case_dir(tree: &Path, id: &str) -> PathBuf {
-    tree.join(".engineering/cases").join(id)
+    tree.join(".takt/cases").join(id)
 }
 
 /// A double that has pull request #1 open for the case's branch at `head`, checks passing.

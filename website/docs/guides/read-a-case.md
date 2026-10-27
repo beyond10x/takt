@@ -3,13 +3,16 @@ title: Read a case
 sidebar_position: 5
 description: After a run, find out from the case directory what happened, step by step, why it stopped and what the model was told, with jq, takt scorecard and takt view.
 lede: Everything a run did is in its case directory and in the transcripts beside it, so the questions after a run are answered by reading files, not by asking the model.
-source: crates/takt/src/case.rs, crates/takt/src/events.rs; takt scorecard, trace and view --help at 0.14.0; a story case of takt 0.14.0 on a scratch repository, 2026-10-26; the layout of a 12-run case from a cluster trial of takt 0.13.1, read, not copied
+source: crates/takt/src/case.rs (Records), crates/takt/src/events.rs; takt scorecard, trace and view --help at 0.14.0; a story case of takt 0.14.0 on a scratch repository, 2026-10-26; the layout of a 12-run case from a cluster trial of takt 0.13.1, read, not copied
 ---
 
 # Read a case
 
-A case is the directory `.engineering/cases/<case>/` in the repository. Every run of the case
+A case is the directory `.takt/cases/<case>/` in the repository (`.engineering/cases/<case>/` for
+a case an earlier takt opened; the commands below read either). Every run of the case
 appends to it, and every file is written by takt, a validator or `takt approve`, never by hand.
+takt ignores `.takt/` in git by default, so the case is in the working tree and not in
+`git status`.
 What each file holds is in [Case files](../reference/case-files.md). This page is about the
 questions you ask after a run.
 
@@ -18,7 +21,7 @@ questions you ask after a run.
 The story run of [Run a story](./run-a-story.md), seven steps:
 
 ```console
-$ cd .engineering/cases/story-add-sub-20261026T231852Z
+$ cd .takt/cases/story-add-sub-20261026T231852Z
 $ ls -1
 artifacts
 branch.yaml
@@ -31,7 +34,6 @@ intent.md
 observations.json
 protocol.ir.json
 protocol.yaml
-python-modules.json
 story.yaml
 $ ls -1 evidence
 0001-test-result-1.json
@@ -96,7 +98,9 @@ does: [How a run ends](../concepts/how-a-run-ends.md).
 ## Why an action was or was not taken
 
 `decisions/NNNN.json` holds one evaluation by the governor: every action's status
-(`admissible`, `approval-required` or `blocked`), and for a blocked one the claims that block it:
+(`admissible`, `approval-required` or `blocked`). A case keeps the latest one alone unless the
+run was made with `--records trial` (the `opened` line's `records` says which). For a blocked
+action the file names the claims that block it:
 
 ```console
 $ jq -c '.actions["pr.open"]' decisions/0003.json
@@ -109,7 +113,7 @@ Back in the repository's root:
 
 ```console
 $ takt scorecard --repo .
-1 cases, 1 runs under .engineering/cases; definitions: errors v1, no_progress v1, outcome v3, refusals v1, step_tokens v2, steps v1, tokens v2, wall v1
+1 cases, 1 runs under .takt/cases; definitions: errors v1, no_progress v1, outcome v3, refusals v1, step_tokens v2, steps v1, tokens v2, wall v1
 case                                scenario  outcome        stop           held_out  steps  tokens  refusals  no_progress  errors  wall_s  notes
 story-add-sub-20261026T231852Z      -         Unperformable  -              -         7      75939   0         0            0       24.870  -
   story-add-sub-20261026T231852Z#1  -         Unperformable  Unperformable  -         7      75939   0         0            0       24.870  -
@@ -126,14 +130,16 @@ A harness step's transcript is outside the repository, because it holds what the
 $XDG_STATE_HOME/takt/transcripts/<repo-key>/<case>/run-<r>/step-<n>.jsonl
 ```
 
-Without `XDG_STATE_HOME`, that is `~/.local/state/takt/transcripts/`. The step's line in
+Without `XDG_STATE_HOME`, that is `~/.local/state/takt/transcripts/`; with a state directory
+(`--state-dir`, `state_dir` or a `loom.agent/1` document's `runtime.state_dir`), it is
+`<state_dir>/transcripts/`. The step's line in
 `events.jsonl` names the path below that directory. `takt view` draws runs on one time axis and
 opens a step's transcript on a click. It reads `takt-trace/1` files and transcripts laid out as
 above under one directory:
 
 ```sh
 mkdir runs
-takt trace --case .engineering/cases/story-add-sub-20261026T231852Z --out runs/add-sub.trace.jsonl
+takt trace --case .takt/cases/story-add-sub-20261026T231852Z --out runs/add-sub.trace.jsonl
 cp -r ~/.local/state/takt/transcripts/<repo-key> runs/
 takt view runs --output takt-view.html
 ```
@@ -148,8 +154,9 @@ time and tokens went: [Read a run report](./read-a-run-report.md).
 
 :::caution[On a cluster]
 
-Under Loom, `HOME` is an emptyDir, so the transcripts go when the pod goes. Copy them out before
-the pod is replaced. A run-state directory you can name is planned
-([Known limitations](../known-limitations.md#takt)).
+Under Loom, `HOME` is an emptyDir, so the transcripts go when the pod goes. At 0.14.0, copy them
+out before the pod is replaced; after it, name a directory on a kept volume with `--state-dir`,
+the configuration file's `state_dir` or the document's `runtime.state_dir`, and the transcripts
+stay under its `transcripts`, what a discarded step set aside under its `set-aside`.
 
 :::

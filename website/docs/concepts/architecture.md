@@ -158,7 +158,7 @@ line wins over the file.
 
 The deployment shape is a container image that runs
 `takt run --repo /workspace --config /config/agent.yaml`, deployed by Loom as a `LoomAgent` of
-the `Command` variant, which Loom 0.44.0 runs once as a Kubernetes Job and whose
+the `Command` variant, which Loom 0.45.0 runs once as a Kubernetes Job and whose
 `status.run` then holds takt's exit code. How to set it up:
 [Deploy on Kubernetes](../guides/deploy-on-kubernetes.md).
 
@@ -167,7 +167,7 @@ the `Command` variant, which Loom 0.44.0 runs once as a Kubernetes Job and whose
 1. **Open or resume a case.** `takt run` resolves the unit: `--case`, `--story`, `--intent`, the
    open case of a story being worked, or the next ready story from the planning store. A new
    case gets its own branch, `takt/<case>`, forked from the base, and its directory
-   `.engineering/cases/<case>/`. The run holds the case (`run.lock`) and appends an `opened` line
+   `.takt/cases/<case>/`. The run holds the case (`run.lock`) and appends an `opened` line
    to `events.jsonl`. See [Protocol and case](./protocol-and-case.md).
 2. **Evaluate.** Loom's governor evaluates the case with Canon over its files. takt writes the
    result as `decisions/NNNN.json` and prints its frontier line. See
@@ -188,7 +188,8 @@ the `Command` variant, which Loom 0.44.0 runs once as a Kubernetes Job and whose
    [Evidence and the judge](./evidence-and-the-judge.md).
 6. **Record.** Each step, effect, evidence record, refusal and decision is a line in
    `events.jsonl`; the step's transcript is kept outside the repository, under
-   `$XDG_STATE_HOME/takt/transcripts`.
+   `$XDG_STATE_HOME/takt/transcripts`, or under `<state_dir>/transcripts` when a state directory
+   is named.
 7. **Stop or go round.** After a `tests.run`, the two test stops are checked. Then the loop
    evaluates again, until an outcome is legitimate or a stop is reached, and the run prints
    `stopped: …` and exits with that stop's code. See [How a run ends](./how-a-run-ends.md).

@@ -21,8 +21,9 @@ use std::process::Command;
 use std::rc::Rc;
 
 use anyhow::anyhow;
-use takt::forge::{BotRoute, Exit, Forge, POLICY_VAR, Runner};
+use takt::forge::{BotRoute, Exit, Forge, Runner};
 use takt::harness::{Harness, StepContext, StepReport};
+use takt::scan::gates::POLICY_VAR;
 use takt::validator::{PrOpen, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -380,7 +381,7 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
     assert!(text.contains("evidence: pull_request open"), "{text}");
     let lines = gates.lines();
     assert_eq!(lines.len(), 4, "{lines:?}");
-    let artifacts = tree.join(".engineering/cases/opens/artifacts");
+    let artifacts = tree.join(".takt/cases/opens/artifacts");
     assert_eq!(
         lines[0],
         format!(

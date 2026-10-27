@@ -400,7 +400,7 @@ impl Ran {
 
 /// Every evidence record under `tree`'s cases, whichever case wrote it.
 fn evidence(tree: &Path) -> Vec<serde_json::Value> {
-    let Ok(cases) = fs::read_dir(tree.join(".engineering/cases")) else {
+    let Ok(cases) = fs::read_dir(tree.join(".takt/cases")) else {
         return Vec::new();
     };
     let mut paths = Vec::new();
@@ -922,10 +922,13 @@ fn scanned(text: &str, excepted: bool) -> Result<Vec<usize>, String> {
 }
 
 /// Whether `file` is one whose test module the scan does not read. The CLI's fixtures start
-/// `git` and `aep` to set up and read the repositories a test runs on; neither is a run's
-/// process. Everything else in the file is read.
+/// `git` and `aep` to set up and read the repositories a test runs on; the credential tests
+/// start `mkfifo` to make a pipe, and the GitLab API tests start `sh` to ask the credential
+/// helper. None is a run's process. Everything else in the file is read.
 fn excepted(file: &Path) -> bool {
     file.ends_with("takt-cli/src/main.rs")
+        || file.ends_with("takt/src/forge/credential.rs")
+        || file.ends_with("takt/src/forge/gitlab/api.rs")
 }
 
 /// Every source file the scan reads: each crate's `src/` under `crates`, the workspace's

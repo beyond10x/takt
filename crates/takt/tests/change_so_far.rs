@@ -13,7 +13,7 @@ use std::process::Command;
 
 use takt::case::Branch;
 use takt::harness::ClaudeCode;
-use takt::run::ChangeScan;
+use takt::scan::gates::ChangeScan;
 use takt::validator::Validator;
 use takt::{Run, RunOptions};
 
@@ -276,7 +276,7 @@ fn a_case_without_a_base_commit_is_told_the_change_is_not_known() {
     let scripts = directory("unknown-scripts");
     let harness = fake_claude(&scripts, APPEND);
     run_case(&tree, "unknown", 1, &harness, false, None);
-    let dir = tree.join(".engineering/cases/unknown");
+    let dir = tree.join(".takt/cases/unknown");
     let mut branch = Branch::read(&dir).expect("the branch record");
     assert!(branch.base_commit.is_some(), "the case recorded its base");
     branch.base_commit = None;

@@ -28,7 +28,8 @@ takt is one Rust binary, Apache-2.0, an application on the SDK of
 runtime drives the case, Loom's governor decides, the harness proposes. It gives you:
 
 - evidence bound to a revision, and a merge only under a grant recorded for that revision;
-- a case that is files in your repository, which a later run resumes and a reviewer replays;
+- a case that is files under `.takt/cases` in your repository, ignored by git unless you commit its
+  `.gitignore`, which a later run resumes and a reviewer replays;
 - a named stop and its own exit code for every end of a run, so a script can drive it;
 - a measured self-improvement loop: a fix counts when a check failed before it and passes after.
 
@@ -38,9 +39,9 @@ the plan, and no container image is published: you build one from `Dockerfile`.
 
 ## Status
 
-0.14.0 is the latest release. A run whose tests are red now stops (`RedBase` before the first
-model call, `RepeatedTestFailure` after two runs that fail the same tests) instead of spending model
-calls, and takt runs as a Loom agent. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
+0.15.0 is the latest release. A run names the Claude Code binary it starts (`--harness-program`)
+and stops `HarnessUnqualified` before the first session when metaharness does not qualify it, so a
+trial on a GitHub repository can end with its pull request merged. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64) are on the
 [releases](https://github.com/beyond10x/takt/releases) page. Changes: [`CHANGELOG.md`](CHANGELOG.md).
 

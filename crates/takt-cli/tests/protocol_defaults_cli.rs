@@ -139,7 +139,7 @@ fn status(repo: &Path, id: &str) -> String {
 
 /// The one case directory under `repo`, by name.
 fn the_case(repo: &Path) -> String {
-    let mut cases: Vec<String> = fs::read_dir(repo.join(".engineering/cases"))
+    let mut cases: Vec<String> = fs::read_dir(repo.join(".takt/cases"))
         .expect("a cases directory")
         .map(|e| {
             e.expect("an entry")

@@ -94,7 +94,7 @@ frontier: implementation.edit (admissible), release.rollback (approval-required)
 step 1: tests.run {}
   effect: the test command exited 101: fail; 0 passed, 1 failed, 0 ignored over 1 result line; to rerun pass `--lib`; failed: tests::adds_two_numbers
   evidence: test_result fail
-stopped: RedBase (the tests fail at the case's base 4663159f, before any step changed it: tests::adds_two_numbers; to rerun pass `--lib`); steps 1, tokens 0, case ~/red/.engineering/cases/takt-20261026T231110Z
+stopped: RedBase (the tests fail at the case's base 4663159f, before any step changed it: tests::adds_two_numbers; to rerun pass `--lib`); steps 1, tokens 0, case ~/red/.takt/cases/takt-20261026T231110Z
 $ echo $?
 3
 ```
@@ -111,7 +111,7 @@ step 1: tests.run {}
   effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
-stopped: Iterations (1); steps 1, tokens 0, case ~/green/.engineering/cases/takt-20261026T231123Z
+stopped: Iterations (1); steps 1, tokens 0, case ~/green/.takt/cases/takt-20261026T231123Z
 $ echo $?
 3
 ```
@@ -126,14 +126,16 @@ for the approval gate. `takt approve` records the grant, and the next run resume
 
 `stopped: error: <what>`: the run ended on an error once its case was open, such as a forge that
 refused, a validator or a harness that failed. Whatever the failed step changed is discarded, the
-error is recorded as an `error` line, and the case stays open. With `--harness none`, a run past
+error is recorded as an `error` line, and the case stays open. A judgement step whose session
+ends without the line naming its action is tried again first, 3 tries at most, each try a step
+that `--iterations` counts; a try that spent the budget stops the run on the budget, exit 3. With `--harness none`, a run past
 a red base ends here as soon as a judgement step is the only way on:
 
 ```console
 $ takt run --repo ~/red --case takt-20261026T231110Z --harness none --forge none --iterations 3 --continue-past-red-base
 case takt-20261026T231110Z on software.change/1 in ~/red; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
 frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-stopped: error: step 1: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left; steps 1, tokens 0, case ~/red/.engineering/cases/takt-20261026T231110Z
+stopped: error: step 1: the harness failed; everything the step changed was discarded: no harness: a judgement step among implementation.edit, tests.write is left; steps 1, tokens 0, case ~/red/.takt/cases/takt-20261026T231110Z
 ```
 
 ### Waiting: exit 6
@@ -164,7 +166,7 @@ trial runner discards it rather than resume it.
 
 A run's outcome lives in its files and its exit code, never only in a process, so a script, a CI
 job or an orchestrator can drive takt without parsing its output. Under Loom, a takt container
-deployed as a `LoomAgent` of the `Command` variant runs once as a Job, and Loom 0.44.0 writes the
+deployed as a `LoomAgent` of the `Command` variant runs once as a Job, and Loom 0.45.0 writes the
 program's exit code, end time and reason into the resource's `status.run` and its `Completed`
 condition. A delivery run is built to end on 0 (accepted, or nothing ready), 3 (a budget, or
 tests that need a person), 4 (the merge waits for a grant) or 7 (`forge: none`, with the

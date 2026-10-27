@@ -82,6 +82,27 @@ pub enum Event {
     /// userinfo, query or fragment), wire and model, the token file's path (`~/…` under HOME)
     /// and pointer or the secret's namespace and name, never a token. Absent for a harness
     /// pointed at none (`claude`, `codex`, `none`) and on a line written before it.
+    /// The records profile the case keeps its decisions under, `default` or `trial`
+    /// ([`crate::case::Records`]), as the case keeps them: a scenario run and an improvement
+    /// case keep every decision, so their line says `trial` whatever was asked. Absent on a
+    /// line written before it, which a reader reads as every decision kept.
+    ///
+    /// The scan: the name of the run's scan adapter ([`crate::scan::Scan::name`]), `gates` or
+    /// `none`, the one every proposal and the change so far pass; absent on a line written
+    /// before it, which a reader reads as "scan not recorded".
+    ///
+    /// Where the protocol was chosen from (`protocol_source`) and where each input's value came
+    /// from (`input_sources`, input name to `flag`, `tag`, `run-file` or `default`), as the case
+    /// record holds them; absent on a line written before, and for a case that records none.
+    ///
+    /// The harness program (`harness_program`): the absolute path the sessions start it by, the
+    /// sha256 of its bytes and the first line its `--version` printed ([`crate::harness::ProgramRecord`]);
+    /// absent for a harness that starts none, a name found nowhere and on a line written before.
+    ///
+    /// The preflight: what metaharness read of the harness binary before the first session, its
+    /// kind, its version and the rows that were not `ok` and did not stop the run, as advisory
+    /// ([`crate::harness::Preflight`]); absent for a harness that starts no program of its own
+    /// and on a line written before it.
     Opened {
         case: String,
         protocol: String,
@@ -98,6 +119,18 @@ pub enum Event {
         confinement: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         endpoint: Option<crate::harness::EndpointConfig>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        records: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scan: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        protocol_source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_sources: Option<BTreeMap<String, String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        harness_program: Option<crate::harness::ProgramRecord>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preflight: Option<Box<crate::harness::Preflight>>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.
@@ -156,14 +189,23 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         revision: Option<String>,
     },
+    /// A step commit's message is not the harness's: its reply held no `commit`, or one that
+    /// failed the check of its shape ([`crate::commit_style::message`]), so the message is the
+    /// fallback. The reason names the check, never the reply's text. Written before the step's
+    /// `effect` line.
+    #[serde(rename = "commit.fallback")]
+    CommitFallback { reason: String },
     /// An evidence record a validator wrote under the case: its id, kind and result, and its
-    /// path relative to the tree.
+    /// path relative to the tree; and, when the observation failed checks, what each printed
+    /// that names what failed ([`crate::validator::FailedCheck`]), absent when none did.
     Evidence {
         id: String,
         kind: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
         path: String,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        failed: Vec<crate::validator::FailedCheck>,
     },
     /// An evidence record written on the story in the planning store: the kind, the reference
     /// and the instant given to the store (the case's record's own `observed_at`), and the
@@ -211,12 +253,17 @@ pub enum Event {
 }
 
 /// One line of the file: the instant, the step, the event.
+/// On a run's `opened` line, the digest of the `llm.routes/1` document the run ran under.
 #[derive(Serialize)]
 struct Line<'a> {
     at: String,
     step: u64,
     #[serde(flatten)]
     event: &'a Event,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    llm_digest: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    commit: Option<&'a serde_json::Value>,
 }
 
 /// The run record of one case.
@@ -247,6 +294,37 @@ impl Events {
     /// the reader knows the torn one was skipped. A symbolic link at the path is refused, never
     /// written through ([`Events::open`]).
     pub fn emit(&self, step: u64, event: &Event) -> Result<()> {
+        self.append(step, event, None, None)
+    }
+
+    /// Appends the `opened` line of a run: `event` as [`Events::emit`] appends it, with the digest
+    /// of the `llm.routes/1` document the run ran under as its `llm_digest` member; no member when
+    /// the run had no such document.
+    pub fn emit_opened(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
+        self.append(step, event, llm_digest, None)
+    }
+
+    /// [`Events::emit_opened`], the line also carrying `commit`, the commit style in effect
+    /// ([`crate::commit_style::Plan::record`]) as its `commit` member.
+    pub fn emit_opened_with(
+        &self,
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: &serde_json::Value,
+    ) -> Result<()> {
+        self.append(step, event, llm_digest, Some(commit))
+    }
+
+    /// The write [`Events::emit`] and [`Events::emit_opened`] make: `event` at `step`, after the
+    /// torn line ends when there is one.
+    fn append(
+        &self,
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: Option<&serde_json::Value>,
+    ) -> Result<()> {
         let mut file = self
             .open(
                 std::fs::OpenOptions::new()
@@ -267,9 +345,11 @@ impl Events {
                     line,
                     reason: "the line was cut short, without its end, and is skipped".to_owned(),
                 },
+                None,
+                None,
             )?);
         }
-        text.push_str(&Self::line(step, event)?);
+        text.push_str(&Self::line(step, event, llm_digest, commit)?);
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", self.path.display()))
     }
@@ -293,11 +373,18 @@ impl Events {
     }
 
     /// `event` at `step`, the instant now, as one line with its end.
-    fn line(step: u64, event: &Event) -> Result<String> {
+    fn line(
+        step: u64,
+        event: &Event,
+        llm_digest: Option<&str>,
+        commit: Option<&serde_json::Value>,
+    ) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
             at: instant(),
             step,
             event,
+            llm_digest,
+            commit,
         })
         .context("write an event")?;
         line.push('\n');

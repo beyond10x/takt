@@ -99,7 +99,9 @@ impl World {
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
-            .env_remove("B10X_GATES_POLICY")
+            // A harness run opens only under a policy or a declared `scan: none`
+            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
+            .env("B10X_GATES_POLICY", self.outer().join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .env(VARIABLE, MARKER);
         command
@@ -181,7 +183,7 @@ fn an_api_key_on_the_messages_wire_is_not_handed_as_a_subscription_oauth_token()
     );
     assert!(!said.contains(MARKER), "{said}");
     assert!(
-        !world.repo().join(".engineering/cases").exists(),
+        !world.repo().join(".takt/cases").exists(),
         "no case was opened"
     );
     assert!(world.staged().is_empty(), "nothing was staged");

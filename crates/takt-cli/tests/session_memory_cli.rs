@@ -42,6 +42,7 @@ fn executable(path: &Path, text: &str) {
 /// having written a test file, the result event naming `tests.write`.
 fn fake_claude(at: &Path, seen: &Path) {
     let script = r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 settings=''
 prev=''
 restricted=no

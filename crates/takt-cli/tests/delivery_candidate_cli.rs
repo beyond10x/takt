@@ -176,6 +176,7 @@ fn world(name: &str, identity: bool) -> World {
     executable(
         &bin.join("claude"),
         r#"#!/bin/sh
+case $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac
 case "$2" in
   *"- change.handover:"*)
     if [ -e work.txt ]; then action=change.handover;
@@ -368,7 +369,7 @@ fn a_forge_none_delivery_hands_a_turn_its_candidate() {
         "stdout {out} stderr {err}"
     );
     assert_eq!(code, 3, "stdout {out} stderr {err}");
-    let case = fs::read_to_string(world.repo.join(".engineering/cases/turn-1/case.yaml"))
+    let case = fs::read_to_string(world.repo.join(".takt/cases/turn-1/case.yaml"))
         .unwrap_or_else(|_| panic!("no turn opened: stdout {out} stderr {err}"));
     assert!(case.contains(&candidate), "{case}");
     assert_eq!(world.route_calls(), "", "the route was called");

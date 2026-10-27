@@ -15,7 +15,7 @@ use std::process::{Output, Stdio};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
-use crate::case::{CASES_DIR, is_under_cases};
+use crate::case::{CASE_ROOTS, holds_cases_root, is_under_cases};
 use crate::confinement::Command;
 
 /// What every git takt runs is told on its command line, over whatever the repository's, the
@@ -1198,7 +1198,9 @@ pub fn commit_paths(
         ("GIT_COMMITTER_NAME", identity.name.as_str()),
         ("GIT_COMMITTER_EMAIL", identity.email.as_str()),
     ];
-    let mut commit: Vec<&str> = vec!["commit", "-q", "--only", "-m", message];
+    let file = MessageFile::write(tree, message)?;
+    let named = file.path.to_string_lossy().into_owned();
+    let mut commit: Vec<&str> = vec!["commit", "-q", "--only", "-F", &named];
     if paths.is_empty() {
         commit.push("--allow-empty");
         raw_with(tree, &commit, None, &env)?;
@@ -1221,6 +1223,35 @@ pub fn commit_paths(
         raw_with(tree, &literal, Some(&list), &env)?;
     }
     head(tree)
+}
+
+/// A commit message in a file of the repository's own git directory, which `git commit -F` reads:
+/// the message never rides on a command line, whatever its length, and the file is removed when
+/// this is dropped.
+struct MessageFile {
+    path: PathBuf,
+}
+
+impl MessageFile {
+    fn write(tree: &Path, message: &str) -> Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNT: AtomicU64 = AtomicU64::new(0);
+        let git_dir = PathBuf::from(run(tree, &["rev-parse", "--absolute-git-dir"])?);
+        let path = git_dir.join(format!(
+            "takt-commit-message.{}.{}",
+            std::process::id(),
+            COUNT.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::write(&path, message)
+            .with_context(|| format!("write the commit message to {}", path.display()))?;
+        Ok(Self { path })
+    }
+}
+
+impl Drop for MessageFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 /// The paths among `paths`, or under one of them, that the index holds as a gitlink (mode
@@ -1266,9 +1297,20 @@ fn new_gitlinks(tree: &Path, paths: &[String]) -> Result<Vec<String>> {
 /// tracked files back to `HEAD`, untracked files removed; ignored files stay. For a tree that was
 /// clean when the work being discarded began, so that everything uncommitted is that work's.
 pub fn discard_uncommitted(tree: &Path) -> Result<()> {
-    let keep = format!("{CASES_DIR}/");
     run(tree, &["reset", "-q", "--hard", "HEAD"])?;
-    run(tree, &["clean", "-fdq", "-e", &keep])?;
+    clean_untracked(tree)
+}
+
+/// `git clean -fdq` with each cases root kept (the new one and the legacy one): the untracked
+/// files a case holds are the case's, and a `.takt/.gitignore` that un-ignores them leaves them
+/// untracked and in reach of a clean.
+fn clean_untracked(tree: &Path) -> Result<()> {
+    let keep: Vec<String> = CASE_ROOTS.iter().map(|root| format!("{root}/")).collect();
+    let mut args = vec!["clean", "-fdq"];
+    for pattern in &keep {
+        args.extend(["-e", pattern.as_str()]);
+    }
+    run(tree, &args)?;
     Ok(())
 }
 
@@ -1892,8 +1934,16 @@ fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<OsString,
     for path in ignored(entries) {
         let path = OsString::from(path);
         let content = Content::of(&at(tree, &path))?;
+        // A directory that holds a cases root is kept as what is in it, never as a whole: the
+        // step's own files below it are put back or removed, the cases root is not. The files
+        // directly in it are kept as their bytes, since git names none of them when the
+        // directory is ignored as a whole, so each can be put back or set aside as it was.
+        if content == Content::Dir && holds_cases_root(&path.to_string_lossy()) {
+            below(tree, &path, true, &mut found)?;
+            continue;
+        }
         if content == Content::Dir {
-            below(tree, &path, &mut found)?;
+            below(tree, &path, false, &mut found)?;
         }
         // A directory that cannot be listed was recorded as such by [`below`].
         found.entry(path).or_insert(content);
@@ -1931,8 +1981,15 @@ pub fn shown(path: &OsStr) -> String {
 /// cases directory, into `found`: a directory as itself, its path ending in `/`, and what is in
 /// it in turn; a link as the link, never followed; anything else by its kind and [`Stamp`],
 /// never opened, so that a large `target/` costs one `lstat` a path and nothing of it is kept to
-/// put back. A directory that cannot be listed is compared by its stamp alone.
-fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> Result<()> {
+/// put back. With `kept`, the regular files directly in `dir` are kept as their bytes instead,
+/// as a directory that holds a cases root (`.takt`) keeps its own files. A directory that cannot
+/// be listed is compared by its stamp alone.
+fn below(
+    tree: &Path,
+    dir: &OsStr,
+    kept: bool,
+    found: &mut BTreeMap<OsString, Content>,
+) -> Result<()> {
     let full = at(tree, dir);
     let listed = match std::fs::read_dir(&full) {
         Ok(listed) => listed,
@@ -1951,9 +2008,15 @@ fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> R
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).with_context(|| format!("list {}", full.display())),
     };
+    // A name is joined to `dir` with its `/`, which an ignored directory's name carries and a
+    // name given without one, such as a link's, does not.
+    let mut prefix = dir.to_owned();
+    if !names_dir(&prefix) {
+        prefix.push("/");
+    }
     for entry in listed {
         let entry = entry.with_context(|| format!("list {}", full.display()))?;
-        let mut path = dir.to_owned();
+        let mut path = prefix.clone();
         path.push(entry.file_name());
         // The cases directory's name is ASCII: a name that is not UTF-8 is never under it.
         if is_under_cases(&path.to_string_lossy()) {
@@ -1969,12 +2032,14 @@ fn below(tree: &Path, dir: &OsStr, found: &mut BTreeMap<OsString, Content>) -> R
         let kind = meta.file_type();
         if kind.is_dir() {
             path.push("/");
-            below(tree, &path, found)?;
+            below(tree, &path, false, found)?;
             found.entry(path).or_insert(Content::Dir);
         } else if kind.is_symlink() {
             let target = std::fs::read_link(entry.path())
                 .with_context(|| format!("read {}", entry.path().display()))?;
             found.insert(path, Content::Link(target));
+        } else if kept && kind.is_file() {
+            found.insert(path, Content::of(&entry.path())?);
         } else {
             let what = if kind.is_file() {
                 "a file in an ignored directory"
@@ -2084,7 +2149,7 @@ pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
     if !dir.is_absolute() {
         bail!(
             "the set-aside directory {} is not an absolute path",
-            dir.display()
+            shown(dir.as_os_str())
         );
     }
     // The longest part of the way that exists, and the rest as it is.
@@ -2106,19 +2171,19 @@ pub fn set_aside_root(dir: &Path, tree: &Path) -> Result<PathBuf> {
     if !std::fs::metadata(base).is_ok_and(|meta| meta.is_dir()) {
         bail!(
             "the set-aside directory {} cannot be made: {} is not a directory",
-            dir.display(),
-            base.display()
+            shown(dir.as_os_str()),
+            shown(base.as_os_str())
         );
     }
     let resolved = std::fs::canonicalize(base)
-        .with_context(|| format!("resolve {}", base.display()))?
+        .with_context(|| format!("resolve {}", shown(base.as_os_str())))?
         .join(rest);
     let tree_resolved = std::fs::canonicalize(tree).unwrap_or_else(|_| tree.to_path_buf());
     if resolved.starts_with(&tree_resolved) || dir.starts_with(tree) {
         bail!(
             "the set-aside directory {} is inside the tree {}, where a later restore would remove what was moved",
-            dir.display(),
-            tree.display()
+            shown(dir.as_os_str()),
+            shown(tree.as_os_str())
         );
     }
     Ok(resolved)
@@ -2830,9 +2895,8 @@ impl Checkpoint {
                 run(tree, &["update-ref", "-d", reference])?;
             }
         }
-        let keep = format!("{CASES_DIR}/");
         run(tree, &["reset", "-q", "--hard", &self.head])?;
-        run(tree, &["clean", "-fdq", "-e", &keep])?;
+        clean_untracked(tree)?;
         let now = ignored_contents(tree, &status(tree, true)?)?;
         let to_move = self.set_aside_of(&now);
         for path in now.keys() {
