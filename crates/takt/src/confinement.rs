@@ -1078,14 +1078,37 @@ impl Opened {
         if facts.serves(&ContractFamily::Limits) {
             profile.process_bounds = Some(bounds);
         }
-        if !self.candidate.paths_are_host_paths() && Path::new(ALTERNATIVES).is_dir() {
-            profile.read_only_roots.push(ReadOnlyRoot {
-                host_path: ALTERNATIVES.to_owned(),
-                mount: ALTERNATIVES.to_owned(),
-            });
-        }
         profile
     }
+}
+
+/// Where `/usr/bin/cc`, the linker cargo calls by default, links through `/etc` (the
+/// alternatives of a Debian or Ubuntu host), which a Linux adapter does not show: makes `dir/cc`
+/// a link to the program it resolves to beneath `/usr`, for a `PATH` entry ahead of `/usr/bin`.
+/// Whether `dir/cc` is there; elsewhere nothing is made.
+///
+/// # Errors
+///
+/// `dir` or the link cannot be made.
+pub fn linker_link(dir: &Path) -> anyhow::Result<bool> {
+    let cc = Path::new("/usr/bin/cc");
+    if !std::fs::read_link(cc).is_ok_and(|to| to.starts_with("/etc")) {
+        return Ok(false);
+    }
+    let Ok(resolved) = cc.canonicalize() else {
+        return Ok(false);
+    };
+    if !resolved.starts_with("/usr/") {
+        return Ok(false);
+    }
+    let link = dir.join("cc");
+    if std::fs::symlink_metadata(&link).is_ok() {
+        return Ok(true);
+    }
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    std::os::unix::fs::symlink(&resolved, &link)
+        .with_context(|| format!("link {} to {}", link.display(), resolved.display()))?;
+    Ok(true)
 }
 
 /// The longest a confined run may be held to: a day, Substrate's cap.
@@ -1374,9 +1397,6 @@ const INSIDE_RUST: &str = "/toolchain/rust";
 const INSIDE_CARGO: &str = "/toolchain/cargo";
 /// Where a Linux adapter shows the workspace.
 const INSIDE_WORKSPACE: &str = "/workspace";
-/// The alternatives directory of a Debian or Ubuntu host, shown read-only at its own path on a
-/// Linux adapter where it exists: `/usr/bin/cc`, the linker cargo calls, links through it.
-const ALTERNATIVES: &str = "/etc/alternatives";
 
 impl TestPlan {
     /// `cargo <args>` in `tree` on `opened`, the toolchain at `toolchain`.
@@ -1477,10 +1497,11 @@ impl TestPlan {
                 });
             }
             let workspace = INSIDE_WORKSPACE;
-            env.insert(
-                "PATH".to_owned(),
-                format!("{INSIDE_RUST}/bin:/usr/bin:/bin"),
-            );
+            let mut path = format!("{INSIDE_RUST}/bin:/usr/bin:/bin");
+            if linker_link(&scratch.0.join("linker"))? {
+                path = format!("{workspace}/target/{name}/linker:{path}");
+            }
+            env.insert("PATH".to_owned(), path);
             env.insert("HOME".to_owned(), "/tmp".to_owned());
             env.insert(
                 "CARGO_HOME".to_owned(),

@@ -1581,10 +1581,17 @@ impl Confinement {
         )?;
         let (home, tmp) = Self::scratch(confined, work)?;
         let developer = confined.developer_programs();
-        let path = match &developer {
+        let mut path = match &developer {
             Some(developer) => format!("{bin}:{developer}:/usr/bin:/bin"),
             None => format!("{bin}:/usr/bin:/bin"),
         };
+        let linker = work.dir.join("linker");
+        if crate::confinement::linker_link(&linker)? {
+            path = format!(
+                "{}:{path}",
+                confined.sees(&linker, &format!("{INSIDE_WORKSPACE}/linker"))?
+            );
+        }
         let mut env = BTreeMap::from([
             ("PATH".to_owned(), path),
             ("HOME".to_owned(), home),

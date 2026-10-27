@@ -1019,7 +1019,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:3227
   # read from: crates/takt/src/scorecard.rs:565-584
   # read from: crates/takt/src/scorecard.rs:1529-1568
-  # read from: crates/takt/src/promotion.rs:3141-3148
+  # read from: crates/takt/src/promotion.rs:3148-3155
   # read from: crates/takt/src/run.rs:11619-11623
   # read from: crates/takt/src/run.rs:213
   # read from: crates/takt/src/run.rs:9823-9832
@@ -2444,8 +2444,8 @@ types:
   # read from: crates/takt/src/scorecard.rs:289-355
   # read from: crates/takt/src/scorecard.rs:1068-1133
   # read from: crates/takt/src/scorecard.rs:94-108
-  # read from: crates/takt/src/promotion.rs:1958-1972
-  # read from: crates/takt/src/promotion.rs:2900-2925
+  # read from: crates/takt/src/promotion.rs:1965-1979
+  # read from: crates/takt/src/promotion.rs:2907-2932
   # read from: crates/takt/src/scorecard.rs:189-196
   # read from: crates/takt/src/scorecard.rs:450-451
   # read from: crates/takt/src/scorecard.rs:793-808
@@ -3033,7 +3033,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:1495-1499
   # read from: crates/takt/src/scorecard.rs:1595-1599
   # read from: crates/takt/src/scorecard.rs:1529-1568
-  # read from: crates/takt/src/promotion.rs:3141-3148
+  # read from: crates/takt/src/promotion.rs:3148-3155
   # read from: crates/takt/src/scorecard.rs:925-948
   # read from: crates/takt/src/scorecard.rs:1465-1466
   # read from: crates/takt/src/improvement.rs:958-963
@@ -3201,13 +3201,13 @@ types:
   # judge no candidate; so a rebaseline under `tokens` version 2 whose re-read finds a run the
   # stored scorecard summed as 0 is refused, and that stored figure is not carried over.
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:2934-3132
+  # read from: crates/takt/src/promotion.rs:2941-3139
   # read from: crates/takt/src/promotion.rs:967-1094
   # read from: crates/takt/src/promotion.rs:762-801
   # read from: crates/takt/src/promotion.rs:920-965
-  # read from: crates/takt/src/promotion.rs:2658-2663
-  # read from: crates/takt/src/promotion.rs:2520-2522
-  # read from: crates/takt/src/promotion.rs:2973-2976
+  # read from: crates/takt/src/promotion.rs:2665-2670
+  # read from: crates/takt/src/promotion.rs:2527-2529
+  # read from: crates/takt/src/promotion.rs:2980-2983
   - name: takt.work.PromotionKind
     kind: enum
     variants: [baseline, promotion, refused, rebaseline]
@@ -3527,8 +3527,8 @@ types:
   # read from: .engineering/planning/story/confinement-seam.md:78
   # read from: crates/takt/src/confinement.rs:276-287
   # read from: crates/takt/src/confinement.rs:342-348
-  # read from: crates/takt/src/confinement.rs:1208-1233
-  # read from: crates/takt/src/confinement.rs:1236-1242
+  # read from: crates/takt/src/confinement.rs:1231-1256
+  # read from: crates/takt/src/confinement.rs:1259-1265
   # read from: crates/takt/src/validator.rs:2563-2582
   # read from: crates/takt-cli/src/main.rs:1141-1158
   - name: takt.work.ConfinementName
@@ -4125,7 +4125,7 @@ entities:
       # operator runs, and what the operator's account can write, are trusted, as everything
       # under `--forge none` is (story:self-improvement-protocol, part 2, correction 2).
       # read from: crates/takt/src/case.rs:4185-4196
-      # read from: crates/takt/src/promotion.rs:2381-2386
+      # read from: crates/takt/src/promotion.rs:2388-2393
       # read from: crates/takt-cli/src/main.rs:1690-1699
       # read from: crates/takt-cli/src/main.rs:3844-3856
       - name: judge
@@ -5640,9 +5640,9 @@ entities:
   # read from: .engineering/planning/story/promotion.md:52-54
   # read from: crates/takt-cli/tests/promote_cli.rs:1344-1349
   # read from: crates/takt/src/promotion.rs:1230-1236
-  # read from: crates/takt/src/promotion.rs:1736-1847
-  # read from: crates/takt/src/promotion.rs:2230-2503
-  # read from: crates/takt/src/promotion.rs:2510-2897
+  # read from: crates/takt/src/promotion.rs:1743-1854
+  # read from: crates/takt/src/promotion.rs:2237-2510
+  # read from: crates/takt/src/promotion.rs:2517-2904
   # Where it is kept, decided 2026-10-18: one JSON file per promotion at
   # `$XDG_STATE_HOME/takt/promotions/<revision>.json` (`~/.local/state/takt/promotions/` without
   # `XDG_STATE_HOME`; a refusal as `<revision>.refused.json`; the scorecard a baseline or a
@@ -5710,10 +5710,10 @@ entities:
   # fail-closed reads are untouched. A run whose `opened` line names no revision (no `binary`, or
   # `unknown revision`) beside a run whose line names one is refused naming it, the mix a save
   # refuses (story:scorecard-save-checks-binary, decided 2026-10-19).
-  # read from: crates/takt/src/promotion.rs:2083-2118
-  # read from: crates/takt/src/promotion.rs:2120-2145
-  # read from: crates/takt/src/promotion.rs:2147-2203
-  # read from: crates/takt/src/promotion.rs:1991-2030
+  # read from: crates/takt/src/promotion.rs:2090-2125
+  # read from: crates/takt/src/promotion.rs:2127-2152
+  # read from: crates/takt/src/promotion.rs:2154-2210
+  # read from: crates/takt/src/promotion.rs:1998-2037
   # One scorecard backs at most one promotion, decided 2026-10-18: one-to-one, the promotion
   # referencing its scorecard. A relation entry carries no bound on the scorecard's side, so the
   # bound is stated here.
@@ -5745,9 +5745,9 @@ entities:
   # judged again.
   # read from: .engineering/planning/story/promote-binds-scorecard-and-merge.md (§ Outcome)
   # read from: .engineering/planning/story/promotion-refusal-is-not-final.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:1850-1928
-  # read from: crates/takt/src/promotion.rs:2569-2635
-  # read from: crates/takt/src/promotion.rs:3135-3182
+  # read from: crates/takt/src/promotion.rs:1857-1935
+  # read from: crates/takt/src/promotion.rs:2576-2642
+  # read from: crates/takt/src/promotion.rs:3142-3189
   # read from: crates/takt/src/promotion.rs:1097-1130
   # Decided 2026-10-19 (story:promotion-chain-head-anchored): the chain's last record is anchored
   # by its head (takt.work.PromotionHead), written by every write of a record and pointed back by
@@ -5779,7 +5779,7 @@ entities:
   # record without it read; `worse` counts the scenarios any comparison marked worse, once each.
   # Amended 2026-10-19 (review F1): a rebaseline adding a scenario had started a new series.
   # read from: .engineering/planning/story/promotion-judged-against-the-series-baseline.md (§ Outcome)
-  # read from: crates/takt/src/promotion.rs:2702-2814
+  # read from: crates/takt/src/promotion.rs:2709-2821
   # read from: crates/takt/src/promotion.rs:226-232
   # read from: crates/takt-cli/src/main.rs:91-95
   # read from: crates/takt-cli/src/main.rs:367
@@ -5791,8 +5791,8 @@ entities:
   # scorecard, a series start's or an adding rebaseline's that the candidate is compared with
   # holding one, naming the record, the case and the step. Each is exit 1, nothing judged,
   # recorded or installed.
-  # read from: crates/takt/src/promotion.rs:2712-2715
-  # read from: crates/takt/src/promotion.rs:2761-2762
+  # read from: crates/takt/src/promotion.rs:2719-2722
+  # read from: crates/takt/src/promotion.rs:2768-2769
   # read from: crates/takt-cli/src/main.rs:365
   - name: takt.work.Promotion
     naming:
