@@ -557,29 +557,35 @@ pub fn choose_protocol(request: &SettingsRequest<'_>) -> Result<(String, Source,
     Ok((spec, source, protocol))
 }
 
-/// Resolves what a case opens on, refusing before anything is opened what the run file, a tag or
-/// the command line gets wrong.
+/// Refuses a run file whose `protocol` or `protocols` section names what takt does not know,
+/// naming the file and the line: a protocol no built-in is, an input the protocol does not
+/// declare, a value outside its declared values. Every entry is checked, whichever protocol the
+/// case opens on and whatever the unit, a case opened, resumed or opened on an intent;
+/// `chosen`, when given, is the protocol a section naming it is checked against, so one chosen
+/// by `--protocol` as a file is read as it is.
 ///
-/// The protocol is the first of `--protocol`, the story's tag `protocol:<name>/<major>`, the run
-/// file's `protocol` (for a story of the planning store) and the default. Each declared input
-/// takes the first of `--input`, the story's tag `input:<name>=<value>`, the run file's
-/// `protocols` section for the protocol, and takt's built-in default; an input nobody sets is
-/// left out, and opening the case refuses it, naming its values. Every entry of the run file's
-/// `protocols` is checked, whichever protocol the case opens on: an unknown protocol, input or
-/// value is refused naming the file and the line, and a tag's or a flag's input the protocol does
-/// not declare is refused naming it. A tag or a key names a built-in protocol only, never a file.
-pub fn resolve_settings(request: &SettingsRequest<'_>) -> Result<Settings> {
-    let file = request.file;
+/// # Errors
+/// The first entry that is refused.
+pub fn check_run_file(
+    file: &crate::run_config::ProtocolSettings,
+    chosen: Option<&LoadedProtocol>,
+) -> Result<()> {
     let known = || builtin_ids().join(", ");
-    let (spec, source, protocol) = choose_protocol(request)?;
-    let declared = protocol.declared_inputs();
-    // Every entry of the run file's `protocols`, against the protocol it names.
-    let mut from_file: Vec<(&str, &crate::run_config::InputSetting)> = Vec::new();
+    if let Some((key, line)) = &file.protocol
+        && LoadedProtocol::builtin(key).is_err()
+    {
+        return Err(file.refusal(
+            *line,
+            &format!(
+                "`protocol` names no protocol takt knows; it knows {}",
+                known()
+            ),
+        ));
+    }
     for section in &file.sections {
-        let target = if names(&section.protocol, &protocol) {
-            protocol.clone()
-        } else {
-            builtin_named(&section.protocol).ok_or_else(|| {
+        let target = match chosen.filter(|protocol| names(&section.protocol, protocol)) {
+            Some(protocol) => protocol.clone(),
+            None => builtin_named(&section.protocol).ok_or_else(|| {
                 file.refusal(
                     section.line,
                     &format!(
@@ -587,7 +593,7 @@ pub fn resolve_settings(request: &SettingsRequest<'_>) -> Result<Settings> {
                         known()
                     ),
                 )
-            })?
+            })?,
         };
         let theirs = target.declared_inputs();
         for set in &section.inputs {
@@ -613,7 +619,32 @@ pub fn resolve_settings(request: &SettingsRequest<'_>) -> Result<Settings> {
                     ),
                 ));
             }
-            if names(&section.protocol, &protocol) {
+        }
+    }
+    Ok(())
+}
+
+/// Resolves what a case opens on, refusing before anything is opened what the run file, a tag or
+/// the command line gets wrong.
+///
+/// The protocol is the first of `--protocol`, the story's tag `protocol:<name>/<major>`, the run
+/// file's `protocol` (for a story of the planning store) and the default. Each declared input
+/// takes the first of `--input`, the story's tag `input:<name>=<value>`, the run file's
+/// `protocols` section for the protocol, and takt's built-in default; an input nobody sets is
+/// left out, and opening the case refuses it, naming its values. Every entry of the run file's
+/// `protocols` is checked, whichever protocol the case opens on: an unknown protocol, input or
+/// value is refused naming the file and the line, and a tag's or a flag's input the protocol does
+/// not declare is refused naming it. A tag or a key names a built-in protocol only, never a file.
+pub fn resolve_settings(request: &SettingsRequest<'_>) -> Result<Settings> {
+    let file = request.file;
+    let (spec, source, protocol) = choose_protocol(request)?;
+    check_run_file(file, Some(&protocol))?;
+    let declared = protocol.declared_inputs();
+    // The entries of the run file's `protocols` that set an input of the protocol chosen.
+    let mut from_file: Vec<(&str, &crate::run_config::InputSetting)> = Vec::new();
+    for section in &file.sections {
+        if names(&section.protocol, &protocol) {
+            for set in &section.inputs {
                 from_file.push((section.protocol.as_str(), set));
             }
         }
@@ -709,6 +740,9 @@ pub struct RunFileValue {
     pub path: Option<std::path::PathBuf>,
     /// The line the value is written on, 1-based.
     pub line: usize,
+    /// Why `takt run` refuses the value, when it does: a value outside the input's declared
+    /// values.
+    pub refused: Option<String>,
 }
 
 /// One declared input of a protocol as `takt protocol show` lists it.
@@ -757,23 +791,32 @@ pub fn list_settings(
         .declared_inputs()
         .into_iter()
         .map(|input| {
-            let run_file = file
-                .sections
-                .iter()
-                .filter(|section| names(&section.protocol, &protocol))
-                .flat_map(|section| {
-                    section
-                        .inputs
-                        .iter()
-                        .filter(|set| set.input == input.name)
-                        .map(move |set| (section.protocol.contains('/'), set))
-                })
-                .max_by_key(|(specific, _)| *specific)
-                .map(|(_, set)| RunFileValue {
-                    value: set.value.clone(),
-                    path: file.file.clone(),
-                    line: set.line,
-                });
+            let run_file =
+                file.sections
+                    .iter()
+                    .filter(|section| names(&section.protocol, &protocol))
+                    .flat_map(|section| {
+                        section
+                            .inputs
+                            .iter()
+                            .filter(|set| set.input == input.name)
+                            .map(move |set| (section.protocol.contains('/'), set))
+                    })
+                    .max_by_key(|(specific, _)| *specific)
+                    .map(|(_, set)| RunFileValue {
+                        value: set.value.clone(),
+                        path: file.file.clone(),
+                        line: set.line,
+                        refused: (!input.values.is_empty() && !input.values.contains(&set.value))
+                            .then(|| {
+                                format!(
+                                    "the input {} of {} takes one of {}",
+                                    input.name,
+                                    protocol.id,
+                                    declared_values(&input)
+                                )
+                            }),
+                    });
             InputListing {
                 default: builtin_default(&protocol.id, &input.name).map(str::to_owned),
                 name: input.name,
@@ -812,15 +855,23 @@ impl ProtocolListing {
                 input.default.as_deref().unwrap_or("none")
             ));
             match &input.run_file {
-                Some(set) => text.push_str(&format!(
-                    "  run file: {} ({}:{})\n",
-                    set.value,
-                    set.path.as_ref().map_or_else(
-                        || "<run file>".to_owned(),
-                        |path| path.display().to_string()
-                    ),
-                    set.line
-                )),
+                Some(set) => {
+                    let at = format!(
+                        "{}:{}",
+                        set.path.as_ref().map_or_else(
+                            || "<run file>".to_owned(),
+                            |path| path.display().to_string()
+                        ),
+                        set.line
+                    );
+                    match &set.refused {
+                        Some(why) => text.push_str(&format!(
+                            "  run file: refused: {} ({at}); takt run refuses it: {why}\n",
+                            set.value
+                        )),
+                        None => text.push_str(&format!("  run file: {} ({at})\n", set.value)),
+                    }
+                }
                 None => text.push_str("  run file: unset\n"),
             }
         }
@@ -834,7 +885,8 @@ impl ProtocolListing {
     }
 
     /// The listing as data: `{"protocol", "inputs": [{"name", "description", "values", "default",
-    /// "run_file": {"value", "path", "line"}}]}`, `default` and `run_file` null when there is none.
+    /// "run_file": {"value", "path", "line", "refused"}}]}`, `default` and `run_file` null when
+    /// there is none, `refused` present only for a value `takt run` refuses.
     #[must_use]
     pub fn json(&self) -> serde_json::Value {
         serde_json::json!({
@@ -844,11 +896,17 @@ impl ProtocolListing {
                 "description": input.description,
                 "values": input.values,
                 "default": input.default,
-                "run_file": input.run_file.as_ref().map(|set| serde_json::json!({
-                    "value": set.value,
-                    "path": set.path.as_ref().map(|path| path.display().to_string()),
-                    "line": set.line,
-                })),
+                "run_file": input.run_file.as_ref().map(|set| {
+                    let mut listed = serde_json::json!({
+                        "value": set.value,
+                        "path": set.path.as_ref().map(|path| path.display().to_string()),
+                        "line": set.line,
+                    });
+                    if let Some(why) = &set.refused {
+                        listed["refused"] = serde_json::json!(why);
+                    }
+                    listed
+                }),
             })).collect::<Vec<_>>(),
         })
     }
@@ -893,7 +951,7 @@ mod tests {
                 "{id}"
             );
         }
-        assert!(LoadedProtocol::builtin("story.delivery/2").is_err());
+        assert!(LoadedProtocol::builtin("story.delivery/2").is_ok());
     }
 
     /// A protocol given as an id or as a file resolves to the same protocol.

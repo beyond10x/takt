@@ -91,6 +91,14 @@ pub enum Event {
     /// `none`, the one every proposal and the change so far pass; absent on a line written
     /// before it, which a reader reads as "scan not recorded".
     ///
+    /// Where the protocol was chosen from (`protocol_source`) and where each input's value came
+    /// from (`input_sources`, input name to `flag`, `tag`, `run-file` or `default`), as the case
+    /// record holds them; absent on a line written before, and for a case that records none.
+    ///
+    /// The harness program (`harness_program`): the absolute path the sessions start it by, the
+    /// sha256 of its bytes and the first line its `--version` printed ([`crate::harness::ProgramRecord`]);
+    /// absent for a harness that starts none, a name found nowhere and on a line written before.
+    ///
     /// The preflight: what metaharness read of the harness binary before the first session, its
     /// kind, its version and the rows that were not `ok` and did not stop the run, as advisory
     /// ([`crate::harness::Preflight`]); absent for a harness that starts no program of its own
@@ -116,7 +124,13 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         scan: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        preflight: Option<crate::harness::Preflight>,
+        protocol_source: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_sources: Option<BTreeMap<String, String>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        harness_program: Option<crate::harness::ProgramRecord>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        preflight: Option<Box<crate::harness::Preflight>>,
     },
     /// An evaluation: its sequence number, the decision file in the case directory it was
     /// written to, and the frontier as printed.

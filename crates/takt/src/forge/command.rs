@@ -53,6 +53,36 @@ impl Entry {
             Self::Merge => "merge",
         }
     }
+
+    /// The placeholders the entry's argument list may hold.
+    #[must_use]
+    pub fn placeholders(self) -> &'static [&'static str] {
+        match self {
+            Self::Open => &["branch", "base", "title", "body_file"],
+            Self::Read => &["number"],
+            Self::Checks | Self::Merge => &["number", "head"],
+        }
+    }
+}
+
+/// The names of the placeholder-shaped words of `element`: lowercase letters and `_` between
+/// braces. A brace that holds anything else is text.
+fn named_in(element: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    let mut rest = element;
+    while let Some(at) = rest.find('{') {
+        let after = &rest[at + 1..];
+        if let Some(end) = after.find('}')
+            && end > 0
+            && after[..end]
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte == b'_')
+        {
+            names.push(&after[..end]);
+        }
+        rest = after;
+    }
+    names
 }
 
 /// The `forge_commands` section of a run file: one argument list per action, never a shell line.
@@ -243,8 +273,9 @@ impl ForgeCommands {
         Ok(())
     }
 
-    /// Checks the section's shape: each entry a non-empty argument list naming a program,
-    /// `id_pattern` a regular expression with a group, `refused_exit` codes above 0 and below 256.
+    /// Checks the section's shape: each entry a non-empty argument list naming a program that is
+    /// no placeholder, holding no placeholder the entry does not take (a word of lowercase
+    /// letters and `_` in braces), `id_pattern` a regular expression with a group, `refused_exit` codes above 0 and below 256.
     /// The refusal names the key and never repeats a value.
     pub fn check(&self) -> Result<()> {
         for entry in [Entry::Open, Entry::Read, Entry::Checks, Entry::Merge] {
@@ -253,6 +284,31 @@ impl ForgeCommands {
             {
                 bail!(
                     "`forge_commands.{}` is an argument list whose first element is the program, and it names none",
+                    entry.name()
+                );
+            }
+            for element in self.argv(entry).unwrap_or_default() {
+                if let Some(unknown) = named_in(element)
+                    .into_iter()
+                    .find(|name| !entry.placeholders().contains(name))
+                {
+                    bail!(
+                        "`forge_commands.{}` holds the placeholder {{{unknown}}}, which that entry does not take: it takes {}",
+                        entry.name(),
+                        entry
+                            .placeholders()
+                            .iter()
+                            .map(|name| format!("{{{name}}}"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+            }
+            if let Some(program) = self.argv(entry).and_then(<[String]>::first)
+                && !named_in(program).is_empty()
+            {
+                bail!(
+                    "`forge_commands.{}` names its program with a placeholder: the first element is a program of the file's own, never a substituted value",
                     entry.name()
                 );
             }
@@ -306,12 +362,13 @@ impl fmt::Debug for CommandForge {
 }
 
 impl CommandForge {
-    /// The file under the state directory that holds the body `{body_file}` names.
+    /// The file under the case's artifacts directory that holds the body `{body_file}` names: the
+    /// case's own, so no other run's `open` can change what this one publishes.
     pub const BODY: &str = "open.body";
 
     /// Over `commands`, refused when the section is misshapen or lacks an entry the protocol's
-    /// `actions` need, naming it; `state` is the directory the body file and each command's
-    /// standard error are kept in; the push and the scan go to the project `tree`'s `origin`
+    /// `actions` need, naming it; `state` is the directory each command's
+    /// standard error is kept in; the push and the scan go to the project `tree`'s `origin`
     /// names, none when it names none (the push is then refused). Every line runs through
     /// `runner`.
     pub fn for_tree(
@@ -638,9 +695,7 @@ impl Forge for CommandForge {
                 )
             })?;
         }
-        std::fs::create_dir_all(&self.state)
-            .with_context(|| format!("create {}", self.state.display()))?;
-        let body = self.state.join(Self::BODY);
+        let body = dir.join(Self::BODY);
         std::fs::write(&body, &request.body)
             .with_context(|| format!("write {}", body.display()))?;
         let body = body.display().to_string();
@@ -706,6 +761,70 @@ mod tests {
         );
         assert_eq!(substitute("{nothing}", &values), "{nothing}");
         assert_eq!(substitute("{\"a\":{body_file}", &values), "{\"a\":/x");
+    }
+
+    fn argv(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
+    }
+
+    #[test]
+    fn an_unknown_placeholder_is_refused_naming_the_entry() {
+        for (commands, entry) in [
+            (
+                ForgeCommands {
+                    open: Some(argv(&["tool", "open", "{branch}", "{titel}"])),
+                    ..Default::default()
+                },
+                "open",
+            ),
+            (
+                ForgeCommands {
+                    read: Some(argv(&["tool", "read", "{head}"])),
+                    ..Default::default()
+                },
+                "read",
+            ),
+            (
+                ForgeCommands {
+                    merge: Some(argv(&["tool", "merge", "--into={base}"])),
+                    ..Default::default()
+                },
+                "merge",
+            ),
+        ] {
+            let error = commands.check().expect_err("refused").to_string();
+            assert!(
+                error.contains(&format!("forge_commands.{entry}")),
+                "{error}"
+            );
+            assert!(error.contains("placeholder"), "{error}");
+        }
+        ForgeCommands {
+            open: Some(argv(&[
+                "tool",
+                "open",
+                "{\"a\": 1}",
+                "{",
+                "}",
+                "{Branch}",
+                "{branch}",
+            ])),
+            ..Default::default()
+        }
+        .check()
+        .expect("braces that name no placeholder are text");
+    }
+
+    #[test]
+    fn a_placeholder_is_no_program() {
+        for program in ["{branch}", "{number}", "/bin/{title}", "{nothing}"] {
+            let commands = ForgeCommands {
+                checks: Some(argv(&[program, "{number}"])),
+                ..Default::default()
+            };
+            let error = commands.check().expect_err("refused").to_string();
+            assert!(error.contains("forge_commands.checks"), "{error}");
+        }
     }
 
     #[test]

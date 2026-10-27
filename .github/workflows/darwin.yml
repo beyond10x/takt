@@ -94,6 +94,22 @@ jobs:
           tar -xzf "$asset"
           echo "$RUNNER_TEMP/aep-$AEP_VERSION-aarch64-apple-darwin" >> "$GITHUB_PATH"
 
+      - name: Install worktree
+        env:
+          WORKTREE_VERSION: "0.19.0"
+          WORKTREE_SHA256: 830e5c96fb5f97637fa1004678ce8a4dd0a8ca6291fc4e71a2151b2471b2f589
+        run: |
+          set -euo pipefail
+          asset="worktree-$WORKTREE_VERSION-aarch64-apple-darwin.tar.gz"
+          release="https://github.com/beyond10x/worktree/releases/download/$WORKTREE_VERSION"
+          cd "$RUNNER_TEMP"
+          curl --fail --silent --show-error --location --output "$asset" "$release/$asset"
+          curl --fail --silent --show-error --location --output WORKTREE-SHA256SUMS "$release/SHA256SUMS"
+          grep -Fx "$WORKTREE_SHA256  $asset" WORKTREE-SHA256SUMS
+          grep -F "  $asset" WORKTREE-SHA256SUMS | shasum -a 256 --check --strict
+          tar -xzf "$asset"
+          echo "$RUNNER_TEMP/worktree-$WORKTREE_VERSION-aarch64-apple-darwin" >> "$GITHUB_PATH"
+
       - name: Install flock
         env:
           FLOCK_VERSION: "0.4.0"

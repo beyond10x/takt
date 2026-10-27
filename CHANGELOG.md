@@ -8,6 +8,7 @@ takt's releases.
 
 ### Added
 
+- `--harness-program <path>` names the program every step starts; `opened` records `harness_program`: its absolute path, the sha256 of its bytes and its `--version` line, found on `PATH` too.
 - `takt run` asks metaharness whether the harness binary qualifies before its first session, on open and on every resume: an unqualified binary stops `HarnessUnqualified`, exit 1, the case resumable.
 - `forge: command` with a `forge_commands` section in the `takt run --config` file: the forge actions `open`, `read`, `checks` and `merge` are the argument lists the file names, run without a shell.
 - Placeholders of `forge_commands`: `{branch}`, `{base}`, `{title}`, `{body_file}`, `{number}` and `{head}`; `merge` receives the head the checks were read on. The scanned push stays takt's own.
@@ -46,6 +47,7 @@ takt's releases.
 - `takt run` keeps only the latest `decisions/NNNN.json` of a case by default (`--records default`, or `records` in the run configuration).
 - `--records trial` keeps every decision; scenario runs and improvement cases always keep every one.
 - New cases open under `.takt/cases`, with a `.takt/.gitignore` of `*` when absent; a case already under `.engineering/cases` resumes where it is, and every guard covers both roots.
+- A new `.takt/` also gets `.takt/.worktreekeep` (`cases/`), so `worktree` 0.19.0 cleanup keeps every case and its archive holds them; an existing file is left alone.
 - The store's `test_result` record names its case record by path, sha256, result, subject revision and producer.
 - The pull request body summarises the case's evidence, steps and tokens, bounded under 60,000 bytes.
 - A resume keeps its case's records profile; `default` drops only its own run's decisions, the reference's parts are percent-encoded, and the body lists the newest evidence that fits.
@@ -54,6 +56,12 @@ takt's releases.
 
 ### Fixed
 
+- A commit body or summary line git reads as a trailer, `Key : value` included, is refused: a reply cannot add `Signed-off-by`; a fallback summary of that shape follows `reported - `.
+- A base branch `takt/<a>/<b>` is refused naming the reserved prefix and a rename, with the old "names no case" in front.
+- A Claude step whose intent names `AGENTS.md` or `CLAUDE.md` is given its bytes at the base once, with no `@` mention of the step's copy.
+- `opened` records `protocol_source` and `input_sources`, and the run's first line says each input's source after its value.
+- A resumed case and an intent run refuse a run file whose `protocols` or `protocol` names what takt does not know, at its line.
+- `takt protocol show` lists a run-file value that `takt run` refuses as `refused`, with the reason, never as set.
 - A base branch under takt's reserved prefix `takt/` that is no case's is refused before a case opens, exit 1, naming the prefix and a rename; it was refused as a case's branch with no base recorded.
 - A gate's command finds a bare program name on `/usr/local/bin:/usr/bin:/bin`, or on the `PATH` its `env` declares, never on the user's `PATH`; a name found nowhere refuses the gate.
 - A gate whose script holds the shell's `:` builtin is run and judged on its own exit; a path a gate names that starts with `:` is looked up literally.
@@ -64,6 +72,10 @@ takt's releases.
 - Each such try is charged the tokens its session reported; the run ends exit 5 after the third, or exit 3 if a try spent the budget.
 - The site's protocol viewer shows all eight protocols `takt protocols` lists, `software.change/1` among them, and writes no predicate as raw JSON.
 - The site says what runs under Seatbelt on macOS since 0.10.0, which scan and forge adapters a run can have, and that `bot` is beyond10x's github.com route.
+- The GitLab push and fetch run no hook the repository names (`core.hooksPath`, `--no-verify`) and follow no redirect; under `api` the credential helper answers only for the host named.
+- A variable named by `credential: {env: NAME}` is removed from every child takt starts, whatever its name; a `{file: PATH}` credential is read through one open that follows no symlink.
+- `{body_file}` of `forge: command` is a file in the case's own artifacts, so a run opening meanwhile cannot change what a case publishes; without `--state-dir` each run keeps its stderr files apart.
+- `forge_commands` refuses a placeholder its entry does not take and a placeholder as the program, before the case opens; `--forge` with an unknown name lists `command` among the forges.
 
 ### Security
 

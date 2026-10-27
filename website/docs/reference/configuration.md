@@ -387,16 +387,19 @@ forge_commands:
 ```
 
 - **Placeholders** are substituted once, inside the argument that holds them: `open` takes
-  `{branch}`, `{base}`, `{title}` and `{body_file}` (a file under the state directory holding the
+  `{branch}`, `{base}`, `{title}` and `{body_file}` (a file under the case's artifacts directory holding the
   body), `read` takes `{number}`, `checks` and `merge` take `{number}` and `{head}`. `merge` receives
-  the head the checks were read on.
+  the head the checks were read on. A placeholder an entry does not take, written in braces as a word
+  of lowercase letters and `_`, and a placeholder as the first element, the program, are refused
+  before the case opens.
 - **Output.** `open` prints the request's URL or number, read by `id_pattern` (default: the last
   integer of the last URL on standard output). `read` prints JSON with `state` (`open`, `merged` or
   `closed`), `head` (the commit, or an object with `sha` and `branch`), `branch` (when `head` is the
   commit alone) and `base`. `checks` prints JSON, a list of `{name, state}`. Output that cannot be
   read is an error naming the command and the field.
 - **Exit codes.** 0 is success; a code in `refused_exit` is a refusal, any other a failure. Standard
-  error of each command goes to a file under the state directory (`forge-command/`).
+  error of each command goes to a file under the state directory (`forge-command/`, in a directory of
+  its own per run when no state directory is given).
 - **Missing entries.** A protocol that opens, reads checks or merges needs the entries for those
   actions; a missing one is refused before the case opens, naming it.
 - **Push and scan.** The push stays takt's scanned push over HTTPS to the project `origin` names,
@@ -522,6 +525,7 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | flag | meaning |
 |---|---|
 | `--harness <HARNESS>` | `claude`, `codex`, `harness` (b10x-harness) or `none` (validators only); default `claude` |
+| `--harness-program <PATH>` | an absolute path: the program every step starts, in place of the one found on `PATH`; `opened` records its path, its sha256 and its `--version` line; refused when it is not absolute, and with `--harness none`, which starts no session |
 | `--model <MODEL>` | the harness's model, when it takes one; under `--harness harness` a route of the `llm` section, when the run has one |
 | `--llm-config <FILE>` | an `llm.routes/1` document (`.toml`, `.yaml` or `.yml`) that replaces the run file's `llm` section; with or without `--config` |
 | `--effort <LEVEL>` | the reasoning effort, as `metaharness run --effort`; refused until takt's launch carries it |

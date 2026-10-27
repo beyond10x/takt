@@ -57,6 +57,14 @@ pub const TAKT_GITIGNORE: &str = ".gitignore";
 /// The text of [`TAKT_GITIGNORE`] that takt writes: every path under [`TAKT_DIR`] ignored.
 const TAKT_GITIGNORE_TEXT: &str = "*\n";
 
+/// The file in [`TAKT_DIR`] that tells `worktree`'s cleanup to keep the cases, written when it is
+/// absent beside [`TAKT_GITIGNORE`]. A repository's own is left alone.
+pub const TAKT_WORKTREEKEEP: &str = ".worktreekeep";
+
+/// The text of [`TAKT_WORKTREEKEEP`] that takt writes: the cases directory, matched relative to
+/// [`TAKT_DIR`].
+const TAKT_WORKTREEKEEP_TEXT: &str = "cases/\n";
+
 /// The prefix of a case's branch: `takt/<case id>`.
 pub const BRANCH_PREFIX: &str = "takt/";
 
@@ -133,18 +141,24 @@ pub const LOOP_BASELINE: &str = "loop_baseline";
 
 /// The case a branch of `tree` is the branch of: `Some(id)` for `takt/<id>` with that case's
 /// directory present, `None` for a branch outside [`BRANCH_PREFIX`]. A branch under the prefix
-/// that names no case id is refused as such, and one that names a case id with no case
-/// directory is refused as a base using takt's reserved prefix, naming the prefix and a rename.
+/// that is no case id, or names a case id with no case
+/// directory, is refused as a base using takt's reserved prefix, naming the prefix and a rename.
 pub(crate) fn case_of_branch<'a>(tree: &Path, branch: &'a str) -> Result<Option<&'a str>> {
     let Some(case) = branch.strip_prefix(BRANCH_PREFIX) else {
         return Ok(None);
     };
-    // The name is joined to the cases directory only as a case id: `takt/x/y` names no case.
-    check_id(case).with_context(|| format!("the branch {} names no case", shown(branch)))?;
-    if std::fs::symlink_metadata(CaseDir::locate(tree, case)).is_err() {
+    // The name is joined to the cases directory only as a case id: `takt/x/y` is no case id, so
+    // it is a base using the reserved prefix, like a name with no case directory.
+    let names_no_case = check_id(case).is_err();
+    if names_no_case || std::fs::symlink_metadata(CaseDir::locate(tree, case)).is_err() {
         let name = shown(branch);
+        let lead = if names_no_case {
+            format!("the branch {name} names no case; ")
+        } else {
+            String::new()
+        };
         bail!(
-            "branch `{name}` uses takt's reserved prefix `{BRANCH_PREFIX}`; base branches cannot start with it; rename it (e.g. `git branch -m {name} trial/{}`)",
+            "{lead}branch `{name}` uses takt's reserved prefix `{BRANCH_PREFIX}`; base branches cannot start with it; rename it (e.g. `git branch -m {name} trial/{}`)",
             shown(case)
         );
     }
@@ -2504,18 +2518,34 @@ pub(crate) fn refuse_link_on_the_way(tree: &Path, id: &str, what: &str) -> Resul
 }
 
 /// Writes [`TAKT_GITIGNORE`] under `tree`'s [`TAKT_DIR`] when there is none, creating the
-/// directory as needed. A file already there, a link or a directory included, is left as it is,
-/// byte for byte. Called at open, on resume and after each observation; an observation that
-/// changes or removes it is refused and undone first (`run.rs`, the observation path), so after
-/// one it is written only when it is absent.
-pub fn write_takt_gitignore(tree: &Path) -> Result<()> {
+/// directory as needed, and [`TAKT_WORKTREEKEEP`] beside it when there is none. A file already
+/// there, a link or a directory included, is left as it is, byte for byte, and a repository's
+/// own `.gitignore` of other content, which takes the cases out of the ignore, gets no keep file:
+/// it would be an untracked file the repository did not ask for. Called at open, on resume and
+/// after each observation; an observation that changes or removes either file is refused and
+/// undone first (`run.rs`, the observation path), so after one they are written only when absent.
+pub fn write_takt_files(tree: &Path) -> Result<()> {
     let takt = tree.join(TAKT_DIR);
-    let path = takt.join(TAKT_GITIGNORE);
-    if std::fs::symlink_metadata(&path).is_ok() {
-        return Ok(());
+    let ignore = takt.join(TAKT_GITIGNORE);
+    let own = match std::fs::symlink_metadata(&ignore) {
+        Err(_) => true,
+        Ok(meta) => {
+            meta.is_file()
+                && std::fs::read(&ignore).is_ok_and(|bytes| bytes == TAKT_GITIGNORE_TEXT.as_bytes())
+        }
+    };
+    for (name, text, wanted) in [
+        (TAKT_GITIGNORE, TAKT_GITIGNORE_TEXT, true),
+        (TAKT_WORKTREEKEEP, TAKT_WORKTREEKEEP_TEXT, own),
+    ] {
+        let path = takt.join(name);
+        if !wanted || std::fs::symlink_metadata(&path).is_ok() {
+            continue;
+        }
+        std::fs::create_dir_all(&takt).with_context(|| format!("create {}", takt.display()))?;
+        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
     }
-    std::fs::create_dir_all(&takt).with_context(|| format!("create {}", takt.display()))?;
-    std::fs::write(&path, TAKT_GITIGNORE_TEXT).with_context(|| format!("write {}", path.display()))
+    Ok(())
 }
 
 /// The records profile a run keeps its case's decisions under: `default` keeps the latest
@@ -2870,6 +2900,7 @@ impl CaseDir {
         let takt_dir = tree.join(TAKT_DIR);
         let takt_was = std::fs::symlink_metadata(&takt_dir).is_ok();
         let ignore_was = std::fs::symlink_metadata(takt_dir.join(TAKT_GITIGNORE)).is_ok();
+        let keep_was = std::fs::symlink_metadata(takt_dir.join(TAKT_WORKTREEKEEP)).is_ok();
         let opened = (|| {
             // The branch's tip is the implementation revision: not the HEAD the case was asked
             // on when the branch forked from a base elsewhere.
@@ -2891,7 +2922,7 @@ impl CaseDir {
             {
                 case.doc["artifacts"]["implementation"]["revision"] = tip.into();
             }
-            write_takt_gitignore(tree)?;
+            write_takt_files(tree)?;
             case.create(intent, &branch)?;
             if let Some(identity) = &identity {
                 let path = case.dir.join(COMMIT_IDENTITY_RECORD);
@@ -2901,7 +2932,7 @@ impl CaseDir {
             Ok(case)
         })();
         opened.map_err(|error: anyhow::Error| {
-            let existed = (takt_was, ignore_was);
+            let existed = (takt_was, ignore_was, keep_was);
             match Self::undo_open(
                 tree,
                 &dir,
@@ -2919,17 +2950,17 @@ impl CaseDir {
     }
 
     /// Takes back an open that failed after its branch was made: the case directory if any of
-    /// it was written, the cases directory when it is empty, the `.takt/.gitignore` and the
-    /// `.takt/` directory the open wrote where they were absent before (`existed`: whether
-    /// `.takt/` and its ignore file were there), and the branch, the tree back on `left`, or
-    /// detached at `start` when it was detached.
+    /// it was written, the cases directory when it is empty, the `.takt/.gitignore`, the
+    /// `.takt/.worktreekeep` and the `.takt/` directory the open wrote where they were absent
+    /// before (`existed`: whether `.takt/`, its ignore file and its keep file were there), and
+    /// the branch, the tree back on `left`, or detached at `start` when it was detached.
     fn undo_open(
         tree: &Path,
         dir: &Path,
         branch: &str,
         left: Option<&str>,
         start: &str,
-        existed: (bool, bool),
+        existed: (bool, bool, bool),
     ) -> Result<()> {
         if std::fs::symlink_metadata(dir).is_ok() {
             std::fs::remove_dir_all(dir)
@@ -2939,10 +2970,13 @@ impl CaseDir {
         if let Some(cases) = dir.parent() {
             let _ = std::fs::remove_dir(cases);
         }
-        let (takt_was, ignore_was) = existed;
+        let (takt_was, ignore_was, keep_was) = existed;
         let takt_dir = tree.join(TAKT_DIR);
         if !ignore_was {
             let _ = std::fs::remove_file(takt_dir.join(TAKT_GITIGNORE));
+        }
+        if !keep_was {
+            let _ = std::fs::remove_file(takt_dir.join(TAKT_WORKTREEKEEP));
         }
         if !takt_was {
             let _ = std::fs::remove_dir(&takt_dir);
@@ -2994,7 +3028,7 @@ impl CaseDir {
                 .with_context(|| format!("check out the branch of the case {id}"))?;
         }
         if dir.starts_with(tree.join(CASES_DIR)) {
-            write_takt_gitignore(tree)?;
+            write_takt_files(tree)?;
         }
         let mut case = Self {
             id: id.to_owned(),
@@ -3217,6 +3251,13 @@ impl CaseDir {
     #[must_use]
     pub fn input_sources(&self) -> Vec<(String, String)> {
         sources_in(&self.doc)
+    }
+
+    /// Where the case's protocol was chosen from, as the case record holds it (`flag`, `tag`,
+    /// `run-file`, `default`...); none for a case opened before the record was kept.
+    #[must_use]
+    pub fn protocol_source(&self) -> Option<String> {
+        self.doc["protocol_source"].as_str().map(str::to_owned)
     }
 
     /// Creates the directory and writes the case's files, `case.yaml` last.

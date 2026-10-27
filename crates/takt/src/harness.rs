@@ -179,6 +179,12 @@ pub trait Harness {
     fn preflight(&self) -> Result<Option<Preflight>> {
         Ok(None)
     }
+    /// The program the harness's sessions start, as it resolves now, which the run records on its
+    /// `opened` line ([`ProgramRecord`]); none by default, for a harness that starts no program of
+    /// its own, and when none is found. A program that is named and cannot be used is refused.
+    fn program_record(&self) -> Result<Option<ProgramRecord>> {
+        Ok(None)
+    }
 }
 
 /// What metaharness read of a harness binary before its first session: its kind as `--harness`
@@ -195,6 +201,19 @@ pub struct Preflight {
     pub failing: Vec<String>,
     #[serde(skip)]
     pub qualified: Vec<String>,
+}
+
+/// The harness program a run's sessions start, as `opened` records it: its absolute path, the
+/// sha256 of its bytes and the first line of its `--version` output, when it printed one.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ProgramRecord {
+    /// The absolute path the program is started by.
+    pub path: String,
+    /// The sha256 of the program's bytes, in lower-case hex.
+    pub sha256: String,
+    /// The first line `--version` printed, when it ran, ended 0 and printed one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 pub use loom_sdk::session::{Endpoint, Proposal, ProposedFile};
@@ -252,7 +271,8 @@ pub struct SessionHarness {
     /// The harness program: `claude` found on takt's own `PATH` as [`ClaudeCode`] finds it, or by
     /// path; `codex` by path, or by name found on the `PATH` metaharness gives its child
     /// (`$HOME/.local/bin` first), the file whose version H9 reads; b10x-harness the one
-    /// metaharness finds itself, on that same `PATH`.
+    /// metaharness finds itself, on that same `PATH`. A program named by an absolute path
+    /// (`--harness-program`) is the one every kind starts.
     pub program: String,
     /// For `Kind::B10x`, the endpoint its loop is pointed at and the subscription token it
     /// reads, or none (`token_file` empty) when [`Self::api_key_secret`] names its key.
@@ -412,6 +432,123 @@ impl SessionHarness {
                     .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
             })
             .ok_or_else(|| anyhow!("the harness program {program} is not on PATH"))
+    }
+
+    /// Refuses a program named by a path that is not absolute, or names no executable file,
+    /// naming the value; a bare name is looked for where the sessions look for it, and refused
+    /// by no check.
+    ///
+    /// # Errors
+    /// When the program holds a `/` and is relative, or is no executable regular file.
+    pub fn check_program(&self) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+        if !self.program.contains('/') {
+            return Ok(());
+        }
+        let path = Path::new(&self.program);
+        if !path.is_absolute() {
+            bail!(
+                "the harness program {} is not an absolute path; name it from the root, or by a bare name to find it on PATH",
+                crate::git::shown(path.as_os_str())
+            );
+        }
+        let usable = std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0);
+        if !usable {
+            bail!(
+                "the harness program {} is not an executable file",
+                crate::git::shown(path.as_os_str())
+            );
+        }
+        Ok(())
+    }
+
+    /// The path of the program the sessions start: the one named by path (checked by
+    /// [`Self::check_program`]), else the first executable file of that name where the sessions
+    /// look: takt's own `PATH` for Claude Code, and `$HOME/.local/bin` then the `PATH` for the
+    /// others, the places metaharness finds them. None when a name is found nowhere.
+    fn program_path(&self) -> Result<Option<std::path::PathBuf>> {
+        use std::os::unix::fs::PermissionsExt as _;
+        if self.program.contains('/') {
+            self.check_program()?;
+            return Ok(Some(std::path::PathBuf::from(&self.program)));
+        }
+        let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+        if self.kind != Kind::Claude
+            && let Some(home) = std::env::var_os("HOME")
+        {
+            dirs.push(Path::new(&home).join(".local/bin"));
+        }
+        dirs.extend(
+            std::env::var_os("PATH")
+                .iter()
+                .flat_map(std::env::split_paths),
+        );
+        Ok(dirs
+            .into_iter()
+            .map(|dir| dir.join(&self.program))
+            .find(|path| {
+                std::fs::metadata(path)
+                    .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            }))
+    }
+
+    /// The sha256 of the bytes of the file at `path`, lower-case hex.
+    fn sha256_of(path: &Path) -> std::io::Result<String> {
+        use sha2::Digest as _;
+        use std::io::Read as _;
+        let mut file = std::fs::File::open(path)?;
+        let mut hasher = sha2::Sha256::new();
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        Ok(hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect())
+    }
+
+    /// The first line `program --version` prints, at most 200 characters, run as a step's
+    /// session is (no credential, none of Claude Code's own variables) in an empty directory of
+    /// its own, held to a few seconds; none when it could not be started, ended other than 0 or
+    /// printed nothing.
+    fn version_of(program: &Path) -> Option<String> {
+        let scratch = std::env::temp_dir().join(format!(
+            "takt-harness-version-{}-{}",
+            std::process::id(),
+            crate::events::instant().replace([':', '.'], "")
+        ));
+        std::fs::create_dir_all(&scratch).ok()?;
+        let mut command = Command::new(program);
+        command.arg("--version").current_dir(&scratch);
+        command.env_remove("CLAUDECODE");
+        command.env_remove("CLAUDE_PID");
+        for (name, _) in std::env::vars_os() {
+            if name.to_string_lossy().starts_with("CLAUDE_CODE_") {
+                command.env_remove(name);
+            }
+        }
+        crate::forge::without_credentials(&mut command, |_| false);
+        let ran = crate::forge::run_child(
+            &mut command,
+            crate::forge::Limits {
+                timeout: std::time::Duration::from_secs(10),
+                output: 4096,
+            },
+        );
+        let _ = std::fs::remove_dir_all(&scratch);
+        let ran = ran.ok().filter(|ran| ran.code == Some(0))?;
+        String::from_utf8_lossy(&ran.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(|line| line.chars().take(200).collect())
     }
 
     /// The files of `tree` the copy holds: tracked, and untracked but not ignored, as git lists
@@ -676,6 +813,27 @@ impl Harness for SessionHarness {
         Ok(Some(preflight))
     }
 
+    /// The program the sessions start: the one named by path, else the one found by name where
+    /// the sessions look for it ([`SessionHarness::program_path`]), with the sha256 of its bytes
+    /// and the first line its `--version` prints. A path that is relative or names no executable
+    /// file is refused naming it. Under a runner that starts no program, and for a name that
+    /// is found nowhere, none.
+    fn program_record(&self) -> Result<Option<ProgramRecord>> {
+        if self.runner.is_some() {
+            return Ok(None);
+        }
+        let Some(path) = self.program_path()? else {
+            return Ok(None);
+        };
+        let sha256 = Self::sha256_of(&path)
+            .with_context(|| format!("the harness program {} cannot be read", path.display()))?;
+        Ok(Some(ProgramRecord {
+            version: Self::version_of(&path),
+            path: path.display().to_string(),
+            sha256,
+        }))
+    }
+
     /// Codex's shell reads where its sandbox grants reading, the whole file system;
     /// b10x-harness's calls are observed and decided by none: both may have read outside the
     /// copy. Claude Code's every call is decided inside it.
@@ -838,7 +996,7 @@ impl Harness for SessionHarness {
                 executor.program = Some(program.clone());
                 vec![program]
             }
-            None if self.kind == Kind::Codex && self.program.contains('/') => {
+            None if self.program.contains('/') => {
                 let program = std::path::PathBuf::from(&self.program);
                 executor.program = Some(program.clone());
                 vec![program]
@@ -1819,7 +1977,8 @@ impl ClaudeCode {
 
     /// The prompt, its rules naming the tools of the harness that takes the step (`rule`), and,
     /// for a harness whose rule takes file mentions, its scope files ([`scope_files`]) scanned
-    /// under `scan`: each attached as an unquoted, relative mention after white space, on one
+    /// under `scan`: each but a file it is given as a context file (`given`) attached as an
+    /// unquoted, relative mention after white space, on one
     /// line after the intent. For a harness whose rule names context files, the context files
     /// its session is given (`given`, [`context_files`]), when there are any: each named once,
     /// on one line after the intent, and its rules then read only the other files. Everything
@@ -1834,13 +1993,15 @@ impl ClaudeCode {
         text.push_str("You are the judgement step of a governed engineering run (takt).\n\n");
         text.push_str(&format!("Intent: {}\n\n", context.intent));
         let attached = if rule.mentions {
-            scope_files(
+            let mut files = scope_files(
                 context.tree,
                 context.scope_revision,
                 context.intent,
                 context.change,
                 scan,
-            )
+            );
+            files.retain(|path| !given.contains(path));
+            files
         } else {
             Vec::new()
         };
@@ -5762,6 +5923,9 @@ mod endpoint_tests {
             endpoint,
             records: None,
             scan: None,
+            protocol_source: None,
+            input_sources: None,
+            harness_program: None,
             preflight: None,
         })
         .expect("the opened line serializes")

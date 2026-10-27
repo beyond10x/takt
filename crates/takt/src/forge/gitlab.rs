@@ -332,11 +332,11 @@ impl Glab {
 
     /// The credential helper of every push and fetch: under `glab`, its own; under `api`, the one
     /// that answers from the token in the environment of that one line.
-    fn helper(&self) -> &'static str {
+    fn helper(&self) -> String {
         if self.api.is_some() {
-            api::CREDENTIAL_HELPER
+            api::credential_helper(&self.host)
         } else {
-            Self::CREDENTIAL_HELPER
+            Self::CREDENTIAL_HELPER.to_owned()
         }
     }
 
@@ -442,21 +442,27 @@ impl Glab {
     }
 
     /// The line that pushes the commit `revision` as `branch`, `<revision>:refs/heads/<branch>`,
-    /// with `glab`'s credential helper the only one, no tag and no submodule's commit with it,
-    /// the options last.
+    /// with the transport's credential helper the only one, no hook, no redirect, no tag and no
+    /// submodule's commit with it, the options last.
     #[must_use]
     pub fn push_revision_argv(&self, branch: &str, revision: &str) -> Vec<String> {
         let url = self.push_url();
         let refspec = format!("{revision}:refs/heads/{branch}");
+        let helper = self.helper();
         [
             "git",
             "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "http.followRedirects=false",
+            "-c",
             "credential.helper=",
             "-c",
-            self.helper(),
+            &helper,
             "push",
             &url,
             &refspec,
+            "--no-verify",
             "--no-follow-tags",
             "--recurse-submodules=no",
         ]
@@ -469,12 +475,17 @@ impl Glab {
     #[must_use]
     pub fn fetch_object_argv(&self, object: &str) -> Vec<String> {
         let url = self.push_url();
+        let helper = self.helper();
         [
             "git",
             "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "http.followRedirects=false",
+            "-c",
             "credential.helper=",
             "-c",
-            self.helper(),
+            &helper,
             "fetch",
             &url,
             object,

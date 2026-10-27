@@ -1033,6 +1033,12 @@ struct LoopArgs {
     /// `harness` (b10x-harness), or `none` (only validators run).
     #[arg(long, default_value = "claude")]
     harness: String,
+    /// The harness program the run's sessions start, by absolute path, in place of the one found
+    /// on `PATH`; the run records its path, sha256 and `--version` on `opened`, the one found on
+    /// `PATH` too when this is not given. A flag only. A relative path, one that names no
+    /// executable file, or one given with `--harness none` is refused before the case opens.
+    #[arg(long, value_name = "PATH")]
+    harness_program: Option<PathBuf>,
     /// The harness's model, when it takes one. Under `--harness harness` it names a route of the
     /// `llm` section, when the run has one.
     #[arg(long, conflicts_with = "endpoint_model")]
@@ -1793,9 +1799,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // file, the default, and each declared input from `--input`, the run file or takt's
             // default, each with its source. One it does not declare is refused before anything is
             // opened. A fresh case on a story resolves them per story below, once its tags are
-            // known; a resumed case keeps its own.
+            // known; a resumed case keeps its own, and its run file is checked all the same.
             let fresh = case.is_none() && resuming.is_none();
             let story_unit = fresh && intent.is_none();
+            if !fresh {
+                takt::protocol::check_run_file(&protocol_settings, None)?;
+            }
             let mut applied = if fresh && !story_unit {
                 Some(settings_for(
                     &protocol_settings,
@@ -2399,9 +2408,12 @@ fn take_next_with_settings<'a>(
 /// b10x-harness's own `claude` provider names; or `none`. An `--endpoint-*` flag given with
 /// another harness is refused.
 fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
-    let session = |kind| {
+    let session = |kind| -> Result<SessionHarness> {
         let mut session = SessionHarness::of(kind);
         session.model.clone_from(&looping.model);
+        if let Some(program) = &looping.harness_program {
+            session.program = program.to_string_lossy().into_owned();
+        }
         if let Some(max_turns) = looping
             .session
             .as_ref()
@@ -2409,8 +2421,23 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         {
             session.max_turns = max_turns;
         }
-        session
+        session.check_program()?;
+        Ok(session)
     };
+    if let Some(program) = &looping.harness_program {
+        if looping.harness == "none" {
+            return Err(anyhow!(
+                "--harness-program {} names the program a session starts, and --harness none starts none; nothing was started",
+                takt::git::shown(program.as_os_str())
+            ));
+        }
+        if !program.is_absolute() {
+            return Err(anyhow!(
+                "--harness-program {} is not an absolute path; nothing was started",
+                takt::git::shown(program.as_os_str())
+            ));
+        }
+    }
     if looping.harness != "harness"
         && let Some(flag) = looping.endpoint.given()
     {
@@ -2420,12 +2447,12 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         ));
     }
     match looping.harness.as_str() {
-        "claude" => Ok(Box::new(session(Kind::Claude))),
-        "codex" => Ok(Box::new(session(Kind::Codex))),
+        "claude" => Ok(Box::new(session(Kind::Claude)?)),
+        "codex" => Ok(Box::new(session(Kind::Codex)?)),
         "harness" => {
             use takt::harness::{Credential, StagedToken};
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            let mut session = session(Kind::B10x);
+            let mut session = session(Kind::B10x)?;
             let config = match &looping.route {
                 Some(route) => {
                     session.model = Some(route.config.model.clone());
@@ -2872,8 +2899,9 @@ impl Forged {
 
 /// [`forge_of`] under what the run file says of the forge (`settings`): `forge: command` runs the
 /// commands of its `forge_commands` section, an entry the protocol's `actions` need that is
-/// missing refused here, before any case opens; `state_dir` (else the state home) holds the
-/// command forge's standard error files and body file. Settings that do not fit the forge are
+/// missing refused here, before any case opens; `state_dir` (else a directory of this run under the
+/// state home) holds the command forge's standard error files; the body file is the case's own,
+/// in its artifacts. Settings that do not fit the forge are
 /// refused, naming their keys.
 fn forge_with(
     repo: &Path,
@@ -2888,7 +2916,9 @@ fn forge_with(
         let commands = settings.commands.clone().unwrap_or_default();
         let state = match state_dir {
             Some(dir) => state_under(dir, "forge-command"),
-            None => takt::promotion::store()?.with_file_name("forge-command"),
+            None => takt::promotion::store()?
+                .with_file_name("forge-command")
+                .join(run_directory()),
         };
         let command = CommandForge::for_tree(
             repo,
@@ -2994,7 +3024,7 @@ fn forge_through(
                 "forge: none (origin names no <owner>/<repo> on a host)".to_owned(),
             )),
         },
-        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab or none")),
+        Some(other) => return Err(anyhow!("no forge `{other}`: bot, gitlab, command or none")),
     })
 }
 
@@ -3040,6 +3070,14 @@ fn state_transcripts(dir: &Path) -> PathBuf {
 /// discarded step moved aside goes ([`state_transcripts`] for `dir`).
 fn state_set_aside(dir: &Path) -> PathBuf {
     state_under(dir, "set-aside")
+}
+
+/// A directory name no other run on the machine has: the process and the instant it started.
+fn run_directory() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_nanos());
+    format!("{}-{nanos}", std::process::id())
 }
 
 /// `name` under the state directory `dir`, a relative `dir` read against the current directory.
@@ -4652,7 +4690,7 @@ mod tests {
             "unknown",
             &["--forge", "hub"],
         ));
-        assert_eq!(error, "no forge `hub`: bot, gitlab or none");
+        assert_eq!(error, "no forge `hub`: bot, gitlab, command or none");
         assert!(!repo.join(".takt/cases").exists());
     }
 

@@ -26,9 +26,16 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 /// one line only.
 pub const HELPER_VARIABLE: &str = "TAKT_FORGE_SECRET";
 
-/// The credential helper of a push under the `api` transport: git asks it with `get` and it
-/// answers from [`HELPER_VARIABLE`].
-pub const CREDENTIAL_HELPER: &str = "credential.helper=!f() { test \"$1\" = get && printf 'username=oauth2\\npassword=%s\\n' \"$TAKT_FORGE_SECRET\"; }; f";
+/// The credential helper of a push under the `api` transport for `host` (with its port, when it has
+/// one): git asks it with `get` and names the host it is about on standard input; it answers from
+/// [`HELPER_VARIABLE`] for `host` and for no other host.
+#[must_use]
+pub fn credential_helper(host: &str) -> String {
+    let quoted = host.replace('\'', "'\\''");
+    format!(
+        "credential.helper=!f() {{ test \"$1\" = get || return 0; h=; while IFS= read -r l; do case \"$l\" in host=*) h=\"${{l#host=}}\";; esac; done; test \"$h\" = '{quoted}' && printf 'username=oauth2\\npassword=%s\\n' \"$TAKT_FORGE_SECRET\"; }}; f"
+    )
+}
 
 /// Whether `host`, with or without a port, is the machine itself.
 fn is_loopback(host: &str) -> bool {
@@ -172,6 +179,57 @@ impl Api {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn helper_answer(host: &str, verb: &str, stdin: &str) -> String {
+        use std::io::Write as _;
+        let config = credential_helper(host);
+        let body = config
+            .strip_prefix("credential.helper=!")
+            .expect("a shell helper");
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{body} \"$@\""))
+            .arg("helper")
+            .arg(verb)
+            .env(HELPER_VARIABLE, "tok-123")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .expect("sh runs");
+        child
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(stdin.as_bytes())
+            .expect("written");
+        let out = child.wait_with_output().expect("sh finishes");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    #[test]
+    fn the_push_helper_answers_for_the_named_host_only() {
+        let named = "protocol=https\nhost=gitlab.example.com:8443\n\n";
+        assert_eq!(
+            helper_answer("gitlab.example.com:8443", "get", named),
+            "username=oauth2\npassword=tok-123\n"
+        );
+        for other in [
+            "protocol=https\nhost=evil.example.org\n\n",
+            "protocol=https\nhost=gitlab.example.com\n\n",
+            "protocol=https\n\n",
+        ] {
+            assert_eq!(
+                helper_answer("gitlab.example.com:8443", "get", other),
+                "",
+                "{other}"
+            );
+        }
+        assert_eq!(helper_answer("gitlab.example.com:8443", "store", named), "");
+        assert_eq!(
+            helper_answer("it's.example.com", "get", "host=it's.example.com\n"),
+            "username=oauth2\npassword=tok-123\n"
+        );
+    }
 
     #[test]
     fn plain_http_is_for_loopback_only() {
