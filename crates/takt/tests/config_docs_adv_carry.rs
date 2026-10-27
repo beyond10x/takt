@@ -46,9 +46,10 @@ fn read(dir: &Path, name: &str, text: &str) -> anyhow::Result<RunConfig> {
 }
 
 /// A TOML value of a type the file takes for `key` (a string, an integer, a fraction, a
-/// boolean), or none when it takes the key with none of them.
+/// boolean, or `"gates"`, a value `scan` takes; story:scan-and-forge-are-adapters), or none
+/// when it takes the key with none of them.
 fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
-    ["\"story:ready-one\"", "1", "1.5", "true"]
+    ["\"story:ready-one\"", "1", "1.5", "true", "\"gates\""]
         .into_iter()
         .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())
 }
@@ -77,8 +78,16 @@ fn keys_the_file_takes(dir: &Path) -> Vec<String> {
         .split_once(" holds ")
         .unwrap_or_else(|| panic!("the refusal names what the file holds: {message}"))
         .1;
-    let keys = quoted(shape);
-    assert!(keys.len() >= 8, "{message}");
+    // story:scan-and-forge-are-adapters: the refusal names `scan`'s values, `gates` and `none`,
+    // after it; they are values, not keys.
+    let keys: Vec<String> = quoted(shape)
+        .into_iter()
+        .filter(|name| name != "gates" && name != "none")
+        .collect();
+    assert!(
+        keys.len() >= 8,
+        "story:scan-and-forge-are-adapters: the refusal names the keys, `scan`'s values aside: {message}"
+    );
     for key in &keys {
         assert!(
             value_for(dir, key).is_some(),
