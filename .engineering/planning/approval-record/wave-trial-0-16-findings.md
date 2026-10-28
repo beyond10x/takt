@@ -8,7 +8,7 @@ relations:
 - decides: story:a-run-can-decline
 - decides: story:a-scenario-declares-an-expected-red-base
 - decides: story:an-accepted-run-reports-the-tested-revisions-obligations
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "approved", at: "2026-10-28T06:52:34Z", actor: "human:timo", revision: 3}
 ---
@@ -27,7 +27,7 @@ takt's ESS pin to the newest released ESS (0.73.0 now; 0.74.0 if tagged by then)
 | item | what |
 |---|---|
 | finding 1 | story:a-run-can-decline: a refused story stops `Declined`, exit 9, apart from `NoProgress` |
-| finding 2 | story:a-scenario-declares-an-expected-red-base: `red_base = expected` in `scenarios.conf` |
+| finding 2 | story:a-scenario-declares-an-expected-red-base: `red-base = expected` in `scenarios.conf` |
 | finding 3 | story:an-accepted-run-reports-the-tested-revisions-obligations |
 | finding 4 | no story: `takt scenario run` opens its trial case on `story.delivery/1` by design (`SCENARIO_PROTOCOL`, a trial case sets no input), while `takt run` on a store story opens on `story.delivery/2`; the 0.17.0 CHANGELOG corrects the 0.16.0 line |
 | pin | the ESS pin moves to 0.73.0, a pin-only unit with no adversary pass |
