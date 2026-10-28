@@ -1189,6 +1189,11 @@ struct LoopArgs {
     /// whose tests fail on purpose.
     #[arg(long)]
     continue_past_red_base: bool,
+    /// Print every decision's full frontier, `frontier: <action> (<status>), …`, beside what the
+    /// run may do: without it the run says the admissible actions once (`may:`) and then only
+    /// when they change (`may now: +<added> -<removed>`).
+    #[arg(long)]
+    verbose: bool,
     /// The `setup` commands `--config` gave, run when the case opens; set from the file, never from
     /// a flag.
     #[arg(skip)]
@@ -3197,6 +3202,9 @@ fn finish(
         run.cap_active_time(seconds);
     }
     run.stop_when_unperformable();
+    run.console(takt::console::Console {
+        verbose: looping.verbose,
+    });
     if looping.continue_past_red_base {
         run.continue_past_red_base();
     }
@@ -4340,6 +4348,20 @@ mod tests {
         Scratch(dir)
     }
 
+    /// Whether the run printed `action` admissible: listed on its `may:` line, or added on a
+    /// `may now:` line.
+    fn may(out: &str, action: &str) -> bool {
+        out.lines().any(|line| {
+            line.strip_prefix("  may: ")
+                .is_some_and(|actions| actions.split_whitespace().any(|a| a == action))
+                || line.strip_prefix("  may now: ").is_some_and(|changes| {
+                    changes
+                        .split_whitespace()
+                        .any(|change| change.strip_prefix('+') == Some(action))
+                })
+        })
+    }
+
     /// Runs `takt <args>` in this process; the exit code and what it printed.
     fn takt(args: &[&str]) -> (u8, String) {
         // These tests run takt in one process, side by side, under one home. The first run makes
@@ -4465,7 +4487,7 @@ mod tests {
             "true",
         ]);
         assert_eq!(code, 3, "{out}");
-        // The loop prints Canon's action frontier each evaluation; the store's lines are these.
+        // The loop says Canon's action frontier as `may:`; the store's lines are these.
         assert!(!out.contains("frontier: took"), "{out}");
         assert!(!out.contains("frontier: nothing ready"), "{out}");
         let case = the_case(&repo);
@@ -4588,9 +4610,11 @@ mod tests {
             GATE_PROTOCOL,
             "--test-cmd",
             "true",
+            "--verbose",
         ]);
         assert_eq!(code, 7, "{out}");
         assert!(out.contains("frontier: gate.run (admissible)"), "{out}");
+        assert!(may(&out, "gate.run"), "{out}");
         assert!(
             out.contains(
                 "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 0, tokens 0"
@@ -5052,7 +5076,7 @@ mod tests {
         );
         assert!(!out.contains("refused"), "{out}");
         assert!(!out.contains("ApprovalRequired"), "{out}");
-        assert!(out.contains("repository.merge (admissible)"), "{out}");
+        assert!(may(&out, "repository.merge"), "{out}");
         assert!(
             out.contains("step 1: repository.merge (none)"),
             "story:harness-none-takes-a-granted-action: the granted merge is the harness's step: {out}"

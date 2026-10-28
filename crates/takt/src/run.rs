@@ -9047,6 +9047,9 @@ pub struct Run<'a> {
     /// The module names no step may put in an import directory, kept with the case when a Python
     /// answered ([`Modules::of_case`]).
     modules: Modules,
+    /// The console the run prints for a person ([`crate::console`]), set by [`Run::console`];
+    /// while none, the run prints every decision's full `frontier:` line and no header.
+    console: Option<crate::console::Console>,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
     /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`], and off
@@ -9340,6 +9343,7 @@ impl<'a> Run<'a> {
             outside_dirs,
             options,
             modules,
+            console: None,
             stops_unperformable: false,
             stops_red_base: true,
             setup: Vec::new(),
@@ -9645,6 +9649,7 @@ impl<'a> Run<'a> {
             outside_dirs,
             options,
             modules,
+            console: None,
             stops_unperformable: false,
             stops_red_base,
             setup: Vec::new(),
@@ -10070,6 +10075,16 @@ impl<'a> Run<'a> {
     /// caller opts in here, and without this call a run offers the harness its step as before.
     pub fn stop_when_unperformable(&mut self) {
         self.stops_unperformable = true;
+    }
+
+    /// Prints the run for a person ([`crate::console`]): a header before the `case` line that
+    /// names takt's version, the story and its intent's title and summary, a harness line after
+    /// it, and the frontier as what the run may do, `may:` at the first decision and `may now:`
+    /// whenever the admissible set changes; every decision's full `frontier:` line too only
+    /// when `console` is verbose. The CLI turns it on for every run; without this call a run
+    /// prints as before.
+    pub fn console(&mut self, console: crate::console::Console) {
+        self.console = Some(console);
     }
 
     /// Goes on past a red base: the case's first `tests.run` failing before any effect is
@@ -11629,6 +11644,16 @@ impl<'a> Run<'a> {
             self.llm_digest.as_deref(),
             &commit_record,
         )?;
+        if self.console.is_some() {
+            let story = match &self.unit {
+                Unit::Story(story) => Some(story.id.as_str()),
+                Unit::Intent(_) => None,
+            };
+            for line in crate::console::header(crate::console::VERSION, story, &self.options.intent)
+            {
+                writeln!(out, "{line}")?;
+            }
+        }
         writeln!(
             out,
             "case {} on {} in {}; inputs {}; confinement {confinement}{adapter}",
@@ -11641,6 +11666,17 @@ impl<'a> Run<'a> {
                 shown_inputs.join(" ")
             }
         )?;
+        if self.console.is_some() {
+            // The harness by the name its step lines carry, its version as preflight read it.
+            let version = preflight
+                .as_ref()
+                .and_then(|preflight| preflight.version.as_deref());
+            writeln!(
+                out,
+                "{}",
+                crate::console::harness_line(self.harness.name(), version, &confinement)
+            )?;
+        }
         if let Some(declined) = declined {
             writeln!(
                 out,
@@ -11683,6 +11719,9 @@ impl<'a> Run<'a> {
         // from here on, never one an earlier run wrote.
         let first_decision = seq + 1;
         let mut last_idle: Option<String> = None;
+        // The admissible set the console last said, under [`Run::console`]: `may:` is said once,
+        // then `may now:` only when the set changes.
+        let mut said_may: Option<Vec<String>> = None;
         let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
         let keeps_state = self.harness.keeps_state();
         // The validators that observed without writing a record, each with the revision it
@@ -11740,7 +11779,23 @@ impl<'a> Run<'a> {
             if self.kept_records() == Records::Default {
                 self.case.keep_only_decision(first_decision, seq)?;
             }
-            writeln!(out, "{}", decision.frontier_line())?;
+            match self.console {
+                Some(console) => {
+                    let now = decision.admissible();
+                    let line = match &said_may {
+                        None => Some(crate::console::may(&now)),
+                        Some(before) => crate::console::may_now(before, &now),
+                    };
+                    if let Some(line) = line {
+                        writeln!(out, "{line}")?;
+                    }
+                    said_may = Some(now);
+                    if console.verbose {
+                        writeln!(out, "{}", decision.frontier_line())?;
+                    }
+                }
+                None => writeln!(out, "{}", decision.frontier_line())?,
+            }
             let state = format!(
                 "{:?}{:?}{:?}",
                 decision.claims, decision.obligations, decision.actions
