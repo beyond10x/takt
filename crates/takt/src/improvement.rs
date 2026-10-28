@@ -1509,14 +1509,23 @@ fn grant_repository_refusal(dir: &Path, mainline: &Mainline) -> Result<Option<St
     if at_grant.repository.as_deref() == now {
         return Ok(None);
     }
-    let read_at_grant = match at_grant.repository.as_deref() {
-        Some(repository) => format!("read {main} from {repository}"),
-        None => format!(
-            "records no repository it read {main} from (given under no forge, or before grants recorded one)"
+    // The remedy the refusal names is one `takt approve` accepts: a grant that records no
+    // repository is given again where the turn reads one (`crate::case::prepare_grant` replaces
+    // it then), and a grant that records one is never replaced at its revision.
+    let (read_at_grant, remedy) = match at_grant.repository.as_deref() {
+        Some(repository) => (
+            format!("read {main} from {repository}"),
+            format!("so resume the turn where it reads {main} of {repository}"),
+        ),
+        None => (
+            format!(
+                "records no repository it read {main} from (given under no forge, or before grants recorded one)"
+            ),
+            "so grant it again".to_owned(),
         ),
     };
     Ok(Some(format!(
-        "the grant given at {} {read_at_grant}, and this run reads {}, so the tip the grant recorded is not that mainline's; a grant authorises a merge read from the repository it read {main}'s tip from, so grant it again",
+        "the grant given at {} {read_at_grant}, and this run reads {}, so the tip the grant recorded is not that mainline's; a grant authorises a merge read from the repository it read {main}'s tip from, {remedy}",
         decision.granted_at,
         match now {
             Some(repository) => format!("{main} of {repository}"),

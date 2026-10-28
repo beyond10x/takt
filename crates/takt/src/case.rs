@@ -1179,7 +1179,9 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// are about no single artifact ([`LoadedProtocol::grant_subject`]), a case that is not at the
 /// gate for the capability (its latest decision does not find an action requiring it
 /// approval-required, or was computed at another revision of that artifact than the case is at
-/// now), and a capability the case already decides at that revision. A grant given at another
+/// now), and a capability the case already decides at that revision, but for a turn's
+/// judge-surface grant whose tip records no repository ([`records_no_repository`]), which a grant
+/// reading a repository replaces. A grant given at another
 /// revision is replaced: it authorises nothing here, and Canon refuses a capability decided
 /// twice. An improvement turn's grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] records
 /// the mainline's tip read once the grant's instant is taken ([`mainline_at_grant`]), none for a
@@ -1288,14 +1290,41 @@ pub fn prepare_grant(
         );
     }
     let mut authority = Authority::read(&dir)?.unwrap_or_default();
-    if let Some(decided) = authority.decision(capability)
-        && decided.applies_at(Some(&revision))
+    let judge_surface_turn =
+        protocol == TURN_PROTOCOL && capability == crate::validator::JUDGE_SURFACE_CAPABILITY;
+    // The decision this grant may replace at its own revision: only a turn's judge-surface
+    // grant whose tip records no repository, which authorises no merge read through the bot
+    // route (the merge's refusal asks for it again); any other decision there is refused.
+    let unpinned = match authority.decision(capability) {
+        Some(decided) if decided.applies_at(Some(&revision)) => {
+            let already = format!(
+                "the case {id} already decides {capability} at {revision}: {} by {} at {}",
+                decided.decision, decided.approver, decided.granted_at
+            );
+            if !(judge_surface_turn && records_no_repository(decided)) {
+                bail!("{already}");
+            }
+            Some(already)
+        }
+        _ => None,
+    };
+    let granted_at = crate::now();
+    // A turn's judge-surface grant records the mainline's tip, read after its instant, so a
+    // merge made before the grant is found by ancestry, never by a date.
+    let mainline_tip = if judge_surface_turn {
+        mainline_at_grant(tree, &dir, id)?
+    } else {
+        None
+    };
+    // A grant that records no repository is replaced only by one that records a repository.
+    if let Some(already) = unpinned
+        && mainline_tip
+            .as_ref()
+            .is_none_or(|tip| tip.repository.is_none())
     {
         bail!(
-            "the case {id} already decides {capability} at {revision}: {} by {} at {}",
-            decided.decision,
-            decided.approver,
-            decided.granted_at
+            "{already}; it records no repository it read {} from, and this grant would read none either",
+            crate::promotion::MAINLINE
         );
     }
     // A decision on the capability at another revision authorises nothing at this one; the
@@ -1303,15 +1332,6 @@ pub fn prepare_grant(
     authority
         .decisions
         .retain(|decision| decision.capability != capability);
-    let granted_at = crate::now();
-    // A turn's judge-surface grant records the mainline's tip, read after its instant, so a
-    // merge made before the grant is found by ancestry, never by a date.
-    let mainline_tip =
-        if protocol == TURN_PROTOCOL && capability == crate::validator::JUDGE_SURFACE_CAPABILITY {
-            mainline_at_grant(tree, &dir, id)?
-        } else {
-            None
-        };
     authority.decisions.push(AuthorityDecision {
         capability: capability.to_owned(),
         decision: Grant::Granted,
@@ -1334,6 +1354,16 @@ pub fn prepare_grant(
         approval,
         _held: held,
     })
+}
+
+/// Whether `decided` is a grant whose mainline tip records no repository it was read from
+/// ([`MainlineTip::repository`]): one given under no forge, or before grants recorded one.
+fn records_no_repository(decided: &AuthorityDecision) -> bool {
+    decided.decision == Grant::Granted
+        && decided
+            .mainline_tip
+            .as_ref()
+            .is_some_and(|tip| tip.repository.is_none())
 }
 
 /// The commit the mainline is at now for the turn `id` at `dir` under `tree`, read through the

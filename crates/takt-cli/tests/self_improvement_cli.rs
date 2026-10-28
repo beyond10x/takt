@@ -2982,3 +2982,60 @@ fn a_merge_read_from_the_local_main_under_a_grant_read_from_the_bot_route_record
     assert!(out.contains("the local main"), "{out}\n{err}");
     assert_eq!(evidence_files(&world), before, "{out}\n{err}");
 }
+
+/// A judge-surface grant that records its repository is not given again at the same revision:
+/// the second `takt approve` exits 1 saying the case already decides it, and `authority.yaml`
+/// is left as it was. Only a grant that records no repository is replaced, by one that does.
+#[test]
+fn a_grant_that_records_its_repository_is_not_given_again_at_its_revision() {
+    let (world, path) = bot_turn_at_the_gate("pin-regrant-pinned");
+    let (code, out, err) = bot_approve(&world, &path);
+    assert_eq!(code, 0, "{out}\n{err}");
+    let authority = world.repo.join(".takt/cases/turn-1/authority.yaml");
+    let granted = fs::read_to_string(&authority).expect("the authority");
+    assert!(
+        granted.contains("mainline_repository: acme/one"),
+        "{granted}"
+    );
+    let (code, out, err) = bot_approve(&world, &path);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(
+        err.contains("already decides repository.merge.judge_surface"),
+        "{out}\n{err}"
+    );
+    assert_eq!(
+        fs::read_to_string(&authority).expect("the authority"),
+        granted
+    );
+}
+
+/// A judge-surface grant that records no repository is replaced only by a grant that reads one:
+/// with the turn's `forge` file then `none`, the local `main` and no repository, the second
+/// `takt approve` exits 1 saying the case already decides it, and `authority.yaml` is left as
+/// it was.
+#[test]
+fn a_grant_that_records_no_repository_is_not_replaced_by_one_that_reads_none() {
+    let (world, path) = bot_turn_at_the_gate("pin-regrant-none");
+    let (code, out, err) = bot_approve(&world, &path);
+    assert_eq!(code, 0, "{out}\n{err}");
+    let case = world.repo.join(".takt/cases/turn-1");
+    let authority = case.join("authority.yaml");
+    let legacy: String = fs::read_to_string(&authority)
+        .expect("the authority")
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("mainline_repository:"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    fs::write(&authority, &legacy).expect("written");
+    fs::write(case.join("forge"), "none\n").expect("written");
+    let (code, out, err) = bot_approve(&world, &path);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert!(
+        err.contains("already decides repository.merge.judge_surface"),
+        "{out}\n{err}"
+    );
+    assert_eq!(
+        fs::read_to_string(&authority).expect("the authority"),
+        legacy
+    );
+}
