@@ -558,7 +558,9 @@ enum ScenarioCommands {
     /// puts the tree back. A scenario whose section gives `red-base = expected` (its seed's
     /// tests fail on purpose) goes on past a red base as `--continue-past-red-base` does,
     /// without the flag, and says so in a line `red base: expected by scenario <id> in
-    /// .engineering/scenarios.conf at <revision>`; the declaration only turns that on, and
+    /// .engineering/scenarios.conf at <revision>: tests failing at the base do not stop the
+    /// run`; the case records the declaration, so a resume of it with `takt run --case` goes on
+    /// past its red base too. The declaration only turns that on, and
     /// `continue_past_red_base = false` in `--config` does not turn it off. Any other value of
     /// `red-base` is refused before anything is cut.
     #[command(after_help = SCENARIO_EXIT_CODES)]
@@ -3273,10 +3275,25 @@ impl Scenario {
             ));
         }
         let entries = takt::git::config_at(repo, revision, SCENARIOS)
-            .with_context(|| {
-                format!(
-                    "scenario {id}: {SCENARIOS} at {revision} does not read as git's configuration syntax, whose keys are letters, digits and `-` (`red-base`, not `red_base`)"
-                )
+            .map_err(|error| {
+                let refused = format!(
+                    "scenario {id}: {SCENARIOS} at {revision} does not read as git's configuration syntax"
+                );
+                // The spelling is named only to a file that gives it: git reads keys without
+                // regard to case, so neither does the hint.
+                let underscored = takt::git::blob(repo, &format!("{revision}:{SCENARIOS}"))
+                    .is_ok_and(|text| {
+                        String::from_utf8_lossy(&text)
+                            .to_ascii_lowercase()
+                            .contains("red_base")
+                    });
+                error.context(if underscored {
+                    format!(
+                        "{refused}, whose keys are letters, digits and `-` (`red-base`, not `red_base`)"
+                    )
+                } else {
+                    refused
+                })
             })?
             .ok_or_else(|| {
             anyhow!(
@@ -3668,12 +3685,13 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         }
     )?;
     // The declaration only turns going on past a red base on: no flag or `--config` value
-    // turns an expected red base back off.
+    // turns an expected red base back off. The line says what the run was told, not what the
+    // base's tests do: a green seed may declare it too.
     if scenario.red_base_expected {
         looping.continue_past_red_base = true;
         writeln!(
             out,
-            "red base: expected by scenario {} in {SCENARIOS} at {declared_on}",
+            "red base: expected by scenario {} in {SCENARIOS} at {declared_on}: tests failing at the base do not stop the run",
             scenario.id
         )?;
     }
@@ -3690,6 +3708,11 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         &validators,
         out,
     )?;
+    // The case keeps the declaration, read at `--declared-on` and never from its tree, so a
+    // resume with `takt run --case` goes on past its red base without the flag.
+    if scenario.red_base_expected {
+        run.case.record_red_base_expected()?;
+    }
     // As `takt run`: a case that terminates accepted records its test result and its move in
     // the store, on the case's branch. A scenario run keeps every decision whatever `--records`
     // says, a resume of it too: the trial's record is what the scenario's scorecard reads, and

@@ -21,6 +21,9 @@ const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:
 /// A test command that fails the same two tests whatever the revision: a seed red on purpose.
 const RED: &str = "#!/bin/sh\nprintf 'running 3 tests\\ntest a::one ... ok\\ntest a::two ... FAILED\\ntest a::three ... FAILED\\n\\ntest result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\\n'\nexit 101\n";
 
+/// A test command that passes whatever the revision: a green seed.
+const GREEN: &str = "#!/bin/sh\nprintf 'running 1 test\\ntest a::one ... ok\\n\\ntest result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\\n'\nexit 0\n";
+
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
@@ -77,9 +80,11 @@ fn world(name: &str, extra: &str) -> World {
     copy_dir(&Path::new(FIXTURES).join("one-ready"), &repo);
     fs::write(repo.join("Cargo.toml"), "[package]\nname = \"scratch\"\n").expect("a file");
     fs::write(repo.join(".engineering/gates.yaml"), GATES).expect("a file");
-    let red = repo.join("red.sh");
-    fs::write(&red, RED).expect("a file");
-    fs::set_permissions(&red, fs::Permissions::from_mode(0o755)).expect("executable");
+    for (file, text) in [("red.sh", RED), ("green.sh", GREEN)] {
+        let path = repo.join(file);
+        fs::write(&path, text).expect("a file");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
+    }
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
@@ -125,6 +130,11 @@ impl World {
     /// `--continue-past-red-base`: the double first on the program path, the state home in the
     /// scratch world. The exit code, stdout and stderr.
     fn scenario(&self) -> (i32, String, String) {
+        self.scenario_with("./red.sh")
+    }
+
+    /// [`World::scenario`] with the test command `test_cmd`.
+    fn scenario_with(&self, test_cmd: &str) -> (i32, String, String) {
         self.takt(&[
             "scenario",
             "run",
@@ -132,7 +142,7 @@ impl World {
             self.repo.to_str().expect("utf-8"),
             "1",
             "--test-cmd",
-            "./red.sh",
+            test_cmd,
             "--forge",
             "none",
             "--commit-style",
@@ -322,4 +332,96 @@ fn the_underscored_spelling_is_refused_naming_the_one_that_reads() {
     );
     assert!(world.trial_branches().is_empty(), "a trial branch was cut");
     assert_eq!(world.calls(), 0, "{out}");
+}
+
+/// The case id a run's `case <id> on …` line names.
+fn case_of(out: &str) -> String {
+    out.lines()
+        .find_map(|line| {
+            line.strip_prefix("case ")?
+                .split_once(" on ")
+                .map(|(id, _)| id)
+        })
+        .unwrap_or_else(|| panic!("the run names no case: {out}"))
+        .to_owned()
+}
+
+/// The case keeps its declared red base in its own record, written at open: `red_base:
+/// expected` in its `case.yaml`; a case whose scenario declares none records none.
+#[test]
+fn the_case_records_its_declared_red_base_at_open() {
+    let declared = world("recorded", "\tred-base = expected\n");
+    let (_, out, err) = declared.scenario();
+    let case = case_of(&out);
+    let snapshot = fs::read_to_string(
+        declared
+            .repo
+            .join(".takt/cases")
+            .join(&case)
+            .join("case.yaml"),
+    )
+    .unwrap_or_else(|error| panic!("{error}: stdout {out} stderr {err}"));
+    assert!(
+        snapshot.lines().any(|line| line == "red_base: expected"),
+        "{snapshot}"
+    );
+    let other = world("not-recorded", "");
+    let (_, out, _) = other.scenario();
+    let case = case_of(&out);
+    let snapshot = fs::read_to_string(other.repo.join(".takt/cases").join(&case).join("case.yaml"))
+        .expect("the case's snapshot");
+    assert!(!snapshot.contains("red_base"), "{snapshot}");
+}
+
+/// A case whose scenario declares no red base stops `RedBase` on its resume too, without the
+/// flag: only the case's record turns the stop off, never the resume itself.
+#[test]
+fn an_undeclared_case_stops_red_base_on_its_resume() {
+    let world = world("undeclared-resume", "");
+    let (code, out, err) = world.scenario();
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    let (code, out, err) = world.resume(&case_of(&out));
+    assert!(
+        out.lines()
+            .any(|line| line.starts_with("stopped: RedBase (")),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    assert_eq!(world.calls(), 0, "a model call at a red base: {out}");
+}
+
+/// A `scenarios.conf` git refuses for a reason other than `red_base` is refused without the
+/// `red-base` spelling hint, which is given only when the file's text holds `red_base`.
+#[test]
+fn a_refusal_without_red_base_gives_no_spelling_hint() {
+    let world = world("other-refusal", "\tlabel_x = y\n");
+    let (code, out, err) = world.scenario();
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("does not read as git's configuration syntax"),
+        "{err}"
+    );
+    // The scratch path itself holds `red-base`; the hint is named in backticks.
+    assert!(!err.contains("`red-base`"), "{err}");
+    assert!(!err.contains("`red_base`"), "{err}");
+    assert!(world.trial_branches().is_empty(), "a trial branch was cut");
+    assert_eq!(world.calls(), 0, "{out}");
+}
+
+/// On a green seed the declaration's line still says what the run was told, and claims no red
+/// base: it says only that tests failing at the base do not stop the run.
+#[test]
+fn a_green_seed_with_the_declaration_claims_no_red_base() {
+    let world = world("green", "\tred-base = expected\n");
+    let (_, out, err) = world.scenario_with("./green.sh");
+    assert!(
+        out.lines().any(|line| line
+            == "red base: expected by scenario 1 in .engineering/scenarios.conf at main: tests failing at the base do not stop the run"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        out.contains("evidence: test_result pass"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(!out.contains("RedBase"), "stdout {out} stderr {err}");
 }

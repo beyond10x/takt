@@ -9028,7 +9028,9 @@ pub struct Run<'a> {
     modules: Modules,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
-    /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
+    /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`], and off
+    /// on the resume of a case whose record holds its red base expected
+    /// ([`CaseDir::red_base_expected`]).
     stops_red_base: bool,
     /// The run file's `setup` commands, run when the case opens ([`Run::declare_setup`]).
     setup: Vec<crate::run_config::SetupCommand>,
@@ -9587,6 +9589,10 @@ impl<'a> Run<'a> {
         // The profile the case was opened under: a resume keeps it unless the caller asks for
         // another ([`Run::keep_records`]).
         let records = case.opened_profile()?;
+        // A case whose record holds its red base expected goes on past it on every resume, as the
+        // run that opened it did ([`CaseDir::red_base_expected`]); any other stops at it until
+        // the caller says otherwise ([`Run::continue_past_red_base`]).
+        let stops_red_base = !case.red_base_expected();
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -9609,7 +9615,7 @@ impl<'a> Run<'a> {
             options,
             modules,
             stops_unperformable: false,
-            stops_red_base: true,
+            stops_red_base,
             setup: Vec::new(),
             workspace: None,
             records,
@@ -10018,7 +10024,8 @@ impl<'a> Run<'a> {
     /// Goes on past a red base: the case's first `tests.run` failing before any effect is
     /// recorded like any other result, and the harness is offered its step, instead of the run
     /// stopping [`Stop::RedBase`]. For a caller whose base fails on purpose; every run stops so
-    /// without this call.
+    /// without this call, but the resume of a case whose record holds its red base expected
+    /// ([`CaseDir::record_red_base_expected`]).
     pub fn continue_past_red_base(&mut self) {
         self.stops_red_base = false;
     }

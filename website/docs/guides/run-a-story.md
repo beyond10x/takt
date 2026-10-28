@@ -304,13 +304,14 @@ With it, `takt scenario run` goes on past the red base without a flag, and print
 opens:
 
 ```text
-red base: expected by scenario 3 in .engineering/scenarios.conf at main
+red base: expected by scenario 3 in .engineering/scenarios.conf at main: tests failing at the base do not stop the run
 ```
 
 Without it, give `takt scenario run` `--continue-past-red-base`. takt 0.16.0 and earlier do not
 read the key, and refuse a section that gives it. A case that went on past its red base resumes
-with `takt run --case` as above, without the flag. A case that stopped `RedBase` resumes with
-`--continue-past-red-base` added to that command.
+with `takt run --case` as above, without the flag, and so does a case whose scenario declared it,
+even one that stopped before its first `tests.run`: the case records the declaration as it opens.
+A case that stopped `RedBase` resumes with `--continue-past-red-base` added to that command.
 
 ## Approve and resume
 
