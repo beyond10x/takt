@@ -1007,6 +1007,7 @@ fn each_metric_prints_its_own_medians_or_is_known_to_have_none() {
             opened_binary: None,
             completed: None,
             step_tokens: BTreeMap::from([("implementation.edit".to_owned(), Some(tokens))]),
+            harness_steps: None,
             layers: None,
         }
     };

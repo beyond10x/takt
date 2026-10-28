@@ -712,6 +712,7 @@ fn trial_row(n: usize, stop: &str, passed: bool) -> Row {
         opened_binary: None,
         completed: Some(stop == "accepted"),
         step_tokens: Default::default(),
+        harness_steps: None,
         layers: None,
     }
 }
@@ -857,6 +858,7 @@ fn a_disk_low_stop_is_no_completion() {
         opened_binary: None,
         completed: None,
         step_tokens: Default::default(),
+        harness_steps: None,
         layers: None,
     };
     assert!(!row.disagrees());

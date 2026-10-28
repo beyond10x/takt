@@ -331,6 +331,7 @@ fn an_unperformable_stop_is_no_completion() {
         opened_binary: None,
         completed: None,
         step_tokens: Default::default(),
+        harness_steps: None,
         layers: None,
     };
     assert!(!row.disagrees());

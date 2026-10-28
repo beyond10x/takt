@@ -155,6 +155,11 @@ pub struct Row {
     pub held_out: Option<HeldOut>,
     /// The highest step number of the run's lines: the steps it took.
     pub steps: u64,
+    /// The run's harness steps: its `step` lines but a validator's (every step but a
+    /// validator's is a harness step, as its tokens are read). None on a file saved before it
+    /// had the field, which [`layers_differ`] reads as [`Row::steps`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_steps: Option<u64>,
     /// The sum of the tokens reported on the run's `step` lines, a validator's that reports
     /// none counting 0; unknown (none, saved as `null`) when a harness step of the run recorded
     /// no tokens, or 0, which takt never writes: a missing record is never read as 0, which
@@ -234,12 +239,15 @@ pub fn layers_text(layers: Option<&BTreeMap<String, String>>) -> String {
 /// that recorded no layers beside one that did differs; so does a layer one run states and
 /// another does not.
 ///
-/// A run that took no step, such as one stopped `HarnessUnqualified` before its first session,
-/// ran on no harness and no model: it states neither layer and brings neither to the comparison
-/// ([`STEP_LAYERS`]), unless its `opened` line names one. Each of those layers is compared over
-/// the runs that took a step, the first of them the one the refusal names beside the other; the
-/// run still counts with its outcome and its 0 steps, and every other layer it states is
-/// compared. None when every run's layers are the same, or no run recorded any.
+/// A run that took no harness step ([`Row::harness_steps`]), such as one stopped
+/// `HarnessUnqualified` before its first session or a resume that took only validator steps
+/// (`tests.run`, `gate.run`, `ci.read`) and stopped, ran on no harness and no model: it states
+/// neither layer and brings neither to the comparison ([`STEP_LAYERS`]), unless its `opened`
+/// line names one. Each of those layers is compared over the runs that took a harness step, the
+/// first of them the one the refusal names beside the other; the run still counts with its
+/// outcome and its steps, and every other layer it states is compared. A run that took a
+/// harness step and states no harness layer is compared, never exempted. None when every run's
+/// layers are the same, or no run recorded any.
 #[must_use]
 pub fn layers_differ(rows: &[Row]) -> Option<String> {
     let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
@@ -279,7 +287,8 @@ pub fn layers_differ(rows: &[Row]) -> Option<String> {
         };
         for &name in &names {
             let revision = layers.get(name);
-            if revision.is_none() && row.steps == 0 && STEP_LAYERS.contains(&name) {
+            let harness_steps = row.harness_steps.unwrap_or(row.steps);
+            if revision.is_none() && harness_steps == 0 && STEP_LAYERS.contains(&name) {
                 continue;
             }
             let Some(&(label_x, x)) = reference.get(name) else {
@@ -303,8 +312,8 @@ pub fn layers_differ(rows: &[Row]) -> Option<String> {
 }
 
 /// The layers a run states only from its steps' lines ([`Span::row`]): the harness's version
-/// and the model. A run that took no step states neither, and [`layers_differ`] compares
-/// neither for it.
+/// and the model. A run that took no harness step states neither, and [`layers_differ`]
+/// compares neither for it.
 pub const STEP_LAYERS: [&str; 2] = ["harness", "model"];
 
 impl Row {
@@ -686,6 +695,8 @@ struct Span {
     first: Option<i128>,
     last: Option<i128>,
     steps: u64,
+    /// The `step` lines but a validator's ([`Row::harness_steps`]).
+    harness_steps: u64,
     tokens: u64,
     /// A harness step recorded no tokens, or 0: the run's tokens are unknown ([`Row::tokens`]).
     tokens_unknown: bool,
@@ -734,6 +745,7 @@ impl Span {
             outcome,
             held_out: None,
             steps: self.steps,
+            harness_steps: Some(self.harness_steps),
             tokens: (!self.tokens_unknown).then_some(self.tokens),
             refusals: self.refusals,
             errors: self.errors,
@@ -817,7 +829,11 @@ fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
                 // A validator reports no tokens and spends none; a harness step (every step but
                 // a validator's) without a count, or with 0, which takt never writes, leaves the
                 // run's tokens and its action's unknown, never 0.
-                let unknown = line["by"] != "validator" && reported.is_none_or(|n| n == 0);
+                let by_harness = line["by"] != "validator";
+                if by_harness {
+                    count(&mut span.harness_steps, 1, &mut span.saturated);
+                }
+                let unknown = by_harness && reported.is_none_or(|n| n == 0);
                 span.tokens_unknown |= unknown;
                 count(&mut span.tokens, tokens, &mut span.saturated);
                 if let Some(action) = line["action"].as_str() {

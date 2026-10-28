@@ -230,6 +230,7 @@ fn card(cases: &[(&str, u64)], margin: u32) -> Scorecard {
                 opened_binary: None,
                 completed: None,
                 step_tokens: Default::default(),
+                harness_steps: None,
                 layers: None,
             })
             .collect(),
