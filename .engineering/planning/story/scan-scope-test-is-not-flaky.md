@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scan-scope-test-is-not-flaky
 kind: story
-status: draft
+status: active
 title: The scan-scope test of the failed checks' block fails now and then
 tags:
 - finding
@@ -16,7 +16,10 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/harness.rs
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T21:15:40Z", actor: "human:timo", revision: 3, executor: "agent:planner"}
+- {from: "proposed", to: "active", at: "2026-10-28T21:15:41Z", actor: "human:timo", revision: 4, executor: "agent:developer"}
 ---
 # The scan-scope test of the failed checks' block fails now and then
 

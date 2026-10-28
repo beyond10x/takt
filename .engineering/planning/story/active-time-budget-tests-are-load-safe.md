@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:active-time-budget-tests-are-load-safe
 kind: story
-status: draft
+status: active
 title: The active-time budget tests fail on a loaded machine
 tags:
 - finding
@@ -12,7 +12,13 @@ refs:
   reference: active-time-budget-tests-are-load-safe
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/tests/active_time_budget.rs
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T21:15:40Z", actor: "human:timo", revision: 3, executor: "agent:planner"}
+- {from: "proposed", to: "active", at: "2026-10-28T21:15:41Z", actor: "human:timo", revision: 4, executor: "agent:developer"}
 ---
 # The active-time budget tests fail on a loaded machine
 

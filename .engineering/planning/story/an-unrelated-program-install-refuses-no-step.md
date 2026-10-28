@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:an-unrelated-program-install-refuses-no-step
 kind: story
-status: draft
+status: active
 title: A program installed by another process during a step refuses that step
 tags:
 - finding
@@ -12,7 +12,15 @@ refs:
   reference: an-unrelated-program-install-refuses-no-step
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: inferred
+  path: crates/takt/src/run.rs
+- confidence: cited
+  path: crates/takt/tests/approval_riders_adv2.rs
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T21:15:41Z", actor: "human:timo", revision: 4, executor: "agent:planner"}
+- {from: "proposed", to: "active", at: "2026-10-28T21:15:41Z", actor: "human:timo", revision: 5, executor: "agent:developer"}
 ---
 # A program installed by another process during a step refuses that step
 
