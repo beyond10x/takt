@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:failed-gate-output-floods-prompt
 kind: story
-status: proposed
+status: implemented
 title: A failed gate's raw output floods the next step's prompt
 tags:
 - finding
@@ -19,9 +19,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: cited
   path: crates/takt/tests/failed_gate_lines.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T15:56:05Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-28T15:57:59Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-28T20:40:00Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}, executor: "agent:planner"}
 ---
 # A failed gate's raw output floods the next step's prompt
 
