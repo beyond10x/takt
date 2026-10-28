@@ -1,9 +1,11 @@
 //! The repository's obligations: each gate of its gates document, read from the case's base
-//! revision, with its last status at the revision the run is at. The prompt lists them
-//! ([`block`]), the run's last line names the ones not met ([`summary`]) and `takt report` prints
-//! the table. A status comes from a gate observation ([`crate::validator::GateRun`]) that the
-//! record holds as an `obligations` line; a gate no observation has judged at the current
-//! revision is `not yet run`, never a status an earlier revision earned.
+//! revision, with its last status at the case's implementation revision, the revision the gate
+//! judges: takt's store commits above it (the `test_result` record, the move, an approval) do not
+//! move it, a code commit does. The prompt lists them ([`block`]), the run's last line names the
+//! ones not met ([`summary`]) and `takt report` prints the table. A status comes from a gate
+//! observation ([`crate::validator::GateRun`]) that the record holds as an `obligations` line; a
+//! gate no observation has judged at the implementation revision is `not yet run`, never a
+//! status an earlier revision earned.
 
 use std::path::Path;
 
@@ -109,8 +111,21 @@ pub fn recorded(record: &[serde_json::Value]) -> Option<(String, Vec<Obligation>
     Some((revision, rows))
 }
 
-/// The obligations of the case at `revision`: each gate of the document `gates` at `base`, with
-/// the status the last observation at `revision` gave it, else `not yet run`.
+/// The last table `record` holds at `revision`; none when no observation wrote one there. A
+/// table recorded later at another revision (a stop's, at takt's store commits above it) does not
+/// hide it.
+#[must_use]
+pub fn recorded_at(record: &[serde_json::Value], revision: &str) -> Option<Vec<Obligation>> {
+    let line = record
+        .iter()
+        .rev()
+        .find(|line| line["event"] == EVENT && line["revision"] == revision)?;
+    serde_json::from_value(line["obligations"].clone()).ok()
+}
+
+/// The obligations of the case at `revision`, the case's implementation revision: each gate of
+/// the document `gates` at `base`, with the status the last table recorded at `revision` gave
+/// it, else `not yet run`.
 ///
 /// # Errors
 /// A git read that fails.
@@ -121,34 +136,48 @@ pub fn current(
     record: &[serde_json::Value],
     revision: &str,
 ) -> Result<Vec<Obligation>> {
-    let seen = recorded(record).filter(|(at, _)| at == revision);
+    let seen = recorded_at(record, revision);
     Ok(gates_at(tree, base, gates)
         .with_context(|| format!("read the gates document {} at {base}", gates.display()))?
         .into_iter()
         .map(|(id, text)| {
             let status = seen
                 .as_ref()
-                .and_then(|(_, rows)| rows.iter().find(|row| row.id == id))
+                .and_then(|rows| rows.iter().find(|row| row.id == id))
                 .map_or(Status::NotYetRun, |row| row.status);
             Obligation { id, text, status }
         })
         .collect())
 }
 
-/// The obligations of `run`'s case at the revision its tree is at, given the case's record so far
-/// (`record`): none for a run with no gates document, or a case that pins no base commit.
+/// The obligations of `run`'s case, given the case's record so far (`record`), and the revision
+/// they are read at: the case's revision of the artifact the gate judges, its implementation
+/// revision, which the gate's observation records its table at; the tree's `HEAD` for a case
+/// that holds no revision of it. None for a run with no gates document, or a case that pins no
+/// base commit.
 ///
 /// # Errors
 /// A git read that fails.
-pub fn of_run(run: &crate::Run<'_>, record: &[serde_json::Value]) -> Result<Vec<Obligation>> {
-    let Some(gates) = run.validators.iter().find_map(|v| v.gates_document()) else {
-        return Ok(Vec::new());
+pub fn of_run(
+    run: &crate::Run<'_>,
+    record: &[serde_json::Value],
+) -> Result<Option<(String, Vec<Obligation>)>> {
+    let Some((gates, subject)) = run
+        .validators
+        .iter()
+        .find_map(|v| v.gates_document().map(|gates| (gates, v.subject())))
+    else {
+        return Ok(None);
     };
     let Some(base) = crate::case::Branch::read(&run.case.dir)?.base_commit else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
-    let revision = crate::git::head(&run.tree)?;
-    current(&run.tree, &base, gates, record, &revision)
+    let revision = match run.case.revision(subject) {
+        Some(revision) => revision,
+        None => crate::git::head(&run.tree)?,
+    };
+    let obligations = current(&run.tree, &base, gates, record, &revision)?;
+    Ok(Some((revision, obligations)))
 }
 
 /// The prompt's block of repository obligations: a heading, then a line per gate with its text
@@ -302,6 +331,32 @@ mod tests {
         let (at, rows) = recorded(&record).expect("a table");
         assert_eq!((at.as_str(), rows.len()), ("r1", 1));
         assert_eq!(rows[0].status, Status::Pass);
+    }
+
+    #[test]
+    fn a_later_table_at_another_revision_does_not_hide_the_gates_table() {
+        let table = |revision: &str, status: &str| {
+            serde_json::json!({
+                "event": "obligations",
+                "revision": revision,
+                "obligations": [{"id": "a", "text": "A.", "status": status}]
+            })
+        };
+        // The gate's table at the implementation revision, then a stop's at takt's store
+        // commits above it, as takt before this story recorded it.
+        let record = vec![table("r1", "pass"), table("r2", "not_yet_run")];
+        let rows = recorded_at(&record, "r1").expect("the gate's table");
+        assert_eq!(rows[0].status, Status::Pass);
+        assert_eq!(
+            recorded_at(&record, "r2").expect("the stop's table")[0].status,
+            Status::NotYetRun
+        );
+        assert_eq!(recorded_at(&record, "r3"), None);
+        let later = vec![table("r1", "pass"), table("r1", "fail")];
+        assert_eq!(
+            recorded_at(&later, "r1").expect("the last table")[0].status,
+            Status::Fail
+        );
     }
 
     #[test]
