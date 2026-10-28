@@ -533,5 +533,9 @@ fn an_argument_less_run_from_the_base_opens_no_second_case_for_a_declined_story(
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert_eq!(world.cases(), cases, "a second case was opened: {out}");
     assert_eq!(world.calls(), 1, "a harness call: {out}");
-    assert_eq!(record(&case).len(), lines, "the declined case was resumed: {out}");
+    assert_eq!(
+        record(&case).len(),
+        lines,
+        "the declined case was resumed: {out}"
+    );
 }

@@ -309,9 +309,18 @@ fn texts_under(dir: &Path, into: &mut Vec<(PathBuf, String)>) {
 #[test]
 fn a_decline_that_changed_any_file_of_the_tree_is_refused() {
     let cases: [(&str, &str); 6] = [
-        ("store", "echo 'an edit' >> '{repo}/.engineering/planning/story/ready-one.md'\n"),
-        ("engineering", "echo 'a note' > '{repo}/.engineering/note.txt'\n"),
-        ("dot-takt", "mkdir -p '{repo}/.takt' && echo 'a note' > '{repo}/.takt/note.txt'\n"),
+        (
+            "store",
+            "echo 'an edit' >> '{repo}/.engineering/planning/story/ready-one.md'\n",
+        ),
+        (
+            "engineering",
+            "echo 'a note' > '{repo}/.engineering/note.txt'\n",
+        ),
+        (
+            "dot-takt",
+            "mkdir -p '{repo}/.takt' && echo 'a note' > '{repo}/.takt/note.txt'\n",
+        ),
         (
             "case-dir",
             "for d in '{repo}'/.takt/cases/*/; do echo 'forged' > \"$d/forged.txt\"; done\n",
@@ -339,11 +348,18 @@ fn a_decline_that_changed_any_file_of_the_tree_is_refused() {
         );
         let repo = &world.repo;
         let put_back = match name {
-            "store" => git_status(
-                repo,
-                &["diff", "--quiet", "--", ".engineering/planning/story/ready-one.md"],
-            )
-            .0,
+            "store" => {
+                git_status(
+                    repo,
+                    &[
+                        "diff",
+                        "--quiet",
+                        "--",
+                        ".engineering/planning/story/ready-one.md",
+                    ],
+                )
+                .0
+            }
             "engineering" => !repo.join(".engineering/note.txt").exists(),
             "dot-takt" => !repo.join(".takt/note.txt").exists(),
             "case-dir" => !case.join("forged.txt").exists(),
@@ -370,7 +386,10 @@ fn a_decline_after_a_kept_edit_holds_on_resume() {
     let world = world("after-edit", false);
     let fix = Path::new(FIXTURES).join("scenario-1/fix/todo.py");
     world.script_at("1", &format!("cp '{}' todo.py\n", fix.display()));
-    world.reply_at("1", &action("implementation.edit", "fixed the done command"));
+    world.reply_at(
+        "1",
+        &action("implementation.edit", "fixed the done command"),
+    );
     let (code, out, err) = world.scenario();
     let stop = stop_line(&out, &err);
     assert!(
@@ -384,7 +403,14 @@ fn a_decline_after_a_kept_edit_holds_on_resume() {
     let id = id_of(&case);
     let (same, _) = git_status(
         &world.repo,
-        &["diff", "--quiet", "main", &format!("takt/{id}"), "--", "todo.py"],
+        &[
+            "diff",
+            "--quiet",
+            "main",
+            &format!("takt/{id}"),
+            "--",
+            "todo.py",
+        ],
     );
     assert!(!same, "the case's branch holds the edit: {out}");
     let (code, out, err) = world.resume(&id);
@@ -456,8 +482,41 @@ fn no_output_of_a_declining_run_carries_a_raw_control_character_of_the_reason() 
     );
 }
 
-/// A blank reason stops `Declined (no reason given)`; a 64 KiB reason stops `Declined` with it
-/// whole, and a resume stops on it again.
+/// The action a reply names is model text as its summary is: one that holds a control or bidi
+/// character is refused, not offered, and no line of the run carries the character raw, the
+/// step line, the refusal and the stop line included (story:a-run-can-decline).
+#[test]
+fn no_output_carries_a_raw_control_character_of_the_action_named() {
+    let world = world("control-action", false);
+    world.reply_at(
+        "last",
+        &action("decline\nsecond line \u{1b}[31m\u{202e}", "nothing"),
+    );
+    let (code, out, err) = world.scenario();
+    let stop = stop_line(&out, &err);
+    assert!(
+        stop.starts_with("stopped: StepRefused ("),
+        "{stop}\n{out}\n{err}"
+    );
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    let shaped: Vec<&str> = out
+        .lines()
+        .chain(err.lines())
+        .filter(|line| line.starts_with("second line") || line.contains(['\u{1b}', '\u{202e}']))
+        .collect();
+    assert!(
+        shaped.is_empty(),
+        "lines the action shaped or coloured: {shaped:?}\nstdout {out}\nstderr {err}"
+    );
+    let text = fs::read_to_string(case_of(&stop).join("events.jsonl")).expect("the case's record");
+    assert!(
+        !text.contains("\\u001b") && !text.contains('\u{202e}'),
+        "the record holds the action raw: {text}"
+    );
+}
+
+/// A blank reason stops `Declined (no reason given)`; a 64 KiB reason stops `Declined` on its
+/// start and a cut marker, the stop line bounded, and a resume stops on it again.
 #[test]
 fn a_blank_and_a_long_reason_stop_declined() {
     let world = world("blank", false);
@@ -475,18 +534,25 @@ fn a_blank_and_a_long_reason_stop_declined() {
     world.reply_at("last", &decline(&long));
     let (code, out, err) = world.scenario();
     let stop = stop_line(&out, &err);
+    let reason = stop
+        .strip_prefix("stopped: Declined (")
+        .and_then(|rest| rest.split_once("); "))
+        .map(|(reason, _)| reason.to_owned())
+        .unwrap_or_default();
+    let kept = reason.strip_suffix(" [reason cut]").unwrap_or_default();
     assert!(
-        stop.starts_with(&format!("stopped: Declined ({}); ", long.trim())),
-        "a long reason, {} bytes: {}…\n{err}",
+        !kept.is_empty() && long.trim().starts_with(kept) && stop.len() <= 4096,
+        "story:a-run-can-decline: a long reason, {} bytes, stops Declined on its start and a cut marker, the stop line at most 4096 bytes ({}): {}…\n{err}",
         long.len(),
+        stop.len(),
         &stop[..stop.len().min(200)]
     );
     assert_eq!(code, 9, "stderr {err}");
     let (code, out, err) = world.resume(&id_of(&case_of(&stop)));
     let again = stop_line(&out, &err);
     assert!(
-        again.starts_with(&format!("stopped: Declined ({}); steps 0, ", long.trim())),
-        "{}…\n{err}",
+        again.starts_with(&format!("stopped: Declined ({reason}); steps 0, ")),
+        "story:a-run-can-decline: a resume stops on the same cut reason: {}…\n{err}",
         &again[..again.len().min(200)]
     );
     assert_eq!(code, 9, "stderr {err}");
@@ -508,7 +574,10 @@ fn a_credential_shaped_reason_never_reaches_the_record_or_the_output() {
         &decline(&format!("refused, the token is {secret} as AGENTS.md says")),
     );
     let (code, out, err) = world.scenario();
-    assert_ne!(code, 9, "a stop naming the reason: stdout {out} stderr {err}");
+    assert_ne!(
+        code, 9,
+        "a stop naming the reason: stdout {out} stderr {err}"
+    );
     assert!(
         !out.contains(&secret) && !err.contains(&secret),
         "the output holds the credential: stdout {out} stderr {err}"
@@ -521,7 +590,10 @@ fn a_credential_shaped_reason_never_reaches_the_record_or_the_output() {
         .filter(|(_, text)| text.contains(&secret))
         .map(|(path, _)| path)
         .collect();
-    assert!(holding.is_empty(), "files holding the credential: {holding:?}");
+    assert!(
+        holding.is_empty(),
+        "files holding the credential: {holding:?}"
+    );
 }
 
 /// A decline whose reply carries a JSON `commit` member stops `Declined`, exit 9, and commits
@@ -591,11 +663,19 @@ fn an_argument_less_run_passes_over_two_declined_cases_and_takes_a_ready_story()
             .count()
     };
     let (code, out, err) = world.frontier_run();
-    assert_eq!(passed_over(&out, &first), 1, "the first case named once: {out}\n{err}");
+    assert_eq!(
+        passed_over(&out, &first),
+        1,
+        "the first case named once: {out}\n{err}"
+    );
     let stop = stop_line(&out, &err);
     let second = id_of(&case_of(&stop));
     assert_ne!(second, first, "the ready story's case was opened: {out}");
-    assert_eq!(world.calls(), 2, "the ready story's case took a step: {out}");
+    assert_eq!(
+        world.calls(),
+        2,
+        "the ready story's case took a step: {out}"
+    );
     assert_eq!(code, 9, "stdout {out} stderr {err}");
     let (code, out, err) = world.frontier_run();
     assert_eq!(passed_over(&out, &first), 1, "{out}\n{err}");
@@ -618,7 +698,10 @@ fn a_declined_case_stays_passed_over_when_its_story_is_edited_on_the_base() {
     let mut text = fs::read_to_string(&story).expect("the story");
     text.push_str("\nThe check may not be weakened.\n");
     fs::write(&story, text).expect("the story is edited");
-    git(&world.repo, &["add", ".engineering/planning/story/ready-one.md"]);
+    git(
+        &world.repo,
+        &["add", ".engineering/planning/story/ready-one.md"],
+    );
     git(&world.repo, &["commit", "-q", "-m", "clarify the story"]);
     let (code, out, err) = world.frontier_run();
     assert!(
