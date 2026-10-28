@@ -15,6 +15,11 @@ pub const SUMMARY_WIDTH: usize = 98;
 /// The most lines a summary takes; a longer paragraph ends its last line with `…`.
 pub const SUMMARY_LINES: usize = 3;
 
+/// The columns a title is cut at: one line of at most this many columns of its words, then ` …`
+/// when words are left over; a first word longer than that is cut to this many columns and ends
+/// with ` …` too. So a title line is at most `TITLE_WIDTH + 2` columns after its prefix.
+pub const TITLE_WIDTH: usize = 98;
+
 /// How the console says the frontier: as changes only, or the full `frontier:` line at each
 /// decision as well (`takt run --verbose`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -23,22 +28,46 @@ pub struct Console {
     pub verbose: bool,
 }
 
-/// The title of an intent: its first line that is not blank, a heading's `#` marks and the
-/// spaces around it taken off. A story's `intent.md` starts with the story's title.
+/// The title of an intent as the header prints it: its first line that is not blank, a heading's
+/// `#` marks and the spaces around it taken off, each word escaped ([`crate::trace::escape`], so
+/// no control or bidi character reaches the console) and the words bounded at [`TITLE_WIDTH`]. A
+/// story's `intent.md` starts with the story's title.
 #[must_use]
 pub fn title(intent: &str) -> String {
-    intent
+    let line = intent
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
-        .map(|line| line.trim_start_matches('#').trim().to_owned())
-        .unwrap_or_default()
+        .map(|line| line.trim_start_matches('#').trim())
+        .unwrap_or_default();
+    let Some(first) = wrap(&escaped_words(line), TITLE_WIDTH, 1)
+        .into_iter()
+        .next()
+    else {
+        return String::new();
+    };
+    if first.chars().count() <= TITLE_WIDTH + 2 {
+        return first;
+    }
+    let mut cut: String = first.chars().take(TITLE_WIDTH).collect();
+    cut.push_str(" …");
+    cut
+}
+
+/// `text`'s words, each escaped ([`crate::trace::escape`]), joined by one space. A word holds no
+/// whitespace and its escape adds none, so wrapping the result measures what is printed.
+fn escaped_words(text: &str) -> String {
+    text.split_whitespace()
+        .map(crate::trace::escape)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The summary of an intent, at most [`SUMMARY_LINES`] lines wrapped at [`SUMMARY_WIDTH`]: the
 /// first paragraph under its `## Outcome` heading, or, when it has none, its first paragraph
 /// after the title. A paragraph is a run of lines that are neither blank nor a heading; none is
-/// no line.
+/// no line. Each word is escaped before the wrap ([`crate::trace::escape`]), so no control or
+/// bidi character reaches the console and the width is that of the printed text.
 #[must_use]
 pub fn summary(intent: &str) -> Vec<String> {
     let lines: Vec<&str> = intent.lines().map(str::trim).collect();
@@ -54,7 +83,11 @@ pub fn summary(intent: &str) -> Vec<String> {
         .take_while(|line| !line.is_empty() && !is_heading(line))
         .copied()
         .collect();
-    wrap(&paragraph.join(" "), SUMMARY_WIDTH, SUMMARY_LINES)
+    wrap(
+        &escaped_words(&paragraph.join(" ")),
+        SUMMARY_WIDTH,
+        SUMMARY_LINES,
+    )
 }
 
 /// Whether `line` is a markdown heading.
@@ -102,11 +135,13 @@ pub fn wrap(text: &str, width: usize, most: usize) -> Vec<String> {
 
 /// The header's lines: `takt <version> · <story id>` and the intent's [`title`] under it, or, for
 /// a run of an intent, `takt <version> · <title>` alone; then the intent's [`summary`], each line
-/// under the first indented two spaces.
+/// under the first indented two spaces. The title and the summary come escaped and bounded; the
+/// story id is escaped here.
 #[must_use]
 pub fn header(version: &str, story: Option<&str>, intent: &str) -> Vec<String> {
     let title = title(intent);
-    let mut lines = match story {
+    let story = story.map(crate::trace::escape);
+    let mut lines = match story.as_deref() {
         Some(story) if title.is_empty() => vec![format!("takt {version} · {story}")],
         Some(story) => vec![format!("takt {version} · {story}"), format!("  {title}")],
         None => vec![format!("takt {version} · {title}")],
@@ -115,9 +150,13 @@ pub fn header(version: &str, story: Option<&str>, intent: &str) -> Vec<String> {
     lines
 }
 
-/// The header's harness line: `  harness <name>[ <version>] · confinement <name>`.
+/// The header's harness line: `  harness <name>[ <version>] · confinement <name>`, each part
+/// escaped ([`crate::trace::escape`]): the version is what a harness program printed.
 #[must_use]
 pub fn harness_line(harness: &str, version: Option<&str>, confinement: &str) -> String {
+    let harness = crate::trace::escape(harness);
+    let version = version.map(crate::trace::escape);
+    let confinement = crate::trace::escape(confinement);
     match version {
         Some(version) => format!("  harness {harness} {version} · confinement {confinement}"),
         None => format!("  harness {harness} · confinement {confinement}"),
@@ -366,6 +405,18 @@ mod tests {
         assert_eq!(title(STORY), "Make the check pass");
         assert_eq!(title("\n\n# A heading\n\nbody"), "A heading");
         assert_eq!(title(""), "");
+    }
+
+    #[test]
+    fn a_long_title_is_one_line_bounded_at_the_title_width() {
+        let words = "word ".repeat(100);
+        let bounded = title(&words);
+        assert!(bounded.ends_with(" …"), "{bounded}");
+        assert!(bounded.chars().count() <= TITLE_WIDTH + 2, "{bounded}");
+        let one = "x".repeat(500);
+        let cut = title(&format!("# {one}"));
+        assert_eq!(cut, format!("{} …", "x".repeat(TITLE_WIDTH)));
+        assert_eq!(title("Fix \u{1b}[2Jit"), "Fix \\u{1b}[2Jit");
     }
 
     #[test]
