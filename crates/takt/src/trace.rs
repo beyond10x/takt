@@ -310,9 +310,10 @@ pub struct Header {
     /// `layers`, "layers not recorded".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<BTreeMap<String, String>>,
-    /// The repository's obligations as the run's last `obligations` line holds them: each gate of
-    /// the gates document at the case's base with its status ([`crate::obligations`]); empty when
-    /// the record holds none.
+    /// The repository's obligations as the last `obligations` line at the case's implementation
+    /// revision holds them, else the run's last `obligations` line: each gate of the gates
+    /// document at the case's base with its status ([`crate::obligations`]); empty when the
+    /// record holds none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub obligations: Vec<crate::obligations::Obligation>,
     /// The files the trace was read from, each relative to the case directory, or its file
@@ -1233,13 +1234,23 @@ impl Trace {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        Ok(Self::from_numbered_lines(
-            &lines,
-            shim.as_deref(),
-            &name,
-            run,
-            sources,
-        ))
+        let mut trace = Self::from_numbered_lines(&lines, shim.as_deref(), &name, run, sources);
+        // The table at the case's implementation revision, the revision the gate judges, not a
+        // later one at takt's store commits above it (a stop's, as takt 0.16.0 recorded it).
+        if let Some(revision) = crate::case::revision_of(case_dir, "implementation")
+            .ok()
+            .flatten()
+        {
+            let tables: Vec<Value> = lines
+                .iter()
+                .filter(|(_, line)| line["event"] == crate::obligations::EVENT)
+                .map(|(_, line)| line.clone())
+                .collect();
+            if let Some(rows) = crate::obligations::recorded_at(&tables, &revision) {
+                trace.header.obligations = rows;
+            }
+        }
+        Ok(trace)
     }
 
     /// The trace of a record's `lines`, as [`Events::read`] gives them, completed from the
