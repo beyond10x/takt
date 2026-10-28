@@ -1006,8 +1006,8 @@ types:
   # read from: crates/takt/src/run.rs:11983-11993
   # read from: crates/takt/src/validator.rs:88-96
   # read from: crates/takt/src/improvement.rs:1107-1111
-  # read from: crates/takt/src/improvement.rs:1760-1764
-  # read from: crates/takt/src/improvement.rs:1972-1976
+  # read from: crates/takt/src/improvement.rs:1777-1781
+  # read from: crates/takt/src/improvement.rs:1989-1993
   # read from: crates/takt/src/run.rs:133-147
   # read from: crates/takt/src/run.rs:217
   # read from: crates/takt/src/run.rs:10291-10299
@@ -3275,7 +3275,7 @@ types:
   # (story:a-judge-surface-candidate-merges-after-its-grant, 2026-10-19).
   # read from: crates/takt/src/improvement.rs:1406-1418
   # read from: crates/takt/src/improvement.rs:1476-1485
-  # read from: crates/takt/src/improvement.rs:1664-1665
+  # read from: crates/takt/src/improvement.rs:1681-1682
   # read from: crates/takt/src/case.rs:1312-1315
   - name: takt.work.Approver
     kind: union
@@ -4086,9 +4086,9 @@ entities:
       # read from: crates/takt/src/case.rs:676-690
       # read from: crates/takt/src/case.rs:726-728
       # read from: crates/takt/src/case.rs:1386-1388
-      # read from: crates/takt/src/improvement.rs:1491-1498
-      # read from: crates/takt/src/improvement.rs:1508-1532
-      # read from: crates/takt/src/improvement.rs:1640-1644
+      # read from: crates/takt/src/improvement.rs:1491-1500
+      # read from: crates/takt/src/improvement.rs:1514-1544
+      # read from: crates/takt/src/improvement.rs:1652-1661
       - name: authority
         type: Map<takt.work.CapabilityId, takt.work.Grant>
       # read from: crates/takt/src/case.rs:2942-2943
@@ -4168,7 +4168,7 @@ entities:
       # its canonical path is the recorded root, and refused naming both roots when it is not; a
       # turn that recorded none, or a case under another protocol, refuses any.
       # read from: crates/takt/src/case.rs:3925-3931
-      # read from: crates/takt/src/improvement.rs:1897-1905
+      # read from: crates/takt/src/improvement.rs:1914-1922
       # read from: crates/takt-cli/src/main.rs:4049-4052
       - name: install_root
         type: Optional<String>
@@ -5317,7 +5317,7 @@ entities:
   # read from: crates/takt/src/validator.rs:692-704
   # read from: crates/takt/src/validator.rs:1478-1481
   # read from: crates/takt/src/validator.rs:643-674
-  # read from: crates/takt/src/improvement.rs:1664-1665
+  # read from: crates/takt/src/improvement.rs:1681-1682
   # read from: crates/takt/src/validator.rs:1468-1476
   # read from: crates/takt/src/validator.rs:1639-1668
   # read from: crates/takt/src/validator.rs:1952-1956

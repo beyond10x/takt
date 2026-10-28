@@ -745,12 +745,12 @@ fn merge_after_the_grant(world: &World) -> String {
 }
 
 /// The story's Decision: "a grant given before grants recorded a repository authorises no
-/// judge-surface merge through the bot route (a new grant records it)", and the refusal tells
-/// the operator to "grant it again". A turn opened and granted before the change (its `forge`
-/// file `bot`, its grant without `mainline_repository`), resumed on the same `acme/one`, whose
-/// `main` holds the candidate by a merge made after the grant: the merge is refused, as the
-/// Decision says. The new grant the refusal asks for must then be possible: `takt approve`
-/// exits 0 and records `acme/one`.
+/// judge-surface merge through the bot route (a new grant records it)". A turn opened and granted
+/// before the change (its `forge` file `bot`, its grant without `mainline_repository`), resumed on
+/// the same `acme/one`, whose `main` holds the candidate by a merge made after the grant: the
+/// merge is refused, and since `main` holds the candidate already, the refusal says no grant
+/// given now authorises it rather than "grant it again". A new grant is still possible: `takt
+/// approve` exits 0 and records `acme/one`.
 #[test]
 fn w40_adv_a_grant_refused_for_recording_no_repository_can_be_given_again() {
     let (world, path) = bot_turn_at_the_gate("adv-legacy-regrant");
@@ -770,7 +770,9 @@ fn w40_adv_a_grant_refused_for_recording_no_repository_can_be_given_again() {
     );
     let (_, out, err) = bot_resume(&world, &path);
     assert!(
-        out.contains("records no repository") && out.contains("grant it again"),
+        out.contains("records no repository")
+            && out.contains("no grant given now authorises that merge")
+            && !out.contains("grant it again"),
         "the refusal for a grant that records no repository was not reached: {out}\n{err}"
     );
     assert!(
@@ -782,7 +784,7 @@ fn w40_adv_a_grant_refused_for_recording_no_repository_can_be_given_again() {
     let (code, out, err) = bot_approve(&world, &path);
     assert_eq!(
         code, 0,
-        "the refusal says `grant it again`, and `takt approve` refuses the grant:\n{out}\n{err}"
+        "`takt approve` refuses a grant replacing one that records no repository:\n{out}\n{err}"
     );
     let authority = fs::read_to_string(world.repo.join(".takt/cases/turn-1/authority.yaml"))
         .expect("the authority");

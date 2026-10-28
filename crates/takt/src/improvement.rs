@@ -1494,8 +1494,14 @@ fn merged_before_grant(
 /// ([`crate::case::MainlineTip::repository`], [`Mainline::repository`]), the local `main`
 /// counting as no repository, so a grant given before grants recorded a repository holds no
 /// merge read through the bot route. Named both; none when they are the same, and none for a
-/// grant that records no tip, which [`merged_before_grant`] refuses.
-fn grant_repository_refusal(dir: &Path, mainline: &Mainline) -> Result<Option<String>> {
+/// grant that records no tip, which [`merged_before_grant`] refuses. `held` says whether the
+/// mainline holds the candidate now, read only for a grant that records no repository: a grant
+/// given again would then come after the merge, and authorise none.
+fn grant_repository_refusal(
+    dir: &Path,
+    mainline: &Mainline,
+    held: impl FnOnce() -> bool,
+) -> Result<Option<String>> {
     let capability = crate::validator::JUDGE_SURFACE_CAPABILITY;
     let main = crate::promotion::MAINLINE;
     let authority = crate::case::Authority::read(dir)?.unwrap_or_default();
@@ -1521,7 +1527,13 @@ fn grant_repository_refusal(dir: &Path, mainline: &Mainline) -> Result<Option<St
             format!(
                 "records no repository it read {main} from (given under no forge, or before grants recorded one)"
             ),
-            "so grant it again".to_owned(),
+            if held() {
+                format!(
+                    "and {main} holds the candidate already, so no grant given now authorises that merge: a grant authorises no merge made before it"
+                )
+            } else {
+                "so grant it again".to_owned()
+            },
         ),
     };
     Ok(Some(format!(
@@ -1637,7 +1649,12 @@ impl CandidateMerged {
         // summaries then saying nothing of a forge.
         let named = self.mainline.named();
         if self.action == Self::JUDGE_SURFACE_ACTION
-            && let Some(why) = grant_repository_refusal(&dir, &self.mainline)?
+            && let Some(why) = grant_repository_refusal(&dir, &self.mainline, || {
+                self.mainline
+                    .tip(tree)
+                    .and_then(|tip| Mainline::holds(tree, &tip, revision))
+                    .is_ok_and(|holds| holds == Ok(true))
+            })?
         {
             return Ok((
                 nothing(format!(
