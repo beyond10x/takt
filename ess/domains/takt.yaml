@@ -1667,6 +1667,14 @@ types:
   # and 8 KiB over all of one observation's checks. Past the bound, the last line
   # first (a checker's summary), then the lines that do not start with white space from the
   # start, then, once all of those fit, the indented ones, each in order until one does not fit.
+  # Output that names failed tests is reduced instead (Python unittest's `FAIL: <test>` and
+  # `ERROR: <test>` headings under a rule of `-`, pytest's `FAILED <id> - <error>` summary
+  # lines, libtest's `---- <test> stdout ----` sections): one line per failed test,
+  # `<FAIL|ERROR|FAILED> <test> - <its last error line>` (unittest's the first line not indented
+  # after the last traceback frame, libtest's the first line of the panic's message), the test
+  # alone when that line is withheld; kept in order until one does not fit, the count left out
+  # being the failed tests not kept and the error lines withheld. None of the runner's own lines
+  # (a passing test's, a program's usage text, a traceback's frames) is kept.
   # A gate that passes keeps nothing.
   # read from: crates/takt/src/validator.rs
   - name: takt.work.FailedCheck
@@ -1966,7 +1974,8 @@ types:
       # nothing. Shown as one block of the prompt after the open obligations and before the
       # change so far: a line that opens it ("The last gate run failed: ..."), then for each
       # check `gate <id>:`, with ` (<n> lines left out)` before the colon when some were, and its
-      # lines fenced as data with a backtick run longer than any inside them. Under the secret
+      # lines fenced as data with a backtick run longer than any inside them; for a test
+      # runner's output, one line per failed test and its last error line. Under the secret
       # scan the change so far and each scope file pass, the block passes it too; one it refuses,
       # or when the scan cannot run, is one line naming the gates and why what they printed is
       # not shown. With none, no block, and the prompt is as it was. A replay rebuilding a
@@ -2541,7 +2550,9 @@ types:
           scorecard` prints each distinct set with its runs' count and refuses to score runs
           whose layers differ, naming the layer and the runs (a run that recorded none beside one
           that did, or a layer one run states and another does not, differ too), unless
-          `--across-layers` asks to compare across them.
+          `--across-layers` asks to compare across them. A run that took no step and states no
+          harness or model layer brings neither to the comparison; each layer is compared
+          against the first run that states it.
 
   # The held-out check's result for a scenario case, as the runner wrote it after the run in
   # `.takt/cases/<case>/held-out.txt`, beside the record and never by the takt binary under
