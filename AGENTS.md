@@ -31,7 +31,7 @@ detail (`website/docs/`); it duplicates none of them.
 | `crates/takt` | the library `b10x-takt` (`use takt::…`): protocol loading (`protocol`), case files, the decision the governor of Loom renders and the evidence records (`case`, `evidence`), the loop (`run`, on Commission's runtime of `loom-sdk`, each harness session through its session executor `b10x-loom-session-executor`), the seams and their first adapters (`harness`, `frontier`, `validator`, `forge`), the git reads and writes (`git`), the run record read back (`scorecard`, `trace`, `report`) |
 | `crates/takt/tests`, `crates/takt-cli/tests` | integration tests and their fixtures |
 | `crates/takt-cli` | the binary `takt` |
-| `protocols/` | `loop-improvement/metrics.yaml` only, the loop metrics' definitions; the protocols takt runs (`story.delivery/1`, `self.improvement/1`, `loop.improvement/1`) are the engineering protocols' built-ins (`b10x-canon-engineering`) |
+| `protocols/` | `loop-improvement/metrics.yaml`, the loop metrics' definitions, and `bench-task/1.yaml`, the `bench.task/1` protocol of a benchmark task (`--protocol`); the protocols takt runs (`story.delivery/1`, `self.improvement/1`, `loop.improvement/1`) are the engineering protocols' built-ins (`b10x-canon-engineering`) |
 | `ess/` | the ESS specification of takt's nouns and their relations |
 | `docs/design/` | design documents |
 | `docs/waves/`, `docs/runs/`, `docs/handoff/` | wave pages, recorded runs, handoff notes |

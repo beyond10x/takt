@@ -1,0 +1,95 @@
+format: protocol/1
+
+protocol:
+  id: bench.task
+  revision: 1
+  description: >-
+    Work one benchmark task: inspect the task's repository, edit it and write tests, and hand it
+    over once the work is done; the task's visible test command then runs against that revision.
+    The case completes when the visible tests pass at the revision the harness handed over, or
+    closes abandoned on an explicit decision. There is no forge, no pull request and no merge.
+    The benchmark's own grading tests stay outside the case, a held-out acceptance check takt
+    never sees.
+
+artifacts:
+  implementation:
+    description: a revision of the task's repository
+
+evidence_kinds:
+  test_result:
+    description: >-
+      the result of running the task's visible test command against an implementation revision;
+      its result is pass or fail
+  handover:
+    description: >-
+      the harness chose to hand the task over at this implementation revision, with no file
+      changed: takt records the choice from the step. The record attests a choice, not that the
+      work is correct: whether the visible tests pass stays validator evidence; it has no result
+
+claims:
+  tests.pass:
+    description: the task's visible tests pass for the current implementation revision
+    true_when:
+      evidence:
+        kind: test_result
+        result: pass
+        subject: implementation
+  change.handed_over:
+    description: >-
+      the harness handed the task over at the current implementation revision, saying the work
+      is done; a new commit returns it to unknown
+    true_when:
+      evidence:
+        kind: handover
+        subject: implementation
+
+obligations:
+  tests.required:
+    description: the task's visible tests pass for the current implementation revision
+    discharged_when:
+      claim: tests.pass
+
+actions:
+  repository.inspect:
+    description: read the task's repository
+    effect: read
+  tests.write:
+    description: change the tests in the task's working revision
+    effect: write
+  implementation.edit:
+    description: change the task's working revision toward its intent
+    effect: write
+  change.handover:
+    description: >-
+      hand the task over, changing no file, once the work is done and no further edit is needed;
+      takt records the choice, and the visible test command runs against this revision
+    effect: read
+    precondition:
+      claim: change.handed_over
+      is: unknown
+    may_produce:
+      - evidence: handover
+  tests.run:
+    description: >-
+      run the task's visible test command against an implementation revision; taken once the
+      harness handed that revision over, so a task whose tests fail at its start is not stopped
+      before any step
+    effect: read
+    precondition:
+      claim: change.handed_over
+    may_produce:
+      - evidence: test_result
+
+outcomes:
+  completed:
+    description: >-
+      the task closed with its visible tests passing at the revision the harness handed over
+    requires:
+      all:
+        - claim: tests.pass
+        - claim: change.handed_over
+  abandoned:
+    description: >-
+      the task closed because it was explicitly abandoned without its visible tests passing
+    requires:
+      decision: explicitly_abandoned
