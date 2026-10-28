@@ -70,6 +70,8 @@ stops! {
         };
     Stop::SetupFailed { .. } => Some(STOP_KINDS[14]),
         Stop::SetupFailed { name: "deps".to_owned(), exit: Some(3) };
+    Stop::Declined(_) => Some(STOP_KINDS[15]),
+        Stop::Declined("AGENTS.md forbids it".to_owned());
 }
 
 /// A stop of every variant, one per row and each of its own row's variant; each display opens

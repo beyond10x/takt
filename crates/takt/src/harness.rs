@@ -1146,6 +1146,20 @@ fn commit_of(transcript: &[u8], action: &str) -> Option<serde_json::Value> {
 /// The line that opens the block of failed checks in a judgement step's prompt.
 pub const FAILED_CHECKS_LABEL: &str = "The last gate run failed";
 
+/// The action a judgement step names to decline the intent instead of taking an offered one,
+/// with no file changed and its reason as the reply's summary: takt's own exit, offered beside
+/// the approvals in every step's prompt ([`DECLINE_PARAGRAPH`]), never a protocol's action. The
+/// run records it and stops [`crate::run::Stop::Declined`]; a decline whose step changed a file
+/// is refused and its change discarded.
+pub const DECLINE: &str = "decline";
+
+/// What a step's prompt says of [`DECLINE`], after the actions it offers and those that need an
+/// approval.
+const DECLINE_PARAGRAPH: &str = "\nIf the intent must not be carried out (an instruction of this \
+     repository forbids it, or it asks for what should not be done), decline it: change no file \
+     and name `decline` as the action, its summary the reason. That ends the run; the case stays \
+     open.\n";
+
 /// Why Loom's session executor proposes nothing when the session's reply holds no JSON line
 /// naming an action, as its text: the session ended, after compaction among other ways, without
 /// it (`loom-session-executor`'s `reply`, at the locked loom 0.43.0).
@@ -2056,6 +2070,7 @@ impl ClaudeCode {
                 text.push_str(&format!("- {action}\n"));
             }
         }
+        text.push_str(DECLINE_PARAGRAPH);
         text.push_str(&format!("\nRules: {}", given_tools.unwrap_or(rule.tools)));
         text.push_str(
             " Do not commit. If the action \
@@ -4965,7 +4980,11 @@ mod tests {
                     The change this case has made so far: no change has been made yet.\n\n\
                     You may perform exactly ONE of these actions now, nothing else:\n\
                     - tests.write: add or change test files only (paths under tests/ or test/, \
-                    or named *_test.*, test_*.*, *.test.*, *.spec.*)\n\nRules: ";
+                    or named *_test.*, test_*.*, *.test.*, *.spec.*)\n\n\
+                    If the intent must not be carried out (an instruction of this repository \
+                    forbids it, or it asks for what should not be done), decline it: change no \
+                    file and name `decline` as the action, its summary the reason. That ends the \
+                    run; the case stays open.\n\nRules: ";
         let shell = "read the files of this directory with shell commands that change nothing \
                      (cat, sed -n, rg, ls, git status, git diff) and change files only with \
                      apply_patch, inside this directory. Run no build, test or other command \
@@ -4984,7 +5003,10 @@ mod tests {
             format!("{head}{scope}{body}{file_tools}{tail}"),
             format!("{head}{scope}{mention}{body}{file_tools}{tail}"),
         ];
-        assert_eq!(prompts, expected);
+        assert_eq!(
+            prompts, expected,
+            "story:a-run-can-decline: the prompt offers the decline exit after the actions"
+        );
     }
 
     /// A tree with no `AGENTS.md`, and one whose `AGENTS.md` git does not track, give a Codex

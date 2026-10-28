@@ -244,6 +244,14 @@ pub enum Event {
     /// A refusal: by the kernel ([`BY_TAKT`]: a step it discarded, a write it would not make)
     /// or by the planning store ([`BY_STORE`]), the reason verbatim.
     Refusal { by: String, reason: String },
+    /// A judgement step declined the intent: it named `decline`, changed no file, and gave
+    /// `reason` as its summary, verbatim, at the case revision `case_revision` (`r<n>`, as the
+    /// case record holds it). A record line, not evidence: the run stops `Declined`, and a run
+    /// on the case at the same case revision stops `Declined` again before any step.
+    Decline {
+        reason: String,
+        case_revision: String,
+    },
     /// The run pauses on the forge for `seconds`, then observes the actions `on` again.
     Waiting { on: Vec<String>, seconds: f64 },
     /// A declared setup command ran when the case opened, before the red-base check: its name,
