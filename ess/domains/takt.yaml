@@ -4059,7 +4059,13 @@ entities:
       # refused with nothing written. An improvement turn's grant of
       # `repository.merge.judge_surface` carries besides the mainline's tip, read when the grant
       # was given (`mainline_tip`), which Canon is never handed: none for a turn that recorded no
-      # forge, and a tip that cannot be read then refuses the grant with nothing written.
+      # forge, and a tip that cannot be read then refuses the grant with nothing written. Beside
+      # the tip, the repository the forge took it from (`mainline_repository`, `<owner>/<repo>`
+      # for the bot route; none for the local `main`). `candidate.merge_judge_surface` records nothing
+      # when the mainline it reads now is another repository's than the grant's, the local
+      # `main` counting as no repository, naming both: so a grant given before grants recorded a
+      # repository authorises no judge-surface merge through the bot route, and a new grant
+      # records it (story:a-turn-pins-the-repository-of-its-forge).
       # read from: crates/takt/src/case.rs:650-665
       # read from: crates/takt/src/case.rs:679-682
       # read from: crates/takt/src/case.rs:770-787
@@ -4168,6 +4174,13 @@ entities:
       # (story:a-judge-surface-candidate-merges-after-its-grant). A resume of a turn through
       # another forge than the one it recorded is refused before anything is written, naming
       # both, so the grant and the merge validators read the same `main`.
+      # Beside the bot route's name, after one space, the repository it reads `main` from
+      # (`bot <owner>/<repo>`, the `origin` remote's when the turn opened); `none` names no
+      # repository. A resume, or `takt approve`, whose bot route reads another repository (the
+      # `origin` remote moved since) is refused before anything is written, naming both. A file
+      # that names `bot` alone, a turn opened before the repository was recorded, still reads and
+      # is not refused for its repository; its grant's record holds it
+      # (`Case.authority`; story:a-turn-pins-the-repository-of-its-forge).
       # read from: crates/takt/src/case.rs:3840-3845
       # read from: crates/takt/src/case.rs:3611-3612
       # read from: crates/takt/src/case.rs:4184

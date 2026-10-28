@@ -1745,14 +1745,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 looping.state_dir.as_deref(),
             )?;
             // A resumed turn reads the mainline through the forge it recorded when it opened,
-            // as `takt approve` does: a run through another is refused before anything is
-            // written.
+            // from the repository it recorded, as `takt approve` does: a run through another,
+            // or on another repository, is refused before anything is written.
             if let Some(resuming) = &resuming {
                 let run_forge = forge.forge.as_ref().map_or("none", |forge| forge.name());
                 if let Some(why) = takt::case::turn_forge_refusal(
                     &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &resuming.id,
                     run_forge,
+                    forge.repository.as_deref(),
                 )? {
                     return Err(anyhow!(why));
                 }
@@ -1774,10 +1775,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     pushes,
                 )?;
             }
-            let mainline = forge.forge.clone().map_or(
-                takt::improvement::Mainline::Local,
-                takt::improvement::Mainline::Forge,
-            );
+            let mainline = forge.mainline();
             // An improvement turn opens with its finding and its candidate, `--input
             // finding=<story id>` and `--input candidate=<full commit id>`, no case inputs of the
             // protocol, taken out of the inputs and checked here with the promoted baseline, so
@@ -2780,11 +2778,28 @@ fn validators_of(
 }
 
 /// The forge a run goes through, the line that says so once its case is open, and, for the bot
-/// route, the route a scenario's trial bases are fetched and created through.
+/// route, the route a scenario's trial bases are fetched and created through and the repository
+/// it reads, which an improvement turn records and reads its mainline from.
 struct Forged {
     forge: Option<Rc<dyn Forge>>,
     line: Option<String>,
     trials: Option<TrialRoute>,
+    repository: Option<String>,
+}
+
+impl Forged {
+    /// The mainline an improvement turn reads through this forge: the repository's `main` for
+    /// the bot route, the forge's for another forge, the local `main` with none.
+    fn mainline(&self) -> takt::improvement::Mainline {
+        match (&self.forge, &self.repository) {
+            (Some(forge), Some(repository)) => takt::improvement::Mainline::Repository {
+                forge: forge.clone(),
+                repository: repository.clone(),
+            },
+            (Some(forge), None) => takt::improvement::Mainline::Forge(forge.clone()),
+            (None, _) => takt::improvement::Mainline::Local,
+        }
+    }
 }
 
 /// The bot route's two lines for a scenario's trial bases, beside the forge's own: a fetch of
@@ -2967,6 +2982,7 @@ fn forge_with(
             forge: Some(Rc::new(connectors)),
             line: Some(line),
             trials: None,
+            repository: None,
         });
     }
     if forge == Some("command") {
@@ -2992,6 +3008,7 @@ fn forge_with(
                     .to_owned(),
             ),
             trials: None,
+            repository: None,
         });
     }
     if forge == Some("gitlab")
@@ -3007,6 +3024,7 @@ fn forge_with(
             forge: Some(Rc::new(glab)),
             line: Some(line),
             trials: None,
+            repository: None,
         });
     }
     forge_of(repo, forge, scan)
@@ -3035,10 +3053,12 @@ fn forge_through(
             bot.repository
         );
         let trials = TrialRoute::of(&bot);
+        let repository = bot.repository.clone();
         Ok(Forged {
             forge: Some(Rc::new(bot)),
             line: Some(line),
             trials: Some(trials),
+            repository: Some(repository),
         })
     };
     let gitlab = |glab: Glab| -> Forged {
@@ -3050,12 +3070,14 @@ fn forge_through(
             forge: Some(Rc::new(glab)),
             line: Some(line),
             trials: None,
+            repository: None,
         }
     };
     let none = |line: Option<String>| Forged {
         forge: None,
         line,
         trials: None,
+        repository: None,
     };
     Ok(match forge {
         Some("none") => none(None),
@@ -3117,6 +3139,7 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Fo
                     BotRoute::HOST
                 )),
                 trials: None,
+                repository: None,
             }),
             _ => forge_of(repo, None, scan),
         },
