@@ -405,10 +405,12 @@ fn a_resume_with_the_flag_goes_on_past_red_base() {
 }
 
 /// A pod restarts takt after `RepeatedTestFailure` (exit 3) and the restart resumes the case:
-/// the case's last two results failed the same tests at two revisions and nothing has
-/// changed since, so the restart spends no further harness call before stopping again.
+/// story:a-revision-without-code-is-no-new-attempt gives a resumed case one implementation edit
+/// before the count can stop it again, so each restart spends exactly one harness call and
+/// stops on the same reason: a pod that restarts takt in a loop spends one call a restart, never
+/// more.
 #[test]
-fn a_restart_after_repeated_failures_spends_no_further_model_call() {
+fn a_restart_after_repeated_failures_spends_one_further_model_call() {
     let script = cargo_script(SAME_TWO);
     let world = world("repeat-restart", &[("t.sh", &script, true)]);
     let (code, out, err) = world.scenario("./t.sh", &["--iterations", "40", "--min-free-gib", "0"]);
@@ -425,9 +427,13 @@ fn a_restart_after_repeated_failures_spends_no_further_model_call() {
     let case = case_of(&out);
     let (code, out, err) = world.resume(&case, "./t.sh", &["--iterations", "40"]);
     let stop = stop_line(&out, &err);
+    assert!(
+        stop.starts_with("stopped: RepeatedTestFailure (2 "),
+        "{stop}\n{out}\n{err}"
+    );
     assert_eq!(
         world.calls() - before,
-        0,
+        1,
         "harness calls in the restarted run before it stopped {stop} (exit {code}); stdout {out} stderr {err}"
     );
 }
