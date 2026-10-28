@@ -161,6 +161,14 @@ promotion are the trial agent's (`.agents/trial-agent.md`).
   agent promotes the candidate's own sha, not the merge's.
 - No wave waits on a trial. Promotion and installing the promoted binary are the trial agent's
   (`takt promote` records the promotion and installs the binary); this session does neither.
+- Every second or third story is delivered by takt itself instead of an implementor
+  (owner, 2026-10-28): `takt run --story <id> --forge none` on a scratch clone of `main` with the
+  latest release, its own `CARGO_TARGET_DIR`, outside the wave's tree, on the codex harness
+  unless the owner names another (`--harness codex`, the model the owner names). A run that ends at a
+  candidate (exit 7) has its diff reviewed and an adversarial pass, then enters the wave as any
+  unit, fixes included; a run that ends earlier leaves the story to an implementor. Each run's
+  exit, steps, tokens and what it shows about takt or its protocol go into the session's run log;
+  an observation seen in two runs, or one that blocks a run, is filed as an `rsi` finding.
 
 ## Limits
 
