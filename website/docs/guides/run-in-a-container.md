@@ -20,7 +20,7 @@ No image is published, so build it from the tag:
 ```sh
 git clone --branch 0.14.0 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.17.0 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.18.0 .
 ```
 
 The image carries takt, `aep`, `b10x-harness` 0.20.0, `ess`, `b10x-gates` (the `gates` scan
@@ -71,7 +71,7 @@ under another uid is refused by git as `dubious ownership`, so clone into a volu
 git -C my-repo bundle create ../my-repo.bundle main
 docker volume create takt-demo-ws
 docker run --rm -v "$PWD/my-repo.bundle:/src/my-repo.bundle:ro" -v takt-demo-ws:/workspace \
-  --entrypoint git takt:0.17.0 clone -q -b main /src/my-repo.bundle /workspace
+  --entrypoint git takt:0.18.0 clone -q -b main /src/my-repo.bundle /workspace
 ```
 
 A story run needs what [Run a story](./run-a-story.md#1-prepare-the-repository) lists, committed
@@ -84,7 +84,7 @@ docker run --rm \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   -e LLM_API_KEY \
   -v takt-demo-ws:/workspace -v "$PWD/config:/config:ro" \
-  --entrypoint tini takt:0.17.0 -- \
+  --entrypoint tini takt:0.18.0 -- \
   /bin/sh -c 'mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace --config /config/agent.yaml "$@"' takt
 ```
 

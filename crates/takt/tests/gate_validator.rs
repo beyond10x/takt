@@ -583,6 +583,36 @@ fn an_unknown_gate_beside_a_false_one_is_fail_and_the_summary_names_the_false_ga
     );
 }
 
+/// The refusal of a case opened over `tree` with the gate validator over
+/// `.engineering/gates.yaml` as the only validator (story:gates-project-checked-at-open: a
+/// document the gate's preparation refuses refuses the case when it opens, no step run): the
+/// error, after checking that no case was left under the cases directory.
+fn refused_at_open(tree: &Path, id: &str) -> String {
+    let options = RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: "pass the gate".to_owned(),
+        inputs: Vec::new(),
+        iterations: Some(4),
+        hours: None,
+        tokens: None,
+        case_id: Some(id.to_owned()),
+        gate: None,
+    };
+    let validators: Vec<Box<dyn Validator>> =
+        vec![Box::new(GateRun::new(".engineering/gates.yaml"))];
+    let error = match Run::open(tree, options, &NoHarness, &validators) {
+        Ok(_) => panic!(
+            "story:gates-project-checked-at-open: the case opened over a gates document the gate refuses"
+        ),
+        Err(error) => format!("{error:#}"),
+    };
+    assert!(
+        !tree.join(takt::case::CASES_DIR).join(id).exists(),
+        "story:gates-project-checked-at-open: the case {id} was left: {error}"
+    );
+    error
+}
+
 #[test]
 fn an_empty_gates_list_aborts_the_run_and_writes_no_record() {
     let tree = scratch_document(
@@ -590,24 +620,12 @@ fn an_empty_gates_list_aborts_the_run_and_writes_no_record() {
         "format: engineering-gates/1\nlanguage: canon-expr/1\ngates: []\n",
         &[],
     );
-    let ran = run_with(&tree, "empty", PROTOCOL, &NoHarness, 4);
-    let error = format!(
-        "{:#}",
-        ran.stop.expect_err("an invalid document aborts the run")
-    );
+    let error = refused_at_open(&tree, "empty");
     assert!(
         error.contains("a gates document cannot be empty"),
         "{error}"
     );
     assert!(error.contains(".engineering/gates.yaml"), "{error}");
-    assert!(ran.records.is_empty(), "{:?}", ran.records);
-    assert!(!ran.text.contains("evidence: gate_result"), "{}", ran.text);
-    assert_eq!(
-        claim(&ran.decision, "gate.green"),
-        "unknown",
-        "{}",
-        ran.decision.json
-    );
 }
 
 #[test]
@@ -617,20 +635,11 @@ fn an_unregistered_function_aborts_the_run_rather_than_passing() {
         &document(&[("manifest", r#"no.such.function("Cargo.toml")"#)]),
         &[],
     );
-    let ran = run_with(&tree, "unregistered", PROTOCOL, &NoHarness, 4);
-    let error = format!(
-        "{:#}",
-        ran.stop
-            .expect_err("an unregistered function aborts the run")
-    );
+    let error = refused_at_open(&tree, "unregistered");
     assert!(error.contains(".engineering/gates.yaml"), "{error}");
-    assert!(ran.records.is_empty(), "{:?}", ran.records);
-    assert!(!ran.text.contains("evidence: gate_result"), "{}", ran.text);
-    assert_eq!(
-        claim(&ran.decision, "gate.green"),
-        "unknown",
-        "{}",
-        ran.decision.json
+    assert!(
+        error.contains("unknown function no.such.function"),
+        "{error}"
     );
 }
 

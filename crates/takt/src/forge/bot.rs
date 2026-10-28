@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail};
 
 use super::{
-    Checks, Exit, Failed, Forge, Head, IdentityScan, Outgoing, Process, PullRequest,
+    Checks, Exit, Failed, Forge, Head, IdentityScan, MergeMessage, Outgoing, Process, PullRequest,
     PullRequestState, PullRequestView, Runner, Scanner, exact_ref, fresh, head_is_a_commit,
     held_by, is_object_id, push_over_https, reading_of, repository_of, succeed, without_userinfo,
     write_request,
@@ -432,6 +432,48 @@ impl BotRoute {
         reading_of(argv, &exit)
     }
 
+    /// Merges pull request `number` at `head` through the API ([`Self::merge_argv`]), the
+    /// request kept as [`Self::MERGE_REQUEST`] and the response as [`Self::MERGE_RESPONSE`]
+    /// under `dir`; with `message`, the merge commit's `commit_title` and `commit_message`. No
+    /// `merge_method` is sent: the forge's default, a merge commit.
+    fn merge_saying(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        number: u64,
+        head: &str,
+        message: Option<&MergeMessage>,
+    ) -> Result<()> {
+        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+        let input = dir.join(Self::MERGE_REQUEST);
+        let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
+        // The head to match: the API refuses the merge when the pull request's head is no longer
+        // this commit, so what is merged is what was read and recorded, never a later push.
+        let mut document = serde_json::json!({ "sha": head });
+        if let Some(message) = message {
+            document["commit_title"] = message.title.as_str().into();
+            document["commit_message"] = message.body.as_str().into();
+        }
+        let bytes = serde_json::to_vec_pretty(&document).context("serialize the merge request")?;
+        std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
+        let argv = self.merge_argv(number, &input, &output);
+        self.succeed(tree, &argv)?;
+        let text = std::fs::read_to_string(&output)
+            .with_context(|| format!("read the response {}", output.display()))?;
+        let response: serde_json::Value = serde_json::from_str(&text)
+            .with_context(|| format!("read the response {}", output.display()))?;
+        if response["merged"] != true {
+            bail!(
+                "{} did not merge pull request #{number}: {}",
+                argv.join(" "),
+                response["message"]
+                    .as_str()
+                    .unwrap_or("the response does not say `merged: true`")
+            );
+        }
+        Ok(())
+    }
+
     /// Runs the push line `argv` in `tree` over HTTPS alone ([`Self::PUSH_ENV`]). A push git
     /// refuses because a URL rewrite in the repository's configuration (`insteadOf`,
     /// `pushInsteadOf`) would send it over another transport is refused naming the URL pushed to
@@ -588,30 +630,21 @@ impl Forge for BotRoute {
     }
 
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let input = dir.join(Self::MERGE_REQUEST);
-        let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
-        // The head to match: the API refuses the merge when the pull request's head is no longer
-        // this commit, so what is merged is what was read and recorded, never a later push.
-        let document = serde_json::json!({ "sha": head });
-        let bytes = serde_json::to_vec_pretty(&document).context("serialize the merge request")?;
-        std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
-        let argv = self.merge_argv(number, &input, &output);
-        self.succeed(tree, &argv)?;
-        let text = std::fs::read_to_string(&output)
-            .with_context(|| format!("read the response {}", output.display()))?;
-        let response: serde_json::Value = serde_json::from_str(&text)
-            .with_context(|| format!("read the response {}", output.display()))?;
-        if response["merged"] != true {
-            bail!(
-                "{} did not merge pull request #{number}: {}",
-                argv.join(" "),
-                response["message"]
-                    .as_str()
-                    .unwrap_or("the response does not say `merged: true`")
-            );
-        }
-        Ok(())
+        self.merge_saying(tree, dir, number, head, None)
+    }
+
+    /// Merges as [`Self::merge`] does, the merge commit's title and body `message`, sent as the
+    /// request's `commit_title` and `commit_message`; the merge method stays the forge's
+    /// default, a merge commit.
+    fn merge_with(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        number: u64,
+        head: &str,
+        message: &MergeMessage,
+    ) -> Result<()> {
+        self.merge_saying(tree, dir, number, head, Some(message))
     }
 
     /// The repository's own `base`, read through the bot route's dry-run fetch

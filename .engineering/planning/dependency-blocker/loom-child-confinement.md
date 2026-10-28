@@ -3,13 +3,13 @@ format: aep.planning-md/3
 id: dependency-blocker:loom-child-confinement
 kind: dependency-blocker
 status: open
-title: Loom 0.33.0 confines a child but writes only in /workspace, with one aperture per run
-summary: live child, standard input, whole output, read-only roots, host paths
+title: Loom 0.46.0 confines a child but writes only inside the workspace
+summary: several apertures and a working directory delivered; a writable root outside /workspace is not (Loom story:writable-host-root)
 tags:
 - loom
 relations:
 - blocks: story:harness-child-confined
-revision: 6
+revision: 8
 ---
 # Blocker: Loom confines a child only partly as takt needs
 
@@ -57,3 +57,17 @@ mount/workdir and several apertures".
 
 Option A: this blocker stays open until a Loom release gives a child a writable mount or working
 directory outside `/workspace` and more than one egress aperture per run.
+
+## Against Loom 0.46.0 and Substrate 0.14.0 (2026-10-28)
+
+Read at Loom tag `0.46.0`, which takt pins (`Cargo.toml`, `b10x-loom-sdk`), and Substrate's latest release 0.14.0. C is `crates/loom-intake-slice/src/confinement.rs` at 0.46.0. Read, not probed.
+
+| what 0.33.0 left | 0.46.0 | left |
+|---|---|---|
+| one egress aperture per run | closed in Loom 0.37.0 (b75bd6c5): `ChildCommand::with_egress` takes up to `MAX_EGRESS_APERTURES` (4), Substrate's own limit (C:36-37, 1249) | none: a bot-route push reaches `api.github.com` and `github.com` |
+| G5, a working directory outside `/workspace` | partly closed in Loom 0.37.0 (2b16c642): `with_workdir` (C:1428) starts a child at or beneath `/workspace` or a read-only root's mount | the directory is read-only unless it is in the workspace |
+| G5, writes outside `/workspace` | open: `with_writable` (C:1200) names only directories of the workspace, and Loom asks Substrate for no writable root (`writable_roots: Vec::new()`, C:1572; C:1034 says Substrate 0.10.0 offers them) | Loom's story:writable-host-root, still `draft` in Loom's store |
+
+The Substrate side is delivered: writable roots since 0.10.0, several apertures since 0.9.0. What is missing is Loom's: a `ChildCommand` that writes an operator-declared root outside the workspace, for the harness session's working directory, decision channel and config home, and a linked worktree's common git directory.
+
+Clearing this for 0.46.0: no. It needs a Loom release that delivers story:writable-host-root. Until then the 0.33.0 reading stands for everything else: `aep` can be confined, git can be confined where `.git` is inside the workspace, and now the forge too (several apertures). The harness session cannot.

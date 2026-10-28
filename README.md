@@ -39,9 +39,9 @@ the plan, and no container image is published: you build one from `Dockerfile`.
 
 ## Status
 
-0.17.0 is the latest release. A judgement step can decline a story its rules forbid, a stop of its
-own (`Declined`, exit 9) apart from a stuck run, and a scenario can declare a seed that is red on
-purpose (`red-base = expected`). What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
+0.18.0 is the latest release. A story case on `story.delivery/2` writes the `tests_change` and
+`paths_changed` evidence its tests-first guards read, a gates file the gate would refuse stops the
+run at open, and a bot merge commit names the story and its evidence. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64) are on the
 [releases](https://github.com/beyond10x/takt/releases) page. Changes: [`CHANGELOG.md`](CHANGELOG.md).
 

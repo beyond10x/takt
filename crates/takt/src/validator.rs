@@ -139,6 +139,14 @@ pub trait Validator {
     fn gates_document(&self) -> Option<&Path> {
         None
     }
+    /// Checks, when the case at `case_dir` in `tree` has just opened, what the validator reads
+    /// from the base revision the case pinned and would refuse when it observes, running
+    /// nothing it would run: a refusal is the error, and the case is not run. Nothing to check
+    /// by default.
+    fn check_at_open(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        let _ = (tree, case_dir);
+        Ok(())
+    }
 }
 
 /// The most bytes [`failing_lines`] keeps of one failed check's output, 4 KiB, each kept line
@@ -2273,6 +2281,56 @@ impl Validator for GateRun {
     fn gates_document(&self) -> Option<&Path> {
         Some(&self.gates)
     }
+
+    /// The gates document and the project file the case pinned at open, prepared as an
+    /// observation prepares them ([`GateRun::prepare`]) and no command run: a file the gate would
+    /// refuse (a `timeout_seconds` outside `1..300`, an unknown format, a program found nowhere)
+    /// is the error, naming the file and the reason. A case that pins no base, or whose base
+    /// holds no gates document, is left to the observation, as before.
+    fn check_at_open(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        // A protocol with no gate step never reads the gate's files, so they refuse nothing; a
+        // case kept outside the tree (a dispatched one) is left to the observation, as before.
+        if !protocol_has_action(case_dir, self.action())? || !case_dir.starts_with(tree) {
+            return Ok(());
+        }
+        let Some((base, at)) = base_revision(tree, case_dir)? else {
+            return Ok(());
+        };
+        if file_at(tree, &at, &self.gates)?.is_none() {
+            return Ok(());
+        }
+        let inputs = self.inputs_at(tree, &at, base)?;
+        let change = change_of(tree, case_dir, &at, &at)?;
+        let dir = case_dir.join(GATE_INPUTS);
+        clear_inputs(&dir)?;
+        let home = FreshHome::new()?;
+        let prepared = self.prepare(tree, case_dir, &home, &inputs, change);
+        let cleared = clear_inputs(&dir);
+        prepared.map(drop).context(
+            "the case is refused at open: the gate would refuse what it reads from the base revision",
+        )?;
+        cleared
+    }
+}
+
+/// What [`GateRun`] reads from the case's base revision: the revision shown (`base`), the gates
+/// document as an error names it (`document`) and its text, and the project file's path and text
+/// when there is one.
+struct BaseInputs {
+    base: String,
+    document: String,
+    gates: String,
+    project: Option<(PathBuf, String)>,
+}
+
+/// Removes `inputs`, the case's [`GATE_INPUTS`], when it is there.
+fn clear_inputs(inputs: &Path) -> Result<()> {
+    match std::fs::remove_dir_all(inputs) {
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            Err(error).with_context(|| format!("remove {}", inputs.display()))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// The admitted command bindings a failed assertion of a gate names: each request of the plan
@@ -2371,6 +2429,107 @@ fn printed_by(
 }
 
 impl GateRun {
+    /// The gates document and the project file at the base revision `at`, shown as `base`: the
+    /// gates document, which must be there, and the project file given, which must be there too,
+    /// or else [`DEFAULT_PROJECT`] when the base holds it.
+    fn inputs_at(&self, tree: &Path, at: &str, base: String) -> Result<BaseInputs> {
+        let document = format!("{} from {base}", self.gates.display());
+        let gates = file_at(tree, at, &self.gates)?
+            .ok_or_else(|| anyhow!("the gates document {document} is not in the base revision"))?;
+        let project = match &self.project {
+            Some(path) => Some((
+                path.clone(),
+                file_at(tree, at, path)?.ok_or_else(|| {
+                    anyhow!(
+                        "the project file {} is not in the base revision, {base}",
+                        path.display()
+                    )
+                })?,
+            )),
+            None => file_at(tree, at, Path::new(DEFAULT_PROJECT))?
+                .map(|text| (PathBuf::from(DEFAULT_PROJECT), text)),
+        };
+        Ok(BaseInputs {
+            base,
+            document,
+            gates,
+            project,
+        })
+    }
+
+    /// The base revision's two files (`inputs`) prepared as the engineering assertions library
+    /// prepares them for the case at `dir`, about `change`, the project file's commands admitted
+    /// in `home` ([`FreshHome::admitting`]): nothing is run. The case directory, which the loop
+    /// writes every pass, stays out of the bundle's source identity: that identity is the
+    /// repository tree's. The two files are copied under the case's [`GATE_INPUTS`] and
+    /// prepared from there, the paths relative to the tree as the library takes them; the
+    /// caller removes them again ([`clear_inputs`]).
+    fn prepare(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        home: &FreshHome,
+        inputs: &BaseInputs,
+        change: canon_engineering_assertions::Change,
+    ) -> Result<canon_engineering_assertions::Prepared> {
+        let BaseInputs {
+            base,
+            document,
+            gates,
+            project,
+        } = inputs;
+        // The external preparation takes one excluded path: the cases root the case is in.
+        let cases = dir
+            .parent()
+            .and_then(|root| root.strip_prefix(tree).ok())
+            .unwrap_or(Path::new(crate::case::CASES_DIR));
+        let copies = dir.join(GATE_INPUTS);
+        let relative = copies
+            .strip_prefix(tree)
+            .with_context(|| format!("{} is not under the tree", copies.display()))?
+            .to_path_buf();
+        let copy = |kind: &str, path: &Path, text: &str| -> Result<PathBuf> {
+            let name = path
+                .file_name()
+                .ok_or_else(|| anyhow!("{} names no file", path.display()))?;
+            let at = copies.join(kind);
+            std::fs::create_dir_all(&at).with_context(|| format!("create {}", at.display()))?;
+            std::fs::write(at.join(name), text)
+                .with_context(|| format!("write {}", at.join(name).display()))?;
+            Ok(relative.join(kind).join(name))
+        };
+        let gates = copy("gates", &self.gates, gates)?;
+        let copied = project
+            .as_ref()
+            .map(|(path, text)| {
+                let admitted = home.admitting(text, tree).with_context(|| {
+                    format!(
+                        "admit the commands of the project file {} from {base}",
+                        path.display()
+                    )
+                })?;
+                copy("project", path, &admitted)
+            })
+            .transpose()?;
+        canon_engineering_assertions::prepare_with(
+            tree,
+            &gates,
+            copied.as_deref(),
+            Some(cases),
+            &canon_engineering_assertions::Admission {
+                change,
+                ..Default::default()
+            },
+        )
+        .with_context(|| match project {
+            Some((project, _)) => format!(
+                "prepare the gates document {document} with the project file {} from {base}",
+                project.display()
+            ),
+            None => format!("prepare the gates document {document}"),
+        })
+    }
+
     /// Observes, each command the gate runs held to the smaller of the project file's timeout
     /// and what is left before `deadline` when the gate's commands are collected.
     fn observe_by(
@@ -2392,22 +2551,9 @@ impl GateRun {
         let Some((base, at)) = base_revision(tree, &dir)? else {
             return unpinned();
         };
-        let document = format!("{} from {base}", self.gates.display());
-        let gates = file_at(tree, &at, &self.gates)?
-            .ok_or_else(|| anyhow!("the gates document {document} is not in the base revision"))?;
-        let project = match &self.project {
-            Some(path) => Some((
-                path.clone(),
-                file_at(tree, &at, path)?.ok_or_else(|| {
-                    anyhow!(
-                        "the project file {} is not in the base revision, {base}",
-                        path.display()
-                    )
-                })?,
-            )),
-            None => file_at(tree, &at, Path::new(DEFAULT_PROJECT))?
-                .map(|text| (PathBuf::from(DEFAULT_PROJECT), text)),
-        };
+        let inputs = self.inputs_at(tree, &at, base)?;
+        let document = inputs.document.clone();
+        let project = inputs.project.clone();
         // What the gate's commands run or read from the tree: a file the case's branch changed
         // would let a model's edit decide the gate the base revision defines. Compared at the
         // base as the test command's surface is ([`judged`]), with what the project file admits
@@ -2498,62 +2644,13 @@ impl GateRun {
         }
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         let change = change_of(tree, &dir, &at, revision)?;
-        // The case directory, which the loop writes every pass, stays out of the bundle's
-        // source identity: that identity is the repository tree's. The base revision's two
-        // files are evaluated from there, the paths relative to the tree as the library takes
-        // them, and are gone again before the observation ends.
-        // The external preparation takes one excluded path: the cases root the case is in.
-        let cases = dir
-            .parent()
-            .and_then(|root| root.strip_prefix(tree).ok())
-            .unwrap_or(Path::new(crate::case::CASES_DIR));
-        let inputs = dir.join(GATE_INPUTS);
-        let relative = inputs
-            .strip_prefix(tree)
-            .with_context(|| format!("{} is not under the tree", inputs.display()))?
-            .to_path_buf();
-        let copy = |kind: &str, path: &Path, text: &str| -> Result<PathBuf> {
-            let name = path
-                .file_name()
-                .ok_or_else(|| anyhow!("{} names no file", path.display()))?;
-            let at = inputs.join(kind);
-            std::fs::create_dir_all(&at).with_context(|| format!("create {}", at.display()))?;
-            std::fs::write(at.join(name), text)
-                .with_context(|| format!("write {}", at.join(name).display()))?;
-            Ok(relative.join(kind).join(name))
-        };
-        let clear = || match std::fs::remove_dir_all(&inputs) {
-            Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
-                Err(error).with_context(|| format!("remove {}", inputs.display()))
-            }
-            _ => Ok(()),
-        };
+        let gate_inputs = dir.join(GATE_INPUTS);
+        let clear = || clear_inputs(&gate_inputs);
         clear()?;
         // The gate's commands run in a home of their own, as the test command does.
         let home = FreshHome::new()?;
         let collected = (|| -> Result<_> {
-            let gates = copy("gates", &self.gates, &gates)?;
-            let copied = project
-                .as_ref()
-                .map(|(path, text)| copy("project", path, &home.admitting(text, tree)?))
-                .transpose()?;
-            let mut prepared = canon_engineering_assertions::prepare_with(
-                tree,
-                &gates,
-                copied.as_deref(),
-                Some(cases),
-                &canon_engineering_assertions::Admission {
-                    change: change.clone(),
-                    ..Default::default()
-                },
-            )
-            .with_context(|| match &project {
-                Some((project, _)) => format!(
-                    "prepare the gates document {document} with the project file {} from {base}",
-                    project.display()
-                ),
-                None => format!("prepare the gates document {document}"),
-            })?;
+            let mut prepared = self.prepare(tree, &dir, &home, &inputs, change.clone())?;
             if let Some(deadline) = deadline {
                 prepared.context.timeout = prepared
                     .context
@@ -3753,6 +3850,95 @@ fn story_file(dir: &Path) -> Result<Option<(String, String)>> {
     Ok(Some((story, path)))
 }
 
+/// The most characters a line of a merge commit's message has ([`merge_message`]).
+const MERGE_LINE: usize = 99;
+
+/// `line` cut to [`MERGE_LINE`] characters, ending in `…` when it was longer.
+fn merge_line(line: String) -> String {
+    if line.chars().count() <= MERGE_LINE {
+        return line;
+    }
+    let mut cut: String = line.chars().take(MERGE_LINE - 1).collect();
+    cut.push('…');
+    cut
+}
+
+/// The evidence kinds a merge rests on, named in its commit's body ([`merge_message`]).
+const MERGED_ON: [&str; 3] = ["test_result", "gate_result", "ci_result"];
+
+/// What the merge commit of pull request `number` says: the title `Merge #<number>: ` and the
+/// pull request's title (the intent's first line, [`title_of`]); the body the case's story (or
+/// that it has none), the case, the head merged (`head`) and, when that is not the granted
+/// `revision`, the revision too; the latest `test_result`, `gate_result` and `ci_result` record
+/// of the case at `revision`, each by id and result; and the grant of `repository.merge`. Each
+/// line is cut to [`MERGE_LINE`] characters; a title that would be cut names the story instead
+/// when the case has one. Nothing attributes the text.
+fn merge_message(
+    dir: &Path,
+    number: u64,
+    revision: &str,
+    head: &str,
+    grant: Option<&crate::case::AuthorityDecision>,
+) -> Result<crate::forge::MergeMessage> {
+    let intent = dir.join("intent.md");
+    let intent =
+        std::fs::read_to_string(&intent).with_context(|| format!("read {}", intent.display()))?;
+    let case = dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let story = crate::case::story_of(dir)?;
+    let mut lines = vec![match &story {
+        Some(story) => format!("- Story: {story}"),
+        None => "- Story: none; the case was opened on an intent".to_owned(),
+    }];
+    lines.push(format!("- Case: {case}"));
+    lines.push(format!("- Merged revision: {head}"));
+    if head != revision {
+        lines.push(format!("- Granted revision: {revision}"));
+        lines.push("- The merged head adds takt's records above the granted revision".to_owned());
+    }
+    lines.push(format!("- Evidence at {}:", short(revision)));
+    let records = evidence_of(dir)?;
+    for kind in MERGED_ON {
+        let latest = records
+            .iter()
+            .rev()
+            .find(|record| record["kind"] == kind && record["subject_revision"] == revision);
+        lines.push(match latest {
+            Some(record) => format!(
+                "  - {kind} {}: {}",
+                record["id"].as_str().unwrap_or(NOT_STATED),
+                record["result"].as_str().unwrap_or(NOT_STATED)
+            ),
+            None => format!("  - {kind}: none at this revision"),
+        });
+    }
+    lines.push(match grant {
+        Some(grant) => format!(
+            "- Grant: {} {} at {}, {}",
+            grant.capability,
+            match grant.decision {
+                crate::case::Grant::Granted => "granted",
+                crate::case::Grant::Denied => "denied",
+            },
+            grant.revision.as_deref().map_or("no revision", short),
+            grant.granted_at
+        ),
+        None => format!("- Grant: {} not recorded", PrMerged::ACTION),
+    });
+    let body: Vec<String> = lines.into_iter().map(merge_line).collect();
+    let title = format!("Merge #{number}: {}", title_of(&intent));
+    let title = match story {
+        Some(story) if title.chars().count() > MERGE_LINE => format!("Merge #{number}: {story}"),
+        _ => title,
+    };
+    Ok(crate::forge::MergeMessage {
+        title: merge_line(title),
+        body: body.join("\n") + "\n",
+    })
+}
+
 impl PrMerged {
     /// The story file of the case at `dir` whose change the guard does not count, `None` when
     /// none is exempt. The case's story is taken by a commit takt makes on the case's branch
@@ -4348,10 +4534,20 @@ impl Validator for PrMerged {
                 // forge whose checks lag the push): the forge then refuses the merge for its
                 // required check, and that refusal is nothing merged, waited on like pending
                 // checks. Every other failure of the merge stays an error.
-                if let Err(error) =
-                    self.forge
-                        .merge(tree, &dir.join("artifacts"), number, &view.head.sha)
-                {
+                let message = merge_message(
+                    &dir,
+                    number,
+                    revision,
+                    &view.head.sha,
+                    authority.decision(self.action()),
+                )?;
+                if let Err(error) = self.forge.merge_with(
+                    tree,
+                    &dir.join("artifacts"),
+                    number,
+                    &view.head.sha,
+                    &message,
+                ) {
                     if crate::forge::refused_for_a_pending_check(&error) {
                         return Ok((
                             nothing(format!(
@@ -4562,6 +4758,15 @@ pub fn is_built_in_kind(kind: &str) -> bool {
 /// record. It reads git only, with no code from configuration: nothing is run from the tree and
 /// nothing leaves the machine, so it compares with the local base branch as it stands, and a
 /// forge's base that moved without a fetch is not seen.
+///
+/// When the case's protocol declares [`ChangeRead::PATHS_KIND`] and lists it among what
+/// `change.read` may produce (`story.delivery/2`), it writes one `paths_changed` record beside
+/// the `change_record`, at the same revision, from the same comparison: the paths outside
+/// `.engineering/` at which the merged tree differs from the tip (with every path whose merge
+/// conflicts outside it), or the revision's tree from the pinned base; `both` when they hold a
+/// test path ([`crate::harness::is_test_path`], what `tests.write` may change) and another,
+/// `tests_only`, `implementation_only`, or `none` when there is no such path. A protocol that
+/// does not declare the kind gets no such record and the same summary as before.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
 
@@ -4570,6 +4775,68 @@ impl ChangeRead {
     pub const ACTION: &str = "change.read";
     /// The evidence kind it writes.
     pub const KIND: &str = "change_record";
+    /// The second kind it writes, when the case's protocol declares it.
+    pub const PATHS_KIND: &str = "paths_changed";
+}
+
+/// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
+/// evidence kind `kind` and lists it among what `action` may produce.
+/// Whether the protocol the case at `case_dir` pinned names `action`. A case with no pinned
+/// protocol file is taken to name it, so the check it guards still runs.
+fn protocol_has_action(case_dir: &Path, action: &str) -> Result<bool> {
+    let path = case_dir.join("protocol.yaml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(doc["actions"]
+        .as_mapping()
+        .is_some_and(|actions| actions.contains_key(action)))
+}
+
+fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
+    let path = case_dir.join("protocol.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    let declared = doc["evidence_kinds"]
+        .as_mapping()
+        .is_some_and(|kinds| kinds.contains_key(kind));
+    let produced = doc["actions"][action]["may_produce"]
+        .as_sequence()
+        .is_some_and(|produced| {
+            produced
+                .iter()
+                .any(|entry| entry["evidence"].as_str() == Some(kind))
+        });
+    Ok(declared && produced)
+}
+
+/// The `paths_changed` result of `paths`, with how many of them are test paths
+/// ([`crate::harness::is_test_path`]) and how many are not. A test path in `deleted` counts
+/// for neither side: deleting a test writes no test, so it cannot make a change `both`.
+fn paths_result(paths: &[String], deleted: &[String]) -> (&'static str, usize, usize) {
+    let tests = paths
+        .iter()
+        .filter(|path| crate::harness::is_test_path(path))
+        .count();
+    let implementation = paths.len() - tests;
+    let tests = tests
+        - deleted
+            .iter()
+            .filter(|path| crate::harness::is_test_path(path) && paths.contains(path))
+            .count();
+    let result = match (tests > 0, implementation > 0) {
+        (true, true) => "both",
+        (true, false) => "tests_only",
+        (false, true) => "implementation_only",
+        (false, false) => "none",
+    };
+    (result, tests, implementation)
 }
 
 impl Validator for ChangeRead {
@@ -4607,7 +4874,9 @@ impl Validator for ChangeRead {
             .filter(|tip| !tip.is_empty())
             .map(|tip| (name, tip))
         });
-        let (differs, summary) = if let Some((name, tip)) = tip {
+        // The paths the comparison changes, read only for a protocol that declares the kind.
+        let paths_declared = produces_kind(&dir, Self::ACTION, Self::PATHS_KIND)?;
+        let (differs, summary, paths) = if let Some((name, tip)) = tip {
             // A merge that conflicts at any path outside `.engineering/` is `ahead`, by the paths
             // merge-tree names: the tree it writes may keep the base's side (a file the case
             // deleted that the base changed, a binary file both changed), and there is a change
@@ -4625,6 +4894,20 @@ impl Validator for ChangeRead {
                 short(revision),
                 short(&tip)
             );
+            let paths = if paths_declared {
+                let mut paths =
+                    crate::git::paths_differing_outside(tree, &tip, &merged.tree, ".engineering")?;
+                for path in &outside {
+                    if !paths.iter().any(|known| known == path) {
+                        paths.push((*path).to_owned());
+                    }
+                }
+                let deleted =
+                    crate::git::paths_deleted_outside(tree, &tip, &merged.tree, ".engineering")?;
+                Some((paths, deleted))
+            } else {
+                None
+            };
             if outside.is_empty() {
                 let differs =
                     crate::git::trees_differ_outside(tree, &tip, &merged.tree, ".engineering")?;
@@ -4646,6 +4929,7 @@ impl Validator for ChangeRead {
                             "leaves as it is"
                         }
                     ),
+                    paths,
                 )
             } else {
                 (
@@ -4654,10 +4938,19 @@ impl Validator for ChangeRead {
                         "{head} conflicts outside .engineering/ at {}, a change to publish",
                         outside.join(", ")
                     ),
+                    paths,
                 )
             }
         } else if let Some((shown, base)) = pinned {
             let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
+            let paths = if paths_declared {
+                Some((
+                    crate::git::paths_differing_outside(tree, &base, revision, ".engineering")?,
+                    crate::git::paths_deleted_outside(tree, &base, revision, ".engineering")?,
+                ))
+            } else {
+                None
+            };
             (
                 differs,
                 format!(
@@ -4665,6 +4958,7 @@ impl Validator for ChangeRead {
                     short(revision),
                     if differs { "differs from" } else { "is" }
                 ),
+                paths,
             )
         } else {
             return Ok(Observation {
@@ -4675,16 +4969,41 @@ impl Validator for ChangeRead {
             });
         };
         let result = if differs { "ahead" } else { "none" };
-        Ok(Observation {
-            summary: format!("{summary}: {result}"),
-            records: vec![Record::new(
-                format!("change-record-{seq}"),
-                self.kind(),
-                Some(result.to_owned()),
+        let mut summary = format!("{summary}: {result}");
+        let mut records = vec![Record::new(
+            format!("change-record-{seq}"),
+            self.kind(),
+            Some(result.to_owned()),
+            self.subject(),
+            revision,
+            self.name(),
+        )];
+        if let Some((paths, deleted)) = paths {
+            let (changed, tests, implementation) = paths_result(&paths, &deleted);
+            let removed = deleted
+                .iter()
+                .filter(|path| crate::harness::is_test_path(path))
+                .count();
+            summary.push_str(&format!(
+                "; it changes {tests} test path(s) and {implementation} implementation path(s){}: {changed}",
+                if removed == 0 {
+                    String::new()
+                } else {
+                    format!(", and deletes {removed} test path(s), which count for neither")
+                }
+            ));
+            records.push(Record::new(
+                format!("paths-changed-{seq}"),
+                Self::PATHS_KIND,
+                Some(changed.to_owned()),
                 self.subject(),
                 revision,
                 self.name(),
-            )],
+            ));
+        }
+        Ok(Observation {
+            summary,
+            records,
             artifact: None,
         })
     }
