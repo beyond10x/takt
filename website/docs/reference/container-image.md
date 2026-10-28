@@ -13,7 +13,7 @@ of this repository builds or pushes an image, and none is published: you build i
 loads your build.
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.17.0 .
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.18.0 .
 ```
 
 Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a Loom agent:
@@ -35,7 +35,7 @@ The tools are downloaded by release URL and checked against a SHA256 in the Dock
 |---|---|
 | [aep](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) | 0.77.1 |
 | [b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness)) | 0.20.0 |
-| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.74.0 |
+| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.75.0 |
 | b10x-gates | 0.1.23 |
 
 `b10x-harness` 0.20.0 is the harness takt 0.14.0's Loom 0.43.0 and metaharness 0.19.0 need. Checked
@@ -79,7 +79,7 @@ argument, so the configuration file is read only when they name it again. The ar
 of `takt run` and win over the file:
 
 ```console
-$ docker run --rm takt:0.17.0 --config /config/agent.yaml --story <story-id> --hours 1
+$ docker run --rm takt:0.18.0 --config /config/agent.yaml --story <story-id> --hours 1
 ```
 
 A `LABEL` names the source (`org.opencontainers.image.source`), the licence (`Apache-2.0`) and the

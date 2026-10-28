@@ -6,9 +6,31 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-28
+
+A `story.delivery/2` case writes the evidence its tests-first guards read; a gates project file the
+gate would refuse stops the run at open; a bot merge commit names the story and its evidence.
+
+### Added
+
+- A committed `tests.write` step in a `story.delivery/2` case records `tests_change` (producer `takt.tests-write`).
+- `change.read` records `paths_changed` (`both`, `tests_only`, `implementation_only` or `none`) beside `change_record`.
+- A step that only deletes tests records no `tests_change`, and a deleted test path counts for neither side.
+- A bot-forge merge sends the title `Merge #<n>: <story title>`, or the story id when the title would be cut.
+- Its body names the story, the case, the merged and granted revisions, the latest test, gate and CI results and the grant.
+
 ### Changed
 
-- The specification, CI and the container image use ESS 0.74.0 (was 0.73.0).
+- The gates document and project file a case pins are checked at open, as `gate.run` reads them.
+- A file the gate would refuse ends the run at open, exit 1, and the case is discarded; a protocol with no `gate.run` is not checked.
+- The specification, CI and the container image use ESS 0.75.0 (was 0.73.0).
+- The engineering-protocols pin moves to 0.12.0: a gate runs an executable link under its own name, so rustup's `cargo` runs as `cargo`.
+
+### Fixed
+
+- An orphan takt adopted as subreaper is reaped once it ends while a test command still runs.
+- A test that kills its own process group and waits for it to empty is no longer left waiting on a zombie.
+- An orphan that leads its own group is still left to the next sweep (story:adopted-orphan-group-leaders-are-reaped).
 
 ## [0.17.0] - 2026-10-28
 
@@ -715,7 +737,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.17.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.18.0...HEAD
+[0.18.0]: https://github.com/beyond10x/takt/compare/0.17.0...0.18.0
 [0.17.0]: https://github.com/beyond10x/takt/compare/0.16.0...0.17.0
 [0.16.0]: https://github.com/beyond10x/takt/compare/0.15.1...0.16.0
 [0.15.1]: https://github.com/beyond10x/takt/compare/0.15.0...0.15.1
