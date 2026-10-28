@@ -2288,6 +2288,11 @@ impl Validator for GateRun {
     /// is the error, naming the file and the reason. A case that pins no base, or whose base
     /// holds no gates document, is left to the observation, as before.
     fn check_at_open(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        // A protocol with no gate step never reads the gate's files, so they refuse nothing; a
+        // case kept outside the tree (a dispatched one) is left to the observation, as before.
+        if !protocol_has_action(case_dir, self.action())? || !case_dir.starts_with(tree) {
+            return Ok(());
+        }
         let Some((base, at)) = base_revision(tree, case_dir)? else {
             return Ok(());
         };
@@ -3866,7 +3871,8 @@ const MERGED_ON: [&str; 3] = ["test_result", "gate_result", "ci_result"];
 /// that it has none), the case, the head merged (`head`) and, when that is not the granted
 /// `revision`, the revision too; the latest `test_result`, `gate_result` and `ci_result` record
 /// of the case at `revision`, each by id and result; and the grant of `repository.merge`. Each
-/// line is cut to [`MERGE_LINE`] characters; nothing attributes the text.
+/// line is cut to [`MERGE_LINE`] characters; a title that would be cut names the story instead
+/// when the case has one. Nothing attributes the text.
 fn merge_message(
     dir: &Path,
     number: u64,
@@ -3881,16 +3887,16 @@ fn merge_message(
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default();
-    let mut lines = vec![match crate::case::story_of(dir)? {
+    let story = crate::case::story_of(dir)?;
+    let mut lines = vec![match &story {
         Some(story) => format!("- Story: {story}"),
         None => "- Story: none; the case was opened on an intent".to_owned(),
     }];
     lines.push(format!("- Case: {case}"));
     lines.push(format!("- Merged revision: {head}"));
     if head != revision {
-        lines.push(format!(
-            "- Granted revision: {revision}; the merged head adds takt's records above it"
-        ));
+        lines.push(format!("- Granted revision: {revision}"));
+        lines.push("- The merged head adds takt's records above the granted revision".to_owned());
     }
     lines.push(format!("- Evidence at {}:", short(revision)));
     let records = evidence_of(dir)?;
@@ -3922,8 +3928,13 @@ fn merge_message(
         None => format!("- Grant: {} not recorded", PrMerged::ACTION),
     });
     let body: Vec<String> = lines.into_iter().map(merge_line).collect();
+    let title = format!("Merge #{number}: {}", title_of(&intent));
+    let title = match story {
+        Some(story) if title.chars().count() > MERGE_LINE => format!("Merge #{number}: {story}"),
+        _ => title,
+    };
     Ok(crate::forge::MergeMessage {
-        title: merge_line(format!("Merge #{number}: {}", title_of(&intent))),
+        title: merge_line(title),
         body: body.join("\n") + "\n",
     })
 }
@@ -4770,6 +4781,22 @@ impl ChangeRead {
 
 /// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
 /// evidence kind `kind` and lists it among what `action` may produce.
+/// Whether the protocol the case at `case_dir` pinned names `action`. A case with no pinned
+/// protocol file is taken to name it, so the check it guards still runs.
+fn protocol_has_action(case_dir: &Path, action: &str) -> Result<bool> {
+    let path = case_dir.join("protocol.yaml");
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(true),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(doc["actions"]
+        .as_mapping()
+        .is_some_and(|actions| actions.contains_key(action)))
+}
+
 fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
     let path = case_dir.join("protocol.yaml");
     let text =
