@@ -35,7 +35,7 @@ The tools are downloaded by release URL and checked against a SHA256 in the Dock
 |---|---|
 | [aep](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) | 0.77.1 |
 | [b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness)) | 0.20.0 |
-| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.70.0 |
+| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.72.0 |
 | b10x-gates | 0.1.23 |
 
 `b10x-harness` 0.20.0 is the harness takt 0.14.0's Loom 0.43.0 and metaharness 0.19.0 need. Checked

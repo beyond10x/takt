@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- The specification, CI and the container image use ESS 0.72.0 (was 0.70.0).
+
 ## [0.16.0] - 2026-10-27
 
 takt confines every test command through Substrate on Linux and macOS, and a store story opens on
