@@ -1,5 +1,5 @@
 format: ess-inputs/2
-requires: ess 0.73
+requires: ess 0.74
 specification:
   - system.yaml
   - domains/takt.yaml
