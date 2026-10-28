@@ -607,9 +607,9 @@ error: test failed, to rerun pass `--lib`
         failing_lines(libtest, FAILED_LINES_PER_CHECK),
         (
             vec![
-                "FAILED tests::removes - assertion `left == right` failed | left: 1 | right: 0"
+                "FAILED tests::removes - panicked at src/lib.rs:12:9: assertion `left == right` failed | left: 1 | right: 0"
                     .to_owned(),
-                "FAILED tests::lists - no todo file".to_owned(),
+                "FAILED tests::lists - panicked at src/lib.rs:20:5: no todo file".to_owned(),
             ],
             0
         )
@@ -770,7 +770,7 @@ fn a_linters_and_a_compilers_failing_lines_beside_a_test_run_are_kept_or_counted
         failing_lines(&printed, FAILED_LINES_PER_CHECK),
         (
             vec![
-                "FAILED t - boom".to_owned(),
+                "FAILED t - panicked at src/lib.rs:1:1: boom".to_owned(),
                 clippy.to_owned(),
                 summary.to_owned()
             ],
@@ -813,7 +813,7 @@ fn a_runners_heading_outside_its_failures_names_no_failed_test() {
                  b broke\n\n\nfailures:\n    b\n\ntest result: FAILED. 1 passed; 1 failed\n";
     assert_eq!(
         failing_lines(mixed, FAILED_LINES_PER_CHECK),
-        (vec!["FAILED b - b broke".to_owned()], 0)
+        (vec!["FAILED b - panicked at src/lib.rs:4:5: b broke".to_owned()], 0)
     );
     let pytest = "=================================== FAILURES ===================================
 ___________________________________ test_x ____________________________________
@@ -882,8 +882,8 @@ test result: FAILED. 0 passed; 1 failed
         failing_lines(doctest, FAILED_LINES_PER_CHECK),
         (
             vec![
-                "FAILED tests::unit - boom".to_owned(),
-                "FAILED src/lib.rs - add (line 3) - doc example wrong".to_owned(),
+                "FAILED tests::unit - panicked at src/lib.rs:10:9: boom".to_owned(),
+                "FAILED src/lib.rs - add (line 3) - panicked at src/lib.rs:5:1: doc example wrong".to_owned(),
             ],
             0
         )
@@ -919,7 +919,7 @@ test result: FAILED. 0 passed; 1 failed
          error: kept out too\n"
     );
     let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
-    assert_eq!(lines, ["FAILED tests::b - b broke"]);
+    assert_eq!(lines, ["FAILED tests::b - panicked at src/lib.rs:2:2: b broke"]);
     assert_eq!(omitted, 2, "the two headings withheld whole");
     assert!(!lines.iter().any(|line| line.contains(&token)));
 }
@@ -936,7 +936,7 @@ fn a_libtest_assertions_values_are_kept_on_its_line() {
         failing_lines(printed, FAILED_LINES_PER_CHECK),
         (
             vec![
-                "FAILED tests::eq - assertion `left == right` failed | left: 1 | right: 2"
+                "FAILED tests::eq - panicked at src/lib.rs:10:9: assertion `left == right` failed | left: 1 | right: 2"
                     .to_owned()
             ],
             0
@@ -951,7 +951,7 @@ fn a_libtest_assertions_values_are_kept_on_its_line() {
     let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
     assert_eq!(
         lines,
-        ["FAILED tests::eq - assertion `left == right` failed"]
+        ["FAILED tests::eq - panicked at src/lib.rs:10:9: assertion `left == right` failed"]
     );
     assert_eq!(omitted, 1);
 }
@@ -1006,7 +1006,7 @@ fn a_key_block_without_its_end_hides_no_failed_test() {
     let (lines, omitted) = read_keyed(&printed);
     assert_eq!(
         lines,
-        ["FAILED tests::rejects_truncated_key - parsed a truncated key"]
+        ["FAILED tests::rejects_truncated_key - panicked at src/lib.rs:3:5: parsed a truncated key"]
     );
     assert_eq!(lines.len() as u64 + omitted, 3, "three failed tests");
     let unittest = format!(

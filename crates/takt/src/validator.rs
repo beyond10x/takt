@@ -768,9 +768,9 @@ fn unittest_end(body: &[Printed]) -> usize {
 ///   `<test>` a node id (`<path>::<name>`) or a `.py` path, its error line what follows ` - `;
 /// - libtest: after a `failures:` line and before a `successes:` one, a `---- <test> stdout ----`
 ///   section, its error line the first line of the panic's message (the line after
-///   `panicked at …:`, or that line itself in the older one-line form) with the `left:` and
-///   `right:` lines after it joined by ` | `, up to the next section, `failures:` or
-///   `successes:`.
+///   `panicked at <location>:`, after `panicked at <location>: `, or that line itself in the
+///   older one-line form) with the `left:` and `right:` lines after it joined by ` | `, up to
+///   the next section, `failures:` or `successes:`.
 ///
 /// A heading of these shapes that was withheld (a pytest line keeps its test when only its error
 /// held a credential) or a pytest line that names no test is counted.
@@ -869,23 +869,32 @@ fn failed_test_errors(lines: &[Printed]) -> Reading {
 }
 
 /// The failed test of a libtest section `body` headed `test`: the first line of the panic's
-/// message, the `left:` and `right:` lines after it joined by ` | `; the message alone, counted
-/// as withheld, when one of those was withheld.
+/// message, after `panicked at <location>: ` when the panic's line names its location on a line
+/// of its own (`panicked at <file>:<line>:<col>:`), the `left:` and `right:` lines after it
+/// joined by ` | `; the message alone, counted as withheld, when one of those was withheld.
 fn libtest_failure(test: &str, body: &[Printed]) -> FailedTest {
-    let (message, after) = match body.iter().position(|line| {
+    let (message, after, location) = match body.iter().position(|line| {
         line.text()
             .is_some_and(|line| line.contains("panicked at "))
     }) {
         Some(at) if body[at].text().is_some_and(|line| line.ends_with(':')) => {
-            (body.get(at + 1), at + 2)
+            let location = body[at]
+                .text()
+                .and_then(|line| line.rsplit_once("panicked at "))
+                .and_then(|(_, rest)| rest.strip_suffix(':'))
+                .filter(|location| !location.is_empty() && !location.contains(char::is_whitespace));
+            (body.get(at + 1), at + 2, location)
         }
-        Some(at) => (Some(&body[at]), at + 1),
-        None => (body.last(), body.len()),
+        Some(at) => (Some(&body[at]), at + 1, None),
+        None => (body.last(), body.len(), None),
     };
     let mut failed = FailedTest::of(format!("FAILED {test}"), message);
     let Some(error) = &mut failed.error else {
         return failed;
     };
+    if let Some(location) = location {
+        error.insert_str(0, &format!("panicked at {location}: "));
+    }
     let mut values = Vec::new();
     for line in body.get(after..).unwrap_or_default().iter().take(2) {
         match line {

@@ -1673,7 +1673,9 @@ types:
   # `failures:`, a doctest's among them): one line per failed test,
   # `<FAIL|ERROR|FAILED> <test> - <its last error line>` (unittest's the first line not indented
   # after the last traceback frame, libtest's the first line of the panic's message with its
-  # `left:` and `right:` lines joined by ` | `), the test alone when that line is withheld; then
+  # `left:` and `right:` lines joined by ` | `, after `panicked at <file>:<line>:<col>: ` when
+  # the panic names its location on a line of its own), the test alone when that line is
+  # withheld; then
   # the failing lines of another command the gate ran beside the tests (a compiler's `error:`
   # lines, a linter's `<path>:<line>[:<col>]: <code>` lines); kept in order until one does not
   # fit, the count left out being the failed tests and failing lines not kept, the error lines
@@ -1984,7 +1986,15 @@ types:
       # scan the change so far and each scope file pass, the block passes it too; one it refuses,
       # or when the scan cannot run, is one line naming the gates and why what they printed is
       # not shown. With none, no block, and the prompt is as it was. A replay rebuilding a
-      # recorded step's prompt reads them from the step's record the same way.
+      # recorded step's prompt reads them from the step's record the same way. When the step
+      # offers `implementation.edit` and the block is shown whole, a block naming the failing
+      # tests' assertions follows it ("Where each failing test's assertion is, read from its
+      # output; ..."): for each kept line naming a failing test (`<FAILED|FAIL|ERROR> <test> -
+      # <error>`), `- <test>: <file>:<line>[:<col>]` read from the error's `panicked at` (libtest's
+      # location on a line of its own or its older one-line form), or that its output names no
+      # location, fenced as data; then the ask to change every function on the path from each
+      # assertion to the behaviour the intent names, its callers among them, not only the one it
+      # names. Only a location's path and numbers are read from a line. No such line, no block.
       # read from: crates/takt/src/harness.rs
       # read from: crates/takt/src/run.rs
       # read from: crates/takt/src/replay.rs
