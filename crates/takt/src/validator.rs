@@ -301,13 +301,43 @@ enum Printed {
 }
 
 /// What [`failing_lines`] reads of a line it withheld before dropping its text: whether it was
-/// indented, the heading of a failed test it was, whether it was a failing line
-/// ([`failure_line`]) and whether it was an assertion's value (`left:`, `right:`).
+/// indented, the heading of a failed test it was, the rule ([`rule`]) or the runner's marker
+/// ([`Marker`]) it was, whether it was a failing line ([`failure_line`]) and whether it was an
+/// assertion's value (`left:`, `right:`). Every shape [`failed_test_errors`] reads a line for is
+/// here, so a withheld line moves the reading as its text would have.
 struct Withheld {
     indented: bool,
     heading: Option<Heading>,
+    rule: Option<char>,
+    marker: Option<Marker>,
     failure: bool,
     value: bool,
+}
+
+/// A line a test runner prints where its report of failures starts or ends: libtest's
+/// `failures:` and `successes:`, pytest's `short test summary info` line.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    Failures,
+    Successes,
+    Summary,
+}
+
+/// The runner's marker `line` is, if any.
+fn marker(line: &str) -> Option<Marker> {
+    match line {
+        "failures:" => Some(Marker::Failures),
+        "successes:" => Some(Marker::Successes),
+        _ if line.contains("short test summary info") => Some(Marker::Summary),
+        _ => None,
+    }
+}
+
+/// The character of a rule `line` is, at least ten `=` or ten `-`, as unittest prints between
+/// its failures.
+fn rule_of(line: &str) -> Option<char> {
+    let c = line.chars().next()?;
+    (matches!(c, '=' | '-') && line.len() >= 10 && line.chars().all(|x| x == c)).then_some(c)
 }
 
 /// The heading of a failed test in a runner's shape; for pytest's, the test it names when that
@@ -338,19 +368,23 @@ impl Withheld {
         Self {
             indented: line.starts_with(char::is_whitespace),
             heading,
+            rule: rule_of(line),
+            marker: marker(line),
             failure: failure_line(line),
             value: assertion_value(line),
         }
     }
 
-    /// A line inside a private key's block: nothing of it is read but its indent.
+    /// A line inside a private key's block, which may run to the end of the output when it has
+    /// no `-----END` line: read for its shape as any withheld line ([`Withheld::of`]), so a
+    /// failed test's heading after it is still counted and still ends the section before it,
+    /// but no test a pytest heading names is kept.
     fn blind(line: &str) -> Self {
-        Self {
-            indented: line.starts_with(char::is_whitespace),
-            heading: None,
-            failure: false,
-            value: false,
+        let mut withheld = Self::of(line);
+        if let Some(Heading::Pytest(name)) = &mut withheld.heading {
+            *name = None;
         }
+        withheld
     }
 }
 
@@ -369,15 +403,21 @@ impl Printed {
         }
     }
 
+    fn marker(&self) -> Option<Marker> {
+        match self {
+            Self::Line(line) => marker(line),
+            Self::Withheld(withheld) => withheld.marker,
+        }
+    }
+
     /// Whether the line ends a libtest section: the next section's heading, or `failures:` or
     /// `successes:`.
     fn ends_libtest_section(&self) -> bool {
-        match self {
-            Self::Line(line) => {
-                libtest_heading(line).is_some() || line == "failures:" || line == "successes:"
-            }
+        let heading = match self {
+            Self::Line(line) => libtest_heading(line).is_some(),
             Self::Withheld(withheld) => matches!(withheld.heading, Some(Heading::Libtest)),
-        }
+        };
+        heading || matches!(self.marker(), Some(Marker::Failures | Marker::Successes))
     }
 }
 
@@ -402,10 +442,13 @@ struct FailedTest {
     withheld: bool,
 }
 
-/// Whether `line` is a rule of at least ten `c`, as unittest prints between its failures.
+/// Whether `line` is a rule of at least ten `c` ([`rule_of`]), as unittest prints between its
+/// failures.
 fn rule(line: &Printed, c: char) -> bool {
-    line.text()
-        .is_some_and(|line| line.len() >= 10 && line.chars().all(|x| x == c))
+    match line {
+        Printed::Line(line) => rule_of(line) == Some(c),
+        Printed::Withheld(withheld) => withheld.rule == Some(c),
+    }
 }
 
 /// A pytest summary line's kind and the rest: `FAILED <rest>` or `ERROR <rest>`, not unittest's
@@ -449,10 +492,28 @@ fn assertion_value(line: &str) -> bool {
     line.starts_with("left:") || line.starts_with("right:")
 }
 
+/// The words in lower case a located line ([`failure_line`]) starts its message with that name
+/// no failure: a compiler's or a type checker's remark beside one, and a log's levels.
+const NOT_FAILURE_WORDS: [&str; 11] = [
+    "warning", "warn", "note", "help", "hint", "remark", "info", "notice", "debug", "trace",
+    "verbose",
+];
+
+/// Whether `path`, the text before a located line's first `:`, is a file's path: it holds a `/`,
+/// or its last part has an extension that starts with a letter (`x.c`, `app.py`). So a time
+/// (`12`, `2026-10-28T19`), a host (`localhost`, `127.0.0.1`) and a word (`make[1]`) are not.
+fn file_path(path: &str) -> bool {
+    path.contains('/')
+        || path.rsplit_once('.').is_some_and(|(stem, extension)| {
+            !stem.is_empty() && extension.starts_with(|c: char| c.is_ascii_alphabetic())
+        })
+}
+
 /// Whether `line`, not indented, is a failing line of a command a gate ran beside a test run: a
 /// compiler's `error:` or `error[<code>]:` line (but cargo's own `error: test failed, …` and
 /// `error: <n> targets failed:` after a test run), or a located finding, `<path>:<line>:` with an
-/// optional `<col>:`, then a word ending in `:` in lower case (`error:`, `unresolved:`) or a
+/// optional `<col>:` and `<path>` a file's ([`file_path`]), then a word ending in `:` in lower
+/// case that names a failure (`error:`, `unresolved:`; not one of [`NOT_FAILURE_WORDS`]) or a
 /// linter's code (`F401`, `E501`, `C0114:`).
 fn failure_line(line: &str) -> bool {
     if line.starts_with("error: test failed, to rerun pass")
@@ -466,7 +527,7 @@ fn failure_line(line: &str) -> bool {
     let Some((path, mut rest)) = line.split_once(':') else {
         return false;
     };
-    if path.is_empty() || path.contains(char::is_whitespace) {
+    if path.contains(char::is_whitespace) || !file_path(path) {
         return false;
     }
     let mut numbers = 0;
@@ -485,7 +546,10 @@ fn failure_line(line: &str) -> bool {
     let code = word.strip_suffix(':').unwrap_or(word);
     let letters = code.bytes().take_while(u8::is_ascii_uppercase).count();
     let digits = code.len() - letters;
-    (word.len() > code.len() && !code.is_empty() && code.bytes().all(|c| c.is_ascii_lowercase()))
+    (word.len() > code.len()
+        && !code.is_empty()
+        && code.bytes().all(|c| c.is_ascii_lowercase())
+        && !NOT_FAILURE_WORDS.contains(&code))
         || word.starts_with("error[")
         || ((1..=4).contains(&letters)
             && (1..=4).contains(&digits)
@@ -542,6 +606,12 @@ fn failed_test_errors(lines: &[Printed]) -> Reading {
     for (index, line) in lines.iter().enumerate() {
         let rest = &lines[index + 1..];
         let under_rule = rest.first().is_some_and(|next| rule(next, '-'));
+        match line.marker() {
+            Some(Marker::Failures) => failures = true,
+            Some(Marker::Successes) => failures = false,
+            Some(Marker::Summary) => summary = true,
+            None => {}
+        }
         let text = match line {
             Printed::Withheld(withheld) => {
                 match &withheld.heading {
@@ -574,11 +644,6 @@ fn failed_test_errors(lines: &[Printed]) -> Reading {
             }
             Printed::Line(text) => text.as_str(),
         };
-        match text {
-            "failures:" => failures = true,
-            "successes:" => failures = false,
-            _ => summary = summary || text.contains("short test summary info"),
-        }
         if let Some((kind, name)) = unittest_heading(text)
             && under_rule
         {

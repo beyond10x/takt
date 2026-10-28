@@ -955,3 +955,208 @@ fn a_libtest_assertions_values_are_kept_on_its_line() {
     );
     assert_eq!(omitted, 1);
 }
+
+/// A private key's opening line, assembled here so this file holds no such shape.
+fn key_begin() -> String {
+    format!("-----BEGIN {} KEY-----", "PRIVATE")
+}
+
+/// What `failing_lines` keeps and counts for `printed`, with no line holding the key's text.
+fn read_keyed(printed: &str) -> (Vec<String>, u64) {
+    let (lines, omitted) = failing_lines(printed, FAILED_LINES_PER_CHECK);
+    for line in &lines {
+        assert!(
+            !line.contains("MIIE") && !line.contains("PRIVATE KEY"),
+            "{line}"
+        );
+    }
+    (lines, omitted)
+}
+
+/// Acceptance 4: a private key's block with no `-----END` line is withheld to the end, and every
+/// failed test's heading after it is still read for its shape: it ends the section before it and
+/// is counted, its text never kept. A test whose last error line was withheld is kept by name,
+/// that line counted.
+#[test]
+fn a_key_block_without_its_end_hides_no_failed_test() {
+    let begin = key_begin();
+    let printed = format!(
+        "running 2 tests\nfailures:\n\n\
+         ---- tests::rejects_truncated_key stdout ----\n\
+         input: {begin}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n\
+         thread 'tests::rejects_truncated_key' panicked at src/lib.rs:3:5:\n\
+         parsed a truncated key\n\n\
+         ---- tests::b stdout ----\nthread 'tests::b' panicked at src/lib.rs:9:5:\nb is wrong\n\n\
+         ---- tests::c stdout ----\nthread 'tests::c' panicked at src/lib.rs:12:5:\nc is wrong\n\n\
+         failures:\n    tests::rejects_truncated_key\n    tests::b\n    tests::c\n\n\
+         test result: FAILED. 0 passed; 3 failed\n"
+    );
+    assert_eq!(
+        read_keyed(&printed),
+        (vec!["FAILED tests::rejects_truncated_key".to_owned()], 3),
+        "the first test's withheld message, and tests::b's and tests::c's headings"
+    );
+    let printed = format!(
+        "failures:\n\n---- tests::rejects_truncated_key stdout ----\n\
+         thread 'tests::rejects_truncated_key' panicked at src/lib.rs:3:5:\n\
+         parsed a truncated key\ninput: {begin}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n\n\
+         ---- tests::b stdout ----\nthread 'tests::b' panicked at src/lib.rs:9:5:\nb is wrong\n\n\
+         ---- tests::c stdout ----\nthread 'tests::c' panicked at src/lib.rs:12:5:\nc is wrong\n"
+    );
+    let (lines, omitted) = read_keyed(&printed);
+    assert_eq!(
+        lines,
+        ["FAILED tests::rejects_truncated_key - parsed a truncated key"]
+    );
+    assert_eq!(lines.len() as u64 + omitted, 3, "three failed tests");
+    let unittest = format!(
+        "======================================================================\n\
+         FAIL: test_a (m.C.test_a)\n\
+         ----------------------------------------------------------------------\n\
+         Traceback (most recent call last):\n  File \"m.py\", line 3, in test_a\n\
+         AssertionError: {begin} != ''\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n\
+         ======================================================================\n\
+         FAIL: test_b (m.C.test_b)\n\
+         ----------------------------------------------------------------------\n\
+         Traceback (most recent call last):\n  File \"m.py\", line 9, in test_b\n\
+         AssertionError: 1 != 2\n\
+         ----------------------------------------------------------------------\n\
+         Ran 2 tests in 0.001s\n\nFAILED (failures=2)\n"
+    );
+    assert_eq!(
+        read_keyed(&unittest),
+        (vec!["FAIL test_a (m.C.test_a)".to_owned()], 2),
+        "test_a's withheld error line and test_b's heading, under its withheld rule"
+    );
+    let pytest = format!(
+        "============ short test summary info ============\n\
+         FAILED tests/t.py::test_a - ValueError: {begin}\n\
+         FAILED tests/t.py::test_b - boom\n"
+    );
+    assert_eq!(
+        read_keyed(&pytest),
+        (vec!["FAILED tests/t.py::test_a".to_owned()], 2),
+        "test_a's withheld error and test_b's heading, its name dropped"
+    );
+    let summary_withheld = format!(
+        "======================================================================\n\
+         FAIL: test_u (m.C.test_u)\n\
+         ----------------------------------------------------------------------\n\
+         AssertionError: 1 != 2\n\
+         ----------------------------------------------------------------------\n\
+         Ran 1 test in 0.001s\n\nFAILED (failures=1)\n\
+         ---- Captured stdout call ----\nloaded {begin}\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n\
+         ============ short test summary info ============\n\
+         FAILED tests/t.py::test_p - boom\n"
+    );
+    assert_eq!(
+        read_keyed(&summary_withheld),
+        (
+            vec!["FAIL test_u (m.C.test_u) - AssertionError: 1 != 2".to_owned()],
+            1
+        ),
+        "pytest's summary line is read under the key, so test_p's heading is counted"
+    );
+}
+
+/// The class of `a_key_block_without_its_end_hides_no_failed_test`: a key's opening line with
+/// no end, put before any line of a runner's output, leaves every failed test kept or counted.
+/// Not between unittest's heading and the rule under it, which it prints as one, so no output
+/// of a test lands there.
+#[test]
+fn a_key_without_its_end_anywhere_leaves_every_failed_test_kept_or_counted() {
+    let libtest = "failures:\n\n---- tests::a stdout ----\n\
+                   thread 'tests::a' panicked at src/lib.rs:1:1:\n\
+                   a broke\n  left: 1\n right: 2\n\n---- tests::b stdout ----\n\
+                   thread 'tests::b' panicked at src/lib.rs:2:2:\nb broke\n\n\
+                   ---- tests::c stdout ----\nthread 'tests::c' panicked at src/lib.rs:3:3:\n\
+                   c broke\n\nfailures:\n    tests::a\n    tests::b\n    tests::c\n\n\
+                   test result: FAILED. 0 passed; 3 failed\n";
+    let unittest = "======================================================================\n\
+                    FAIL: test_a (m.C.test_a)\n\
+                    ----------------------------------------------------------------------\n\
+                    Traceback (most recent call last):\n  File \"m.py\", line 3, in test_a\n\
+                    AssertionError: 1 != 2\n\n\
+                    ======================================================================\n\
+                    ERROR: test_b (m.C.test_b)\n\
+                    ----------------------------------------------------------------------\n\
+                    Traceback (most recent call last):\n  File \"m.py\", line 9, in test_b\n\
+                    SystemExit: 2\n\
+                    ----------------------------------------------------------------------\n\
+                    Ran 2 tests in 0.001s\n\nFAILED (failures=1, errors=1)\n";
+    let pytest = "______ test_a ______\nE   assert 1 == 2\n\
+                  ============ short test summary info ============\n\
+                  FAILED tests/t.py::test_a - assert 1 == 2\n\
+                  ERROR tests/t.py::test_b - RuntimeError: boom\n\
+                  FAILED tests/t.py::test_c\n";
+    let begin = key_begin();
+    for (printed, failed) in [(libtest, 3), (unittest, 2), (pytest, 3)] {
+        let lines: Vec<&str> = printed.lines().collect();
+        for at in 0..=lines.len() {
+            if at > 0
+                && (lines[at - 1].starts_with("FAIL: ") || lines[at - 1].starts_with("ERROR: "))
+            {
+                continue;
+            }
+            let mut keyed = lines.clone();
+            keyed.insert(at, &begin);
+            let keyed = keyed.join("\n");
+            let (kept, omitted) = read_keyed(&keyed);
+            assert!(
+                kept.len() as u64 + omitted >= failed,
+                "key before line {at} of\n{printed}\nkept {kept:?}, omitted {omitted}"
+            );
+        }
+    }
+}
+
+/// Acceptance 3: beside a test run, a line is a failing line only when it is one. A compiler's or
+/// a type checker's `warning:`, `note:`, `help:`, a log's `info:` or `debug:`, a timestamp and a
+/// `<host>:<port>:` are not `<path>:<line>: <failure>`; a located `error:` or `unresolved:` and a
+/// linter's code are.
+#[test]
+fn a_located_line_is_failing_only_when_it_names_a_failure() {
+    let test = "FAILED tests/test_a.py::test_x - assert 1 == 2";
+    let printed = format!(
+        "make[1]: Entering directory '/w'\n\
+         Makefile:12: recipe for target 'test' failed\n\
+         cc -c x.c\n\
+         x.c:3:5: warning: unused variable 'y' [-Wunused-variable]\n\
+         x.c:2:1: note: declared here\n\
+         x.c:4:1: help: remove it\n\
+         12:30:45: info: worker started\n\
+         2026-10-28T19:11:37: debug: tick\n\
+         localhost:8080: listening: ok\n\
+         127.0.0.1:8080: listening: ok\n\
+         todo.py: error: argument cmd: invalid choice: 'remove'\n\
+         usage: todo.py [-h] {{add,list}} ...\n\
+         tests/test_a.py:5: AssertionError\n\
+         tests/test_a.py:7: in helper\n\
+         tests/test_a.py:10: DeprecationWarning: x is deprecated\n\
+         src/app.py:3: note: See https://mypy.rtfd.io\n\
+         warning: unused import: `std::fmt`\n\
+         Ran 3 tests in 0.002s\nFAILED (failures=1)\n\
+         ============ short test summary info ============\n{test}\n"
+    );
+    assert_eq!(
+        failing_lines(&printed, FAILED_LINES_PER_CHECK),
+        (vec![test.to_owned()], 0)
+    );
+    let failing = [
+        "x.c:3:5: error: 'y' undeclared",
+        "src/app.py:3: error: Incompatible types in assignment",
+        "docs/a.md:3: unresolved: crates/x.rs:9",
+        "src/app.py:3:1: F401 'os' imported but unused",
+        "/w/src/lib.rs:7:1: error[E0425]: cannot find value `x`",
+    ];
+    let printed = format!(
+        "{}\n============ short test summary info ============\n{test}\n",
+        failing.join("\n")
+    );
+    let mut expected = vec![test.to_owned()];
+    expected.extend(failing.iter().map(|line| (*line).to_owned()));
+    assert_eq!(
+        failing_lines(&printed, FAILED_LINES_PER_CHECK),
+        (expected, 0)
+    );
+}
