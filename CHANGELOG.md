@@ -8,7 +8,7 @@ takt's releases.
 
 ### Changed
 
-- The specification, CI and the container image use ESS 0.72.0 (was 0.70.0).
+- The specification, CI and the container image use ESS 0.73.0 (was 0.70.0).
 
 ## [0.16.0] - 2026-10-27
 
