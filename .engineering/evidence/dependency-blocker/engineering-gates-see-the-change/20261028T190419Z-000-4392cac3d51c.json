@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T19:04:19Z",
+  "actor": "human:timo",
+  "artifact": "dependency-blocker:engineering-gates-see-the-change",
+  "kind": "dependency-blocker",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "engineering-protocols 0.12.0 (commit 2bb0eae5): applies_when and GateResult::NotApplicable in crates/canon-engineering-assertions/src/lib.rs:115,239; git.changed in crates/assertion-providers/src/git.rs:44; takt pins tag 0.12.0 (Cargo.toml:13-14) and has Status::NotApplicable (crates/takt/src/obligations.rs:27)",
+    "reference": "https://github.com/beyond10x/engineering-protocols/releases/tag/0.12.0"
+  }
+}

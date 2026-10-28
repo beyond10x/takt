@@ -2,11 +2,13 @@
 format: aep.planning-md/3
 id: dependency-blocker:gate-programs-resolve-by-name
 kind: dependency-blocker
-status: open
+status: cleared
 title: Gate program resolution by name is not in the assertions library yet
 relations:
 - blocks: story:gate-commands-find-programs-on-a-system-path
-revision: 1
+revision: 3
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-28T19:04:20Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"verification":1}}, executor: "agent:planner"}
 ---
 # Dependency blocker: gate-programs-resolve-by-name
 
@@ -27,3 +29,7 @@ Upstream state: that story's named tests pass on its working tree, including the
 search path. takt's workspace builds against that tree through an uncommitted `[patch]` path override, and takt's
 `gate/bare-program-name-runs` scenario is then the end-to-end check. engineering-protocols releases, and takt takes it
 as a pin-only hop.
+
+## Cleared
+
+Cleared 2026-10-28 by engineering-protocols 0.12.0 (tag 0.12.0, commit 2bb0eae5). Its providers resolve a bare `program` name on a `search_path`, and take a runtime-supplied default when the project admits none (`crates/assertion-providers/src/process.rs`, the program resolution). takt pins that tag (`Cargo.toml:14`); supplying the fixed system path is story:gate-commands-find-programs-on-a-system-path's work.

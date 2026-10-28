@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:bench-task-protocol
 kind: story
-status: draft
+status: active
 title: 'A protocol for a benchmark task: visible tests, no forge, the benchmark''s own tests held out'
 summary: 'protocols/bench-task/1.yaml: tests.pass on the visible test command, outcome completed, no pull request or merge'
 relations:
@@ -11,7 +11,10 @@ relations:
 scope:
 - confidence: inferred
   path: protocols/bench-task/1.yaml
-revision: 6
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T17:56:51Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-28T17:56:51Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: bench-task-protocol
 

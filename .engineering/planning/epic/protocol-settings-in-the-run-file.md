@@ -2,13 +2,17 @@
 format: aep.planning-md/3
 id: epic:protocol-settings-in-the-run-file
 kind: epic
-status: draft
+status: implemented
 title: Every protocol's declared settings are set in the repository-local run file
 summary: protocol key, protocols section, shipped defaults, a listing
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:run-config-proxies-llm-and-metaharness
-revision: 2
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T19:04:02Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"review_outcome":1}}, executor: "agent:planner"}
+- {from: "proposed", to: "active", at: "2026-10-28T19:04:02Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"review_outcome":1}}, executor: "agent:planner"}
+- {from: "active", to: "implemented", at: "2026-10-28T19:04:02Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}, executor: "agent:planner"}
 ---
 # Epic: protocol-settings-in-the-run-file
 

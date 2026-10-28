@@ -13,7 +13,7 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/scorecard.rs
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T02:52:54Z", actor: "human:timo", revision: 4}
@@ -21,7 +21,7 @@ transitions:
 ---
 ## Outcome
 
-`takt scorecard` takes each scenario run's outcome from the held-out acceptance check recorded beside the run (the scenario's `acceptance.sh` result, written by the runner, not by the takt binary under judgement), and refuses a run that has none; the binary's own `stop` line is reported beside it, and a disagreement is named.
+`takt scorecard` takes each scenario run's outcome from the held-out acceptance check recorded beside the run (`held-out.txt`, the result of the scenario's held-out check, written by the runner, not by the takt binary under judgement; the check is `check.toml` over `heldout.patch` as story:scenario-corpus-realistic commits them, `acceptance-<id>.sh` in the runner of 2026-10-18), and refuses a run that has none; the binary's own `stop` line is reported beside it, and a disagreement is named.
 
 ## Context
 

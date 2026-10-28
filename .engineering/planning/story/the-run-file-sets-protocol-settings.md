@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-run-file-sets-protocol-settings
 kind: story
-status: active
+status: implemented
 title: The run file names the protocol and sets its declared inputs
 summary: protocol key and protocols section, checked against case.inputs
 tags:
@@ -24,10 +24,11 @@ scope:
   path: crates/takt/tests/protocol_settings.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T12:00:46Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-10-27T12:00:46Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "active", to: "implemented", at: "2026-10-28T19:03:30Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}, executor: "agent:planner"}
 ---
 # Story: the-run-file-sets-protocol-settings
 
