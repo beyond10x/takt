@@ -10312,28 +10312,28 @@ impl<'a> Run<'a> {
         )
     }
 
-    /// The repository's obligations at the stop ([`crate::obligations`]): the table recorded as
-    /// the run's last, and a line naming the ones not met. Nothing for a run with no gates
-    /// document; a table that cannot be read is left out, and the stop stays the one reached.
+    /// The repository's obligations at the stop ([`crate::obligations`]), read at the case's
+    /// implementation revision, not at takt's store commits above it: the table recorded as the
+    /// run's last, at the revision it was read at, and a line naming the ones not met. Nothing
+    /// for a run with no gates document; a table that cannot be read is left out, and the stop
+    /// stays the one reached.
     fn close_obligations(&self, events: &Events, stop: &Stop, out: &mut dyn Write) -> Result<()> {
         let Ok(record) = events.read() else {
             return Ok(());
         };
-        let Ok(obligations) = crate::obligations::of_run(self, &record) else {
+        let Ok(Some((revision, obligations))) = crate::obligations::of_run(self, &record) else {
             return Ok(());
         };
         if obligations.is_empty() {
             return Ok(());
         }
-        if let Ok(revision) = crate::git::head(&self.tree) {
-            events.emit(
-                self.steps,
-                &Event::Obligations {
-                    revision,
-                    obligations: obligations.clone(),
-                },
-            )?;
-        }
+        events.emit(
+            self.steps,
+            &Event::Obligations {
+                revision,
+                obligations: obligations.clone(),
+            },
+        )?;
         if let Some(line) = crate::obligations::summary(&obligations, stop.hands_over()) {
             writeln!(out, "obligations: {line}")?;
         }
@@ -11922,7 +11922,11 @@ impl<'a> Run<'a> {
         )?;
         let record = events.read()?;
         let failed = failed_checks(&record);
-        let obligations = crate::obligations::of_run(self, &record).unwrap_or_default();
+        let obligations = crate::obligations::of_run(self, &record)
+            .ok()
+            .flatten()
+            .map(|(_, obligations)| obligations)
+            .unwrap_or_default();
         // The repository's instruction files are read at the commit the case forked from.
         let base = crate::case::Branch::read(&self.case.dir)?.base_commit;
         let ask = self.commit_plan_now().ask();
