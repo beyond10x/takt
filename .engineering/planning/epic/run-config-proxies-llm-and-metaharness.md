@@ -2,14 +2,17 @@
 format: aep.planning-md/3
 id: epic:run-config-proxies-llm-and-metaharness
 kind: epic
-status: draft
+status: active
 title: 'takt''s run file proxies llm and metaharness: model routes and harnesses in their own words'
 summary: llm and harness sections that are llm.routes/1 and metaharness's session request, validated by their own code; same flag names
 tags:
 - config-proxy
 relations:
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T15:34:43Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-10-28T15:34:43Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":2}}}
 ---
 # Epic: run-config-proxies-llm-and-metaharness
 

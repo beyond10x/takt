@@ -2,10 +2,12 @@
 format: aep.planning-md/3
 id: decision-blocker:local-leftovers-after-wave-38
 kind: decision-blocker
-status: open
+status: cleared
 title: Local trees, a stash and unpushed branches hold work nobody has saved; deleting them is the operator's call
 summary: 'Decider: operator. A delete, B keep, C bundle then remove (recommended)'
-revision: 2
+revision: 4
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-28T15:31:29Z", actor: "human:timo", revision: 4}
 ---
 # Blocker: local leftovers that hold uncommitted or unpushed work
 
@@ -29,3 +31,9 @@ each tree, `git stash list`, `git rev-list --count origin/main..<branch>`, `git 
 | C (recommended) | write each tree's diff, the stash and each branch into a git bundle in a local archive directory outside the repository, then remove them |
 
 Nothing is removed until the operator answers.
+
+## Decision (2026-10-28)
+
+The operator, 2026-10-28: option A, "A delete". Done the same day: 13 trees removed with
+`git worktree remove --force`, `stash@{0}` dropped (a979d54), 8 branches deleted with
+`git branch -D`. No tree had a process in it; no branch in the list had a remote.
