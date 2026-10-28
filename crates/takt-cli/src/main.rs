@@ -555,13 +555,20 @@ enum ScenarioCommands {
     /// 10^8), not consecutive ones. The
     /// hard guard is the checkout's own: a number it knows is passed over, and `git checkout -b`
     /// refuses a branch that exists. A refusal before the push removes the branch and
-    /// puts the tree back.
+    /// puts the tree back. A scenario whose section gives `red-base = expected` (its seed's
+    /// tests fail on purpose) goes on past a red base as `--continue-past-red-base` does,
+    /// without the flag, and says so in a line `red base: expected by scenario <id> in
+    /// .engineering/scenarios.conf at <revision>`; the declaration only turns that on, and
+    /// `continue_past_red_base = false` in `--config` does not turn it off. Any other value of
+    /// `red-base` is refused before anything is cut.
     #[command(after_help = SCENARIO_EXIT_CODES)]
     Run(Box<ScenarioRunArgs>),
 }
 
 /// Where a repository declares its scenarios, in git's configuration syntax, one section a
-/// scenario: `[scenario "<id>"]` with `story = <story id>` and `seed = <commit>`.
+/// scenario: `[scenario "<id>"]` with `story = <story id>` and `seed = <commit>`, and
+/// `red-base = expected` for a seed whose tests fail on purpose (git's syntax admits no `_` in
+/// a key).
 const SCENARIOS: &str = ".engineering/scenarios.conf";
 
 #[derive(clap::Args)]
@@ -3237,12 +3244,17 @@ struct Scenario {
     id: String,
     story: String,
     seed: String,
+    /// The section gives `red-base = expected`: the seed's tests fail on purpose, and the run
+    /// goes on past its red base.
+    red_base_expected: bool,
 }
 
 impl Scenario {
     /// The scenario `id` as [`SCENARIOS`] at `revision` declares it, read without a checkout.
-    /// An id that cannot name a case and a branch, a declaration that is missing, lacks `story`
-    /// or `seed`, gives one twice, or gives a key takt does not read, is refused.
+    /// An id that cannot name a case and a branch, a file git does not read as its
+    /// configuration syntax, a declaration that is missing, lacks `story` or `seed`, gives a
+    /// key twice, gives a key takt does not read, or gives `red-base` another value than
+    /// `expected`, is refused.
     fn read(repo: &Path, revision: &str, id: &str) -> Result<Self> {
         if id.is_empty()
             || !id
@@ -3253,14 +3265,20 @@ impl Scenario {
                 "scenario {id}: a scenario id is letters, digits, `-` and `_`, so it can name a case and a branch"
             ));
         }
-        let entries = takt::git::config_at(repo, revision, SCENARIOS)?.ok_or_else(|| {
+        let entries = takt::git::config_at(repo, revision, SCENARIOS)
+            .with_context(|| {
+                format!(
+                    "scenario {id}: {SCENARIOS} at {revision} does not read as git's configuration syntax, whose keys are letters, digits and `-` (`red-base`, not `red_base`)"
+                )
+            })?
+            .ok_or_else(|| {
             anyhow!(
                 "scenario {id}: {revision} holds no {SCENARIOS} in {}; the scenarios are declared there",
                 repo.display()
             )
         })?;
         let prefix = format!("scenario.{id}.");
-        let (mut story, mut seed) = (None, None);
+        let (mut story, mut seed, mut red_base) = (None, None, None);
         let mut declared = false;
         for (key, value) in entries {
             let Some(name) = key.strip_prefix(&prefix) else {
@@ -3270,9 +3288,10 @@ impl Scenario {
             let slot = match name {
                 "story" => &mut story,
                 "seed" => &mut seed,
+                "red-base" => &mut red_base,
                 other => {
                     return Err(anyhow!(
-                        "scenario {id}: {SCENARIOS} at {revision} gives `{other}`, which takt does not read; a scenario gives `story` and `seed`"
+                        "scenario {id}: {SCENARIOS} at {revision} gives `{other}`, which takt does not read; a scenario gives `story` and `seed`, and may give `red-base`"
                     ));
                 }
             };
@@ -3294,10 +3313,20 @@ impl Scenario {
         }
         let missing =
             |name: &str| anyhow!("scenario {id}: {SCENARIOS} at {revision} gives no `{name}`");
+        let red_base_expected = match red_base.as_deref() {
+            None => false,
+            Some("expected") => true,
+            Some(other) => {
+                return Err(anyhow!(
+                    "scenario {id}: {SCENARIOS} at {revision} gives `red-base = {other}`; `red-base` takes one value, `expected`, for a seed whose tests fail on purpose; nothing was changed"
+                ));
+            }
+        };
         Ok(Self {
             id: id.to_owned(),
             story: story.ok_or_else(|| missing("story"))?,
             seed: seed.ok_or_else(|| missing("seed"))?,
+            red_base_expected,
         })
     }
 }
@@ -3456,7 +3485,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         scenario,
         declared_on,
         config: _,
-        looping,
+        mut looping,
     } = args;
     looping.check()?;
     let repo = repo
@@ -3631,6 +3660,16 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             None => "not pushed: no forge".to_owned(),
         }
     )?;
+    // The declaration only turns going on past a red base on: no flag or `--config` value
+    // turns an expected red base back off.
+    if scenario.red_base_expected {
+        looping.continue_past_red_base = true;
+        writeln!(
+            out,
+            "red base: expected by scenario {} in {SCENARIOS} at {declared_on}",
+            scenario.id
+        )?;
+    }
     let options = looping.options(SCENARIO_PROTOCOL.to_owned(), Vec::new(), Some(case_id));
     let store = Aep::default();
     let set_aside = looping.state_dir.as_deref().map(state_set_aside);
