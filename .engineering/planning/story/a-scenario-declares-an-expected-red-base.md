@@ -2,16 +2,17 @@
 format: aep.planning-md/3
 id: story:a-scenario-declares-an-expected-red-base
 kind: story
-status: active
+status: implemented
 title: A scenario declares an expected red base
 summary: red_base = expected in scenarios.conf lets takt scenario run go past a seed that is red on purpose
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T06:52:41Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-28T06:52:41Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-28T08:21:54Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

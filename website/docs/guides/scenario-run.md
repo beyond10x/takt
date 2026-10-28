@@ -69,7 +69,7 @@ resume of it with `takt run --case` needs no flag either, also after a stop befo
 `continue_past_red_base = false` does not turn the declaration off. The key is `red-base`, not
 `red_base`: git's configuration syntax admits no `_` in a key. `expected` is its one value; any
 other is refused before anything is cut. A scenario without the key still stops `RedBase`.
-(Not in 0.16.0.)
+(From 0.17.0.)
 
 ## Scenarios
 

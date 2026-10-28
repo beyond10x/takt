@@ -2,16 +2,17 @@
 format: aep.planning-md/3
 id: story:an-accepted-run-reports-the-tested-revisions-obligations
 kind: story
-status: active
+status: implemented
 title: An accepted run reports the obligations of the tested revision
 summary: The last obligations line reads the implementation revision, not the records head above it
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T06:52:41Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-28T06:52:42Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-28T08:21:54Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

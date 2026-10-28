@@ -2,17 +2,18 @@
 format: aep.planning-md/3
 id: story:a-run-can-decline
 kind: story
-status: active
+status: implemented
 title: A judgement step can decline a story, a named stop with its reason
 summary: A decline exit records the reason and stops Declined, exit 9, apart from NoProgress
 relations:
 - informed_by: review-result:scenario-corpus-round-0
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T06:52:41Z", actor: "human:timo", revision: 5}
 - {from: "proposed", to: "active", at: "2026-10-28T06:52:41Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-28T08:21:54Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

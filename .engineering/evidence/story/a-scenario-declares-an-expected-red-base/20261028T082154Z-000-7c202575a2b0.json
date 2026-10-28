@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T08:21:54Z",
+  "actor": "human:timo",
+  "artifact": "story:a-scenario-declares-an-expected-red-base",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked at integration/takt 6df30a17 with the 0.17.0 version bump: 2326 passed, 0 failed, 5 ignored; fmt, clippy -D warnings, citations and ess validate clean",
+    "reference": "https://github.com/beyond10x/takt/commit/6df30a17a0c984fcbc09a89eb37a5aead6401ed5"
+  }
+}
