@@ -71,9 +71,8 @@ fn a_yaml_tag_is_refused_not_dropped() {
     }
 }
 
-/// A duplicate key is refused in either form. TOML names the duplicate's line, 3; YAML today
-/// names line 1, where its mapping starts (serde_yaml_ng), until
-/// story:a-duplicate-yaml-key-is-refused-at-its-line makes it name line 3 as TOML does.
+/// A duplicate key is refused in either form at the duplicate's line, 3, naming the key; YAML
+/// must not name line 1, where its mapping starts (serde_yaml_ng reports a duplicate there).
 #[test]
 fn a_duplicate_key_is_refused_at_its_line_in_yaml_as_in_toml() {
     let t = file(
@@ -82,7 +81,10 @@ fn a_duplicate_key_is_refused_at_its_line_in_yaml_as_in_toml() {
         "iterations = 1\nhours = 1.0\niterations = 2\n",
     );
     let toml = refusal(&t);
-    assert!(toml.contains("line 3"), "TOML: {toml}");
+    assert!(
+        toml.contains("line 3") && toml.contains("iterations"),
+        "TOML: {toml}"
+    );
     let y = file(
         "dup",
         "run.yaml",
@@ -90,9 +92,8 @@ fn a_duplicate_key_is_refused_at_its_line_in_yaml_as_in_toml() {
     );
     let yaml = refusal(&y);
     assert!(
-        yaml.contains("is refused at line 1:") && !yaml.contains("line 3"),
-        "YAML's refusal changed: once story:a-duplicate-yaml-key-is-refused-at-its-line lands, \
-         assert it names line 3 and the key as TOML does: {yaml}"
+        yaml.contains("line 3") && !yaml.contains("line 1:") && yaml.contains("iterations"),
+        "YAML names line 3 and the key as TOML does: {yaml}"
     );
 }
 

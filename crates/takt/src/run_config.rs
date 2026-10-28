@@ -830,6 +830,86 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
     }
 }
 
+/// The refusal of the file at `path` for a key written twice, at the second one's `line`, naming
+/// the key when it is one takt or Loom declares and repeating nothing else written in it.
+fn refused_duplicate(path: &Path, line: usize, key: &str) -> anyhow::Error {
+    let declared =
+        SHAPE.contains(&format!("`{key}`")) || LOOM_AGENT_MEMBERS.contains(&key) || key == "takt";
+    if declared {
+        anyhow!(
+            "the run configuration file {} is refused at line {line}: it holds the key `{key}` \
+             twice in one mapping",
+            path.display()
+        )
+    } else {
+        anyhow!(
+            "the run configuration file {} is refused at line {line}: it holds a key twice in one \
+             mapping",
+            path.display()
+        )
+    }
+}
+
+/// The 1-based line of the first key a block mapping of the YAML `text` holds twice, and the key.
+/// serde_yaml_ng refuses such a document at the line its mapping starts; this finds the
+/// duplicate's own. Flow mappings are not looked into, and a block scalar's lines are skipped.
+fn duplicate_yaml_key(text: &str) -> Option<(usize, &str)> {
+    let mut frames: Vec<(usize, Vec<&str>)> = Vec::new();
+    let mut scalar: Option<usize> = None;
+    for (number, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let mut indent = line.len() - trimmed.len();
+        if scalar.is_some_and(|at| indent > at) {
+            continue;
+        }
+        scalar = None;
+        if trimmed.starts_with("---") {
+            frames.clear();
+            continue;
+        }
+        let (entry, item) = match trimmed.strip_prefix("- ") {
+            Some(rest) => {
+                let rest = rest.trim_start();
+                indent += trimmed.len() - rest.len();
+                (rest, true)
+            }
+            None => (trimmed, false),
+        };
+        while frames
+            .last()
+            .is_some_and(|(at, _)| *at > indent || (item && *at == indent))
+        {
+            frames.pop();
+        }
+        let Some((key, value)) = entry
+            .split_once(':')
+            .filter(|(_, rest)| rest.is_empty() || rest.starts_with([' ', '\t']))
+        else {
+            continue;
+        };
+        if key.starts_with(['{', '[']) {
+            continue;
+        }
+        let key = key.trim().trim_matches(['"', '\'']);
+        if value.trim_start().starts_with(['|', '>']) {
+            scalar = Some(indent);
+        }
+        match frames.last_mut() {
+            Some((at, keys)) if *at == indent => {
+                if keys.contains(&key) {
+                    return Some((number + 1, key));
+                }
+                keys.push(key);
+            }
+            _ => frames.push((indent, vec![key])),
+        }
+    }
+    None
+}
+
 /// `message` without the line and column llm appends to a YAML document's refusal: they locate the
 /// copy of an inline section that takt re-serialises, not the run file.
 fn without_position(message: &str) -> &str {
@@ -957,11 +1037,15 @@ fn from_toml(path: &Path, text: &str) -> Result<RunConfig> {
 /// The run configuration in `text`, YAML: a `loom.agent/1` document's `takt` member, nothing
 /// when it has none, or else the whole document. A document with a `format` other than
 /// `loom.agent/1`, a member of one that is neither Loom's nor `takt`, or a YAML tag anywhere is
-/// refused without repeating what is written.
+/// refused without repeating what is written. A key written twice is refused at the second one's
+/// line, as TOML refuses it.
 fn from_yaml(path: &Path, text: &str) -> Result<RunConfig> {
     let line = |error: &serde_yaml_ng::Error| error.location().map(|at| at.line());
     let document: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(text).map_err(|error| refused(path, line(&error)))?;
+        serde_yaml_ng::from_str(text).map_err(|error| match duplicate_yaml_key(text) {
+            Some((at, key)) => refused_duplicate(path, at, key),
+            None => refused(path, line(&error)),
+        })?;
     if tagged(&document) {
         return Err(anyhow!(
             "the run configuration file {} is refused: it carries a YAML tag, which no member \
