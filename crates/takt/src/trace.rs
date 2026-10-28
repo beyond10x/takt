@@ -370,8 +370,9 @@ fn source_name(case_dir: &Path, path: &Path) -> String {
 
 /// `text` as a trace carries it and a report prints it, the one escape every text a record
 /// contributes passes: the home directory as `~`, so no local path travels, and each control
-/// character (C0, DEL and C1) as `\u{..}`, so a record a harness shaped cannot drive the
-/// terminal a report is read on. Passing a text through twice changes nothing.
+/// character (C0, DEL and C1) and each bidi override or isolate ([`is_bidi_control`]) as
+/// `\u{..}`, so a record a harness shaped cannot drive the terminal a report is read on nor
+/// reorder what it shows of a line. Passing a text through twice changes nothing.
 #[must_use]
 pub fn escape(text: &str) -> String {
     let home = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned());
@@ -395,7 +396,7 @@ fn escape_with(text: &str, home: Option<&str>) -> String {
             rest = after;
             continue;
         }
-        if c.is_control() {
+        if c.is_control() || is_bidi_control(c) {
             out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
         } else {
             out.push(c);
@@ -403,6 +404,12 @@ fn escape_with(text: &str, home: Option<&str>) -> String {
         rest = &rest[c.len_utf8()..];
     }
     out
+}
+
+/// Whether `c` is a bidi embedding, override or isolate (U+202A-U+202E, U+2066-U+2069): a
+/// character that reorders how a terminal shows the rest of its line.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 /// Whether `c` continues a path component's name, so a home directory it follows was not
@@ -1499,5 +1506,25 @@ mod tests {
             once,
             "escaping twice changes nothing"
         );
+    }
+
+    /// story:a-run-can-decline: a bidi override or isolate (U+202A-U+202E, U+2066-U+2069)
+    /// reorders what a terminal shows of a line, so a text a model wrote passes none raw.
+    #[test]
+    fn no_bidi_override_or_isolate_passes_the_escape() {
+        let bidi: String = ('\u{202a}'..='\u{202e}')
+            .chain('\u{2066}'..='\u{2069}')
+            .collect();
+        let escaped = escape_with(&format!("ok {bidi} done"), None);
+        assert_eq!(
+            escaped,
+            "ok \\u{202a}\\u{202b}\\u{202c}\\u{202d}\\u{202e}\\u{2066}\\u{2067}\\u{2068}\\u{2069} done"
+        );
+        assert_eq!(
+            escape_with(&escaped, None),
+            escaped,
+            "escaping twice changes nothing"
+        );
+        assert_eq!(escape_with("café ‹ok›", None), "café ‹ok›");
     }
 }

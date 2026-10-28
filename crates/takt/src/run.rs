@@ -616,14 +616,35 @@ impl Declined {
 }
 
 /// `summary`, a decline's reason, as its stop line names it: each control character escaped,
-/// [`NO_REASON`] when it is empty.
+/// cut to [`REASON_AT_MOST`] bytes ([`reason_bounded`]), [`NO_REASON`] when it is empty.
 fn declined_reason(summary: &str) -> String {
-    let reason = crate::trace::escape(summary.trim());
+    let reason = reason_bounded(&crate::trace::escape(summary.trim()));
     if reason.is_empty() {
         NO_REASON.to_owned()
     } else {
         reason
     }
+}
+
+/// The most bytes of a decline's reason that its `decline` record line, the record's stop
+/// line and the terminal's stop line carry, the marker [`REASON_CUT`] included; a reason the
+/// model wrote is not a channel without end into the record and the terminal.
+const REASON_AT_MOST: usize = 2048;
+
+/// What a reason [`reason_bounded`] cut ends with, so a reader sees it was cut.
+const REASON_CUT: &str = " [reason cut]";
+
+/// `reason` when it is at most [`REASON_AT_MOST`] bytes; otherwise its start, cut on a
+/// character boundary, and [`REASON_CUT`], [`REASON_AT_MOST`] bytes or fewer in all.
+fn reason_bounded(reason: &str) -> String {
+    if reason.len() <= REASON_AT_MOST {
+        return reason.to_owned();
+    }
+    let mut end = REASON_AT_MOST - REASON_CUT.len();
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{REASON_CUT}", &reason[..end])
 }
 
 /// Where a validator's step is taken: the run's record and output, the evaluation it follows,
@@ -9703,17 +9724,38 @@ impl<'a> Run<'a> {
         Self::resumable_undeclined(tree, active, &mut passed, out)
     }
 
-    /// The open case to resume for one of the stories `stories` ([`crate::case::resumable`])
-    /// that is not declined at its current case revision ([`Declined::now`]): each declined one
-    /// is passed over, said on `out` once, its story kept in `passed`, and the next looked for.
+    /// The open case to resume for one of the stories `stories`, as [`crate::case::resumable`]
+    /// finds it, that is not declined at its current case revision ([`Declined::now`]): the
+    /// first case in case order that records a story among them, is not finished and is not
+    /// declined. Each declined one is passed over, said on `out` once, the case kept in
+    /// `passed`, and the next case looked for: the declined case is passed over, not its
+    /// story, so another open case of the same story is still resumed.
     fn resumable_undeclined(
         tree: &Path,
-        mut stories: Vec<String>,
+        stories: Vec<String>,
         passed: &mut BTreeSet<String>,
         out: &mut dyn Write,
     ) -> Result<Option<(String, String)>> {
-        stories.retain(|story| !passed.contains(story));
-        while let Some((case_id, story_id)) = crate::case::resumable(tree, &stories, out)? {
+        if stories.is_empty() {
+            return Ok(None);
+        }
+        for (case_id, dir) in crate::case::case_dirs(tree)? {
+            if passed.contains(&case_id) || !dir.join("case.yaml").is_file() {
+                continue;
+            }
+            let Some(story_id) =
+                crate::case::story_of(&dir)?.filter(|story| stories.contains(story))
+            else {
+                continue;
+            };
+            match crate::case::is_finished(&dir) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => writeln!(
+                    out,
+                    "frontier: the case {case_id} has a decision that does not read ({error:#}); taken as open"
+                )?,
+            }
             let case_dir = crate::case::CaseDir::locate(tree, &case_id);
             let Some(declined) = Declined::now(tree, &case_id, &case_dir) else {
                 return Ok(Some((case_id, story_id)));
@@ -9724,8 +9766,7 @@ impl<'a> Run<'a> {
                 declined.case_revision,
                 declined_reason(&declined.reason)
             )?;
-            stories.retain(|story| *story != story_id);
-            passed.insert(story_id);
+            passed.insert(case_id);
         }
         Ok(None)
     }
@@ -12280,8 +12321,15 @@ impl<'a> Run<'a> {
         // discard carries.
         let undo =
             || -> Result<String> { undo_step(&tree, &kept_all).map(|undone| undone.aside.named()) };
+        // The action a step names is model text, as its summary is: escaped once here
+        // ([`crate::trace::escape`]), so no line, record or stop that names it carries a
+        // control or bidi character raw. An action so escaped is offered by no protocol and
+        // is refused as not offered.
         let stepped = match stepped {
-            Ok(stepped) => stepped,
+            Ok(stepped) => stepped.map(|mut report| {
+                report.action = crate::trace::escape(&report.action);
+                report
+            }),
             Err(panic) => {
                 match undo() {
                     Ok(moved) if !moved.is_empty() => eprintln!(
@@ -12579,7 +12627,7 @@ impl<'a> Run<'a> {
             report.action,
             self.harness.name()
         )
-        .and_then(|()| writeln!(out, "  said: {}", report.summary));
+        .and_then(|()| writeln!(out, "  said: {}", crate::trace::escape(&report.summary)));
         if let Err(error) = told {
             let moved = undo()?;
             record_step(self)?;
@@ -12859,7 +12907,7 @@ impl<'a> Run<'a> {
                 return Ok(Judgement::Stop(Stop::StepRefused(why)));
             }
             record_step(self)?;
-            let reason = reply_summary.unwrap_or_else(|| report.summary.clone());
+            let reason = reason_bounded(&reply_summary.unwrap_or_else(|| report.summary.clone()));
             let case_revision = case_revision_now(&self.case.dir)?;
             events.emit(
                 self.steps,
@@ -13173,5 +13221,24 @@ impl<'a> Run<'a> {
             &head[..8.min(head.len())]
         )?;
         Ok((true, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// story:a-run-can-decline: a reason past [`REASON_AT_MOST`] bytes is cut on a character
+    /// boundary and marked; one within it is kept whole.
+    #[test]
+    fn a_long_reason_is_cut_on_a_character_boundary_and_marked() {
+        assert_eq!(reason_bounded("short"), "short");
+        let whole = "é".repeat(REASON_AT_MOST);
+        let cut = reason_bounded(&whole);
+        assert!(cut.len() <= REASON_AT_MOST, "{} bytes", cut.len());
+        let kept = cut.strip_suffix(REASON_CUT).expect("the cut marker");
+        assert!(whole.starts_with(kept) && !kept.is_empty());
+        assert_eq!(reason_bounded(&cut), cut, "a cut reason is not cut again");
+        assert!(declined_reason(&"\u{1b}".repeat(REASON_AT_MOST)).len() <= REASON_AT_MOST);
     }
 }
