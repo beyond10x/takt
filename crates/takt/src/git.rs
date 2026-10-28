@@ -3042,6 +3042,52 @@ pub fn trees_differ_outside(tree: &Path, from: &str, to: &str, outside: &str) ->
     }
 }
 
+/// The paths at which the trees of `from` and `to` (commits or trees) differ outside the
+/// directory `outside` (relative to the tree), in git's order: `git diff --name-only -z` with
+/// no rename detection (a renamed file is its old path and its new one), no external diff and
+/// no text conversion, and no code from configuration ([`NO_CONFIGURED_CODE`]). A name that is
+/// not UTF-8 is read lossily.
+///
+/// # Errors
+/// A git that does not run or exits other than 0, naming what git said.
+pub fn paths_differing_outside(
+    tree: &Path,
+    from: &str,
+    to: &str,
+    outside: &str,
+) -> Result<Vec<String>> {
+    let exclude = format!(":(exclude){outside}");
+    let args = [
+        "diff",
+        "--name-only",
+        "-z",
+        "--no-renames",
+        "--no-ext-diff",
+        "--no-textconv",
+        from,
+        to,
+        "--",
+        ".",
+        exclude.as_str(),
+    ];
+    let output = isolated_output(tree, &args)?;
+    if !output.status.success() {
+        bail!(
+            "git {} in {} exited {}: {}",
+            args.join(" "),
+            tree.display(),
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .map(|field| String::from_utf8_lossy(field).into_owned())
+        .collect())
+}
+
 /// A bare repository made for git commands that read no configured code, removed when
 /// dropped: no work tree, no configuration but what `git init` writes, no `info/attributes`
 /// and no hook (`--template=` copies nothing), `HEAD` on a branch with no commit, so no

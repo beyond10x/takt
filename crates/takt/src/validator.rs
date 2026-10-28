@@ -4562,6 +4562,15 @@ pub fn is_built_in_kind(kind: &str) -> bool {
 /// record. It reads git only, with no code from configuration: nothing is run from the tree and
 /// nothing leaves the machine, so it compares with the local base branch as it stands, and a
 /// forge's base that moved without a fetch is not seen.
+///
+/// When the case's protocol declares [`ChangeRead::PATHS_KIND`] and lists it among what
+/// `change.read` may produce (`story.delivery/2`), it writes one `paths_changed` record beside
+/// the `change_record`, at the same revision, from the same comparison: the paths outside
+/// `.engineering/` at which the merged tree differs from the tip (with every path whose merge
+/// conflicts outside it), or the revision's tree from the pinned base; `both` when they hold a
+/// test path ([`crate::harness::is_test_path`], what `tests.write` may change) and another,
+/// `tests_only`, `implementation_only`, or `none` when there is no such path. A protocol that
+/// does not declare the kind gets no such record and the same summary as before.
 #[derive(Debug, Clone, Default)]
 pub struct ChangeRead;
 
@@ -4570,6 +4579,46 @@ impl ChangeRead {
     pub const ACTION: &str = "change.read";
     /// The evidence kind it writes.
     pub const KIND: &str = "change_record";
+    /// The second kind it writes, when the case's protocol declares it.
+    pub const PATHS_KIND: &str = "paths_changed";
+}
+
+/// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
+/// evidence kind `kind` and lists it among what `action` may produce.
+fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
+    let path = case_dir.join("protocol.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    let declared = doc["evidence_kinds"]
+        .as_mapping()
+        .is_some_and(|kinds| kinds.contains_key(kind));
+    let produced = doc["actions"][action]["may_produce"]
+        .as_sequence()
+        .is_some_and(|produced| {
+            produced
+                .iter()
+                .any(|entry| entry["evidence"].as_str() == Some(kind))
+        });
+    Ok(declared && produced)
+}
+
+/// The `paths_changed` result of `paths`, with how many of them are test paths
+/// ([`crate::harness::is_test_path`]) and how many are not.
+fn paths_result(paths: &[String]) -> (&'static str, usize, usize) {
+    let tests = paths
+        .iter()
+        .filter(|path| crate::harness::is_test_path(path))
+        .count();
+    let implementation = paths.len() - tests;
+    let result = match (tests > 0, implementation > 0) {
+        (true, true) => "both",
+        (true, false) => "tests_only",
+        (false, true) => "implementation_only",
+        (false, false) => "none",
+    };
+    (result, tests, implementation)
 }
 
 impl Validator for ChangeRead {
@@ -4607,7 +4656,9 @@ impl Validator for ChangeRead {
             .filter(|tip| !tip.is_empty())
             .map(|tip| (name, tip))
         });
-        let (differs, summary) = if let Some((name, tip)) = tip {
+        // The paths the comparison changes, read only for a protocol that declares the kind.
+        let paths_declared = produces_kind(&dir, Self::ACTION, Self::PATHS_KIND)?;
+        let (differs, summary, paths) = if let Some((name, tip)) = tip {
             // A merge that conflicts at any path outside `.engineering/` is `ahead`, by the paths
             // merge-tree names: the tree it writes may keep the base's side (a file the case
             // deleted that the base changed, a binary file both changed), and there is a change
@@ -4625,6 +4676,18 @@ impl Validator for ChangeRead {
                 short(revision),
                 short(&tip)
             );
+            let paths = if paths_declared {
+                let mut paths =
+                    crate::git::paths_differing_outside(tree, &tip, &merged.tree, ".engineering")?;
+                for path in &outside {
+                    if !paths.iter().any(|known| known == path) {
+                        paths.push((*path).to_owned());
+                    }
+                }
+                Some(paths)
+            } else {
+                None
+            };
             if outside.is_empty() {
                 let differs =
                     crate::git::trees_differ_outside(tree, &tip, &merged.tree, ".engineering")?;
@@ -4646,6 +4709,7 @@ impl Validator for ChangeRead {
                             "leaves as it is"
                         }
                     ),
+                    paths,
                 )
             } else {
                 (
@@ -4654,10 +4718,21 @@ impl Validator for ChangeRead {
                         "{head} conflicts outside .engineering/ at {}, a change to publish",
                         outside.join(", ")
                     ),
+                    paths,
                 )
             }
         } else if let Some((shown, base)) = pinned {
             let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
+            let paths = if paths_declared {
+                Some(crate::git::paths_differing_outside(
+                    tree,
+                    &base,
+                    revision,
+                    ".engineering",
+                )?)
+            } else {
+                None
+            };
             (
                 differs,
                 format!(
@@ -4665,6 +4740,7 @@ impl Validator for ChangeRead {
                     short(revision),
                     if differs { "differs from" } else { "is" }
                 ),
+                paths,
             )
         } else {
             return Ok(Observation {
@@ -4675,16 +4751,32 @@ impl Validator for ChangeRead {
             });
         };
         let result = if differs { "ahead" } else { "none" };
-        Ok(Observation {
-            summary: format!("{summary}: {result}"),
-            records: vec![Record::new(
-                format!("change-record-{seq}"),
-                self.kind(),
-                Some(result.to_owned()),
+        let mut summary = format!("{summary}: {result}");
+        let mut records = vec![Record::new(
+            format!("change-record-{seq}"),
+            self.kind(),
+            Some(result.to_owned()),
+            self.subject(),
+            revision,
+            self.name(),
+        )];
+        if let Some(paths) = paths {
+            let (changed, tests, implementation) = paths_result(&paths);
+            summary.push_str(&format!(
+                "; it changes {tests} test path(s) and {implementation} implementation path(s): {changed}"
+            ));
+            records.push(Record::new(
+                format!("paths-changed-{seq}"),
+                Self::PATHS_KIND,
+                Some(changed.to_owned()),
                 self.subject(),
                 revision,
                 self.name(),
-            )],
+            ));
+        }
+        Ok(Observation {
+            summary,
+            records,
             artifact: None,
         })
     }

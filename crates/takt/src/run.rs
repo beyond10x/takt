@@ -13220,9 +13220,75 @@ impl<'a> Run<'a> {
             changed.len(),
             &head[..8.min(head.len())]
         )?;
+        if report.action == TESTS_WRITE
+            && shape
+                .produces
+                .get(TESTS_WRITE)
+                .is_some_and(|produced| produced.contains(TESTS_CHANGE))
+        {
+            self.record_tests_change(events, out, seq, &head, request)?;
+        }
         Ok((true, None))
     }
+
+    /// The `tests_change` record of a `tests.write` step committed at `head`: no result, about
+    /// the implementation at `head`, written through the case's evidence port under
+    /// [`TESTS_CHANGE_PRODUCER`] for the step's action request `request`. It attests what takt
+    /// itself did, a commit of the step's change whose every path is a test path (a step that
+    /// changed another was refused before it was committed), not what the harness said.
+    ///
+    /// # Errors
+    /// The port's refusal, or a failure to write the event or the line.
+    fn record_tests_change(
+        &mut self,
+        events: &Events,
+        out: &mut dyn Write,
+        seq: usize,
+        head: &str,
+        request: &AdmittedRequest,
+    ) -> Result<()> {
+        let record = crate::evidence::Record::new(
+            format!("tests-change-{seq}"),
+            TESTS_CHANGE,
+            None,
+            "implementation",
+            head,
+            TESTS_CHANGE_PRODUCER,
+        );
+        let path = CaseEvidence::new(&mut self.case, vec![TESTS_CHANGE_PRODUCER.to_owned()])?
+            .submit(
+                TESTS_CHANGE_PRODUCER,
+                &record,
+                Some(&request.data().action_request_id.0.0),
+            )?;
+        events.emit(
+            self.steps,
+            &Event::Evidence {
+                id: record.id.clone(),
+                kind: record.kind.clone(),
+                result: None,
+                path: path
+                    .strip_prefix(&self.tree)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+                failed: Vec::new(),
+            },
+        )?;
+        writeln!(out, "  evidence: {} -", record.kind)?;
+        Ok(())
+    }
 }
+
+/// The action that changes the story's tests, every path it changes a test path.
+const TESTS_WRITE: &str = "tests.write";
+
+/// The evidence kind takt writes when a `tests.write` step is committed, in a case whose
+/// protocol lists it among what `tests.write` may produce (`story.delivery/2`).
+pub const TESTS_CHANGE: &str = "tests_change";
+
+/// The producer of a `tests_change` record: takt, attesting the commit of a `tests.write` step.
+pub const TESTS_CHANGE_PRODUCER: &str = "takt.tests-write";
 
 #[cfg(test)]
 mod tests {
