@@ -161,7 +161,9 @@ pub enum Stop {
     },
     /// [`REPEATED_FAILURES`] `tests.run` results in a row failed the same set of tests, each at
     /// a revision the one before was not at: the edits between them moved nothing the tests
-    /// decide. The run stops after the last, before another judgement step; the case stays open.
+    /// decide. A failing result at a revision a `tests.write` step committed (its `tests_change`
+    /// record's), the red run that shows the new tests failing, is not counted. The run stops
+    /// after the last, before another judgement step; the case stays open.
     RepeatedTestFailure {
         /// The tests every one of the results failed, never empty.
         tests: Vec<String>,
@@ -198,7 +200,9 @@ pub enum Stop {
 }
 
 /// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
-/// stop the run ([`Stop::RepeatedTestFailure`]).
+/// stop the run ([`Stop::RepeatedTestFailure`]). A failing result at a revision a `tests_change`
+/// record is about ([`tests_written_at`]), the red run a protocol asks for after its tests are
+/// written, is not one of them and leaves the row as it was.
 pub const REPEATED_FAILURES: u64 = 2;
 
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
@@ -467,8 +471,10 @@ impl TestsSoFar {
     /// `tests.run` step wrote a `test_result` record; the row of failures of the same tests its
     /// results end with ([`Failing::after`], each result's tests read from its step's summary,
     /// [`crate::validator::failures_in`]); and the stop of its last run, from its last `stop`
-    /// line after the last `opened` one, when it is `RedBase` or `RepeatedTestFailure`.
-    fn read(record: &[serde_json::Value]) -> Self {
+    /// line after the last `opened` one, when it is `RedBase` or `RepeatedTestFailure`. A failing
+    /// result at a revision in `written`, the revisions the case's `tests_change` records are
+    /// about ([`tests_written_at`]), leaves the row as it was ([`REPEATED_FAILURES`]).
+    fn read(record: &[serde_json::Value], written: &BTreeSet<String>) -> Self {
         let mut first = true;
         let mut failing = None;
         let mut last_failed: BTreeSet<String> = BTreeSet::new();
@@ -501,6 +507,9 @@ impl TestsSoFar {
                     let failed = (line["result"] == "fail")
                         .then(|| crate::validator::failures_in(summary).tests);
                     last_failed = failed.iter().flatten().cloned().collect();
+                    if failed.is_some() && written.contains(revision) {
+                        continue;
+                    }
                     Failing::after(&mut failing, revision, failed);
                 }
                 _ => {}
@@ -517,6 +526,46 @@ impl TestsSoFar {
             again,
         }
     }
+}
+
+/// The revisions of the implementation the `tests_change` records of the case under `case_dir`
+/// are about: each one a `tests.write` step committed, attested by takt itself
+/// ([`TESTS_CHANGE_PRODUCER`]), in a case whose protocol lists `tests_change` among what
+/// `tests.write` may produce. A failing `tests.run` at one of them is the run that shows the new
+/// tests red, which a protocol asks for before the implementation is edited, so it counts toward
+/// no row of [`REPEATED_FAILURES`]. A case without the directory holds none; a record that does
+/// not read is an error naming its file, as [`CaseDir::has_evidence`] answers.
+fn tests_written_at(case_dir: &Path) -> Result<BTreeSet<String>> {
+    let dir = case_dir.join("evidence");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", dir.display())),
+    };
+    let mut written = BTreeSet::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("read {}", dir.display()))?
+            .path();
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("json" | "yaml")
+        ) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("read the evidence record {}", path.display()))?;
+        let record: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
+            .with_context(|| format!("read the evidence record {}", path.display()))?;
+        if record["kind"].as_str() == Some(TESTS_CHANGE)
+            && record["producer"].as_str() == Some(TESTS_CHANGE_PRODUCER)
+            && record["subject"].as_str() == Some("implementation")
+            && let Some(revision) = record["subject_revision"].as_str()
+        {
+            written.insert(revision.to_owned());
+        }
+    }
+    Ok(written)
 }
 
 /// The reason [`Stop::Declined`] gives for a decline whose summary was empty.
@@ -11455,8 +11504,10 @@ impl<'a> Run<'a> {
     /// ([`Run::continue_past_red_base`]). Else [`Stop::RepeatedTestFailure`] when it leaves the
     /// row of failures of the same tests ([`Failing::after`], seeded from the case's record) at
     /// [`REPEATED_FAILURES`] or more: after a `RepeatedTestFailure` the check again at the same
-    /// revision failing the same set stops the same way, and a pass or another set goes on. An
-    /// observation that wrote no record changes nothing but the check again, which it uses up.
+    /// revision failing the same set stops the same way, and a pass or another set goes on. A
+    /// failure at a revision a `tests_change` record is about ([`tests_written_at`]), the red run
+    /// after the tests are written, leaves the row as it was. An observation that wrote no record
+    /// changes nothing but the check again, which it uses up.
     fn tests_stop(
         &self,
         revision: &str,
@@ -11490,6 +11541,9 @@ impl<'a> Run<'a> {
                 tests: failures.tests,
                 rerun: failures.rerun,
             }));
+        }
+        if tests_written_at(&self.case.dir)?.contains(revision) {
+            return Ok(None);
         }
         Failing::after(&mut so_far.failing, revision, Some(failures.tests));
         Ok(so_far
@@ -11547,13 +11601,14 @@ impl<'a> Run<'a> {
         // What the case's record holds of its tests before this run's own lines
         // ([`Run::tests_stop`]); a record that does not read names no first result and no row,
         // so it stops nothing, and a `RedBase` the run goes on past is not checked again.
+        let written = tests_written_at(&self.case.dir)?;
         let mut tests_so_far = events.read().map_or(
             TestsSoFar {
                 first: false,
                 failing: None,
                 again: None,
             },
-            |record| TestsSoFar::read(&record),
+            |record| TestsSoFar::read(&record, &written),
         );
         if !self.stops_red_base && matches!(tests_so_far.again, Some(Again::RedBase(_))) {
             tests_so_far.again = None;
