@@ -3226,10 +3226,11 @@ fn finish(
         Err(error) => {
             writeln!(
                 out,
-                "stopped: error: {}; steps {}, tokens {}, case {}",
+                "stopped: error: {}; steps {}, tokens {}{}, case {}",
                 one_line(&format!("{error:#}")),
                 run.steps,
                 run.tokens,
+                stop_figures(run),
                 run.case.dir.display()
             )?;
             return Ok(EXIT_ERROR);
@@ -3237,9 +3238,10 @@ fn finish(
     };
     writeln!(
         out,
-        "stopped: {stop}; steps {}, tokens {}, case {}",
+        "stopped: {stop}; steps {}, tokens {}{}, case {}",
         run.steps,
         run.tokens,
+        stop_figures(run),
         run.case.dir.display()
     )?;
     Ok(match stop {
@@ -3253,6 +3255,15 @@ fn finish(
         Stop::Declined(_) => EXIT_DECLINED,
         _ => EXIT_STOPPED,
     })
+}
+
+/// What the `stopped:` line names between its tokens and its case: the run's wall time, its cost
+/// when a step reported one, and its commits with the paths they committed
+/// ([`takt::console::stop_figures`]).
+fn stop_figures(run: &Run<'_>) -> String {
+    let (commits, paths) = run.commits();
+    let wall = u64::try_from(run.elapsed().as_millis()).unwrap_or(u64::MAX);
+    takt::console::stop_figures(wall, run.cost_usd(), commits, paths)
 }
 
 /// A scenario as the repository declares it in [`SCENARIOS`]: one story of its store, run from
