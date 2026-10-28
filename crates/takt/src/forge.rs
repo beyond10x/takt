@@ -721,7 +721,11 @@ pub struct SweepsHeld {
 /// leftover, kills it and reaps it, leaving its own wait an error ("No child processes"). Held
 /// by any number of threads at once. Not re-entrant: the thread holding it must not call
 /// [`sweep_left`] or [`run_child`] before dropping it, as their sweep would wait for it forever,
-/// nor hold it a second time, which waits forever behind a sweep that is due.
+/// nor hold it a second time, which waits forever behind a sweep that is due. On Linux what
+/// this process adopted is still reaped meanwhile once it has ended, if it leads no process
+/// group and is in a group other than this process's own. The child the hold is for is never
+/// one: it leads a group or a session of its own, or stays in this process's group, and is
+/// never started into another process's group.
 pub fn hold_sweeps() -> SweepsHeld {
     SweepsHeld {
         _held: SWEEPS
@@ -751,20 +755,137 @@ pub(crate) const MARK: &str = "TAKT_CHILD";
 /// What a child left behind once it ended: on Linux, takt is the subreaper of everything it
 /// starts (`PR_SET_CHILD_SUBREAPER`), so a process the child started and orphaned, in a session
 /// or a process group of its own, becomes takt's child instead of `init`'s and is found here.
+/// One that has ended is reaped as soon as it has, while the child still runs ([`reap_ended`]).
 #[cfg(target_os = "linux")]
 mod leftovers {
     use std::collections::BTreeSet;
     use std::time::{Duration, Instant};
 
-    /// Makes this process the subreaper of what it starts, once.
+    /// How long the reaper sleeps between two looks for an ended orphan ([`reap_ended`]).
+    const REAP_EVERY: Duration = Duration::from_millis(20);
+
+    /// Held while this process reaps what it adopted: by the reaper for each of its looks
+    /// ([`reap_ended`]), and by [`sweep`] and [`sweep_marked`] for the whole of theirs, so that
+    /// a process one of them found ended or killed is reaped by that one only, by an id still
+    /// its own. Taken last: nothing else is taken while it is held.
+    static REAPING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Makes this process the subreaper of what it starts, once, and starts the thread that
+    /// reaps what it adopted as soon as that has ended ([`reap_ended`]), for as long as the
+    /// process lives.
     pub fn adopt() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
             // SAFETY: `prctl` with `PR_SET_CHILD_SUBREAPER` takes integers only.
-            unsafe {
-                libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0);
+            let adopted = unsafe { libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) } == 0;
+            // Without the thread an ended orphan is reaped by the next sweep, as it was before.
+            if adopted {
+                let _ = std::thread::Builder::new()
+                    .name("takt-reaper".to_owned())
+                    .spawn(|| {
+                        loop {
+                            std::thread::sleep(REAP_EVERY);
+                            reap_ended();
+                        }
+                    });
             }
         });
+    }
+
+    /// Reaps every process this one adopted that has ended: a zombie whose parent this process
+    /// is, that leads no process group, in a group other than this process's own. Its process
+    /// group then no longer answers for it, so a test that killed a group and waits until it is
+    /// gone sees it gone under takt as on a plain shell, where `init` reaps it.
+    ///
+    /// None of these is a child another caller waits on: every child this process starts stays
+    /// in this process's own process group and session ([`std::process::Command`]'s default),
+    /// or leads a group or a session of its own (`process_group(0)`: [`super::run_child`],
+    /// Substrate's adapters, the gate provider's commands; `setsid`: a harness's session).
+    /// Nothing it links starts a child into another process's group (`process_group` with any
+    /// other group). A process in a foreign group that leads none and whose parent is this one
+    /// is therefore one a child started, orphaned and this process adopted. A zombie that leads
+    /// a group, adopted or not, is left to its caller or to the next sweep.
+    ///
+    /// Each one is reaped by its id while [`REAPING`] is held: between the read that found it
+    /// ended and its reap no other reaper of this process can take it, so its id is still its
+    /// own and names no process that took it over.
+    fn reap_ended() {
+        if !any_ended_child() {
+            return;
+        }
+        let _reaping = REAPING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let me = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
+        // SAFETY: `getpgrp` takes nothing and touches no memory of this process.
+        let own = unsafe { libc::getpgrp() };
+        for pid in children(me) {
+            let orphan = state(pid).is_some_and(|(state, parent, group)| {
+                state == 'Z' && parent == me && group != pid && group != own
+            });
+            if orphan {
+                let mut status = 0;
+                // SAFETY: `waitpid` writes the status into the integer it is given.
+                unsafe { libc::waitpid(pid, &raw mut status, libc::WNOHANG) };
+            }
+        }
+    }
+
+    /// Whether a child of this process has ended and is not reaped yet: one `waitid` that
+    /// leaves it as it is (`WNOWAIT`), so the reaper's look costs one call while none has.
+    fn any_ended_child() -> bool {
+        // SAFETY: `siginfo_t` is plain data; `waitid` writes into the one it is given.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // SAFETY: `waitid` writes into `info` and reads nothing else of this process.
+        let found = unsafe {
+            libc::waitid(
+                libc::P_ALL,
+                0,
+                &raw mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        // SAFETY: `waitid` filled `info` as a child's, or left it zeroed when none had ended.
+        found == 0 && unsafe { info.si_pid() } != 0
+    }
+
+    /// This process's children: from each of its threads' `children` list, or, on a kernel that
+    /// keeps none, from every process's parent.
+    fn children(me: libc::pid_t) -> Vec<libc::pid_t> {
+        let listed: Option<Vec<libc::pid_t>> =
+            std::fs::read_dir("/proc/self/task").ok().and_then(|tasks| {
+                let mut read = false;
+                let mut found = Vec::new();
+                for task in tasks.filter_map(Result::ok) {
+                    if let Ok(text) = std::fs::read_to_string(task.path().join("children")) {
+                        read = true;
+                        found.extend(
+                            text.split_whitespace()
+                                .filter_map(|pid| pid.parse::<libc::pid_t>().ok()),
+                        );
+                    }
+                }
+                read.then_some(found)
+            });
+        listed.unwrap_or_else(|| {
+            let Ok(entries) = std::fs::read_dir("/proc") else {
+                return Vec::new();
+            };
+            entries
+                .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse().ok())
+                .filter(|pid| stat(*pid).is_some_and(|(parent, _, _)| parent == me))
+                .collect()
+        })
+    }
+
+    /// A process's state, parent and process group, from `/proc/<pid>/stat`.
+    fn state(pid: libc::pid_t) -> Option<(char, libc::pid_t, libc::pid_t)> {
+        let text = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+        let rest = text.get(text.rfind(')')? + 2..)?;
+        let mut fields = rest.split(' ');
+        let state = fields.next()?.chars().next()?;
+        let mut next = || fields.next()?.parse().ok();
+        Some((state, next()?, next()?))
     }
 
     /// A process's parent, process group and session, from `/proc/<pid>/stat`.
@@ -818,6 +939,9 @@ mod leftovers {
             return Ok(());
         };
         let mark = format!("{}={mark}", super::MARK).into_bytes();
+        let _reaping = REAPING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for _ in 0..64 {
             let found = adopted(group, &mark, running);
             if found.is_empty() {
@@ -866,6 +990,9 @@ mod leftovers {
     pub fn sweep_marked(group: libc::pid_t, mark: &str, spare: libc::pid_t) -> anyhow::Result<()> {
         let me = libc::pid_t::try_from(std::process::id()).unwrap_or(0);
         let mark = format!("{}={mark}", super::MARK).into_bytes();
+        let _reaping = REAPING
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let found = || -> Vec<libc::pid_t> {
             let Ok(entries) = std::fs::read_dir("/proc") else {
                 return Vec::new();
@@ -1122,7 +1249,9 @@ pub fn sweep_left() -> Result<()> {
 /// group and dropped the call's mark from its environment. On macOS every process of this user
 /// that carries the call's mark is killed too, wherever it went; not killed there: one that left
 /// the group and dropped the mark. On other systems, one that left the group at all. An error
-/// too when its output stays held open after that.
+/// too when its output stays held open after that. On Linux, while it runs, a process it
+/// started and orphaned that has ended is reaped as soon as it has, unless it leads a process
+/// group or went into takt's own: its group no longer answers for it, as under `init`.
 pub fn run_child(command: &mut Command, limits: Limits) -> Result<Finished> {
     run_child_keeping_head(command, limits, 0)
 }
