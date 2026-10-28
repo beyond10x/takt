@@ -6263,7 +6263,7 @@ entities:
   # read from: .engineering/planning/design/benchmark-integration.md:22-24
   # read from: .engineering/planning/design/benchmark-integration.md:32-33
   # read from: .engineering/planning/design/benchmark-integration.md:37
-  # read from: .engineering/planning/story/bench-task-protocol.md:23
+  # read from: .engineering/planning/story/bench-task-protocol.md:24
   # Maps to bench.case of the organization's benchmark instrument, one task with its expectations
   # and its hidden tests; and the benchmark subset it belongs to maps to bench.corpus, a set of
   # cases pinned to where they came from: takt's design makes each benchmark a bench corpus.
