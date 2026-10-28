@@ -13230,11 +13230,15 @@ impl<'a> Run<'a> {
             changed.len(),
             &head[..8.min(head.len())]
         )?;
+        // A step that only deleted tests wrote none, so it is no `tests_change`.
         if report.action == TESTS_WRITE
             && shape
                 .produces
                 .get(TESTS_WRITE)
                 .is_some_and(|produced| produced.contains(TESTS_CHANGE))
+            && changed
+                .iter()
+                .any(|path| self.tree.join(path).symlink_metadata().is_ok())
         {
             self.record_tests_change(events, out, seq, &head, request)?;
         }

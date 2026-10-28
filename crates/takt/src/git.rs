@@ -3056,20 +3056,41 @@ pub fn paths_differing_outside(
     to: &str,
     outside: &str,
 ) -> Result<Vec<String>> {
+    diff_names_outside(tree, from, to, outside, None)
+}
+
+/// The paths [`paths_differing_outside`] names that `to` deletes: `git diff --diff-filter=D`
+/// under the same options.
+///
+/// # Errors
+/// A git that does not run or exits other than 0, naming what git said.
+pub fn paths_deleted_outside(
+    tree: &Path,
+    from: &str,
+    to: &str,
+    outside: &str,
+) -> Result<Vec<String>> {
+    diff_names_outside(tree, from, to, outside, Some("--diff-filter=D"))
+}
+
+fn diff_names_outside(
+    tree: &Path,
+    from: &str,
+    to: &str,
+    outside: &str,
+    filter: Option<&str>,
+) -> Result<Vec<String>> {
     let exclude = format!(":(exclude){outside}");
-    let args = [
+    let mut args = vec![
         "diff",
         "--name-only",
         "-z",
         "--no-renames",
         "--no-ext-diff",
         "--no-textconv",
-        from,
-        to,
-        "--",
-        ".",
-        exclude.as_str(),
     ];
+    args.extend(filter);
+    args.extend([from, to, "--", ".", exclude.as_str()]);
     let output = isolated_output(tree, &args)?;
     if !output.status.success() {
         bail!(

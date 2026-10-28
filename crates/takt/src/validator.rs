@@ -4790,13 +4790,19 @@ fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
 }
 
 /// The `paths_changed` result of `paths`, with how many of them are test paths
-/// ([`crate::harness::is_test_path`]) and how many are not.
-fn paths_result(paths: &[String]) -> (&'static str, usize, usize) {
+/// ([`crate::harness::is_test_path`]) and how many are not. A test path in `deleted` counts
+/// for neither side: deleting a test writes no test, so it cannot make a change `both`.
+fn paths_result(paths: &[String], deleted: &[String]) -> (&'static str, usize, usize) {
     let tests = paths
         .iter()
         .filter(|path| crate::harness::is_test_path(path))
         .count();
     let implementation = paths.len() - tests;
+    let tests = tests
+        - deleted
+            .iter()
+            .filter(|path| crate::harness::is_test_path(path) && paths.contains(path))
+            .count();
     let result = match (tests > 0, implementation > 0) {
         (true, true) => "both",
         (true, false) => "tests_only",
@@ -4869,7 +4875,9 @@ impl Validator for ChangeRead {
                         paths.push((*path).to_owned());
                     }
                 }
-                Some(paths)
+                let deleted =
+                    crate::git::paths_deleted_outside(tree, &tip, &merged.tree, ".engineering")?;
+                Some((paths, deleted))
             } else {
                 None
             };
@@ -4909,12 +4917,10 @@ impl Validator for ChangeRead {
         } else if let Some((shown, base)) = pinned {
             let differs = crate::git::trees_differ_outside(tree, &base, revision, ".engineering")?;
             let paths = if paths_declared {
-                Some(crate::git::paths_differing_outside(
-                    tree,
-                    &base,
-                    revision,
-                    ".engineering",
-                )?)
+                Some((
+                    crate::git::paths_differing_outside(tree, &base, revision, ".engineering")?,
+                    crate::git::paths_deleted_outside(tree, &base, revision, ".engineering")?,
+                ))
             } else {
                 None
             };
@@ -4945,10 +4951,19 @@ impl Validator for ChangeRead {
             revision,
             self.name(),
         )];
-        if let Some(paths) = paths {
-            let (changed, tests, implementation) = paths_result(&paths);
+        if let Some((paths, deleted)) = paths {
+            let (changed, tests, implementation) = paths_result(&paths, &deleted);
+            let removed = deleted
+                .iter()
+                .filter(|path| crate::harness::is_test_path(path))
+                .count();
             summary.push_str(&format!(
-                "; it changes {tests} test path(s) and {implementation} implementation path(s): {changed}"
+                "; it changes {tests} test path(s) and {implementation} implementation path(s){}: {changed}",
+                if removed == 0 {
+                    String::new()
+                } else {
+                    format!(", and deletes {removed} test path(s), which count for neither")
+                }
             ));
             records.push(Record::new(
                 format!("paths-changed-{seq}"),
