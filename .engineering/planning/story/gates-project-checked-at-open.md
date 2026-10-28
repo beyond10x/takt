@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:gates-project-checked-at-open
 kind: story
-status: active
+status: implemented
 title: A gates project file the gate would refuse refuses the case at open, before the first model call
 summary: the pinned assertions project file is validated when the case opens
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:downstream-story-delivery
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T13:11:31Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-28T13:11:31Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-28T15:54:58Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

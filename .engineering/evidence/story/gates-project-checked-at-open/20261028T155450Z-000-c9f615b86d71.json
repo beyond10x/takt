@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-28T15:54:50Z",
+  "actor": "human:timo",
+  "artifact": "story:gates-project-checked-at-open",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test --workspace --locked on 1e0609f4 with the 0.18.0 release edits (engineering-protocols 2bb0eae): 2343 passed, 0 failed, 5 ignored; gates_project_checked_at_open 3 passed, gates_project_checked_at_open_adv1 2 passed"
+  }
+}

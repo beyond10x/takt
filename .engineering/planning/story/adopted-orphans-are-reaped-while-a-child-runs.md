@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:adopted-orphans-are-reaped-while-a-child-runs
 kind: story
-status: active
+status: implemented
 title: An orphan takt adopted is reaped once it ends, while the test command still runs
 summary: no zombie of a test's killed process group outlives its test
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:downstream-story-delivery
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T13:11:31Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-28T13:11:31Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-28T15:54:58Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

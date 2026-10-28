@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:story-delivery-2-evidence-writers
 kind: story
-status: active
+status: implemented
 title: A story case on story.delivery/2 records tests_change and paths_changed, so it reaches pr.open
 summary: takt writes the two evidence kinds story.delivery/2 reads
 tags:
@@ -11,10 +11,11 @@ relations:
 - decomposes: epic:downstream-story-delivery
 - serves: vision:safe-agentic-coding
 - informed_by: story:story-delivery-tests-first
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T13:11:30Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-28T13:11:30Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-28T15:54:58Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 

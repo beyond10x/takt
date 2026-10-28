@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:bot-merge-commit-has-a-body
 kind: story
-status: active
+status: implemented
 title: takt's merge through the bot forge has a title and a body naming the story and its evidence
 summary: no default forge merge message
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:downstream-story-delivery
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T13:11:31Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-28T13:11:32Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-28T15:54:59Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 ## Outcome
 
