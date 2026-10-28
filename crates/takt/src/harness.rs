@@ -4200,6 +4200,25 @@ mod tests {
         assert!(status.success(), "git {args:?}");
     }
 
+    /// `script` at `path`, executable, written by a child shell, so that no descriptor of this
+    /// process ever has `path` open for writing. Written by this process, a fork on another test
+    /// thread can hold that descriptor until its child execs, and an exec of `path` meanwhile
+    /// fails with `ETXTBSY`, "Text file busy" (story:scan-scope-test-is-not-flaky).
+    fn executable(path: &Path, script: &str) {
+        let status = Command::new("/bin/sh")
+            .args([
+                "-c",
+                "printf '%s' \"$2\" > \"$1\" && chmod 755 \"$1\"",
+                "sh",
+            ])
+            .arg(path)
+            .arg(script)
+            .stdin(std::process::Stdio::null())
+            .status()
+            .expect("sh runs");
+        assert!(status.success(), "write {}", path.display());
+    }
+
     /// A repository at `tree` holding `files`, all committed.
     fn committed(tree: &Path, files: &[(&str, &[u8])]) {
         for (path, bytes) in files {
@@ -4401,20 +4420,16 @@ mod tests {
     /// cannot run; the scan is handed each file's bytes.
     #[test]
     fn a_file_the_scan_refuses_is_not_attached() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = scratch("scan");
         let tools = scratch("scan-tools");
         committed(&dir.0, &[TODO, ("config.py", b"KEY = 'SECRET'\n")]);
         let program = tools.0.join("gates");
-        std::fs::write(
+        executable(
             &program,
             "#!/bin/sh\nfor last; do :; done\n\
              [ \"$1\" = scan-text ] || exit 2\n\
              if grep -q SECRET \"$last\"; then exit 1; fi\nexit 0\n",
-        )
-        .expect("a fake scan");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("executable");
+        );
         let intent = scoped(&["config.py", "todo.py"]);
         let scan = crate::scan::gates::ChangeScan {
             program: program.clone(),
@@ -4561,20 +4576,16 @@ mod tests {
     /// scan is not run.
     #[test]
     fn failed_checks_pass_the_scan_scope_files_pass() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = scratch("failed-scan");
         let tools = scratch("failed-scan-tools");
         committed(&dir.0, &[TODO]);
         let program = tools.0.join("gates");
-        std::fs::write(
+        executable(
             &program,
             "#!/bin/sh\nfor last; do :; done\n\
              [ \"$1\" = scan-text ] || exit 2\n\
              if grep -q SECRET \"$last\"; then exit 1; fi\nexit 0\n",
-        )
-        .expect("a fake scan");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("executable");
+        );
         let scan = crate::scan::gates::ChangeScan {
             program,
             policy: tools.0.join("policy.yaml"),
@@ -4589,6 +4600,11 @@ mod tests {
             omitted: 0,
         };
         let clean = [check("1 failed: tests::adds")];
+        assert_eq!(
+            crate::run::scan_change(&dir.0, &scan, failed_block(&clean).as_bytes()),
+            Ok(()),
+            "the fake scan's start"
+        );
         assert_eq!(
             failed_block_scanned(&clean, &dir.0, Some(&scan)),
             failed_block(&clean)
@@ -5398,7 +5414,6 @@ mod tests {
     /// that passes everything; the file beside it is.
     #[test]
     fn a_file_of_a_credentials_shape_is_not_attached_with_or_without_a_policy() {
-        use std::os::unix::fs::PermissionsExt as _;
         let dir = scratch("credential");
         let tools = scratch("credential-tools");
         let dashes = "-----";
@@ -5414,13 +5429,10 @@ mod tests {
             ["todo.py"]
         );
         let program = tools.0.join("gates");
-        std::fs::write(
+        executable(
             &program,
             "#!/bin/sh\n[ \"$1\" = scan-text ] || exit 2\nexit 0\n",
-        )
-        .expect("a fake scan");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("executable");
+        );
         let passing = crate::scan::gates::ChangeScan {
             program,
             policy: tools.0.join("policy.yaml"),
