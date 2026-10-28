@@ -291,6 +291,27 @@ A trial counts when both hold:
 Compare the sha256 that `opened`'s `harness_program` names with the one you noted: a different
 value means the run did not start the binary you qualified, and the trial does not count.
 
+#### A scenario whose seed is red
+
+Scenario 3 (`story:empty-or-broken-file`) starts red on purpose: at its seed a test for an empty
+`todo.json` fails, and the story is to make it pass. Run it as scenario 1, with `3` for `1`, from
+a clone of its own. Its first `tests.run` fails before any step, so the run stops `RedBase`,
+exit 3, before any model call, unless the scenario declares the red base expected.
+
+The declaration is one line in the scenario's section of `.engineering/scenarios.conf`,
+`red-base = expected` ([Scenario run](./scenario-run.md#a-seed-whose-tests-fail-on-purpose)).
+With it, `takt scenario run` goes on past the red base without a flag, and prints before the case
+opens:
+
+```text
+red base: expected by scenario 3 in .engineering/scenarios.conf at main
+```
+
+Without it, give `takt scenario run` `--continue-past-red-base`. takt 0.16.0 and earlier do not
+read the key, and refuse a section that gives it. A case that went on past its red base resumes
+with `takt run --case` as above, without the flag. A case that stopped `RedBase` resumes with
+`--continue-past-red-base` added to that command.
+
 ## Approve and resume
 
 ```sh
