@@ -32,6 +32,7 @@ it: a story's open case is found on its own, and an intent's case is resumed wit
 | 6 | `Waiting` | resumes and observes again |
 | 7 | `Unperformable` | resumes, with the performer it lacked |
 | 8 | `DiskLow` | resumes once there is space |
+| 9 | `Declined (<reason>)` | stops `Declined` again until a commit moves the case's revision |
 
 ### Completed: exit 0
 
@@ -76,7 +77,8 @@ before it spends model calls on them.
   stops at once, before any model call, naming the failed tests and the runner's rerun hint.
   The failure is recorded as the case's test result like any other. `--continue-past-red-base`
   (or `continue_past_red_base: true` in a run's configuration) goes on past it, for a base whose
-  tests fail on purpose.
+  tests fail on purpose; a scenario declares that with `red-base = expected` in its section of
+  `.engineering/scenarios.conf` ([Scenario run](../guides/scenario-run.md)).
 - **`RepeatedTestFailure`**: two `tests.run` results in a row, each at a new revision, fail the
   same tests. The edits between them moved nothing the tests decide; the run stops before
   another judgement step, naming the tests. A failing set that changes, or a failure whose output
@@ -161,6 +163,16 @@ gates document, to go on.
 or of `CARGO_TARGET_DIR`, had less free than `--min-free-gib` (default 10; `0` turns the check
 off). The case stays open. A scenario trial with a `DiskLow` run gets no scorecard verdict, so a
 trial runner discards it rather than resume it.
+
+### Declined: exit 9
+
+`Declined (<reason>)`: a judgement step named `decline` instead of an action, changed no file,
+and gave its reason, for a story the rules it was given forbid. takt writes a `decline` line
+with the reason and the case revision to `events.jsonl`; it is a record, not evidence, and the
+protocol's outcome stays open. A step that names `decline` and changed a file is refused instead
+(`StepRefused`, exit 3). A run on the case at the same case revision stops `Declined` again
+before any model call, and an argument-less `takt run` passes the case over, until a commit
+moves its revision. A stuck run still ends `NoProgress`, exit 3.
 
 ## Reading the code from outside
 

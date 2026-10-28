@@ -33,6 +33,7 @@ A field added to an event later is optional, so older lines still read.
 | `store_evidence` | `story`, `kind`, `reference`, `observed_at`, `commit`? | evidence was written on the story in the planning store |
 | `store_move` | `story`, `to`, `commit`? | the story moved in the planning store |
 | `refusal` | `by` (`takt` or `store`), `reason` (verbatim) | a step was discarded, or a write refused |
+| `decline` | `reason` (the step's summary), `case_revision` (`r<n>`) | a judgement step named `decline`, changing no file; a record line, not evidence |
 | `waiting` | `on` (actions), `seconds` | the run paused on the forge before observing again |
 | `error` | `error` | the run ended on an error, or met one while recording an accepted case |
 | `skipped` | `line`, `reason` | an earlier line was cut short and is skipped on read |
@@ -56,6 +57,7 @@ kind: its two new stops are `stop` lines like the others.
 | `Waiting` | the forge or a local file the run waits on is not ready and the budget ended | 6 |
 | `Unperformable` | the only action that decides a claim has no performer in this run | 7 |
 | `DiskLow` | less free disk than `--min-free-gib` | 8 |
+| `Declined` | a judgement step declined the story, `Declined (<reason>)`, after a `decline` line | 9 |
 
 A run that ends on an error ends with an `error` line and no `stop` line, and exits 5. A red base as `takt run` writes it:
 
