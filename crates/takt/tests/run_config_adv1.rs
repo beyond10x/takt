@@ -73,6 +73,8 @@ fn a_yaml_tag_is_refused_not_dropped() {
 
 /// A duplicate key is refused in either form at the duplicate's line, 3, naming the key; YAML
 /// must not name line 1, where its mapping starts (serde_yaml_ng reports a duplicate there).
+/// The key is asserted as "`iterations` twice": the shape text of any other refusal spells
+/// `iterations` too.
 #[test]
 fn a_duplicate_key_is_refused_at_its_line_in_yaml_as_in_toml() {
     let t = file(
@@ -82,7 +84,7 @@ fn a_duplicate_key_is_refused_at_its_line_in_yaml_as_in_toml() {
     );
     let toml = refusal(&t);
     assert!(
-        toml.contains("line 3") && toml.contains("iterations"),
+        toml.contains("line 3") && toml.contains("`iterations` twice"),
         "TOML: {toml}"
     );
     let y = file(
@@ -92,7 +94,7 @@ fn a_duplicate_key_is_refused_at_its_line_in_yaml_as_in_toml() {
     );
     let yaml = refusal(&y);
     assert!(
-        yaml.contains("line 3") && !yaml.contains("line 1:") && yaml.contains("iterations"),
+        yaml.contains("line 3") && !yaml.contains("line 1:") && yaml.contains("`iterations` twice"),
         "YAML names line 3 and the key as TOML does: {yaml}"
     );
 }
