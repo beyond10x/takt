@@ -1160,3 +1160,120 @@ fn a_located_line_is_failing_only_when_it_names_a_failure() {
         (expected, 0)
     );
 }
+
+/// The output of a gate whose `printed` lines stand before a failed pytest run's summary.
+fn beside_a_failed_test(printed: &str) -> String {
+    format!(
+        "{printed}\n============ short test summary info ============\n\
+         FAILED tests/t.py::test_x - assert 1 == 2\n"
+    )
+}
+
+/// story:failed-gate-keeps-other-linter-shapes, acceptance 1 and 3: beside a failed test run,
+/// the failing lines of ruff's full format, black, ruff `format --check`, rustfmt `--check` (both
+/// forms), tsc, a C compiler's fatal error and a file with no extension are kept; a failing line
+/// at an address or a host names no file, so it is counted and not kept.
+#[test]
+fn other_linters_failing_lines_beside_a_test_run_are_kept_or_counted() {
+    let test = "FAILED tests/t.py::test_x - assert 1 == 2";
+    let cases: [(&str, &[&str], u64); 11] = [
+        (
+            "F401 [*] os imported but unused\n --> src/app.py:1:8",
+            &["F401 [*] os imported but unused", " --> src/app.py:1:8"],
+            0,
+        ),
+        (
+            "would reformat src/app.py",
+            &["would reformat src/app.py"],
+            0,
+        ),
+        (
+            "Would reformat: src/app.py",
+            &["Would reformat: src/app.py"],
+            0,
+        ),
+        (
+            "Diff in /w/src/lib.rs at line 3:",
+            &["Diff in /w/src/lib.rs at line 3:"],
+            0,
+        ),
+        ("Diff in /w/src/lib.rs:3:", &["Diff in /w/src/lib.rs:3:"], 0),
+        (
+            "src/a.ts(3,5): error TS2322: Type string is not assignable to type number.",
+            &["src/a.ts(3,5): error TS2322: Type string is not assignable to type number."],
+            0,
+        ),
+        (
+            "x.c:3:10: fatal error: y.h: No such file or directory",
+            &["x.c:3:10: fatal error: y.h: No such file or directory"],
+            0,
+        ),
+        (
+            "Dockerfile:3: error: unknown instruction",
+            &["Dockerfile:3: error: unknown instruction"],
+            0,
+        ),
+        ("127.0.0.1:8080: error: refused", &[], 1),
+        ("example.com:443: error: refused", &[], 1),
+        ("localhost:5432: fatal error: refused", &[], 1),
+    ];
+    for (printed, kept, omitted) in cases {
+        let mut expected = vec![test.to_owned()];
+        expected.extend(kept.iter().map(|line| (*line).to_owned()));
+        assert_eq!(
+            failing_lines(&beside_a_failed_test(printed), FAILED_LINES_PER_CHECK),
+            (expected, omitted),
+            "{printed}"
+        );
+    }
+}
+
+/// story:failed-gate-keeps-other-linter-shapes, acceptance 2: ruff's code line and its
+/// ` --> <path>:<line>:<col>` line are kept together or counted together: past the bound, and
+/// when one of them is withheld.
+#[test]
+fn ruffs_code_line_and_its_location_are_kept_or_counted_together() {
+    let test = "FAILED tests/t.py::test_x - assert 1 == 2";
+    let code = "F401 [*] os imported but unused";
+    let printed = beside_a_failed_test(&format!("{code}\n --> src/app.py:1:8"));
+    assert_eq!(
+        failing_lines(&printed, test.len() + 1 + code.len() + 1),
+        (vec![test.to_owned()], 2),
+        "room for the code line alone"
+    );
+    let token = token();
+    let printed = beside_a_failed_test(&format!(
+        "F401 [*] {token} imported but unused\n --> src/app.py:1:8"
+    ));
+    assert_eq!(
+        failing_lines(&printed, FAILED_LINES_PER_CHECK),
+        (vec![test.to_owned()], 2),
+        "the withheld code line and its location"
+    );
+}
+
+/// story:failed-gate-keeps-other-linter-shapes, acceptance 4: the new shapes widen nothing else.
+/// A type checker's warning in tsc's shape, a code-shaped word with no location after it,
+/// rustc's location line after its error, a host's line that names no error, and a capitalised
+/// word with a number that is no file's line are neither kept nor counted.
+#[test]
+fn the_other_shapes_keep_no_line_that_names_no_failure() {
+    let test = "FAILED tests/t.py::test_x - assert 1 == 2";
+    let clippy = "error: this `if` has identical blocks";
+    let printed = beside_a_failed_test(&format!(
+        "src/a.ts(3,5): warning TS6133: x is declared but never read\n\
+         HTTP2 enabled\n\
+         E501 Line too long (91 > 88)\n\
+         {clippy}\n  --> src/lib.rs:3:5\n\
+         example.com:443: listening: ok\n\
+         localhost:5432: ready: ok\n\
+         Diff in progress\n\
+         would reformat nothing\n\
+         Makefile:12: recipe for target 'test' failed\n\
+         Started:12: in 3 seconds"
+    ));
+    assert_eq!(
+        failing_lines(&printed, FAILED_LINES_PER_CHECK),
+        (vec![test.to_owned(), clippy.to_owned()], 0)
+    );
+}

@@ -220,9 +220,11 @@ fn plain(line: &str) -> String {
 /// Output that names failed tests ([`failed_test_errors`]: unittest's, pytest's, libtest's) is not
 /// chosen that way: its lines are one per failed test, `<FAIL|ERROR|FAILED> <test> - <its last
 /// error line>` (the test alone when that line was withheld or there is none), each cut as above,
-/// then the failing lines of another command the gate ran beside the tests ([`failure_line`]:
-/// a compiler's `error:` lines, a linter's `<path>:<line>[:<col>]: <code>` lines), kept in
-/// order until one does not fit. The count left out is the failed tests and failing lines not
+/// then the failing lines of another command the gate ran beside the tests ([`failing`]:
+/// a compiler's `error:` lines, a linter's `<path>:<line>[:<col>]: <code>` lines, a formatter's
+/// `would reformat <path>`; a code line and its ` --> <path>:<line>` line together), kept in
+/// order until one does not fit; a failing line located at a host, not a file, is counted and
+/// never kept. The count left out is the failed tests and failing lines not
 /// kept, the error lines and failing lines withheld, and each heading of a failed test withheld
 /// whole or naming no test. None of the lines the runner printed itself (a passing test's, the
 /// usage text a program printed, a traceback's frames) is kept.
@@ -310,7 +312,7 @@ enum Printed {
 
 /// What [`failing_lines`] reads of a line it withheld before dropping its text: whether it was
 /// indented, the heading of a failed test it was, the rule ([`rule`]) or the runner's marker
-/// ([`Marker`]) it was, whether it was a failing line ([`failure_line`]) and whether it was an
+/// ([`Marker`]) it was, whether it was a failing line ([`failing`]) and whether it was an
 /// assertion's value (`left:`, `right:`). Every shape [`failed_test_errors`] reads a line for is
 /// here, so a withheld line moves the reading as its text would have.
 struct Withheld {
@@ -318,7 +320,7 @@ struct Withheld {
     heading: Option<Heading>,
     rule: Option<char>,
     marker: Option<Marker>,
-    failure: bool,
+    failing: Failing,
     value: bool,
 }
 
@@ -378,7 +380,7 @@ impl Withheld {
             heading,
             rule: rule_of(line),
             marker: marker(line),
-            failure: failure_line(line),
+            failing: failing(line),
             value: assertion_value(line),
         }
     }
@@ -500,43 +502,98 @@ fn assertion_value(line: &str) -> bool {
     line.starts_with("left:") || line.starts_with("right:")
 }
 
-/// The words in lower case a located line ([`failure_line`]) starts its message with that name
+/// The words in lower case a located line ([`located`]) starts its message with that name
 /// no failure: a compiler's or a type checker's remark beside one, and a log's levels.
 const NOT_FAILURE_WORDS: [&str; 11] = [
     "warning", "warn", "note", "help", "hint", "remark", "info", "notice", "debug", "trace",
     "verbose",
 ];
 
-/// Whether `path`, the text before a located line's first `:`, is a file's path: it holds a `/`,
-/// or its last part has an extension that starts with a letter (`x.c`, `app.py`). So a time
-/// (`12`, `2026-10-28T19`), a host (`localhost`, `127.0.0.1`) and a word (`make[1]`) are not.
-fn file_path(path: &str) -> bool {
-    path.contains('/')
-        || path.rsplit_once('.').is_some_and(|(stem, extension)| {
-            !stem.is_empty() && extension.starts_with(|c: char| c.is_ascii_alphabetic())
-        })
+/// The last parts of a name that make it a host's, not a file's: the common top-level domains
+/// and the names RFC 2606 and RFC 6762 reserve, so `example.com` and `db.internal` are hosts.
+/// None is a common file's extension (`.dev`, `.app` are both, and stay a file's).
+const HOST_DOMAINS: [&str; 14] = [
+    "com",
+    "net",
+    "org",
+    "edu",
+    "gov",
+    "mil",
+    "int",
+    "arpa",
+    "io",
+    "local",
+    "internal",
+    "localdomain",
+    "example",
+    "invalid",
+];
+
+/// Whether `place`, the text before a located line's first `:`, is a host's: `localhost`, an
+/// IPv4 address, or a name of letters, digits, `-` and `.` whose last part is one of
+/// [`HOST_DOMAINS`].
+fn host(place: &str) -> bool {
+    let parts: Vec<&str> = place.split('.').collect();
+    place == "localhost"
+        || (parts.len() == 4
+            && parts.iter().all(|part| {
+                (1..=3).contains(&part.len()) && part.bytes().all(|c| c.is_ascii_digit())
+            }))
+        || (parts.len() > 1
+            && parts.iter().all(|part| {
+                !part.is_empty() && part.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+            })
+            && parts
+                .last()
+                .is_some_and(|domain| HOST_DOMAINS.contains(&domain.to_ascii_lowercase().as_str())))
 }
 
-/// Whether `line`, not indented, is a failing line of a command a gate ran beside a test run: a
-/// compiler's `error:` or `error[<code>]:` line (but cargo's own `error: test failed, …` and
-/// `error: <n> targets failed:` after a test run), or a located finding, `<path>:<line>:` with an
-/// optional `<col>:` and `<path>` a file's ([`file_path`]), then a word ending in `:` in lower
-/// case that names a failure (`error:`, `unresolved:`; not one of [`NOT_FAILURE_WORDS`]) or a
-/// linter's code (`F401`, `E501`, `C0114:`).
-fn failure_line(line: &str) -> bool {
-    if line.starts_with("error: test failed, to rerun pass")
-        || (line.starts_with("error: ") && line.ends_with(" targets failed:"))
-    {
-        return false;
+/// Whether `path`, the text before a located line's first `:`, is a file's path: it holds a `/`;
+/// or its last part has an extension that starts with a letter (`x.c`, `app.py`) and it is no
+/// host's ([`host`]); or it is a name without one that starts with a capital and holds a small
+/// letter, of letters, digits, `_` and `-` (`Dockerfile`, `Makefile`). So a time (`12`,
+/// `2026-10-28T19`), a host (`localhost`, `127.0.0.1`, `example.com`) and a word (`make[1]`,
+/// `BUILD`) are not.
+fn file_path(path: &str) -> bool {
+    path.contains('/')
+        || (!host(path)
+            && path.rsplit_once('.').is_some_and(|(stem, extension)| {
+                !stem.is_empty() && extension.starts_with(|c: char| c.is_ascii_alphabetic())
+            }))
+        || (path.starts_with(|c: char| c.is_ascii_uppercase())
+            && path.bytes().any(|c| c.is_ascii_lowercase())
+            && path
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'))
+}
+
+/// Whether `code` is a linter's code: one to four capitals, then one to four digits (`F401`,
+/// `E501`, `C0114`, `TS2322`).
+fn linter_code(code: &str) -> bool {
+    let letters = code.bytes().take_while(u8::is_ascii_uppercase).count();
+    let digits = code.len() - letters;
+    (1..=4).contains(&letters)
+        && (1..=4).contains(&digits)
+        && code[letters..].bytes().all(|c| c.is_ascii_digit())
+}
+
+/// A located line's place, how many numbers follow it, and its message: `<place>:<n>:` with an
+/// optional `<n>:`, or `<place>(<n>)` or `<place>(<n>,<n>):` (tsc's, MSVC's), then a space. The
+/// place holds no white space.
+fn located(line: &str) -> Option<(&str, usize, &str)> {
+    let (place, mut rest) = line.split_once(':')?;
+    if place.contains(char::is_whitespace) {
+        return None;
     }
-    if line.starts_with("error:") || line.starts_with("error[") {
-        return true;
-    }
-    let Some((path, mut rest)) = line.split_once(':') else {
-        return false;
-    };
-    if path.contains(char::is_whitespace) || !file_path(path) {
-        return false;
+    if let Some((file, at)) = place.strip_suffix(')').and_then(|p| p.split_once('(')) {
+        let numbers: Vec<&str> = at.split(',').collect();
+        return (numbers.len() <= 2
+            && numbers
+                .iter()
+                .all(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit())))
+        .then_some(())
+        .and_then(|()| rest.strip_prefix(' '))
+        .map(|message| (file, numbers.len(), message));
     }
     let mut numbers = 0;
     while numbers < 2 {
@@ -547,21 +604,135 @@ fn failure_line(line: &str) -> bool {
         rest = &rest[digits + 1..];
         numbers += 1;
     }
-    let Some(rest) = rest.strip_prefix(' ').filter(|_| numbers > 0) else {
-        return false;
-    };
-    let word = rest.split_whitespace().next().unwrap_or_default();
+    let message = rest.strip_prefix(' ').filter(|_| numbers > 0)?;
+    Some((place, numbers, message))
+}
+
+/// Whether a located line's `message` names a failure: a word ending in `:` in lower case that
+/// names one (`error:`, `unresolved:`; not one of [`NOT_FAILURE_WORDS`]), `error[<code>]`, a
+/// linter's code ([`linter_code`]), or a word in lower case that is not one of
+/// [`NOT_FAILURE_WORDS`] before `error:` (`fatal error:`) or before a linter's code ending in `:`
+/// (tsc's `error TS2322:`).
+fn names_failure(message: &str) -> bool {
+    let mut words = message.split_whitespace();
+    let word = words.next().unwrap_or_default();
     let code = word.strip_suffix(':').unwrap_or(word);
-    let letters = code.bytes().take_while(u8::is_ascii_uppercase).count();
-    let digits = code.len() - letters;
-    (word.len() > code.len()
-        && !code.is_empty()
-        && code.bytes().all(|c| c.is_ascii_lowercase())
-        && !NOT_FAILURE_WORDS.contains(&code))
+    let lower = |word: &str| {
+        !word.is_empty()
+            && word.bytes().all(|c| c.is_ascii_lowercase())
+            && !NOT_FAILURE_WORDS.contains(&word)
+    };
+    let second = words.next().unwrap_or_default();
+    (word.len() > code.len() && lower(code))
         || word.starts_with("error[")
-        || ((1..=4).contains(&letters)
-            && (1..=4).contains(&digits)
-            && code[letters..].bytes().all(|c| c.is_ascii_digit()))
+        || linter_code(code)
+        || (lower(word)
+            && (second == "error:" || second.strip_suffix(':').is_some_and(linter_code)))
+}
+
+/// Whether a located line's `message` names an error: `error:` or a word in lower case before
+/// it (`fatal error:`), the one failure a line located at a host ([`host`]) is read for.
+fn names_error(message: &str) -> bool {
+    let mut words = message.split_whitespace();
+    let word = words.next().unwrap_or_default();
+    word == "error:"
+        || (word.bytes().all(|c| c.is_ascii_lowercase())
+            && !NOT_FAILURE_WORDS.contains(&word)
+            && words.next() == Some("error:"))
+}
+
+/// What a line is to the failing lines of a command a gate ran beside a test run
+/// ([`failing`]).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Failing {
+    /// Names no failure.
+    No,
+    /// A failing line that names a file or nothing located: kept when it fits, else counted.
+    Line,
+    /// A failing line located at a host, not a file: counted, never kept.
+    Host,
+    /// A linter's code heading a finding, `<code> …` (ruff's full format): failing with the
+    /// location line after it ([`Failing::Location`]), and with it kept or counted.
+    Code,
+    /// A finding's location line, indented `--> <path>:<line>[:<col>]`: failing only after a
+    /// [`Failing::Code`] line.
+    Location,
+}
+
+/// What `line` is to the failing lines beside a test run:
+/// - a failing line ([`Failing::Line`]): a compiler's `error:` or `error[<code>]:` line (but
+///   cargo's own `error: test failed, …` and `error: <n> targets failed:` after a test run); a
+///   located finding ([`located`]) at a file ([`file_path`]) whose message names a failure
+///   ([`names_failure`]); black's and ruff's `would reformat <path>` (`Would reformat: <path>`);
+///   rustfmt's `Diff in <path> at line <n>:` or `Diff in <path>:<n>:`;
+/// - a failing line at a host ([`Failing::Host`]): a located line at a host ([`host`]) with one
+///   number, its port, whose message names an error ([`names_error`]);
+/// - a code line ([`Failing::Code`]): not indented, a linter's code ([`linter_code`]) then a space;
+/// - a location line ([`Failing::Location`]): indented, `--> <path>:<line>` with an optional
+///   `:<col>`, `<path>` a file's.
+fn failing(line: &str) -> Failing {
+    if line.starts_with("error: test failed, to rerun pass")
+        || (line.starts_with("error: ") && line.ends_with(" targets failed:"))
+    {
+        return Failing::No;
+    }
+    if line.starts_with("error:") || line.starts_with("error[") {
+        return Failing::Line;
+    }
+    if let Some(location) = line
+        .strip_prefix(char::is_whitespace)
+        .map(str::trim_start)
+        .and_then(|rest| rest.strip_prefix("--> "))
+    {
+        let mut parts = location.split(':');
+        let path = parts.next().unwrap_or_default();
+        let numbers: Vec<&str> = parts.collect();
+        let location = file_path(path)
+            && (1..=2).contains(&numbers.len())
+            && numbers
+                .iter()
+                .all(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_digit()));
+        return if location {
+            Failing::Location
+        } else {
+            Failing::No
+        };
+    }
+    if let Some(path) = line
+        .strip_prefix("would reformat ")
+        .or_else(|| line.strip_prefix("Would reformat: "))
+        && file_path(path)
+    {
+        return Failing::Line;
+    }
+    if let Some(diff) = line
+        .strip_prefix("Diff in ")
+        .and_then(|rest| rest.strip_suffix(':'))
+    {
+        let (path, number) = diff
+            .rsplit_once(" at line ")
+            .or_else(|| diff.rsplit_once(':'))
+            .unwrap_or_default();
+        if !number.is_empty() && number.bytes().all(|c| c.is_ascii_digit()) && file_path(path) {
+            return Failing::Line;
+        }
+    }
+    if let Some((place, numbers, message)) = located(line) {
+        if file_path(place) && names_failure(message) {
+            return Failing::Line;
+        }
+        if host(place) && numbers == 1 && names_error(message) {
+            return Failing::Host;
+        }
+        return Failing::No;
+    }
+    if line
+        .split_once(' ')
+        .is_some_and(|(code, _)| linter_code(code))
+    {
+        return Failing::Code;
+    }
+    Failing::No
 }
 
 /// The failed tests output names, the headings of failed tests it withheld whole or that name no
@@ -754,18 +925,35 @@ struct Room {
 impl Room {
     /// Keeps `line` when it fits and every line offered before it did; false when it is left out.
     fn offer(&mut self, line: String) -> bool {
-        if self.full || line.len() + 1 > self.left {
+        self.offer_all(vec![line])
+    }
+
+    /// Keeps all of `lines` when they fit together and every line offered before them did, or
+    /// none of them; false when they are left out.
+    fn offer_all(&mut self, lines: Vec<String>) -> bool {
+        let cost = lines.iter().map(|line| line.len() + 1).sum::<usize>();
+        if self.full || cost > self.left {
             self.full = true;
             return false;
         }
-        self.left -= line.len() + 1;
-        self.kept.push(line);
+        self.left -= cost;
+        self.kept.extend(lines);
         true
     }
 }
 
+impl Printed {
+    /// What the line is to the failing lines beside a test run ([`failing`]).
+    fn failing(&self) -> Failing {
+        match self {
+            Self::Line(line) => failing(line),
+            Self::Withheld(withheld) => withheld.failing,
+        }
+    }
+}
+
 /// The lines of [`failing_lines`] for output that names failed tests: one per test in order,
-/// then the failing lines no failed test's heading or section holds ([`failure_line`]), within
+/// then the failing lines no failed test's heading or section holds ([`failing`]), within
 /// `budget` bytes, and the count of tests and failing lines not kept, error lines and failing
 /// lines withheld, and headings withheld whole or naming no test.
 fn failed_test_lines(reading: Reading, cleaned: &[Printed], budget: usize) -> (Vec<String>, u64) {
@@ -796,13 +984,28 @@ fn failed_test_lines(reading: Reading, cleaned: &[Printed], budget: usize) -> (V
             omitted += u64::from(!withheld);
         }
     }
-    for (line, claimed) in cleaned.iter().zip(&reading.claimed) {
-        match line {
-            _ if *claimed => {}
-            Printed::Line(text) if failure_line(text) => {
+    for (index, line) in cleaned.iter().enumerate() {
+        if reading.claimed[index] {
+            continue;
+        }
+        match (line, line.failing()) {
+            (Printed::Line(text), Failing::Line) => {
                 omitted += u64::from(!room.offer(text.clone()));
             }
-            Printed::Withheld(withheld) if withheld.failure => omitted += 1,
+            (Printed::Withheld(_), Failing::Line) | (_, Failing::Host) => omitted += 1,
+            (_, Failing::Code)
+                if cleaned.get(index + 1).is_some_and(|next| {
+                    !reading.claimed[index + 1] && next.failing() == Failing::Location
+                }) =>
+            {
+                let pair = match (line, &cleaned[index + 1]) {
+                    (Printed::Line(code), Printed::Line(location)) => {
+                        room.offer_all(vec![code.clone(), location.clone()])
+                    }
+                    _ => false,
+                };
+                omitted += if pair { 0 } else { 2 };
+            }
             _ => {}
         }
     }
