@@ -467,3 +467,264 @@ fn only_the_last_gate_runs_failures_are_shown() {
     record.push(serde_json::json!({"step": 3, "event": "evidence", "id": "gate-result-3", "kind": "gate_result", "result": "pass", "path": "p"}));
     assert!(takt::run::failed_checks(&record).is_empty());
 }
+
+// story:failed-gate-output-floods-prompt: a test runner's output reaches the next step's prompt
+// as each failed test's name and its last error line, bounded, never as the lines it printed.
+
+/// What `python -m unittest -v` printed for two passing tests, a test whose call the seed's
+/// argparse refuses (its usage text interleaved with the progress lines) and a failed
+/// assertion.
+const UNITTEST: &str = "test_add (tests.test_todo.TodoTest.test_add) ... ok
+test_list (tests.test_todo.TodoTest.test_list) ... ok
+test_remove (test_remove.RemoveTest.test_remove) ... usage: todo.py [-h] --file FILE {add,list,done} ...
+todo.py: error: argument command: invalid choice: 'remove' (choose from 'add', 'list', 'done')
+ERROR
+test_done (tests.test_todo.TodoTest.test_done) ... FAIL
+
+======================================================================
+ERROR: test_remove (test_remove.RemoveTest.test_remove)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File \"/repo/tests/test_remove.py\", line 5, in test_remove
+    self.assertEqual(todo.main([\"--file\", \"t.json\", \"remove\", \"1\"]), 0)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File \"/repo/todo.py\", line 30, in main
+    args = parser.parse_args(argv)
+  File \"/usr/lib/python3.12/argparse.py\", line 2643, in error
+    self.exit(2, _('%(prog)s: error: %(message)s\\n') % args)
+  File \"/usr/lib/python3.12/argparse.py\", line 2630, in exit
+    _sys.exit(status)
+SystemExit: 2
+
+======================================================================
+FAIL: test_done (tests.test_todo.TodoTest.test_done)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File \"/repo/tests/test_todo.py\", line 20, in test_done
+    self.assertEqual(items, [])
+AssertionError: Lists differ: ['a'] != []
+
+First list contains 1 additional elements.
+First extra element 0:
+'a'
+
+- ['a']
++ []
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.003s
+
+FAILED (failures=1, errors=1)
+";
+
+/// Every line of [`UNITTEST`] that must not reach a prompt: a passing test's, the usage text,
+/// a traceback's frames and its header.
+const NOT_SHOWN: [&str; 6] = [
+    "... ok",
+    "usage: todo.py",
+    "invalid choice",
+    "Traceback (most recent call last)",
+    "File \"/usr/lib/python3.12/argparse.py\"",
+    "_sys.exit(status)",
+];
+
+/// Acceptance 1: a unittest run's output is reduced to each failed test's name and its last
+/// error line, in order, with nothing left out.
+#[test]
+fn a_unittest_run_is_its_failed_tests_and_their_last_error_lines() {
+    let (lines, omitted) = failing_lines(UNITTEST, FAILED_LINES_PER_CHECK);
+    assert_eq!(
+        lines,
+        [
+            "ERROR test_remove (test_remove.RemoveTest.test_remove) - SystemExit: 2",
+            "FAIL test_done (tests.test_todo.TodoTest.test_done) - AssertionError: Lists differ: ['a'] != []",
+        ]
+    );
+    assert_eq!(omitted, 0);
+}
+
+/// Acceptance 1, for the two other runners named: pytest's short summary and libtest's
+/// failures, each test with its error line.
+#[test]
+fn pytest_and_libtest_runs_are_their_failed_tests() {
+    let pytest = "============================= test session starts ==============================
+collected 3 items
+
+tests/test_todo.py .F                                                     [ 66%]
+tests/test_remove.py F                                                    [100%]
+
+=================================== FAILURES ===================================
+_________________________________ test_done ____________________________________
+
+    def test_done():
+>       assert done(1) == []
+E       assert ['a'] == []
+
+tests/test_todo.py:9: AssertionError
+=========================== short test summary info ============================
+FAILED tests/test_todo.py::test_done - assert ['a'] == []
+FAILED tests/test_remove.py::test_remove - SystemExit: 2
+========================= 2 failed, 1 passed in 0.02s ==========================
+";
+    assert_eq!(
+        failing_lines(pytest, FAILED_LINES_PER_CHECK),
+        (
+            vec![
+                "FAILED tests/test_todo.py::test_done - assert ['a'] == []".to_owned(),
+                "FAILED tests/test_remove.py::test_remove - SystemExit: 2".to_owned(),
+            ],
+            0
+        )
+    );
+    let libtest = "running 3 tests
+test tests::adds ... ok
+test tests::removes ... FAILED
+test tests::lists ... FAILED
+
+failures:
+
+---- tests::removes stdout ----
+
+thread 'tests::removes' panicked at src/lib.rs:12:9:
+assertion `left == right` failed
+  left: 1
+ right: 0
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tests::lists stdout ----
+thread 'tests::lists' panicked at src/lib.rs:20:5:
+no todo file
+
+failures:
+    tests::lists
+    tests::removes
+
+test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--lib`
+";
+    assert_eq!(
+        failing_lines(libtest, FAILED_LINES_PER_CHECK),
+        (
+            vec![
+                "FAILED tests::removes - assertion `left == right` failed".to_owned(),
+                "FAILED tests::lists - no todo file".to_owned(),
+            ],
+            0
+        )
+    );
+}
+
+/// Acceptance 2: however many tests failed, the lines kept stay within the bound, every failed
+/// test is either kept or counted as left out, and none of the runner's own lines comes back.
+#[test]
+fn failed_tests_past_the_bound_are_counted() {
+    let mut printed = String::new();
+    for n in 0..300 {
+        printed.push_str(&format!(
+            "test_{n} (tests.test_many.ManyTest.test_{n}) ... FAIL\n"
+        ));
+    }
+    for n in 0..300 {
+        printed.push_str(&format!(
+            "======================================================================\n\
+             FAIL: test_{n} (tests.test_many.ManyTest.test_{n})\n\
+             ----------------------------------------------------------------------\n\
+             Traceback (most recent call last):\n  \
+             File \"/repo/tests/test_many.py\", line {n}, in test_{n}\n    \
+             self.assertEqual({n}, -1)\n\
+             AssertionError: {n} != -1\n\n"
+        ));
+    }
+    printed.push_str("Ran 300 tests in 0.1s\n\nFAILED (failures=300)\n");
+    let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    let bytes: usize = lines.iter().map(|line| line.len() + 1).sum();
+    assert!(bytes <= FAILED_LINES_PER_CHECK, "{bytes} bytes kept");
+    assert_eq!(lines.len() + omitted as usize, 300, "{lines:?}");
+    assert!(omitted > 0);
+    assert_eq!(
+        lines[0],
+        "FAIL test_0 (tests.test_many.ManyTest.test_0) - AssertionError: 0 != -1"
+    );
+    assert!(
+        lines.iter().all(|line| line.starts_with("FAIL test_")),
+        "{lines:?}"
+    );
+    // A smaller room keeps fewer, still in order, still counted.
+    let (few, left_out) = failing_lines(&printed, 200);
+    assert!(few.iter().map(|line| line.len() + 1).sum::<usize>() <= 200);
+    assert_eq!(few.len() + left_out as usize, 300);
+    assert_eq!(few[..], lines[..few.len()]);
+}
+
+/// Acceptance 4: a failed test whose last error line holds a credential's shape is named
+/// without it, the withheld line counted; a private key's block in its output reaches nothing.
+#[test]
+fn a_failed_tests_credential_is_withheld() {
+    let token = format!("gh{}_{}", 'p', "Zq3".repeat(13));
+    assert!(takt::run::credential_shape(&token).is_some());
+    let kind = format!("OPENSSH {} KEY", "PRIVATE");
+    let body = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5YWJjZGVmZ2hpamts";
+    let printed = format!(
+        "======================================================================\n\
+         FAIL: test_token (tests.test_ci.CiTest.test_token)\n\
+         ----------------------------------------------------------------------\n\
+         Traceback (most recent call last):\n  \
+         File \"/repo/tests/test_ci.py\", line 3, in test_token\n    \
+         self.assertEqual(read(), '')\n\
+         AssertionError: '{token}' != ''\n\n\
+         ======================================================================\n\
+         FAIL: test_key (tests.test_ci.CiTest.test_key)\n\
+         ----------------------------------------------------------------------\n\
+         Traceback (most recent call last):\n  \
+         File \"/repo/tests/test_ci.py\", line 9, in test_key\n    \
+         self.assertFalse(key())\n\
+         AssertionError: a key was found:\n\
+         -----BEGIN {kind}-----\n{body}\n-----END {kind}-----\n\n\
+         Ran 2 tests in 0.001s\n\nFAILED (failures=2)\n"
+    );
+    let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    assert_eq!(
+        lines,
+        [
+            "FAIL test_token (tests.test_ci.CiTest.test_token)",
+            "FAIL test_key (tests.test_ci.CiTest.test_key) - AssertionError: a key was found:",
+        ]
+    );
+    assert_eq!(omitted, 1, "the token's line, withheld");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains(&token) || line.contains(body))
+    );
+}
+
+/// Acceptance 1 and 2, through a run: after a gate whose command prints a unittest run, the
+/// next judgement step's prompt keeps the block's opening line and names each failed test and
+/// its last error line, and holds no passing test's line, no usage text and no traceback.
+#[test]
+fn the_next_prompt_names_the_failed_tests_and_not_the_traceback() {
+    let tree = repository(
+        "unittest",
+        &format!("cat >&2 <<'PRINTED'\n{UNITTEST}PRINTED\nexit 1"),
+    );
+    let ran = run(&tree, "unittest");
+    let block = ran
+        .prompt
+        .split_once(takt::harness::FAILED_CHECKS_LABEL)
+        .unwrap_or_else(|| panic!("the block keeps its opening line:\n{}", ran.prompt))
+        .1;
+    let block = block
+        .split_once("gate citations:\n")
+        .unwrap_or_else(|| panic!("the failed gate, nothing left out:\n{}", ran.prompt))
+        .1;
+    for line in [
+        "ERROR test_remove (test_remove.RemoveTest.test_remove) - SystemExit: 2",
+        "FAIL test_done (tests.test_todo.TodoTest.test_done) - AssertionError: Lists differ: ['a'] != []",
+    ] {
+        assert!(block.contains(line), "{line} in\n{}", ran.prompt);
+    }
+    for line in NOT_SHOWN {
+        assert!(!ran.prompt.contains(line), "{line} in\n{}", ran.prompt);
+    }
+}

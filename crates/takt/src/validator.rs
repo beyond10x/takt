@@ -208,11 +208,17 @@ fn plain(line: &str) -> String {
 /// order. No rule of any one command's: `<document>:<line>: unresolved: <cited>` lines of a
 /// citation checker and `error:`/`warning:` lines of a compiler are kept before their indented
 /// detail alike.
+///
+/// Output that names failed tests ([`failed_test_errors`]: unittest's, pytest's, libtest's) is not
+/// chosen that way: its lines are one per failed test, `<FAIL|ERROR|FAILED> <test> - <its last
+/// error line>` (the test alone when that line was withheld or there is none), each cut as above,
+/// kept in order until one does not fit; the count left out is the failed tests not kept and
+/// the error lines withheld. None of the lines the runner printed itself (a passing test's, the
+/// usage text a program printed, a traceback's frames) is kept.
 #[must_use]
 pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
-    let mut withheld = 0u64;
     let mut in_key = false;
-    let mut lines: Vec<String> = Vec::new();
+    let mut cleaned: Vec<Printed> = Vec::new();
     for line in printed.lines() {
         let line = plain(line);
         let line = line.trim_end();
@@ -225,19 +231,28 @@ pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
         }
         if in_key || crate::run::credential_shape(line).is_some() {
             in_key = in_key && !line.contains("-----END ");
-            withheld += 1;
+            cleaned.push(Printed::Withheld {
+                indented: line.starts_with(char::is_whitespace),
+            });
             continue;
         }
-        if line.len() <= FAILED_LINE_BYTES {
-            lines.push(line.to_owned());
-            continue;
-        }
-        let mut end = FAILED_LINE_BYTES - '…'.len_utf8();
-        while !line.is_char_boundary(end) {
-            end -= 1;
-        }
-        lines.push(format!("{}…", &line[..end]));
+        cleaned.push(Printed::Line(cut_line(line)));
     }
+    let tests = failed_test_errors(&cleaned);
+    if !tests.is_empty() {
+        return failed_test_lines(tests, budget);
+    }
+    let mut withheld = 0u64;
+    let lines: Vec<String> = cleaned
+        .into_iter()
+        .filter_map(|line| match line {
+            Printed::Line(line) => Some(line),
+            Printed::Withheld { .. } => {
+                withheld += 1;
+                None
+            }
+        })
+        .collect();
     let cost = |line: &String| line.len() + 1;
     if lines.iter().map(cost).sum::<usize>() <= budget {
         return (lines, withheld);
@@ -269,6 +284,191 @@ pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
         .zip(keep)
         .filter_map(|(line, kept)| kept.then_some(line))
         .collect();
+    (kept, omitted)
+}
+
+/// One non-blank line of a failed command's output as [`failing_lines`] cleaned it, or the mark
+/// of one it withheld and whether that line was indented.
+enum Printed {
+    Line(String),
+    Withheld { indented: bool },
+}
+
+impl Printed {
+    fn text(&self) -> Option<&str> {
+        match self {
+            Self::Line(line) => Some(line),
+            Self::Withheld { .. } => None,
+        }
+    }
+
+    fn indented(&self) -> bool {
+        match self {
+            Self::Line(line) => line.starts_with(char::is_whitespace),
+            Self::Withheld { indented } => *indented,
+        }
+    }
+}
+
+/// `line`, or past [`FAILED_LINE_BYTES`] its start cut there and ended in `…`.
+fn cut_line(line: &str) -> String {
+    if line.len() <= FAILED_LINE_BYTES {
+        return line.to_owned();
+    }
+    let mut end = FAILED_LINE_BYTES - '…'.len_utf8();
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}
+
+/// A failed test a test runner's output names: how it failed and its name
+/// (`FAIL test_x (m.C.test_x)`), and its last error line, `None` when it was withheld or the
+/// output gives none.
+struct FailedTest {
+    name: String,
+    error: Option<String>,
+    withheld: bool,
+}
+
+/// Whether `line` is a rule of at least ten `c`, as unittest prints between its failures.
+fn rule(line: &Printed, c: char) -> bool {
+    line.text()
+        .is_some_and(|line| line.len() >= 10 && line.chars().all(|x| x == c))
+}
+
+/// The failed tests `lines` name, in the order printed, read in three runners' shapes, and none
+/// when they name none:
+/// - unittest: a `FAIL: <test>` or `ERROR: <test>` line under a rule of `-`, its error line the
+///   first line not indented after its last traceback frame (`  File "…", line …`), or its last
+///   line without one, up to the next rule;
+/// - pytest: a `FAILED <test>` or `ERROR <test>` line of its short summary, `<test>` a node id
+///   (`<path>::<name>`) or a `.py` path, its error line what follows ` - `;
+/// - libtest: a `---- <test> stdout ----` section, its error line the first line of the panic's
+///   message (the line after `panicked at …:`, or that line itself in the older one-line form),
+///   up to the next section or `failures:`.
+fn failed_test_errors(lines: &[Printed]) -> Vec<FailedTest> {
+    let mut found = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(text) = line.text() else {
+            continue;
+        };
+        let rest = &lines[index + 1..];
+        if let Some((kind, name)) = text
+            .strip_prefix("FAIL: ")
+            .map(|name| ("FAIL", name))
+            .or_else(|| text.strip_prefix("ERROR: ").map(|name| ("ERROR", name)))
+            && rest.first().is_some_and(|next| rule(next, '-'))
+        {
+            let body = &rest[1..];
+            let end = body
+                .iter()
+                .position(|line| rule(line, '=') || rule(line, '-'))
+                .unwrap_or(body.len());
+            let body = &body[..end];
+            let frame = body.iter().rposition(|line| {
+                line.text().is_some_and(|line| {
+                    line.starts_with(char::is_whitespace)
+                        && line.trim_start().starts_with("File \"")
+                })
+            });
+            let error = match frame {
+                Some(frame) => body[frame + 1..].iter().find(|line| !line.indented()),
+                None => body.last(),
+            };
+            found.push(FailedTest::of(format!("{kind} {name}"), error));
+            continue;
+        }
+        if let Some((kind, rest)) = text
+            .strip_prefix("FAILED ")
+            .map(|rest| ("FAILED", rest))
+            .or_else(|| text.strip_prefix("ERROR ").map(|rest| ("ERROR", rest)))
+        {
+            let (test, error) = rest
+                .split_once(" - ")
+                .map_or((rest, None), |(test, error)| (test, Some(error)));
+            if !test.contains(char::is_whitespace) && (test.contains("::") || test.ends_with(".py"))
+            {
+                found.push(FailedTest {
+                    name: format!("{kind} {test}"),
+                    error: error.map(str::to_owned),
+                    withheld: false,
+                });
+            }
+            continue;
+        }
+        if let Some(test) = text
+            .strip_prefix("---- ")
+            .and_then(|rest| rest.strip_suffix(" stdout ----"))
+            .filter(|test| !test.contains(char::is_whitespace))
+        {
+            let end = rest
+                .iter()
+                .position(|line| {
+                    line.text().is_some_and(|line| {
+                        line.starts_with("---- ") || line.trim_end() == "failures:"
+                    })
+                })
+                .unwrap_or(rest.len());
+            let body = &rest[..end];
+            let error = match body.iter().position(|line| {
+                line.text()
+                    .is_some_and(|line| line.contains("panicked at "))
+            }) {
+                Some(at) if body[at].text().is_some_and(|line| line.ends_with(':')) => {
+                    body.get(at + 1)
+                }
+                Some(at) => Some(&body[at]),
+                None => body.last(),
+            };
+            found.push(FailedTest::of(format!("FAILED {test}"), error));
+        }
+    }
+    found
+}
+
+impl FailedTest {
+    fn of(name: String, error: Option<&Printed>) -> Self {
+        Self {
+            name,
+            error: error.and_then(Printed::text).map(str::to_owned),
+            withheld: matches!(error, Some(Printed::Withheld { .. })),
+        }
+    }
+}
+
+/// The lines of [`failing_lines`] for output that names failed tests: one per test in order,
+/// within `budget` bytes, and the count of tests not kept and error lines withheld.
+fn failed_test_lines(tests: Vec<FailedTest>, budget: usize) -> (Vec<String>, u64) {
+    let mut omitted = 0u64;
+    let mut left = budget;
+    let mut kept = Vec::new();
+    let mut full = false;
+    for test in tests {
+        let mut withheld = test.withheld;
+        let line = match test.error {
+            Some(error) => {
+                let line = cut_line(&format!("{} - {error}", test.name));
+                if crate::run::credential_shape(&line).is_some() {
+                    withheld = true;
+                    cut_line(&test.name)
+                } else {
+                    line
+                }
+            }
+            None => cut_line(&test.name),
+        };
+        if withheld {
+            omitted += 1;
+        }
+        if full || crate::run::credential_shape(&line).is_some() || line.len() + 1 > left {
+            full = full || line.len() + 1 > left;
+            omitted += u64::from(!withheld);
+            continue;
+        }
+        left -= line.len() + 1;
+        kept.push(line);
+    }
     (kept, omitted)
 }
 
