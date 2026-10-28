@@ -1025,7 +1025,7 @@ fn decided_at(decision: &Decision, artifact: &str) -> Option<String> {
 }
 
 /// The revision of `artifact` the case at `case_dir` is at, from its `case.yaml`.
-fn revision_of(case_dir: &Path, artifact: &str) -> Result<Option<String>> {
+pub(crate) fn revision_of(case_dir: &Path, artifact: &str) -> Result<Option<String>> {
     let path = case_dir.join("case.yaml");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
