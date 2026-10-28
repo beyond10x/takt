@@ -71,8 +71,10 @@ struct World {
 /// text `declare` with `{seed}` replaced by the seed's id, on the next commit. A `claude` double
 /// in `bin` counts its calls and proposes `implementation.edit`.
 fn world(name: &str, seed_conf: Option<&str>, declare: &str) -> World {
-    let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("scenario-red-base-adv1-{}-{name}", std::process::id()));
+    let outer = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
+        "scenario-red-base-adv1-{}-{name}",
+        std::process::id()
+    ));
     if outer.exists() {
         fs::remove_dir_all(&outer).expect("a stale scratch tree is removed");
     }
@@ -232,7 +234,10 @@ fn stop_line(out: &str, err: &str) -> String {
 /// Asserts the run stopped `RedBase`, exit 3, with no model call and no declaration line.
 fn stopped_red(world: &World, (code, out, err): &(i32, String, String)) {
     let stop = stop_line(out, err);
-    assert!(stop.starts_with("stopped: RedBase ("), "{stop}\n{out}\n{err}");
+    assert!(
+        stop.starts_with("stopped: RedBase ("),
+        "{stop}\n{out}\n{err}"
+    );
     assert!(!out.contains("red base: expected"), "{out}");
     assert_eq!(world.calls(), 0, "a model call at a red base: {out}");
     assert_eq!(*code, 3, "stdout {out} stderr {err}");
@@ -247,7 +252,10 @@ fn went_on(world: &World, at: &str, (_, out, err): &(i32, String, String)) {
         "the declaration is named: stdout {out} stderr {err}"
     );
     assert!(!out.contains("RedBase"), "stdout {out} stderr {err}");
-    assert!(world.calls() >= 1, "no judgement step: stdout {out} stderr {err}");
+    assert!(
+        world.calls() >= 1,
+        "no judgement step: stdout {out} stderr {err}"
+    );
 }
 
 /// Asserts the run was refused before anything was cut, exit 1, stderr holding each of `named`.
@@ -257,7 +265,10 @@ fn refused(world: &World, named: &[&str], (code, out, err): &(i32, String, Strin
         assert!(err.contains(name), "{name} is named: {err}");
     }
     assert!(world.trial_branches().is_empty(), "a trial branch was cut");
-    assert!(!world.repo.join(".takt/cases").exists(), "a case was opened: {out}");
+    assert!(
+        !world.repo.join(".takt/cases").exists(),
+        "a case was opened: {out}"
+    );
     assert_eq!(world.calls(), 0, "{out}");
 }
 
@@ -308,7 +319,11 @@ fn another_scenarios_declaration_does_not_leak() {
 /// `red-base` twice in the section is refused before anything is cut, naming the key.
 #[test]
 fn a_duplicate_red_base_is_refused() {
-    let world = world("twice", None, &one("\tred-base = expected\n\tred-base = expected\n"));
+    let world = world(
+        "twice",
+        None,
+        &one("\tred-base = expected\n\tred-base = expected\n"),
+    );
     let run = world.scenario("./red.sh", &[]);
     refused(&world, &["`red-base`", "twice"], &run);
 }
@@ -316,7 +331,10 @@ fn a_duplicate_red_base_is_refused() {
 /// The same key in a second `[scenario "1"]` section: git reads one section, so twice too.
 #[test]
 fn a_red_base_in_a_repeated_section_is_refused() {
-    let declare = format!("{}[scenario \"1\"]\n\tred-base = expected\n", one("\tred-base = expected\n"));
+    let declare = format!(
+        "{}[scenario \"1\"]\n\tred-base = expected\n",
+        one("\tred-base = expected\n")
+    );
     let world = world("twice-section", None, &declare);
     let run = world.scenario("./red.sh", &[]);
     refused(&world, &["`red-base`", "twice"], &run);
@@ -434,7 +452,10 @@ fn a_resume_after_a_stop_before_the_first_tests_goes_on_as_the_guide_says() {
 fn an_expected_red_base_on_a_green_seed_runs_as_green() {
     let world = world("green", None, &one("\tred-base = expected\n"));
     let (_, out, err) = world.scenario("./green.sh", &[]);
-    assert!(out.contains("evidence: test_result pass"), "stdout {out} stderr {err}");
+    assert!(
+        out.contains("evidence: test_result pass"),
+        "stdout {out} stderr {err}"
+    );
     assert!(!out.contains("RedBase"), "stdout {out} stderr {err}");
     assert!(world.calls() >= 1, "stdout {out} stderr {err}");
 }
