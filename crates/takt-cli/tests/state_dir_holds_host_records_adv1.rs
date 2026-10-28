@@ -4,6 +4,9 @@
 //! `claude` is a double that rewrites an ignored file in the repository, so each step is refused
 //! and discarded and that file is set aside; nothing reaches a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 mod state_dir_holds_host_records_adv1 {
     use std::fs;
     use std::path::{Path, PathBuf};

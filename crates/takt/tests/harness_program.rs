@@ -4,6 +4,9 @@
 //! `PATH` and recorded the same way; a path that is relative or names no executable file is
 //! refused naming it. The program is a double; nothing reaches a model.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

@@ -5,6 +5,9 @@
 //! paths and implementation paths both changed", the story's tests written and the
 //! implementation done.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

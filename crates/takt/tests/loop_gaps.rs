@@ -5,6 +5,9 @@
 //! the token budget stops the run once the harness has reported that many tokens, and not
 //! before; the time budget stops the run once that much time has passed.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

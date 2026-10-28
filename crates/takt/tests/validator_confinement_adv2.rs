@@ -6,6 +6,9 @@
 //! onto HEAD, so the gate is read from the model-edited tree again: the very F3 defect, revived
 //! for every case still in flight across the migration that introduced the pin.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

@@ -8,6 +8,9 @@
 //! layers differ, naming the layer, unless asked to compare across them; a record without
 //! `layers` reads as not recorded.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

@@ -3,6 +3,9 @@
 //! story:the-state-directory-holds-every-host-record (how a refused state directory is named).
 //! Nothing reaches a model or a network.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -1,6 +1,9 @@
 //! Adversary pass 2 against the authority hardening: interleavings across cases in one tree,
 //! the evidence reader's promise, and case ids at the edges.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};

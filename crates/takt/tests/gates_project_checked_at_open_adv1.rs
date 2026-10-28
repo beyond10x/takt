@@ -2,6 +2,9 @@
 //! validator registered, whatever the case's protocol does with it, and prepares the gate's
 //! inputs under the case directory as if it were inside the tree.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

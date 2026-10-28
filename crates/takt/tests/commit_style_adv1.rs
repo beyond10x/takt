@@ -4,6 +4,9 @@
 //! message that carries no takt trailer (a case opened on an intent, or `trailer: ""`), becomes a
 //! trailer git and every forge read, such as `Signed-off-by` or `Co-authored-by`.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;

@@ -2,6 +2,9 @@
 //! `approvals_only` (read from `git diff-tree --raw -z`), the head named in `branch.yaml` before
 //! the push, and the checks read before the merge of a head carrying the approval's commits.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};

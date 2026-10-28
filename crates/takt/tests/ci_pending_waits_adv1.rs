@@ -2,6 +2,9 @@
 //! (`--hours inf`, `--hours NaN`), and the refusal of a merge for a pending required check as the
 //! bot route reports it, read by `forge::refused_for_a_pending_check`.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::panic::AssertUnwindSafe;

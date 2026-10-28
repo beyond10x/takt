@@ -3,6 +3,9 @@
 //! own instructions, read at the case's base, win over a configured style. Each session here is
 //! metaharness's scripted Claude Code: no vendor process, no credential, no network.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;

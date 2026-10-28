@@ -5,6 +5,9 @@
 //! `timeout_seconds: 1800` refuses the open with no case left, the harness never asked; a valid
 //! one opens as before, and its gate runs.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

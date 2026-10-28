@@ -2,6 +2,9 @@
 //! case's `protocol.yaml` there before `check_id` sees the id, though `check_id`'s doc says
 //! every id `takt run --case` gives passes it before it is joined to a path.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

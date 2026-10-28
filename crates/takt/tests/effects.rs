@@ -4,6 +4,9 @@
 //! effect too, under `takt.choice`. With an authority provider that allows every capability, the
 //! merge effect still merges only under a grant of `repository.merge` at the case's revision.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;

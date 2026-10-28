@@ -7,6 +7,9 @@
 //! stops Completed (accepted). Every record names its validator; the model never produces
 //! evidence; a connection to the forge is never authority.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;

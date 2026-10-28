@@ -7,6 +7,9 @@
 //! `.local/bin`, where the session executor finds it, records its environment and arguments
 //! and reads the staged token back.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

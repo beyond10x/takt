@@ -3,6 +3,9 @@
 //! or ignore it, or give a `--test-cmd` that does not write it." Every repository is a scratch one
 //! under the crate's build directory.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

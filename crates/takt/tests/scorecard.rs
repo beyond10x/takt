@@ -5,6 +5,9 @@
 //! components beside their sum, instants below the second, the base revision on `opened` and
 //! the revision a validator observed on its step.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

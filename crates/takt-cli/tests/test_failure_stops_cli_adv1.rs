@@ -8,6 +8,9 @@
 //! resumed the case"), its first five runs stopped at step 1 before any `tests.run` result, and
 //! its failing tests had long names. Each case here builds one of those shapes.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

@@ -5,6 +5,9 @@
 //! double; nothing reaches a model. One case at a time: a run sweeps what left the test
 //! process's own group, a sibling case's gate command among it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

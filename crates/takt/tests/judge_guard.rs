@@ -5,6 +5,9 @@
 //! reports the local `main`), never from the candidate's tree and never at the case's base
 //! commit; a base commit that is not an ancestor of that tip refuses the merge.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;

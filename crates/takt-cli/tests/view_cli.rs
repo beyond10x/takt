@@ -8,6 +8,9 @@
 //! transcripts directory), one alone (its transcript found by the layout
 //! `<repo-key>/<case>/run-<r>/step-<n>.jsonl`). Nothing runs a model or reaches a network.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

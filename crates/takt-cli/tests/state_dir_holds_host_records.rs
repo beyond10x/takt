@@ -5,6 +5,9 @@
 //! configuration's `takt.state_dir` names one. Without any of the three, both stay under
 //! `$XDG_STATE_HOME/takt`. The `claude` is a double; nothing reaches a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 mod state_dir_holds_host_records {
     use std::fs;
     use std::path::{Path, PathBuf};

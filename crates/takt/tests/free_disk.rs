@@ -6,6 +6,9 @@
 //! reader that fails stops nothing and is said once. The free-space reader is injected
 //! ([`Run::read_free_space_with`]); no test fills a disk.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};

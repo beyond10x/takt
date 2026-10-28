@@ -2,6 +2,9 @@
 //! that `approvals_only` takes for the approval's own, and which refs a step or a validator's
 //! command may move.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

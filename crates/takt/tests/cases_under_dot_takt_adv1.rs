@@ -2,6 +2,9 @@
 //! writes into the tree is refused and undone; these cases aim at what lies around the new cases
 //! root: `.takt/` itself, its `.gitignore` and the other files a repository or a step keeps in it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

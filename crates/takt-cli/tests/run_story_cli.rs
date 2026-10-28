@@ -5,6 +5,9 @@
 //! case resumes that case; and without `--story` the frontier's next ready story is taken as
 //! before (story:run-names-its-story).
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

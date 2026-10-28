@@ -5,6 +5,9 @@
 //! refuses for a required check that has not reported is nothing merged, no record, and waited
 //! on like pending checks.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

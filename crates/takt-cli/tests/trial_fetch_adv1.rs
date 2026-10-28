@@ -5,6 +5,9 @@
 //! repository's own configuration is the only configuration it reads. `ssh` is a double on the
 //! program path that records how it was started and refuses; nothing reaches a network.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -6,6 +6,9 @@
 //! observation is put back whatever another part's error, and nothing is put back through a link
 //! on the way from the tree down.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fs;

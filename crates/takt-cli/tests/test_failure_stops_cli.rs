@@ -11,6 +11,9 @@
 //! the tests and the count, with no harness call after the second; a failing set that changes, or
 //! one the output does not name, does not stop it.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

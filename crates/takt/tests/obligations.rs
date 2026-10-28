@@ -3,6 +3,9 @@
 //! gates document with its status, and the run's last line and `takt report` print the same
 //! table. The gates document is read from the base, so a change that edits it cannot weaken it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};

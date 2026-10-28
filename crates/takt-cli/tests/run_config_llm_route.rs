@@ -5,6 +5,9 @@
 //! section with no `model`. The route's key is a file this test writes, whose marker must reach no
 //! output. No refused run reaches a network, and HOME is a scratch directory.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

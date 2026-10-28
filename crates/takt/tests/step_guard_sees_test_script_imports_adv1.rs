@@ -4,6 +4,9 @@
 //! outcome: a judgement step cannot earn `tests.run` or `gate.run` `pass` by adding a file that
 //! the test command's script loads in place of the real test runner.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

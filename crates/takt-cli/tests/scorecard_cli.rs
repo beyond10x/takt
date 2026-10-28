@@ -3,6 +3,9 @@
 //! `scorecard-<sha>.json`; `--against <file>` marks a scenario worse than the saved one's and
 //! exits 3. The case directories are written through `takt::events`, as the run loop writes them.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

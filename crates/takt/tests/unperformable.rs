@@ -5,6 +5,9 @@
 //! is the only producer of a claim that does not hold. It takes no harness call there, and a
 //! resume takes none either. With the performer registered, nothing changes.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -2,6 +2,9 @@
 //! outside the declared set from any layer is refused, a resumed case's run file is still checked,
 //! and the `opened` line carries each value's source.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

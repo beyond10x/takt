@@ -8,6 +8,9 @@
 //! failed there still names it, a code commit after the gate reads it `not yet run`, and a stop at
 //! the store commits does not hide the gate's table from a resume or from `takt report`.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

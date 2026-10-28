@@ -4,6 +4,9 @@
 //! takt's own actor accepted as the approver of a story's merge. Each case is named for what it
 //! asserts now that the defect is closed.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

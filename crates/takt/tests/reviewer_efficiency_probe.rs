@@ -1,5 +1,8 @@
 //! Reviewer probes for the efficiency grant (1f55e0e). Not part of the change.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;

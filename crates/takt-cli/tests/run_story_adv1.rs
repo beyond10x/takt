@@ -1,6 +1,9 @@
 //! Adversarial cases for `takt run --story <id>` (story:run-names-its-story), through the
 //! binary over a copy of the `one-ready` fixture store, as `run_story_cli.rs` builds it.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

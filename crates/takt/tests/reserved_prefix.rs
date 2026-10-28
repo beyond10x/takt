@@ -1,6 +1,9 @@
 //! A base branch under takt's reserved prefix `takt/`, that is no case's branch, is refused by
 //! name before a case opens, and a case's own branch still resolves to its recorded base.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};

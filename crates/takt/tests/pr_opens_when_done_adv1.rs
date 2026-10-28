@@ -4,6 +4,9 @@
 //! side in the tree it writes: a file the case deleted that the base modified, and a binary
 //! file both changed. Each case is named for what it asserts.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

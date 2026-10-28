@@ -2,6 +2,9 @@
 //! the repository, a document outside the repository (absolute, and relative through `..`),
 //! and a path that names a directory. Adversary pass 1 over story:gate-validator.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

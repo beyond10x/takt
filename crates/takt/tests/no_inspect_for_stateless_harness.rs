@@ -4,6 +4,9 @@
 //! step with `--no-session-persistence`: it is driven here through a fake `claude` program that
 //! keeps every prompt it is given and picks `repository.inspect` whenever the prompt lists it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

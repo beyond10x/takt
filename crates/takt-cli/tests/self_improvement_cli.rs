@@ -19,6 +19,9 @@
 //! test's own: the promotion store under `XDG_STATE_HOME`, `check-finding`'s cache under
 //! `XDG_CACHE_HOME`; the scenario repository is a local checkout.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

@@ -4,6 +4,9 @@
 //! as `test_result` evidence from takt at the record's own instant, and moves the story to
 //! `implemented`, both on the case's branch.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

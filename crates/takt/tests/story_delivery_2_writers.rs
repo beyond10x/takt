@@ -7,6 +7,9 @@
 //! the two writers `tests.shown_red` and `change.complete` never hold: `implementation.edit` is
 //! never admitted, and `pr.open` never.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

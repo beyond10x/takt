@@ -4,6 +4,9 @@
 //! records over the recorded turns through the binary alone; a missing value, or one that is no
 //! full commit id of a commit of the repository, is refused before anything is written.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -4,6 +4,9 @@
 //! shown as what failed must be what failed, not the output of a run of the command that passed.
 //! The credential-shaped text is assembled at run time, so this file holds no such shape itself.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

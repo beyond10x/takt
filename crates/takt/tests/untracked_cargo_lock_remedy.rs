@@ -3,6 +3,9 @@
 //! it, or give a test command that does not write it. Any other untracked path keeps the refusal
 //! it had, with no remedy. Every repository is a scratch one under the crate's build directory.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -3,6 +3,9 @@
 //! validator guard leaves open: what a test command plants in the git directory, a branch it
 //! moves, a process it leaves running, and a gate command's script on the case branch.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
