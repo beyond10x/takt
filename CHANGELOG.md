@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- The specification, CI and the container image use ESS 0.74.0 (was 0.73.0).
+
 ## [0.17.0] - 2026-10-28
 
 A step can decline a story its rules forbid, stop `Declined` with exit 9; a scenario can declare a
