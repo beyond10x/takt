@@ -39,9 +39,9 @@ the plan, and no container image is published: you build one from `Dockerfile`.
 
 ## Status
 
-0.16.0 is the latest release. A run names the Claude Code binary it starts (`--harness-program`)
-and stops `HarnessUnqualified` before the first session when metaharness does not qualify it, so a
-trial on a GitHub repository can end with its pull request merged. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
+0.17.0 is the latest release. A judgement step can decline a story its rules forbid, a stop of its
+own (`Declined`, exit 9) apart from a stuck run, and a scenario can declare a seed that is red on
+purpose (`red-base = expected`). What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64) are on the
 [releases](https://github.com/beyond10x/takt/releases) page. Changes: [`CHANGELOG.md`](CHANGELOG.md).
 

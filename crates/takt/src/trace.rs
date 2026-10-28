@@ -310,9 +310,10 @@ pub struct Header {
     /// `layers`, "layers not recorded".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layers: Option<BTreeMap<String, String>>,
-    /// The repository's obligations as the run's last `obligations` line holds them: each gate of
-    /// the gates document at the case's base with its status ([`crate::obligations`]); empty when
-    /// the record holds none.
+    /// The repository's obligations as the last `obligations` line at the case's implementation
+    /// revision holds them, else the run's last `obligations` line: each gate of the gates
+    /// document at the case's base with its status ([`crate::obligations`]); empty when the
+    /// record holds none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub obligations: Vec<crate::obligations::Obligation>,
     /// The files the trace was read from, each relative to the case directory, or its file
@@ -369,8 +370,9 @@ fn source_name(case_dir: &Path, path: &Path) -> String {
 
 /// `text` as a trace carries it and a report prints it, the one escape every text a record
 /// contributes passes: the home directory as `~`, so no local path travels, and each control
-/// character (C0, DEL and C1) as `\u{..}`, so a record a harness shaped cannot drive the
-/// terminal a report is read on. Passing a text through twice changes nothing.
+/// character (C0, DEL and C1) and each bidi override or isolate ([`is_bidi_control`]) as
+/// `\u{..}`, so a record a harness shaped cannot drive the terminal a report is read on nor
+/// reorder what it shows of a line. Passing a text through twice changes nothing.
 #[must_use]
 pub fn escape(text: &str) -> String {
     let home = std::env::var_os("HOME").map(|home| home.to_string_lossy().into_owned());
@@ -394,7 +396,7 @@ fn escape_with(text: &str, home: Option<&str>) -> String {
             rest = after;
             continue;
         }
-        if c.is_control() {
+        if c.is_control() || is_bidi_control(c) {
             out.push_str(&format!("\\u{{{:x}}}", u32::from(c)));
         } else {
             out.push(c);
@@ -402,6 +404,12 @@ fn escape_with(text: &str, home: Option<&str>) -> String {
         rest = &rest[c.len_utf8()..];
     }
     out
+}
+
+/// Whether `c` is a bidi embedding, override or isolate (U+202A-U+202E, U+2066-U+2069): a
+/// character that reorders how a terminal shows the rest of its line.
+fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
 }
 
 /// Whether `c` continues a path component's name, so a home directory it follows was not
@@ -472,6 +480,14 @@ fn classify(by: &str, action: &str, summary: &str) -> Class {
                 Intent::Inspect,
                 Kind::Read,
                 Some("unchanged"),
+                Evidence::Declared,
+            ),
+            // takt's own exit beside the actions: the step changed no file and declined.
+            crate::harness::DECLINE => class(
+                Actor::Harness,
+                Intent::Coordinate,
+                Kind::ModelCall,
+                Some("declined"),
                 Evidence::Declared,
             ),
             _ => class(
@@ -1233,13 +1249,23 @@ impl Trace {
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
-        Ok(Self::from_numbered_lines(
-            &lines,
-            shim.as_deref(),
-            &name,
-            run,
-            sources,
-        ))
+        let mut trace = Self::from_numbered_lines(&lines, shim.as_deref(), &name, run, sources);
+        // The table at the case's implementation revision, the revision the gate judges, not a
+        // later one at takt's store commits above it (a stop's, as takt 0.16.0 recorded it).
+        if let Some(revision) = crate::case::revision_of(case_dir, "implementation")
+            .ok()
+            .flatten()
+        {
+            let tables: Vec<Value> = lines
+                .iter()
+                .filter(|(_, line)| line["event"] == crate::obligations::EVENT)
+                .map(|(_, line)| line.clone())
+                .collect();
+            if let Some(rows) = crate::obligations::recorded_at(&tables, &revision) {
+                trace.header.obligations = rows;
+            }
+        }
+        Ok(trace)
     }
 
     /// The trace of a record's `lines`, as [`Events::read`] gives them, completed from the
@@ -1443,6 +1469,16 @@ mod tests {
         );
     }
 
+    /// story:a-run-can-decline: a declining step is a model call that edits nothing.
+    #[test]
+    fn a_declining_step_is_no_edit() {
+        let decline = classify("harness", "decline", "AGENTS.md forbids it");
+        assert_eq!(
+            (decline.kind, decline.intent, decline.outcome),
+            (Kind::ModelCall, Intent::Coordinate, Some("declined"))
+        );
+    }
+
     #[test]
     fn seconds_round_to_the_millisecond() {
         assert_eq!(seconds(30_003_589_000), 30.003);
@@ -1470,5 +1506,25 @@ mod tests {
             once,
             "escaping twice changes nothing"
         );
+    }
+
+    /// story:a-run-can-decline: a bidi override or isolate (U+202A-U+202E, U+2066-U+2069)
+    /// reorders what a terminal shows of a line, so a text a model wrote passes none raw.
+    #[test]
+    fn no_bidi_override_or_isolate_passes_the_escape() {
+        let bidi: String = ('\u{202a}'..='\u{202e}')
+            .chain('\u{2066}'..='\u{2069}')
+            .collect();
+        let escaped = escape_with(&format!("ok {bidi} done"), None);
+        assert_eq!(
+            escaped,
+            "ok \\u{202a}\\u{202b}\\u{202c}\\u{202d}\\u{202e}\\u{2066}\\u{2067}\\u{2068}\\u{2069} done"
+        );
+        assert_eq!(
+            escape_with(&escaped, None),
+            escaped,
+            "escaping twice changes nothing"
+        );
+        assert_eq!(escape_with("café ‹ok›", None), "café ‹ok›");
     }
 }

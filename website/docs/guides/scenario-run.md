@@ -43,6 +43,34 @@ admits only while the branch's tip is merged into the default branch.
 `takt scenario run --config <FILE>` reads the same run configuration file as `takt run`, and
 refuses a `story` in it, since the scenario names the story. (Not in 0.14.0.)
 
+## A seed whose tests fail on purpose
+
+A run stops `RedBase`, exit 3, when the case's first `tests.run` fails before any step changed
+the tree. Some scenarios start from a seed that is red on purpose: the story is to make a failing
+test pass. Such a scenario declares it in its section, with the key `red-base`:
+
+```ini
+[scenario "3"]
+	story = story:empty-or-broken-file
+	seed = <commit>
+	red-base = expected
+```
+
+The run then goes on past a red base as `--continue-past-red-base` does, without the flag. A line
+before the case opens says what the scenario declared, whether the seed's tests then fail or not:
+
+```text
+red base: expected by scenario 3 in .engineering/scenarios.conf at main: tests failing at the base do not stop the run
+```
+
+The case records the declaration as it opens (`red_base: expected` in its `case.yaml`), so a
+resume of it with `takt run --case` needs no flag either, also after a stop before its first
+`tests.run` such as `SetupFailed`. A `--config` file's
+`continue_past_red_base = false` does not turn the declaration off. The key is `red-base`, not
+`red_base`: git's configuration syntax admits no `_` in a key. `expected` is its one value; any
+other is refused before anything is cut. A scenario without the key still stops `RedBase`.
+(From 0.17.0.)
+
 ## Scenarios
 
 Scenario 1 is a 31-line change to a toy CLI in the scratch repository. Scenarios 2 to 6 were

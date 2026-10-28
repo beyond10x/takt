@@ -1025,7 +1025,7 @@ fn decided_at(decision: &Decision, artifact: &str) -> Option<String> {
 }
 
 /// The revision of `artifact` the case at `case_dir` is at, from its `case.yaml`.
-fn revision_of(case_dir: &Path, artifact: &str) -> Result<Option<String>> {
+pub(crate) fn revision_of(case_dir: &Path, artifact: &str) -> Result<Option<String>> {
     let path = case_dir.join("case.yaml");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
@@ -1314,6 +1314,10 @@ pub fn inputs_of(case_dir: &Path) -> Result<Vec<(String, String)>> {
 
 /// The `case.yaml` member that holds where each input's value came from.
 const INPUT_SOURCES: &str = "input_sources";
+
+/// The `case.yaml` member that holds `expected` for a case whose red base is expected
+/// ([`CaseDir::record_red_base_expected`]).
+const RED_BASE: &str = "red_base";
 
 /// The inputs of the case at `case_dir` with the source of each value as its `case.yaml` holds
 /// them, `(name, value, source)`; the source is empty for a case that records none.
@@ -3412,6 +3416,22 @@ impl CaseDir {
     #[must_use]
     pub fn protocol_source(&self) -> Option<String> {
         self.doc["protocol_source"].as_str().map(str::to_owned)
+    }
+
+    /// Records in `case.yaml` that the case's red base is expected (`red_base: expected`): the
+    /// tests failing at its base are no stop for any run of it, a resume included
+    /// ([`CaseDir::red_base_expected`]). Written by takt as the case is opened, from what the
+    /// caller was told before it (a scenario's declaration), never from the case's tree.
+    pub fn record_red_base_expected(&mut self) -> Result<()> {
+        self.doc[RED_BASE] = "expected".into();
+        self.write()
+    }
+
+    /// Whether the case's record holds its red base expected ([`CaseDir::record_red_base_expected`]);
+    /// false for a case that records none.
+    #[must_use]
+    pub fn red_base_expected(&self) -> bool {
+        self.doc[RED_BASE].as_str() == Some("expected")
     }
 
     /// Creates the directory and writes the case's files, `case.yaml` last.

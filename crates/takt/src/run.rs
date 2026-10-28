@@ -190,6 +190,11 @@ pub enum Stop {
         /// The code it ended with.
         exit: Option<i32>,
     },
+    /// A judgement step declined the intent: it named `decline`, changed no file, and gave
+    /// this reason as its summary; or the run found the case declined at its current case
+    /// revision and took no step. The case stays open; a commit that moves its revision makes
+    /// it step again.
+    Declined(String),
 }
 
 /// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
@@ -199,7 +204,7 @@ pub const REPEATED_FAILURES: u64 = 2;
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 15] = [
+pub const STOP_KINDS: [&str; 16] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -215,6 +220,7 @@ pub const STOP_KINDS: [&str; 15] = [
     "RepeatedTestFailure",
     "HarnessUnqualified",
     "SetupFailed",
+    "Declined",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -317,6 +323,7 @@ impl std::fmt::Display for Stop {
                     "SetupFailed ({name} did not end: a signal, no start or its time ran out)"
                 ),
             },
+            Stop::Declined(reason) => write!(f, "Declined ({reason})"),
         }
     }
 }
@@ -510,6 +517,134 @@ impl TestsSoFar {
             again,
         }
     }
+}
+
+/// The reason [`Stop::Declined`] gives for a decline whose summary was empty.
+const NO_REASON: &str = "no reason given";
+
+/// The key of `case.yaml` that holds the case revision, `r<n>`; a case that holds none is at
+/// `r1`, as the case record reads it.
+const CASE_REVISION_KEY: &str = "revision";
+
+/// The case revision `case.yaml` under `case_dir` holds now, `r<n>`; `r1` when it holds none.
+fn case_revision_now(case_dir: &Path) -> Result<String> {
+    let path = case_dir.join("case.yaml");
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
+    let doc: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(&text).with_context(|| format!("read {}", path.display()))?;
+    Ok(case_revision_in(&doc))
+}
+
+/// The case revision the `case.yaml` document `doc` holds, `r1` when it holds none.
+fn case_revision_in(doc: &serde_yaml_ng::Value) -> String {
+    doc.get(CASE_REVISION_KEY)
+        .and_then(serde_yaml_ng::Value::as_str)
+        .unwrap_or("r1")
+        .to_owned()
+}
+
+/// The decline a case's last run stopped on ([`Stop::Declined`]): the reason and the case
+/// revision of the record's last `decline` line, read as [`TestsSoFar::read`] reads a `RedBase`
+/// stop: only when the last `stop` line after the last `opened` one is `Declined`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Declined {
+    reason: String,
+    case_revision: String,
+}
+
+impl Declined {
+    /// The decline `record`, a case's record before a run's own lines, ends on; none when its
+    /// last run stopped on anything else or holds no `decline` line.
+    fn last(record: &[serde_json::Value]) -> Option<Self> {
+        let mut decline = None;
+        let mut stop: Option<&str> = None;
+        for line in record {
+            match line["event"].as_str() {
+                Some("opened") => stop = None,
+                Some("stop") => stop = line["stop"].as_str(),
+                Some("decline") => {
+                    decline = Some(Declined {
+                        reason: line["reason"].as_str().unwrap_or_default().to_owned(),
+                        case_revision: line["case_revision"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_owned(),
+                    });
+                }
+                _ => {}
+            }
+        }
+        let declined = stop.and_then(|stop| stop.split([' ', '(']).next()) == Some("Declined");
+        decline.filter(|_| declined)
+    }
+
+    /// The decline that holds for the case `case_id` at `case_dir` now ([`Declined::last`]): at
+    /// the case revision its `case.yaml` holds, with the case's branch at the case's
+    /// implementation revision or above it by approval records only
+    /// ([`crate::case::approvals_only`]), so a resume would not move the revision. Reads only;
+    /// a record, a case or a branch that does not read holds no decline, and the case is taken
+    /// as any other.
+    fn now(tree: &Path, case_id: &str, case_dir: &Path) -> Option<Self> {
+        let declined = Self::last(&Events::new(case_dir).read().ok()?)?;
+        let path = case_dir.join("case.yaml");
+        let doc: serde_yaml_ng::Value =
+            serde_yaml_ng::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        if case_revision_in(&doc) != declined.case_revision {
+            return None;
+        }
+        if let Some(revision) = doc["artifacts"]["implementation"]["revision"].as_str() {
+            let branch = format!(
+                "refs/heads/{}^{{commit}}",
+                crate::case::Branch::name_of(case_id)
+            );
+            let head = crate::git::run(tree, &["rev-parse", "--verify", "-q", &branch]).ok()?;
+            if head != revision
+                && !crate::case::approvals_only(tree, revision, &head, case_dir).ok()?
+            {
+                return None;
+            }
+        }
+        Some(declined)
+    }
+
+    /// The stop this decline gives: its reason, each control character escaped, or
+    /// [`NO_REASON`].
+    fn stop(&self) -> Stop {
+        Stop::Declined(declined_reason(&self.reason))
+    }
+}
+
+/// `summary`, a decline's reason, as its stop line names it: each control character escaped,
+/// cut to [`REASON_AT_MOST`] bytes ([`reason_bounded`]), [`NO_REASON`] when it is empty.
+fn declined_reason(summary: &str) -> String {
+    let reason = reason_bounded(&crate::trace::escape(summary.trim()));
+    if reason.is_empty() {
+        NO_REASON.to_owned()
+    } else {
+        reason
+    }
+}
+
+/// The most bytes of a decline's reason that its `decline` record line, the record's stop
+/// line and the terminal's stop line carry, the marker [`REASON_CUT`] included; a reason the
+/// model wrote is not a channel without end into the record and the terminal.
+const REASON_AT_MOST: usize = 2048;
+
+/// What a reason [`reason_bounded`] cut ends with, so a reader sees it was cut.
+const REASON_CUT: &str = " [reason cut]";
+
+/// `reason` when it is at most [`REASON_AT_MOST`] bytes; otherwise its start, cut on a
+/// character boundary, and [`REASON_CUT`], [`REASON_AT_MOST`] bytes or fewer in all.
+fn reason_bounded(reason: &str) -> String {
+    if reason.len() <= REASON_AT_MOST {
+        return reason.to_owned();
+    }
+    let mut end = REASON_AT_MOST - REASON_CUT.len();
+    while !reason.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{REASON_CUT}", &reason[..end])
 }
 
 /// Where a validator's step is taken: the run's record and output, the evaluation it follows,
@@ -8914,7 +9049,9 @@ pub struct Run<'a> {
     modules: Modules,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
-    /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`].
+    /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`], and off
+    /// on the resume of a case whose record holds its red base expected
+    /// ([`CaseDir::red_base_expected`]).
     stops_red_base: bool,
     /// The run file's `setup` commands, run when the case opens ([`Run::declare_setup`]).
     setup: Vec<crate::run_config::SetupCommand>,
@@ -9473,6 +9610,10 @@ impl<'a> Run<'a> {
         // The profile the case was opened under: a resume keeps it unless the caller asks for
         // another ([`Run::keep_records`]).
         let records = case.opened_profile()?;
+        // A case whose record holds its red base expected goes on past it on every resume, as the
+        // run that opened it did ([`CaseDir::red_base_expected`]); any other stops at it until
+        // the caller says otherwise ([`Run::continue_past_red_base`]).
+        let stops_red_base = !case.red_base_expected();
         Ok(Self {
             tree: tree.to_path_buf(),
             case,
@@ -9495,7 +9636,7 @@ impl<'a> Run<'a> {
             options,
             modules,
             stops_unperformable: false,
-            stops_red_base: true,
+            stops_red_base,
             setup: Vec::new(),
             workspace: None,
             records,
@@ -9563,22 +9704,71 @@ impl<'a> Run<'a> {
     /// not on a case's branch, so a status never comes from a branch a model committed on (a
     /// tree on a case's branch is put on its base by [`Run::take_next`], and the next run reads
     /// the base's list there). Among those, the first in case order that is not finished; a
-    /// decision that does not read is said on `out` and the case taken as open. `None` when
-    /// there is nothing to resume.
+    /// decision that does not read is said on `out` and the case taken as open. A case
+    /// declined at its current case revision ([`Declined::now`]) is passed over, said on `out`.
+    /// `None` when there is nothing to resume.
     pub fn next_to_resume(
         tree: &Path,
         frontier: &dyn Frontier,
         out: &mut dyn Write,
     ) -> Result<Option<(String, String)>> {
+        let mut passed = BTreeSet::new();
         let taken = taken_on_case_branches(tree)?;
-        if let Some(found) = crate::case::resumable(tree, &taken, out)? {
+        if let Some(found) = Self::resumable_undeclined(tree, taken, &mut passed, out)? {
             return Ok(Some(found));
         }
         if on_a_case_branch(tree)? {
             return Ok(None);
         }
         let active = frontier.active(tree)?;
-        crate::case::resumable(tree, &active, out)
+        Self::resumable_undeclined(tree, active, &mut passed, out)
+    }
+
+    /// The open case to resume for one of the stories `stories`, as [`crate::case::resumable`]
+    /// finds it, that is not declined at its current case revision ([`Declined::now`]): the
+    /// first case in case order that records a story among them, is not finished and is not
+    /// declined. Each declined one is passed over, said on `out` once, the case kept in
+    /// `passed`, and the next case looked for: the declined case is passed over, not its
+    /// story, so another open case of the same story is still resumed.
+    fn resumable_undeclined(
+        tree: &Path,
+        stories: Vec<String>,
+        passed: &mut BTreeSet<String>,
+        out: &mut dyn Write,
+    ) -> Result<Option<(String, String)>> {
+        if stories.is_empty() {
+            return Ok(None);
+        }
+        for (case_id, dir) in crate::case::case_dirs(tree)? {
+            if passed.contains(&case_id) || !dir.join("case.yaml").is_file() {
+                continue;
+            }
+            let Some(story_id) =
+                crate::case::story_of(&dir)?.filter(|story| stories.contains(story))
+            else {
+                continue;
+            };
+            match crate::case::is_finished(&dir) {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(error) => writeln!(
+                    out,
+                    "frontier: the case {case_id} has a decision that does not read ({error:#}); taken as open"
+                )?,
+            }
+            let case_dir = crate::case::CaseDir::locate(tree, &case_id);
+            let Some(declined) = Declined::now(tree, &case_id, &case_dir) else {
+                return Ok(Some((case_id, story_id)));
+            };
+            writeln!(
+                out,
+                "frontier: passed over the case {case_id} ({story_id}): declined at case revision {} ({}); a commit that moves its revision makes it step again",
+                declined.case_revision,
+                declined_reason(&declined.reason)
+            )?;
+            passed.insert(case_id);
+        }
+        Ok(None)
     }
 
     /// Opens the case on the next ready story, the store told last, and never resumes one: for
@@ -9875,7 +10065,8 @@ impl<'a> Run<'a> {
     /// Goes on past a red base: the case's first `tests.run` failing before any effect is
     /// recorded like any other result, and the harness is offered its step, instead of the run
     /// stopping [`Stop::RedBase`]. For a caller whose base fails on purpose; every run stops so
-    /// without this call.
+    /// without this call, but the resume of a case whose record holds its red base expected
+    /// ([`CaseDir::record_red_base_expected`]).
     pub fn continue_past_red_base(&mut self) {
         self.stops_red_base = false;
     }
@@ -10312,28 +10503,28 @@ impl<'a> Run<'a> {
         )
     }
 
-    /// The repository's obligations at the stop ([`crate::obligations`]): the table recorded as
-    /// the run's last, and a line naming the ones not met. Nothing for a run with no gates
-    /// document; a table that cannot be read is left out, and the stop stays the one reached.
+    /// The repository's obligations at the stop ([`crate::obligations`]), read at the case's
+    /// implementation revision, not at takt's store commits above it: the table recorded as the
+    /// run's last, at the revision it was read at, and a line naming the ones not met. Nothing
+    /// for a run with no gates document; a table that cannot be read is left out, and the stop
+    /// stays the one reached.
     fn close_obligations(&self, events: &Events, stop: &Stop, out: &mut dyn Write) -> Result<()> {
         let Ok(record) = events.read() else {
             return Ok(());
         };
-        let Ok(obligations) = crate::obligations::of_run(self, &record) else {
+        let Ok(Some((revision, obligations))) = crate::obligations::of_run(self, &record) else {
             return Ok(());
         };
         if obligations.is_empty() {
             return Ok(());
         }
-        if let Ok(revision) = crate::git::head(&self.tree) {
-            events.emit(
-                self.steps,
-                &Event::Obligations {
-                    revision,
-                    obligations: obligations.clone(),
-                },
-            )?;
-        }
+        events.emit(
+            self.steps,
+            &Event::Obligations {
+                revision,
+                obligations: obligations.clone(),
+            },
+        )?;
         if let Some(line) = crate::obligations::summary(&obligations, stop.hands_over()) {
             writeln!(out, "obligations: {line}")?;
         }
@@ -10759,11 +10950,11 @@ impl<'a> Run<'a> {
     }
 
     /// Why the step guard refuses `proposal` on its face, before the edit effect writes a byte
-    /// of it to `tree`: an action neither `offered` nor among the `approvals`; a file changed
-    /// for an approval, `repository.inspect` or an action that records a choice (`shape`),
-    /// which change none, each file named; a path that is no plain path of the tree (absolute,
-    /// with a `.` or `..` part, a part named `.git`); a path in the cases directory or on the
-    /// judge `surface`; a non-test path for `tests.write`; a path reached through a link, or
+    /// of it to `tree`: an action neither `offered` nor among the `approvals` nor a decline; a
+    /// file changed for an approval, a decline, `repository.inspect` or an action that records
+    /// a choice (`shape`), which change none, each file named; a path that is no plain path of
+    /// the tree (absolute, with a `.` or `..` part, a part named `.git`); a path in the cases
+    /// directory or on the judge `surface`; a non-test path for `tests.write`; a path reached through a link, or
     /// one at which the tree holds no regular file but something else; a path git ignores
     /// ([`crate::git::ignored_among`]), each named, which no commit would carry and the scratch
     /// copy never held, so what the tree holds there is the operator's and is never written,
@@ -10778,11 +10969,13 @@ impl<'a> Run<'a> {
     ) -> Option<String> {
         let action = &proposal.action;
         let approval = approvals.contains(action);
-        if !offered.contains(action) && !approval {
+        // A decline is takt's own exit, offered beside the actions, and changes no file.
+        let decline = action == crate::harness::DECLINE;
+        if !offered.contains(action) && !approval && !decline {
             return Some(format!("{action} was not offered"));
         }
         let records_choice = !shape.choices_of(action).is_empty();
-        if (approval || records_choice || action == "repository.inspect")
+        if (approval || records_choice || decline || action == "repository.inspect")
             && !proposal.files.is_empty()
         {
             let named: Vec<std::ffi::OsString> = proposal
@@ -11355,6 +11548,9 @@ impl<'a> Run<'a> {
         if !self.stops_red_base && matches!(tests_so_far.again, Some(Again::RedBase(_))) {
             tests_so_far.again = None;
         }
+        // The decline the case's last run stopped on, read before this run's own lines: at the
+        // case revision the case is still at, this run stops on it again before any step.
+        let declined = Declined::now(&self.tree, &self.case.id, &self.case.dir);
         // The layers the run can read as it opens (ADR 0101), each from what ran: takt's own
         // revision as the caller gave it. The harness's version and the model are read from
         // the harness's stream at each step, so their layers are on the step lines; the program's
@@ -11435,6 +11631,14 @@ impl<'a> Run<'a> {
                 shown_inputs.join(" ")
             }
         )?;
+        if let Some(declined) = declined {
+            writeln!(
+                out,
+                "declined: at case revision {}, where the case still is; no step is taken until a commit moves it",
+                declined.case_revision
+            )?;
+            return Ok(declined.stop());
+        }
         if let Some(preflight) = &preflight {
             if preflight.failing.is_empty() {
                 if !preflight.advisory.is_empty() {
@@ -11922,7 +12126,11 @@ impl<'a> Run<'a> {
         )?;
         let record = events.read()?;
         let failed = failed_checks(&record);
-        let obligations = crate::obligations::of_run(self, &record).unwrap_or_default();
+        let obligations = crate::obligations::of_run(self, &record)
+            .ok()
+            .flatten()
+            .map(|(_, obligations)| obligations)
+            .unwrap_or_default();
         // The repository's instruction files are read at the commit the case forked from.
         let base = crate::case::Branch::read(&self.case.dir)?.base_commit;
         let ask = self.commit_plan_now().ask();
@@ -12113,8 +12321,15 @@ impl<'a> Run<'a> {
         // discard carries.
         let undo =
             || -> Result<String> { undo_step(&tree, &kept_all).map(|undone| undone.aside.named()) };
+        // The action a step names is model text, as its summary is: escaped once here
+        // ([`crate::trace::escape`]), so no line, record or stop that names it carries a
+        // control or bidi character raw. An action so escaped is offered by no protocol and
+        // is refused as not offered.
         let stepped = match stepped {
-            Ok(stepped) => stepped,
+            Ok(stepped) => stepped.map(|mut report| {
+                report.action = crate::trace::escape(&report.action);
+                report
+            }),
             Err(panic) => {
                 match undo() {
                     Ok(moved) if !moved.is_empty() => eprintln!(
@@ -12162,10 +12377,15 @@ impl<'a> Run<'a> {
         // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but
         // after a path of the shape of a credential ([`proposed_path_refusal`]), since a
         // refusal on its face names the path.
+        // The reply's own summary, as the proposal carries it: the step's summary may add what
+        // the harness said of its session (metaharness's rows), which a decline's reason does
+        // not hold.
+        let mut reply_summary: Option<String> = None;
         let stepped = match stepped {
             Ok(report) => match self.harness.take_proposal() {
                 None => Ok(report),
                 Some(proposal) => {
+                    reply_summary = Some(proposal.summary.clone());
                     let unscanned = proposal_scan_refusal(
                         &self.tree,
                         &self.scan,
@@ -12407,7 +12627,7 @@ impl<'a> Run<'a> {
             report.action,
             self.harness.name()
         )
-        .and_then(|()| writeln!(out, "  said: {}", report.summary));
+        .and_then(|()| writeln!(out, "  said: {}", crate::trace::escape(&report.summary)));
         if let Err(error) = told {
             let moved = undo()?;
             record_step(self)?;
@@ -12666,6 +12886,41 @@ impl<'a> Run<'a> {
             self.refused(events, BY_TAKT, &why)?;
             writeln!(out, "  refused: {why}; the change was discarded")?;
             return Ok(Judgement::Stop(Stop::StepRefused(why)));
+        }
+        // A decline ([`crate::harness::DECLINE`]): offered beside the actions as takt's own
+        // exit, not the protocol's, and taken with no file changed. Judged here, before the
+        // offered actions and before the idle check, so a declining step never reads as one
+        // that made no progress; one that changed a file is refused and its change discarded.
+        if report.action == crate::harness::DECLINE {
+            if !changed.is_empty() {
+                let moved = undo()?;
+                let why = format!(
+                    "{} changed {} path(s), and it changes none: {}",
+                    report.action,
+                    changed.len(),
+                    crate::trace::escape(&changed.join(", "))
+                );
+                record_step(self)?;
+                let why = format!("{why}{moved}");
+                self.refused(events, BY_TAKT, &why)?;
+                writeln!(out, "  refused: {why}; the change was discarded")?;
+                return Ok(Judgement::Stop(Stop::StepRefused(why)));
+            }
+            record_step(self)?;
+            let reason = reason_bounded(&reply_summary.unwrap_or_else(|| report.summary.clone()));
+            let case_revision = case_revision_now(&self.case.dir)?;
+            events.emit(
+                self.steps,
+                &Event::Decline {
+                    reason: reason.clone(),
+                    case_revision: case_revision.clone(),
+                },
+            )?;
+            writeln!(
+                out,
+                "  effect: none; declined at case revision {case_revision}, the case stays open"
+            )?;
+            return Ok(Judgement::Stop(Stop::Declined(declined_reason(&reason))));
         }
         if approvals.contains(&report.action) {
             if !changed.is_empty() {
@@ -12966,5 +13221,24 @@ impl<'a> Run<'a> {
             &head[..8.min(head.len())]
         )?;
         Ok((true, None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// story:a-run-can-decline: a reason past [`REASON_AT_MOST`] bytes is cut on a character
+    /// boundary and marked; one within it is kept whole.
+    #[test]
+    fn a_long_reason_is_cut_on_a_character_boundary_and_marked() {
+        assert_eq!(reason_bounded("short"), "short");
+        let whole = "é".repeat(REASON_AT_MOST);
+        let cut = reason_bounded(&whole);
+        assert!(cut.len() <= REASON_AT_MOST, "{} bytes", cut.len());
+        let kept = cut.strip_suffix(REASON_CUT).expect("the cut marker");
+        assert!(whole.starts_with(kept) && !kept.is_empty());
+        assert_eq!(reason_bounded(&cut), cut, "a cut reason is not cut again");
+        assert!(declined_reason(&"\u{1b}".repeat(REASON_AT_MOST)).len() <= REASON_AT_MOST);
     }
 }

@@ -6,9 +6,26 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-28
+
+A step can decline a story its rules forbid, stop `Declined` with exit 9; a scenario can declare a
+seed red on purpose; an accepted run reports the obligations of the revision it tested.
+
+### Added
+
+- A step may name `decline` with a reason and no file changed: the run stops `Declined (<reason>)`, exit 9, after a `decline` line in `events.jsonl`; a stuck run stays `NoProgress`.
+- A declined case stops `Declined` again with no step until a commit moves its revision, and an argument-less `takt run` passes it over; a decline that changed a file is refused.
+- `red-base = expected` in a scenario's section of `.engineering/scenarios.conf` lets `takt scenario run` go past a red seed with no flag; the case keeps it for `takt run --case`.
+
 ### Changed
 
-- The specification, CI and the container image use ESS 0.72.0 (was 0.70.0).
+- The specification, CI and the container image use ESS 0.73.0 (was 0.70.0).
+- The ` said:` line and the action a step names are printed with control and bidi characters escaped; a decline reason is cut at 2048 bytes.
+
+### Fixed
+
+- An accepted run reports the obligations of the revision its gate and tests judged, not `not yet run` at takt's store commits above it; `takt report` reads the same table.
+- 0.16.0's entry says a store story opens on `story.delivery/2`: that holds for `takt run`, while `takt scenario run` opens its trial case on `story.delivery/1`, which declares no case input.
 
 ## [0.16.0] - 2026-10-27
 
@@ -694,7 +711,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.16.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.17.0...HEAD
+[0.17.0]: https://github.com/beyond10x/takt/compare/0.16.0...0.17.0
 [0.16.0]: https://github.com/beyond10x/takt/compare/0.15.1...0.16.0
 [0.15.1]: https://github.com/beyond10x/takt/compare/0.15.0...0.15.1
 [0.15.0]: https://github.com/beyond10x/takt/compare/0.14.0...0.15.0
