@@ -259,6 +259,15 @@ pub struct PullRequest {
     pub body: String,
 }
 
+/// What the commit a merge makes says ([`Forge::merge_with`]): its title and its body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeMessage {
+    /// The title, one line.
+    pub title: String,
+    /// The body, its lines.
+    pub body: String,
+}
+
 /// A pull request's head: the branch and the commit it names.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Head {
@@ -365,6 +374,19 @@ pub trait Forge {
     /// came back, when it keeps anything. What the merge made of the pull request is read back
     /// through [`Self::pull_request`]; the merge itself answers nothing a validator records.
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
+    /// [`Self::merge`], the merge commit saying `message`, for an adapter that is told what its
+    /// merge commit says. By default `message` is not read, and the forge's own message stands.
+    fn merge_with(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        number: u64,
+        head: &str,
+        message: &MergeMessage,
+    ) -> Result<()> {
+        let _ = message;
+        self.merge(tree, dir, number, head)
+    }
     /// Scans the commit identity `identity`, as a commit object would carry it, with the scan
     /// [`Self::scan_outgoing`] applies before a push, when a run whose commits leave the machine
     /// opens; `dir` is where the adapter keeps the text it scanned. A refusal is an error naming

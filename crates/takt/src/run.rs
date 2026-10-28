@@ -9298,6 +9298,16 @@ impl<'a> Run<'a> {
             case.discard()?;
             return Err(error);
         }
+        // What a validator reads from the base revision pinned at open, the gate's gates document
+        // and project file, is checked now, as its observation would read it and running none
+        // of its commands ([`Validator::check_at_open`]): a file it would refuse refuses the run
+        // here, before the first model call, rather than at its step; the case is discarded.
+        for validator in validators {
+            if let Err(error) = validator.check_at_open(tree, &case.dir) {
+                case.discard()?;
+                return Err(error);
+            }
+        }
         // The module names the test command's Python imports from outside the tree, asked once;
         // kept with the case when a Python answered, else the built-in lists stand in.
         let runs: Vec<String> = validators.iter().flat_map(|v| v.runs()).collect();
