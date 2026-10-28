@@ -115,6 +115,7 @@ fn ci_runs_the_check_tasks_commands_as_three_jobs() {
         .map(|part| part.as_str().expect("each part is a task name"))
         .collect();
     assert_eq!(parts, ["check-static", "test-cli", "test-library"]);
+    assert_eq!(job["timeout-minutes"].as_u64(), Some(30));
     let last = job["steps"]
         .as_sequence()
         .and_then(|steps| steps.last())
