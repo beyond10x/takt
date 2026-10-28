@@ -232,21 +232,37 @@ pub fn layers_text(layers: Option<&BTreeMap<String, String>>) -> String {
 /// The first difference between the layers of `rows`, as the refusal names it: the two runs
 /// (`<case>#<n>`), the layer, and each run's revision of it or that it recorded none. A run
 /// that recorded no layers beside one that did differs; so does a layer one run states and
-/// another does not. None when every run's layers are the same, or no run recorded any.
+/// another does not.
+///
+/// A run that took no step, such as one stopped `HarnessUnqualified` before its first session,
+/// ran on no harness and no model: it states neither layer and brings neither to the comparison
+/// ([`STEP_LAYERS`]), unless its `opened` line names one. Each of those layers is compared over
+/// the runs that took a step, the first of them the one the refusal names beside the other; the
+/// run still counts with its outcome and its 0 steps, and every other layer it states is
+/// compared. None when every run's layers are the same, or no run recorded any.
 #[must_use]
 pub fn layers_differ(rows: &[Row]) -> Option<String> {
     let mut counted: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut first: Option<(String, &Row)> = None;
-    for row in rows {
-        let n = counted.entry(row.case.as_str()).or_insert(0);
-        *n += 1;
-        let label = format!("{}#{n}", row.case);
-        let Some((label_a, a)) = &first else {
-            first = Some((label, row));
-            continue;
-        };
-        match (&a.layers, &row.layers) {
-            (None, None) => {}
+    let labels: Vec<String> = rows
+        .iter()
+        .map(|row| {
+            let n = counted.entry(row.case.as_str()).or_insert(0);
+            *n += 1;
+            format!("{}#{n}", row.case)
+        })
+        .collect();
+    let names: BTreeSet<&str> = rows
+        .iter()
+        .filter_map(|row| row.layers.as_ref())
+        .flat_map(BTreeMap::keys)
+        .map(String::as_str)
+        .collect();
+    // Each layer's first revision, or none, as the first run that brings the layer states it.
+    let mut reference: BTreeMap<&str, (&str, Option<&String>)> = BTreeMap::new();
+    let (label_a, a) = (labels.first()?, rows.first()?);
+    for (label, row) in labels.iter().zip(rows) {
+        let layers = match (&a.layers, &row.layers) {
+            (None, None) => continue,
             (None, Some(_)) => {
                 return Some(format!(
                     "run {label_a} recorded no layers (its `opened` line has no `layers`, so its layers are not recorded), run {label} recorded {}: the runs' layers differ; a scorecard scores runs of one stack, so nothing is scored (pass --across-layers to compare across them)",
@@ -259,32 +275,37 @@ pub fn layers_differ(rows: &[Row]) -> Option<String> {
                     layers_text(a.layers.as_ref())
                 ));
             }
-            (Some(first_layers), Some(layers)) => {
-                let names: BTreeSet<&str> = first_layers
-                    .keys()
-                    .chain(layers.keys())
-                    .map(String::as_str)
-                    .collect();
-                for name in names {
-                    let (x, y) = (first_layers.get(name), layers.get(name));
-                    if x == y {
-                        continue;
-                    }
-                    let state = |revision: Option<&String>| {
-                        revision
-                            .map_or_else(|| "none".to_owned(), |revision| format!("`{revision}`"))
-                    };
-                    return Some(format!(
-                        "layer `{name}`: run {label_a} records {}, run {label} records {}: the runs' layers differ; a scorecard scores runs of one stack, so nothing is scored (pass --across-layers to compare across them)",
-                        state(x),
-                        state(y)
-                    ));
-                }
+            (Some(_), Some(layers)) => layers,
+        };
+        for &name in &names {
+            let revision = layers.get(name);
+            if revision.is_none() && row.steps == 0 && STEP_LAYERS.contains(&name) {
+                continue;
             }
+            let Some(&(label_x, x)) = reference.get(name) else {
+                reference.insert(name, (label, revision));
+                continue;
+            };
+            if x == revision {
+                continue;
+            }
+            let state = |revision: Option<&String>| {
+                revision.map_or_else(|| "none".to_owned(), |revision| format!("`{revision}`"))
+            };
+            return Some(format!(
+                "layer `{name}`: run {label_x} records {}, run {label} records {}: the runs' layers differ; a scorecard scores runs of one stack, so nothing is scored (pass --across-layers to compare across them)",
+                state(x),
+                state(revision)
+            ));
         }
     }
     None
 }
+
+/// The layers a run states only from its steps' lines ([`Span::row`]): the harness's version
+/// and the model. A run that took no step states neither, and [`layers_differ`] compares
+/// neither for it.
+pub const STEP_LAYERS: [&str; 2] = ["harness", "model"];
 
 impl Row {
     /// The steps that leave the run's tokens unknown, each named by its action, in action

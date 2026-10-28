@@ -18,7 +18,7 @@ use anyhow::anyhow;
 use takt::case::CASES_DIR;
 use takt::events::{EVENTS_FILE, Event, Events, TokenUsage};
 use takt::frontier::Aep;
-use takt::harness::{ClaudeCode, Harness, StepContext, StepReport};
+use takt::harness::{ClaudeCode, Harness, Preflight, StepContext, StepReport};
 use takt::scorecard::Scorecard;
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions};
@@ -555,5 +555,229 @@ fn a_layer_one_run_states_and_another_does_not_is_named() {
     );
     let error = scored(&repo, false).expect_err("refused");
     assert!(error.contains("layer `model`"), "{error}");
+    assert!(error.contains("scenario-1-trial-2#1"), "{error}");
+}
+
+/// A harness whose binary does not qualify: its preflight fails, as metaharness reports a
+/// `--version` that did not answer, so a run on it stops `HarnessUnqualified` before any step.
+struct Unqualified;
+
+impl Harness for Unqualified {
+    fn name(&self) -> &str {
+        "claude-code"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        Err(anyhow!(
+            "an unqualified harness takes no step: {} offered",
+            context.offered.join(", ")
+        ))
+    }
+
+    fn preflight(&self) -> Result<Option<Preflight>, anyhow::Error> {
+        Ok(Some(Preflight {
+            kind: "claude".to_owned(),
+            version: None,
+            advisory: Vec::new(),
+            failing: vec!["version failed: `--version` did not answer".to_owned()],
+            qualified: vec!["2.1.309".to_owned()],
+        }))
+    }
+}
+
+/// story:unqualified-stop-records-no-layer: a case whose first run took a harness step and
+/// whose resume stopped `HarnessUnqualified` before any step is scored and saved without
+/// `--across-layers`: the resume ran on no harness and no model, so it brings no harness or
+/// model layer to the comparison, and it still counts as a run of its case, with its outcome
+/// and its 0 steps.
+#[test]
+fn a_resume_stopped_unqualified_does_not_make_the_runs_differ() {
+    let tree = scratch("unqualified-tree");
+    fs::write(tree.join("README.md"), "a story\n").expect("a file");
+    git(&tree, &["init", "-q", "-b", "main"]);
+    git(&tree, &["add", "-A"]);
+    git(&tree, &["commit", "-q", "-m", "start"]);
+    let scripts = scratch("unqualified-scripts");
+    let harness = fake_claude(&scripts, "2.1.309");
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let options = RunOptions {
+        protocol: "software.change/1".to_owned(),
+        intent: "record the layers".to_owned(),
+        inputs: vec![
+            ("risk".to_owned(), "standard".to_owned()),
+            ("change_kind".to_owned(), "bugfix".to_owned()),
+            ("affects_security_boundary".to_owned(), "false".to_owned()),
+        ],
+        iterations: Some(1),
+        hours: None,
+        tokens: None,
+        case_id: Some("unqualified".to_owned()),
+        gate: Some("repository.merge".to_owned()),
+    };
+    let mut run = Run::open(&tree, options.clone(), &harness, &validators).expect("the case opens");
+    run.binary = Some(TAKT_A.to_owned());
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    stop.unwrap_or_else(|error| panic!("the first run runs: {error:#}\n{text}"));
+    drop(run);
+
+    let unqualified = Unqualified;
+    let mut run = Run::resume(&tree, options, "unqualified", &unqualified, &validators)
+        .expect("the case resumes");
+    run.binary = Some(TAKT_A.to_owned());
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    let stop = stop.unwrap_or_else(|error| panic!("the resume stops: {error:#}\n{text}"));
+    assert!(
+        matches!(stop, takt::Stop::HarnessUnqualified { .. }),
+        "{stop:?}\n{text}"
+    );
+    drop(run);
+
+    let card = Scorecard::read(&tree).expect("the scorecard reads");
+    assert_eq!(card.rows.len(), 2, "{card:#?}");
+    assert_eq!(
+        card.rows[0].layers,
+        Some(layers(&[("takt", TAKT_A), ("harness", "2.1.309")])),
+        "{card:#?}"
+    );
+    assert_eq!(card.rows[1].outcome, "HarnessUnqualified", "{card:#?}");
+    assert_eq!(card.rows[1].steps, 0, "{card:#?}");
+    assert_eq!(
+        card.rows[1].layers,
+        Some(layers(&[("takt", TAKT_A)])),
+        "the resume ran no harness, so no harness layer is joined, never guessed: {card:#?}"
+    );
+
+    let text = scored(&tree, false)
+        .unwrap_or_else(|error| panic!("scored without --across-layers: {error}"));
+    assert!(text.contains("HarnessUnqualified"), "{text}");
+    let saved = scratch("unqualified-saved");
+    let mut out = Vec::new();
+    takt::scorecard::report(
+        &tree,
+        Some(&saved),
+        Some(TAKT_A),
+        None,
+        &[],
+        false,
+        &mut out,
+    )
+    .unwrap_or_else(|error| panic!("saved without --across-layers: {error:#}"));
+    let saved = Scorecard::load(&saved.join(format!("scorecard-{TAKT_A}.json")))
+        .expect("the saved scorecard loads");
+    assert_eq!(saved.rows.len(), 2, "{saved:#?}");
+    assert_eq!(saved.rows[1].outcome, "HarnessUnqualified", "{saved:#?}");
+    assert_eq!(saved.rows[1].steps, 0, "{saved:#?}");
+}
+
+/// One run of `case` under `repo` that stopped `HarnessUnqualified` before any step: an
+/// `opened` line with `layers` and a stop at step 0, no step line.
+fn stopped_before_any_step(repo: &Path, case: &str, layers: BTreeMap<String, String>) {
+    let dir = repo.join(CASES_DIR).join(case);
+    fs::create_dir_all(&dir).expect("a case directory");
+    fs::write(dir.join(takt::scorecard::HELD_OUT_FILE), "PASS\n").expect("the held-out result");
+    let events = Events::new(&dir);
+    let lines = [
+        Event::Opened {
+            case: case.to_owned(),
+            protocol: "story.delivery/1".to_owned(),
+            story: None,
+            inputs: Vec::new(),
+            base: None,
+            binary: layers.get("takt").cloned(),
+            layers: Some(layers),
+            confinement: None,
+            substrate: None,
+            endpoint: None,
+            records: None,
+            scan: None,
+            protocol_source: None,
+            input_sources: None,
+            harness_program: None,
+            preflight: None,
+        },
+        Event::Stop {
+            stop: "HarnessUnqualified (claude: version failed)".to_owned(),
+            steps: 0,
+            tokens: 0,
+            completed: Some(false),
+        },
+    ];
+    for event in lines {
+        events.emit(0, &event).expect("the event is written");
+    }
+}
+
+/// A run that took no step stands out of the harness and model comparison, wherever it comes
+/// in the set: two runs that took harness steps on different harness versions are still
+/// refused, naming the layer and both of those runs, and a run without a step that records a
+/// different takt revision is still refused on the takt layer.
+#[test]
+fn a_run_without_a_step_hides_no_difference_between_the_others() {
+    let repo = scratch("stepless-first");
+    stopped_before_any_step(&repo, "scenario-1-trial-1", layers(&[("takt", TAKT_A)]));
+    record(
+        &repo,
+        "scenario-1-trial-2",
+        Some(layers(&[
+            ("takt", TAKT_A),
+            ("harness", "2.1.304 (Claude Code)"),
+        ])),
+        Some("claude-opus-5-5"),
+    );
+    record(
+        &repo,
+        "scenario-1-trial-3",
+        Some(layers(&[
+            ("takt", TAKT_A),
+            ("harness", "2.1.305 (Claude Code)"),
+        ])),
+        Some("claude-opus-5-5"),
+    );
+    let error = scored(&repo, false).expect_err("refused");
+    assert!(error.contains("layer `harness`"), "{error}");
+    assert!(
+        error.contains("scenario-1-trial-2#1") && error.contains("scenario-1-trial-3#1"),
+        "{error}"
+    );
+    assert!(
+        error.contains("2.1.304 (Claude Code)") && error.contains("2.1.305 (Claude Code)"),
+        "{error}"
+    );
+
+    let same = scratch("stepless-same");
+    stopped_before_any_step(&same, "scenario-1-trial-1", layers(&[("takt", TAKT_A)]));
+    record(
+        &same,
+        "scenario-1-trial-2",
+        Some(layers(&[
+            ("takt", TAKT_A),
+            ("harness", "2.1.304 (Claude Code)"),
+        ])),
+        Some("claude-opus-5-5"),
+    );
+    let text = scored(&same, false).expect("a run without a step brings no harness layer");
+    assert!(text.contains("HarnessUnqualified"), "{text}");
+
+    let other = scratch("stepless-takt");
+    record(
+        &other,
+        "scenario-1-trial-1",
+        Some(layers(&[
+            ("takt", TAKT_A),
+            ("harness", "2.1.304 (Claude Code)"),
+        ])),
+        Some("claude-opus-5-5"),
+    );
+    stopped_before_any_step(
+        &other,
+        "scenario-1-trial-2",
+        layers(&[("takt", "fedcba9876543210fedcba9876543210fedcba98")]),
+    );
+    let error = scored(&other, false).expect_err("refused on takt");
+    assert!(error.contains("layer `takt`"), "{error}");
     assert!(error.contains("scenario-1-trial-2#1"), "{error}");
 }

@@ -216,11 +216,20 @@ fn plain(line: &str) -> String {
 /// order. No rule of any one command's: `<document>:<line>: unresolved: <cited>` lines of a
 /// citation checker and `error:`/`warning:` lines of a compiler are kept before their indented
 /// detail alike.
+///
+/// Output that names failed tests ([`failed_test_errors`]: unittest's, pytest's, libtest's) is not
+/// chosen that way: its lines are one per failed test, `<FAIL|ERROR|FAILED> <test> - <its last
+/// error line>` (the test alone when that line was withheld or there is none), each cut as above,
+/// then the failing lines of another command the gate ran beside the tests ([`failure_line`]:
+/// a compiler's `error:` lines, a linter's `<path>:<line>[:<col>]: <code>` lines), kept in
+/// order until one does not fit. The count left out is the failed tests and failing lines not
+/// kept, the error lines and failing lines withheld, and each heading of a failed test withheld
+/// whole or naming no test. None of the lines the runner printed itself (a passing test's, the
+/// usage text a program printed, a traceback's frames) is kept.
 #[must_use]
 pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
-    let mut withheld = 0u64;
     let mut in_key = false;
-    let mut lines: Vec<String> = Vec::new();
+    let mut cleaned: Vec<Printed> = Vec::new();
     for line in printed.lines() {
         let line = plain(line);
         let line = line.trim_end();
@@ -228,24 +237,36 @@ pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
             continue;
         }
         // A private key's block, from its `BEGIN` line through its `END` line or the end.
+        let inside = in_key;
         if line.contains("-----BEGIN ") && line.contains("PRIVATE KEY-----") {
             in_key = true;
         }
         if in_key || crate::run::credential_shape(line).is_some() {
             in_key = in_key && !line.contains("-----END ");
-            withheld += 1;
+            cleaned.push(Printed::Withheld(if inside {
+                Withheld::blind(line)
+            } else {
+                Withheld::of(line)
+            }));
             continue;
         }
-        if line.len() <= FAILED_LINE_BYTES {
-            lines.push(line.to_owned());
-            continue;
-        }
-        let mut end = FAILED_LINE_BYTES - '…'.len_utf8();
-        while !line.is_char_boundary(end) {
-            end -= 1;
-        }
-        lines.push(format!("{}…", &line[..end]));
+        cleaned.push(Printed::Line(cut_line(line)));
     }
+    let reading = failed_test_errors(&cleaned);
+    if !reading.tests.is_empty() {
+        return failed_test_lines(reading, &cleaned, budget);
+    }
+    let mut withheld = 0u64;
+    let lines: Vec<String> = cleaned
+        .into_iter()
+        .filter_map(|line| match line {
+            Printed::Line(line) => Some(line),
+            Printed::Withheld(_) => {
+                withheld += 1;
+                None
+            }
+        })
+        .collect();
     let cost = |line: &String| line.len() + 1;
     if lines.iter().map(cost).sum::<usize>() <= budget {
         return (lines, withheld);
@@ -278,6 +299,514 @@ pub fn failing_lines(printed: &str, budget: usize) -> (Vec<String>, u64) {
         .filter_map(|(line, kept)| kept.then_some(line))
         .collect();
     (kept, omitted)
+}
+
+/// One non-blank line of a failed command's output as [`failing_lines`] cleaned it, or what is
+/// known of one it withheld.
+enum Printed {
+    Line(String),
+    Withheld(Withheld),
+}
+
+/// What [`failing_lines`] reads of a line it withheld before dropping its text: whether it was
+/// indented, the heading of a failed test it was, the rule ([`rule`]) or the runner's marker
+/// ([`Marker`]) it was, whether it was a failing line ([`failure_line`]) and whether it was an
+/// assertion's value (`left:`, `right:`). Every shape [`failed_test_errors`] reads a line for is
+/// here, so a withheld line moves the reading as its text would have.
+struct Withheld {
+    indented: bool,
+    heading: Option<Heading>,
+    rule: Option<char>,
+    marker: Option<Marker>,
+    failure: bool,
+    value: bool,
+}
+
+/// A line a test runner prints where its report of failures starts or ends: libtest's
+/// `failures:` and `successes:`, pytest's `short test summary info` line.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Marker {
+    Failures,
+    Successes,
+    Summary,
+}
+
+/// The runner's marker `line` is, if any.
+fn marker(line: &str) -> Option<Marker> {
+    match line {
+        "failures:" => Some(Marker::Failures),
+        "successes:" => Some(Marker::Successes),
+        _ if line.contains("short test summary info") => Some(Marker::Summary),
+        _ => None,
+    }
+}
+
+/// The character of a rule `line` is, at least ten `=` or ten `-`, as unittest prints between
+/// its failures.
+fn rule_of(line: &str) -> Option<char> {
+    let c = line.chars().next()?;
+    (matches!(c, '=' | '-') && line.len() >= 10 && line.chars().all(|x| x == c)).then_some(c)
+}
+
+/// The heading of a failed test in a runner's shape; for pytest's, the test it names when that
+/// holds no credential's shape.
+enum Heading {
+    Pytest(Option<String>),
+    Unittest,
+    Libtest,
+}
+
+impl Withheld {
+    /// A withheld line read for its shape; for a pytest summary line, the test it names is kept
+    /// only when the test alone holds no credential's shape.
+    fn of(line: &str) -> Self {
+        let heading = if let Some((kind, rest)) = pytest_heading(line) {
+            Some(Heading::Pytest(
+                pytest_test(rest)
+                    .map(|(test, _)| format!("{kind} {test}"))
+                    .filter(|name| crate::run::credential_shape(name).is_none()),
+            ))
+        } else if unittest_heading(line).is_some() {
+            Some(Heading::Unittest)
+        } else if libtest_heading(line).is_some() {
+            Some(Heading::Libtest)
+        } else {
+            None
+        };
+        Self {
+            indented: line.starts_with(char::is_whitespace),
+            heading,
+            rule: rule_of(line),
+            marker: marker(line),
+            failure: failure_line(line),
+            value: assertion_value(line),
+        }
+    }
+
+    /// A line inside a private key's block, which may run to the end of the output when it has
+    /// no `-----END` line: read for its shape as any withheld line ([`Withheld::of`]), so a
+    /// failed test's heading after it is still counted and still ends the section before it,
+    /// but no test a pytest heading names is kept.
+    fn blind(line: &str) -> Self {
+        let mut withheld = Self::of(line);
+        if let Some(Heading::Pytest(name)) = &mut withheld.heading {
+            *name = None;
+        }
+        withheld
+    }
+}
+
+impl Printed {
+    fn text(&self) -> Option<&str> {
+        match self {
+            Self::Line(line) => Some(line),
+            Self::Withheld(_) => None,
+        }
+    }
+
+    fn indented(&self) -> bool {
+        match self {
+            Self::Line(line) => line.starts_with(char::is_whitespace),
+            Self::Withheld(withheld) => withheld.indented,
+        }
+    }
+
+    fn marker(&self) -> Option<Marker> {
+        match self {
+            Self::Line(line) => marker(line),
+            Self::Withheld(withheld) => withheld.marker,
+        }
+    }
+
+    /// Whether the line ends a libtest section: the next section's heading, or `failures:` or
+    /// `successes:`.
+    fn ends_libtest_section(&self) -> bool {
+        let heading = match self {
+            Self::Line(line) => libtest_heading(line).is_some(),
+            Self::Withheld(withheld) => matches!(withheld.heading, Some(Heading::Libtest)),
+        };
+        heading || matches!(self.marker(), Some(Marker::Failures | Marker::Successes))
+    }
+}
+
+/// `line`, or past [`FAILED_LINE_BYTES`] its start cut there and ended in `…`.
+fn cut_line(line: &str) -> String {
+    if line.len() <= FAILED_LINE_BYTES {
+        return line.to_owned();
+    }
+    let mut end = FAILED_LINE_BYTES - '…'.len_utf8();
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}
+
+/// A failed test a test runner's output names: how it failed and its name
+/// (`FAIL test_x (m.C.test_x)`), and its last error line, `None` when it was withheld or the
+/// output gives none.
+struct FailedTest {
+    name: String,
+    error: Option<String>,
+    withheld: bool,
+}
+
+/// Whether `line` is a rule of at least ten `c` ([`rule_of`]), as unittest prints between its
+/// failures.
+fn rule(line: &Printed, c: char) -> bool {
+    match line {
+        Printed::Line(line) => rule_of(line) == Some(c),
+        Printed::Withheld(withheld) => withheld.rule == Some(c),
+    }
+}
+
+/// A pytest summary line's kind and the rest: `FAILED <rest>` or `ERROR <rest>`, not unittest's
+/// closing `FAILED (failures=…)`.
+fn pytest_heading(line: &str) -> Option<(&'static str, &str)> {
+    line.strip_prefix("FAILED ")
+        .map(|rest| ("FAILED", rest))
+        .or_else(|| line.strip_prefix("ERROR ").map(|rest| ("ERROR", rest)))
+        .filter(|(_, rest)| !rest.starts_with('('))
+}
+
+/// The test of a pytest summary line's rest and its error: what comes before ` - ` and what
+/// follows. The test is a node id (`<path>::<name>`, whose parameters' id may hold a space) or a
+/// `.py` path; `None` for anything else.
+fn pytest_test(rest: &str) -> Option<(&str, Option<&str>)> {
+    let (test, error) = rest
+        .split_once(" - ")
+        .map_or((rest, None), |(test, error)| (test, Some(error)));
+    let first = test.split_whitespace().next()?;
+    (first.contains("::") || (first == test && test.ends_with(".py"))).then_some((test, error))
+}
+
+/// A unittest heading's kind and test: `FAIL: <test>` or `ERROR: <test>`.
+fn unittest_heading(line: &str) -> Option<(&'static str, &str)> {
+    line.strip_prefix("FAIL: ")
+        .map(|name| ("FAIL", name))
+        .or_else(|| line.strip_prefix("ERROR: ").map(|name| ("ERROR", name)))
+}
+
+/// The test of a libtest section's heading, `---- <test> stdout ----`; a doctest's test holds
+/// spaces (`src/lib.rs - add (line 3)`).
+fn libtest_heading(line: &str) -> Option<&str> {
+    line.strip_prefix("---- ")
+        .and_then(|rest| rest.strip_suffix(" stdout ----"))
+        .filter(|test| !test.is_empty())
+}
+
+/// Whether `line` is a value libtest prints under a failed assertion, `left: …` or `right: …`.
+fn assertion_value(line: &str) -> bool {
+    let line = line.trim_start();
+    line.starts_with("left:") || line.starts_with("right:")
+}
+
+/// The words in lower case a located line ([`failure_line`]) starts its message with that name
+/// no failure: a compiler's or a type checker's remark beside one, and a log's levels.
+const NOT_FAILURE_WORDS: [&str; 11] = [
+    "warning", "warn", "note", "help", "hint", "remark", "info", "notice", "debug", "trace",
+    "verbose",
+];
+
+/// Whether `path`, the text before a located line's first `:`, is a file's path: it holds a `/`,
+/// or its last part has an extension that starts with a letter (`x.c`, `app.py`). So a time
+/// (`12`, `2026-10-28T19`), a host (`localhost`, `127.0.0.1`) and a word (`make[1]`) are not.
+fn file_path(path: &str) -> bool {
+    path.contains('/')
+        || path.rsplit_once('.').is_some_and(|(stem, extension)| {
+            !stem.is_empty() && extension.starts_with(|c: char| c.is_ascii_alphabetic())
+        })
+}
+
+/// Whether `line`, not indented, is a failing line of a command a gate ran beside a test run: a
+/// compiler's `error:` or `error[<code>]:` line (but cargo's own `error: test failed, …` and
+/// `error: <n> targets failed:` after a test run), or a located finding, `<path>:<line>:` with an
+/// optional `<col>:` and `<path>` a file's ([`file_path`]), then a word ending in `:` in lower
+/// case that names a failure (`error:`, `unresolved:`; not one of [`NOT_FAILURE_WORDS`]) or a
+/// linter's code (`F401`, `E501`, `C0114:`).
+fn failure_line(line: &str) -> bool {
+    if line.starts_with("error: test failed, to rerun pass")
+        || (line.starts_with("error: ") && line.ends_with(" targets failed:"))
+    {
+        return false;
+    }
+    if line.starts_with("error:") || line.starts_with("error[") {
+        return true;
+    }
+    let Some((path, mut rest)) = line.split_once(':') else {
+        return false;
+    };
+    if path.contains(char::is_whitespace) || !file_path(path) {
+        return false;
+    }
+    let mut numbers = 0;
+    while numbers < 2 {
+        let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 0 || rest.as_bytes().get(digits) != Some(&b':') {
+            break;
+        }
+        rest = &rest[digits + 1..];
+        numbers += 1;
+    }
+    let Some(rest) = rest.strip_prefix(' ').filter(|_| numbers > 0) else {
+        return false;
+    };
+    let word = rest.split_whitespace().next().unwrap_or_default();
+    let code = word.strip_suffix(':').unwrap_or(word);
+    let letters = code.bytes().take_while(u8::is_ascii_uppercase).count();
+    let digits = code.len() - letters;
+    (word.len() > code.len()
+        && !code.is_empty()
+        && code.bytes().all(|c| c.is_ascii_lowercase())
+        && !NOT_FAILURE_WORDS.contains(&code))
+        || word.starts_with("error[")
+        || ((1..=4).contains(&letters)
+            && (1..=4).contains(&digits)
+            && code[letters..].bytes().all(|c| c.is_ascii_digit()))
+}
+
+/// The failed tests output names, the headings of failed tests it withheld whole or that name no
+/// test, and which lines a failed test's heading or section holds.
+struct Reading {
+    tests: Vec<FailedTest>,
+    unnamed: u64,
+    claimed: Vec<bool>,
+}
+
+impl Reading {
+    fn claim(&mut self, from: usize, count: usize) {
+        let end = (from + count).min(self.claimed.len());
+        for claimed in &mut self.claimed[from..end] {
+            *claimed = true;
+        }
+    }
+}
+
+/// The lines of a unittest failure's body up to the next rule.
+fn unittest_end(body: &[Printed]) -> usize {
+    body.iter()
+        .position(|line| rule(line, '=') || rule(line, '-'))
+        .unwrap_or(body.len())
+}
+
+/// The failed tests `lines` name, in the order printed, read in three runners' shapes, each only
+/// where its runner reports failures, and none when they name none:
+/// - unittest: a `FAIL: <test>` or `ERROR: <test>` line under a rule of `-`, its error line the
+///   first line not indented after its last traceback frame (`  File "…", line …`), or its last
+///   line without one, up to the next rule;
+/// - pytest: after its `short test summary info` line, a `FAILED <test>` or `ERROR <test>` line,
+///   `<test>` a node id (`<path>::<name>`) or a `.py` path, its error line what follows ` - `;
+/// - libtest: after a `failures:` line and before a `successes:` one, a `---- <test> stdout ----`
+///   section, its error line the first line of the panic's message (the line after
+///   `panicked at …:`, or that line itself in the older one-line form) with the `left:` and
+///   `right:` lines after it joined by ` | `, up to the next section, `failures:` or
+///   `successes:`.
+///
+/// A heading of these shapes that was withheld (a pytest line keeps its test when only its error
+/// held a credential) or a pytest line that names no test is counted.
+fn failed_test_errors(lines: &[Printed]) -> Reading {
+    let mut reading = Reading {
+        tests: Vec::new(),
+        unnamed: 0,
+        claimed: vec![false; lines.len()],
+    };
+    let mut failures = false;
+    let mut summary = false;
+    for (index, line) in lines.iter().enumerate() {
+        let rest = &lines[index + 1..];
+        let under_rule = rest.first().is_some_and(|next| rule(next, '-'));
+        match line.marker() {
+            Some(Marker::Failures) => failures = true,
+            Some(Marker::Successes) => failures = false,
+            Some(Marker::Summary) => summary = true,
+            None => {}
+        }
+        let text = match line {
+            Printed::Withheld(withheld) => {
+                match &withheld.heading {
+                    Some(Heading::Pytest(name)) if summary => {
+                        reading.claim(index, 1);
+                        match name {
+                            Some(name) => reading.tests.push(FailedTest {
+                                name: name.clone(),
+                                error: None,
+                                withheld: true,
+                            }),
+                            None => reading.unnamed += 1,
+                        }
+                    }
+                    Some(Heading::Unittest) if under_rule => {
+                        reading.claim(index, 2 + unittest_end(&rest[1..]));
+                        reading.unnamed += 1;
+                    }
+                    Some(Heading::Libtest) if failures => {
+                        let end = rest
+                            .iter()
+                            .position(Printed::ends_libtest_section)
+                            .unwrap_or(rest.len());
+                        reading.claim(index, 1 + end);
+                        reading.unnamed += 1;
+                    }
+                    _ => {}
+                }
+                continue;
+            }
+            Printed::Line(text) => text.as_str(),
+        };
+        if let Some((kind, name)) = unittest_heading(text)
+            && under_rule
+        {
+            let body = &rest[1..];
+            let body = &body[..unittest_end(body)];
+            let frame = body.iter().rposition(|line| {
+                line.text().is_some_and(|line| {
+                    line.starts_with(char::is_whitespace)
+                        && line.trim_start().starts_with("File \"")
+                })
+            });
+            let error = match frame {
+                Some(frame) => body[frame + 1..].iter().find(|line| !line.indented()),
+                None => body.last(),
+            };
+            reading.claim(index, 2 + body.len());
+            reading
+                .tests
+                .push(FailedTest::of(format!("{kind} {name}"), error));
+            continue;
+        }
+        if summary && let Some((kind, rest)) = pytest_heading(text) {
+            reading.claim(index, 1);
+            match pytest_test(rest) {
+                Some((test, error)) => reading.tests.push(FailedTest {
+                    name: format!("{kind} {test}"),
+                    error: error.map(str::to_owned),
+                    withheld: false,
+                }),
+                None => reading.unnamed += 1,
+            }
+            continue;
+        }
+        if failures && let Some(test) = libtest_heading(text) {
+            let end = rest
+                .iter()
+                .position(Printed::ends_libtest_section)
+                .unwrap_or(rest.len());
+            reading.claim(index, 1 + end);
+            reading.tests.push(libtest_failure(test, &rest[..end]));
+        }
+    }
+    reading
+}
+
+/// The failed test of a libtest section `body` headed `test`: the first line of the panic's
+/// message, the `left:` and `right:` lines after it joined by ` | `; the message alone, counted
+/// as withheld, when one of those was withheld.
+fn libtest_failure(test: &str, body: &[Printed]) -> FailedTest {
+    let (message, after) = match body.iter().position(|line| {
+        line.text()
+            .is_some_and(|line| line.contains("panicked at "))
+    }) {
+        Some(at) if body[at].text().is_some_and(|line| line.ends_with(':')) => {
+            (body.get(at + 1), at + 2)
+        }
+        Some(at) => (Some(&body[at]), at + 1),
+        None => (body.last(), body.len()),
+    };
+    let mut failed = FailedTest::of(format!("FAILED {test}"), message);
+    let Some(error) = &mut failed.error else {
+        return failed;
+    };
+    let mut values = Vec::new();
+    for line in body.get(after..).unwrap_or_default().iter().take(2) {
+        match line {
+            Printed::Line(text) if assertion_value(text) => values.push(text.trim_start()),
+            Printed::Withheld(withheld) if withheld.value => {
+                failed.withheld = true;
+                return failed;
+            }
+            _ => break,
+        }
+    }
+    for value in values {
+        error.push_str(" | ");
+        error.push_str(value);
+    }
+    failed
+}
+
+impl FailedTest {
+    fn of(name: String, error: Option<&Printed>) -> Self {
+        Self {
+            name,
+            error: error.and_then(Printed::text).map(str::to_owned),
+            withheld: matches!(error, Some(Printed::Withheld(_))),
+        }
+    }
+}
+
+/// The room [`failed_test_lines`] keeps lines in: the bytes left, whether a line did not fit,
+/// the lines kept.
+struct Room {
+    left: usize,
+    full: bool,
+    kept: Vec<String>,
+}
+
+impl Room {
+    /// Keeps `line` when it fits and every line offered before it did; false when it is left out.
+    fn offer(&mut self, line: String) -> bool {
+        if self.full || line.len() + 1 > self.left {
+            self.full = true;
+            return false;
+        }
+        self.left -= line.len() + 1;
+        self.kept.push(line);
+        true
+    }
+}
+
+/// The lines of [`failing_lines`] for output that names failed tests: one per test in order,
+/// then the failing lines no failed test's heading or section holds ([`failure_line`]), within
+/// `budget` bytes, and the count of tests and failing lines not kept, error lines and failing
+/// lines withheld, and headings withheld whole or naming no test.
+fn failed_test_lines(reading: Reading, cleaned: &[Printed], budget: usize) -> (Vec<String>, u64) {
+    let mut omitted = reading.unnamed;
+    let mut room = Room {
+        left: budget,
+        full: false,
+        kept: Vec::new(),
+    };
+    for test in reading.tests {
+        let mut withheld = test.withheld;
+        let line = match test.error {
+            Some(error) => {
+                let line = cut_line(&format!("{} - {error}", test.name));
+                if crate::run::credential_shape(&line).is_some() {
+                    withheld = true;
+                    cut_line(&test.name)
+                } else {
+                    line
+                }
+            }
+            None => cut_line(&test.name),
+        };
+        if withheld {
+            omitted += 1;
+        }
+        if crate::run::credential_shape(&line).is_some() || !room.offer(line) {
+            omitted += u64::from(!withheld);
+        }
+    }
+    for (line, claimed) in cleaned.iter().zip(&reading.claimed) {
+        match line {
+            _ if *claimed => {}
+            Printed::Line(text) if failure_line(text) => {
+                omitted += u64::from(!room.offer(text.clone()));
+            }
+            Printed::Withheld(withheld) if withheld.failure => omitted += 1,
+            _ => {}
+        }
+    }
+    (room.kept, omitted)
 }
 
 /// How an effect performs the request it was handed: the validator's observation, taken where
