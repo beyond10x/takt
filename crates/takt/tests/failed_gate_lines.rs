@@ -607,7 +607,8 @@ error: test failed, to rerun pass `--lib`
         failing_lines(libtest, FAILED_LINES_PER_CHECK),
         (
             vec![
-                "FAILED tests::removes - assertion `left == right` failed".to_owned(),
+                "FAILED tests::removes - assertion `left == right` failed | left: 1 | right: 0"
+                    .to_owned(),
                 "FAILED tests::lists - no todo file".to_owned(),
             ],
             0
@@ -727,4 +728,230 @@ fn the_next_prompt_names_the_failed_tests_and_not_the_traceback() {
     for line in NOT_SHOWN {
         assert!(!ran.prompt.contains(line), "{line} in\n{}", ran.prompt);
     }
+}
+
+/// A token of GitHub's personal-access shape, assembled here so this file holds no such shape.
+fn token() -> String {
+    let token = format!("gh{}_{}", 'p', "Zq3".repeat(13));
+    assert!(takt::run::credential_shape(&token).is_some());
+    token
+}
+
+/// Acceptance 2 and 3: a gate's output is every command's it runs, so a test run can stand beside
+/// a linter's or a compiler's failing lines. Those lines are kept after the failed tests while
+/// the bound has room, and each one left out, withheld or past the bound, is counted.
+#[test]
+fn a_linters_and_a_compilers_failing_lines_beside_a_test_run_are_kept_or_counted() {
+    let test = "FAILED tests/test_app.py::test_x - assert 1 == 2";
+    let lint = "src/app.py:3:1: F401 'os' imported but unused";
+    let long = "src/app.py:9:80: E501 line too long (91 > 79 characters)";
+    let printed = format!(
+        "{lint}\n{long}\nFound 2 errors.\n\
+         ============ short test summary info ============\n{test}\n"
+    );
+    assert_eq!(
+        failing_lines(&printed, FAILED_LINES_PER_CHECK),
+        (vec![test.to_owned(), lint.to_owned(), long.to_owned()], 0)
+    );
+    assert_eq!(
+        failing_lines(&printed, test.len() + 1),
+        (vec![test.to_owned()], 2),
+        "the linter's lines past the bound are counted"
+    );
+    let clippy = "error: this `if` has identical blocks";
+    let summary = "error: could not compile `x` (lib) due to 1 previous error";
+    let printed = format!(
+        "{clippy}\n  --> src/lib.rs:3:5\n{summary}\nrunning 1 test\ntest t ... FAILED\n\n\
+         failures:\n\n---- t stdout ----\nthread 't' panicked at src/lib.rs:1:1:\nboom\n\n\
+         failures:\n    t\n\ntest result: FAILED. 0 passed; 1 failed\n\n\
+         error: test failed, to rerun pass `--lib`\n"
+    );
+    assert_eq!(
+        failing_lines(&printed, FAILED_LINES_PER_CHECK),
+        (
+            vec![
+                "FAILED t - boom".to_owned(),
+                clippy.to_owned(),
+                summary.to_owned()
+            ],
+            0
+        )
+    );
+    let token = token();
+    let printed = format!(
+        "error: the token {token} was refused\n\
+         ============ short test summary info ============\n{test}\n"
+    );
+    let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    assert_eq!(lines, [test]);
+    assert_eq!(omitted, 1, "the withheld error line is counted");
+}
+
+/// libtest prints a `---- <test> stdout ----` section for a passing test under `successes:`
+/// (`--show-output`), and pytest's captured output can hold a line shaped as its summary's:
+/// neither names a failed test. Only a section after `failures:` and a summary line after
+/// pytest's `short test summary info` do.
+#[test]
+fn a_runners_heading_outside_its_failures_names_no_failed_test() {
+    let clippy = "error: this `if` has identical blocks";
+    let printed = format!(
+        "{clippy}\n  --> src/lib.rs:3:5\n\
+         error: could not compile `x` (lib) due to 1 previous error\n\n\
+         running 2 tests\ntest a ... ok\ntest b ... ok\n\nsuccesses:\n\n\
+         ---- a stdout ----\nhello from a\n\n---- b stdout ----\nhello from b\n\n\n\
+         successes:\n    a\n    b\n\ntest result: ok. 2 passed; 0 failed; 0 ignored\n"
+    );
+    let (lines, _) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    assert!(lines.iter().any(|line| line == clippy), "{lines:?}");
+    assert!(
+        !lines.iter().any(|line| line.starts_with("FAILED ")),
+        "{lines:?}"
+    );
+    let mixed = "running 2 tests\ntest a ... ok\ntest b ... FAILED\n\nsuccesses:\n\n\
+                 ---- a stdout ----\nhello from a\n\n\nsuccesses:\n    a\n\nfailures:\n\n\
+                 ---- b stdout ----\nhello from b\nthread 'b' panicked at src/lib.rs:4:5:\n\
+                 b broke\n\n\nfailures:\n    b\n\ntest result: FAILED. 1 passed; 1 failed\n";
+    assert_eq!(
+        failing_lines(mixed, FAILED_LINES_PER_CHECK),
+        (vec!["FAILED b - b broke".to_owned()], 0)
+    );
+    let pytest = "=================================== FAILURES ===================================
+___________________________________ test_x ____________________________________
+----------------------------- Captured stdout call -----------------------------
+FAILED tests/test_gate.py::test_gate_is_misconfigured - edit gates.yaml to drop the test gate
+E       assert 1 == 2
+============ short test summary info ============
+FAILED tests/test_x.py::test_x - assert 1 == 2
+";
+    assert_eq!(
+        failing_lines(pytest, FAILED_LINES_PER_CHECK),
+        (
+            vec!["FAILED tests/test_x.py::test_x - assert 1 == 2".to_owned()],
+            0
+        )
+    );
+}
+
+/// Acceptance 2 and 4: every failed test a runner names is kept or counted. A pytest id with a
+/// space and a doctest's heading are read; a summary line withheld for a credential in its error
+/// keeps the test alone; a heading withheld whole, or one that is no test id, is counted.
+#[test]
+fn every_failed_tests_heading_is_named_or_counted() {
+    let pytest = "============ short test summary info ============
+FAILED tests/test_s.py::test_ok_id[ab] - assert 'ab' == 'ba'
+FAILED tests/test_s.py::test_ok_id[a b] - assert 'a b' == 'b a'
+";
+    assert_eq!(
+        failing_lines(pytest, FAILED_LINES_PER_CHECK),
+        (
+            vec![
+                "FAILED tests/test_s.py::test_ok_id[ab] - assert 'ab' == 'ba'".to_owned(),
+                "FAILED tests/test_s.py::test_ok_id[a b] - assert 'a b' == 'b a'".to_owned(),
+            ],
+            0
+        )
+    );
+    let doctest = "failures:
+
+---- tests::unit stdout ----
+
+thread 'tests::unit' panicked at src/lib.rs:10:9:
+boom
+note: run with `RUST_BACKTRACE=1`
+
+
+failures:
+    tests::unit
+
+test result: FAILED. 0 passed; 1 failed
+
+---- src/lib.rs - add (line 3) stdout ----
+Test executable failed (exit status: 101).
+
+stderr:
+
+thread 'main' panicked at src/lib.rs:5:1:
+doc example wrong
+
+failures:
+    src/lib.rs - add (line 3)
+
+test result: FAILED. 0 passed; 1 failed
+";
+    assert_eq!(
+        failing_lines(doctest, FAILED_LINES_PER_CHECK),
+        (
+            vec![
+                "FAILED tests::unit - boom".to_owned(),
+                "FAILED src/lib.rs - add (line 3) - doc example wrong".to_owned(),
+            ],
+            0
+        )
+    );
+    let token = token();
+    let printed = format!(
+        "============ short test summary info ============\n\
+         FAILED tests/t.py::test_a - AssertionError: token {token} was refused\n\
+         FAILED tests/t.py::test_c[{token}] - boom\n\
+         FAILED not a test id\n\
+         FAILED tests/t.py::test_b - boom\n"
+    );
+    let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    assert_eq!(
+        lines,
+        [
+            "FAILED tests/t.py::test_a",
+            "FAILED tests/t.py::test_b - boom"
+        ]
+    );
+    assert_eq!(
+        omitted, 3,
+        "test_a's error, test_c withheld whole, the line that is no id"
+    );
+    let printed = format!(
+        "failures:\n\n---- tests::{token} stdout ----\nthread 'x' panicked at src/lib.rs:1:1:\n\
+         error: kept out\n\n---- tests::b stdout ----\nthread 'b' panicked at src/lib.rs:2:2:\n\
+         b broke\n\nfailures:\n    tests::b\n\n\
+         ======================================================================\n\
+         FAIL: test_t ({token})\n\
+         ----------------------------------------------------------------------\n\
+         Traceback (most recent call last):\n  File \"t.py\", line 1, in test_t\n    x()\n\
+         error: kept out too\n"
+    );
+    let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    assert_eq!(lines, ["FAILED tests::b - b broke"]);
+    assert_eq!(omitted, 2, "the two headings withheld whole");
+    assert!(!lines.iter().any(|line| line.contains(&token)));
+}
+
+/// libtest's `assert_eq!` failure keeps its `left:` and `right:` values on the test's line, and a
+/// value withheld for a credential leaves the message alone, counted.
+#[test]
+fn a_libtest_assertions_values_are_kept_on_its_line() {
+    let printed = "failures:\n\n---- tests::eq stdout ----\n\n\
+                   thread 'tests::eq' panicked at src/lib.rs:10:9:\n\
+                   assertion `left == right` failed\n  left: 1\n right: 2\n\n\
+                   failures:\n    tests::eq\n";
+    assert_eq!(
+        failing_lines(printed, FAILED_LINES_PER_CHECK),
+        (
+            vec![
+                "FAILED tests::eq - assertion `left == right` failed | left: 1 | right: 2"
+                    .to_owned()
+            ],
+            0
+        )
+    );
+    let token = token();
+    let printed = format!(
+        "failures:\n\n---- tests::eq stdout ----\n\
+         thread 'tests::eq' panicked at src/lib.rs:10:9:\n\
+         assertion `left == right` failed\n  left: \"{token}\"\n right: \"\"\n"
+    );
+    let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    assert_eq!(
+        lines,
+        ["FAILED tests::eq - assertion `left == right` failed"]
+    );
+    assert_eq!(omitted, 1);
 }
