@@ -1314,6 +1314,10 @@ const EXIT_UNPERFORMABLE: u8 = 7;
 /// Exit 8: the run stopped before a step with too little free disk for it, `stopped: DiskLow`;
 /// the machine spoiled the trial, so a runner discards it rather than resume it.
 const EXIT_DISK_LOW: u8 = 8;
+/// Exit 9: a judgement step declined the intent with no file changed, or the case is declined
+/// at its current case revision, `stopped: Declined (<reason>)`; apart from exit 3's
+/// `NoProgress`, so a correct refusal and a stuck run read apart.
+const EXIT_DECLINED: u8 = 9;
 
 /// What `takt run --help` says about the exit codes; each line opens with its code.
 const EXIT_CODES: &str = "Exit codes:
@@ -1325,7 +1329,8 @@ const EXIT_CODES: &str = "Exit codes:
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
   7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)
-  8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
+  8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it
+  9  stopped: Declined (<reason>): a judgement step named `decline` instead of an offered action, with no file changed, its reason the reply's summary; recorded as a `decline` line in events.jsonl with the case revision, never as evidence; the case stays open, a run on it at that case revision stops Declined again before any step, an argument-less run passes it over, and a commit that moves its revision makes it step again";
 
 /// What `takt scenario run --help` says about the exit codes: [`EXIT_CODES`] without `frontier:
 /// nothing ready`, which only `takt run` prints; a scenario whose story is not ready is exit 1.
@@ -1338,7 +1343,8 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
   7  stopped: Unperformable (<claim>; nothing performs it without <the forge, the gates document>): no step left moves an open obligation, and the only action that decides <claim> is admissible but has no performer in this run (--forge none, no gates document); no judgement step is taken, the case stays open; at pr.opened the delivery first prints `candidate: <full commit id>`, its code commits (not takt's take, record or approval commits) replayed on the base branch's tip under the configured identity and named by refs/takt/candidates/<case>, or `candidate: none: <why>` (no identity configured, or a code commit that needs what was left out)
-  8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it";
+  8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it
+  9  stopped: Declined (<reason>): a judgement step named `decline` instead of an offered action, with no file changed, its reason the reply's summary; recorded as a `decline` line in events.jsonl with the case revision, never as evidence; the case stays open, `takt run --case <case>` at that case revision stops Declined again before any step, and a commit that moves its revision makes it step again";
 
 fn main() -> ExitCode {
     let mut cli = match parsed() {
@@ -3234,6 +3240,7 @@ fn finish(
         Stop::DiskLow { .. } => EXIT_DISK_LOW,
         Stop::HarnessUnqualified { .. } => EXIT_REFUSED,
         Stop::SetupFailed { .. } => EXIT_REFUSED,
+        Stop::Declined(_) => EXIT_DECLINED,
         _ => EXIT_STOPPED,
     })
 }

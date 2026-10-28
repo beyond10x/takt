@@ -475,6 +475,14 @@ fn classify(by: &str, action: &str, summary: &str) -> Class {
                 Some("unchanged"),
                 Evidence::Declared,
             ),
+            // takt's own exit beside the actions: the step changed no file and declined.
+            crate::harness::DECLINE => class(
+                Actor::Harness,
+                Intent::Coordinate,
+                Kind::ModelCall,
+                Some("declined"),
+                Evidence::Declared,
+            ),
             _ => class(
                 Actor::Harness,
                 Intent::Change,
@@ -1451,6 +1459,16 @@ mod tests {
         assert_eq!(
             (ci.actor, ci.kind, ci.intent),
             (Actor::Forge, Kind::CiWait, Intent::Wait)
+        );
+    }
+
+    /// story:a-run-can-decline: a declining step is a model call that edits nothing.
+    #[test]
+    fn a_declining_step_is_no_edit() {
+        let decline = classify("harness", "decline", "AGENTS.md forbids it");
+        assert_eq!(
+            (decline.kind, decline.intent, decline.outcome),
+            (Kind::ModelCall, Intent::Coordinate, Some("declined"))
         );
     }
 

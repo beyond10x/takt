@@ -1053,6 +1053,7 @@ types:
       repeated_test_failure: takt.work.RepeatedTestFailure
       harness_unqualified: takt.work.HarnessUnqualified
       setup_failed: takt.work.SetupFailed
+      declined: String
 
   # What a `red_base` stop names: the revision the case's first `tests.run` failed at, the tests
   # its output names as failed (cargo's `test <name> ... FAILED` lines or its quiet `failures:`
@@ -1309,6 +1310,7 @@ types:
       store_evidence: takt.work.RunStoreEvidence
       store_move: takt.work.RunStoreMove
       refusal: takt.work.RunRefusal
+      decline: takt.work.RunDecline
       waiting: takt.work.RunWait
       error: takt.work.RunError
       skipped: takt.work.RunSkipped
@@ -1800,6 +1802,20 @@ types:
       - name: by
         type: String
       - name: reason
+        type: String
+
+  # A judgement step declined the intent: it named `decline`, takt's own exit offered beside the
+  # actions and never a protocol's, changed no file, and gave `reason` as its reply's summary,
+  # verbatim; `case_revision` is the case revision (`r<n>`) the case was at. A record line, never
+  # evidence: the run stops `declined` with exit 9, and a run on the case at the same case
+  # revision stops `declined` again before any step; an argument-less run passes the case over
+  # until a commit moves its revision. A decline whose step changed a file is refused instead.
+  - name: takt.work.RunDecline
+    kind: struct
+    fields:
+      - name: reason
+        type: String
+      - name: case_revision
         type: String
 
   # The run pauses on the forge for `seconds`, then observes the actions `on` again. A wait on
