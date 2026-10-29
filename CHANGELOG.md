@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-29
+
+`libz-sys` 1.1.31, for RUSTSEC-2026-0418.
+
 ### Security
 
 - `libz-sys` moves from 1.1.30 to 1.1.31 in the lock, for RUSTSEC-2026-0418 (fixed in 1.1.31; the lock already holds `cc` 1.9.0).
@@ -856,7 +860,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.22.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.22.1...HEAD
+[0.22.1]: https://github.com/beyond10x/takt/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/beyond10x/takt/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/beyond10x/takt/compare/0.20.0...0.21.0
 [0.20.0]: https://github.com/beyond10x/takt/compare/0.19.0...0.20.0

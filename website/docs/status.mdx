@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.22.0, 2026-10-29 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.22.1, 2026-10-29 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
@@ -76,6 +76,7 @@ Each release in one line, from the changelog:
 | 0.20.0 | `--forge local`: a bare repository on this machine, the tree's `origin`, is the forge; a run opens a request record there, runs the run file's `local_checks` as the test command is, and on a grant merges into the target branch; a Codex step is given each file once (no `AGENTS.md` Codex loads itself, no `CLAUDE.md` that adds nothing to it, no file the change so far shows whole); a credential joined to the word before it is withheld; a failed `tests.run`'s block makes paths relative and withholds only the lines the secret scan refuses; a run without `--confinement` says it got `none` as the default; loom 0.48.0 with metaharness 0.23.0, b10x-harness 0.22.0 in the image; ESS 0.76.0 for the specification, CI and the image |
 | 0.21.0 | under its `said:` line a harness step lists its tool calls, and before its `effect:` line a step that committed prints the commit's diff, escaped and bounded, coloured under `--color auto\|always\|never`, both off with `--quiet-steps`; a documentation edit a test file of the case names counts as an attempt toward `RepeatedTestFailure`; a key held twice after an alias, a tagged or a colon-ended key is refused at the duplicate's line; a record is stamped when submitted, never before the case's latest; loom 0.49.1 with Canon 0.7.0 and engineering-protocols 0.13.0, whose `story.delivery/2` admits the edit after a red gate only once a test failed since the tests were written |
 | 0.22.0 | every evidence record's `observed_at` is written to the microsecond, and a record ordered after another one in the same second is stamped after it at once, with no wait; the planning store's `test_result` keeps whole seconds; loom 0.50.0 with Canon 0.8.0 and engineering-protocols 0.14.0, whose `story.delivery/2` admits the edit after a red gate only once a test failed since the latest tests write |
+| 0.22.1 | `libz-sys` 1.1.31 in the lock, for RUSTSEC-2026-0418 |
 
 ## Every story
 
