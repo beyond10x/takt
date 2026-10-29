@@ -6,6 +6,9 @@
 //! refused wherever an operator gives one; evidence that does not read stops the run naming the
 //! file; the latest decision is the one with the highest sequence number, however many digits.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fs;

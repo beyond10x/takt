@@ -3,6 +3,9 @@
 //! within the budget and a grace of 10 s, exit 3, the child killed and its change discarded.
 //! The `claude` is a double; nothing reaches a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

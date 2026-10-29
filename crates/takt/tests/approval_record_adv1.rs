@@ -2,6 +2,9 @@
 //! beyond the granted revision, and what a real forge does around the push of the approval's
 //! commit that the double does not.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -2,6 +2,9 @@
 //! a built-in protocol's inputs with the run file's value and line, the same as JSON, and an
 //! unknown protocol refused with exit 1 naming the ones takt knows.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

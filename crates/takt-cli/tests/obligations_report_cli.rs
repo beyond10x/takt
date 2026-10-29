@@ -8,6 +8,9 @@
 //! failed there still names it, a code commit after the gate reads it `not yet run`, and a stop at
 //! the store commits does not hide the gate's table from a resume or from `takt report`.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -622,6 +625,7 @@ fn a_stop_time_table_does_not_hide_the_gates_table() {
                     id: "manifest".to_owned(),
                     text: "The repository has its manifest.".to_owned(),
                     status: takt::obligations::Status::NotYetRun,
+                    commands: Vec::new(),
                 }],
             },
         )

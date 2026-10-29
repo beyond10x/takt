@@ -6,6 +6,9 @@
 //! scenario runs against the real `worktree` binary on a fixture repository, with the
 //! registry, the policy and the trees under the scratch directory.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;

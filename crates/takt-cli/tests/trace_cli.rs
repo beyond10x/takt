@@ -1,6 +1,9 @@
 //! story:run-trace-and-report through the binary: `takt trace --case <dir>` writes one
 //! `takt-trace/1` file, `takt report` prints the attribution across the cases or traces given.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

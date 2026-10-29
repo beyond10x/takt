@@ -5,6 +5,9 @@
 //! any other command it keeps the first line beside the last ones, so a summary printed first is
 //! not dropped.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};

@@ -4,6 +4,9 @@
 //! record, and bounded with the scope files. Metaharness's scripted session stands in for each
 //! vendor program: no process, no credential, no network.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -109,6 +112,7 @@ fn step(
         time_left: None,
         change: &ChangeSoFar::NoneYet,
         failed: &[],
+        last_gate: None,
         scope_revision: None,
         base_revision: base,
         commit: None,

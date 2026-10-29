@@ -1,6 +1,9 @@
 //! The `takt` binary's `--forge` default at its edge: an `origin` that is not a GitHub
 //! repository. Adversary pass 1 over story:forge-pull-request-evidence.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

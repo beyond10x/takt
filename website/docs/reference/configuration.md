@@ -56,7 +56,7 @@ for `_`; those six have no flag.
 `takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
-`--tokens`, `--active-seconds`, `--min-free-gib`, `--gate`, `--gates`, `--project`,
+`--tokens`, `--active-seconds`, `--min-free-gib`, `--verbose`, `--gate`, `--gates`, `--project`,
 `--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
 `--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
 `--endpoint-*` names of the endpoint flags below. A key for one of them is refused.

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T19:04:21Z",
+  "actor": "human:timo",
+  "artifact": "dependency-blocker:worktree-nested-keep-file",
+  "kind": "dependency-blocker",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "worktree 0.19.0 (tag 0.19.0, commit 0f912020 on origin/main, GitHub Release published 2026-10-27T13:56:54Z): CHANGELOG.md:5 at 0.19.0, 'A .worktreekeep in a subdirectory keeps paths at and below that directory'",
+    "reference": "https://github.com/beyond10x/worktree/releases/tag/0.19.0"
+  }
+}

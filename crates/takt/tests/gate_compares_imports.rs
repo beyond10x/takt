@@ -13,6 +13,9 @@
 //! shell, by a `sh -c` string or a shell script the gate runs; a shell line the step guard's
 //! reader cannot read with certainty fails closed, naming why.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -442,7 +442,7 @@ pub fn rebuilt_prompt_line(
         gate,
     )?;
     let change = change_of(start, &start.case_dir, repo, &start.revision)?;
-    let failed = failed_of(start);
+    let (failed, last_gate) = failed_of(start);
     // The scope files as the revision the step started at holds them, in the repository.
     let ask = commit_ask(start);
     let context = context(
@@ -451,6 +451,7 @@ pub fn rebuilt_prompt_line(
         &offer,
         &change,
         &failed,
+        last_gate.as_ref(),
         Some(&start.revision),
         None,
         ask.as_ref(),
@@ -496,6 +497,7 @@ fn context<'a>(
     offer: &'a crate::run::Offer,
     change: &'a ChangeSoFar,
     failed: &'a [crate::validator::FailedCheck],
+    last_gate: Option<&'a crate::run::GateFailure>,
     scope_revision: Option<&'a str>,
     base_revision: Option<&'a str>,
     commit: Option<&'a crate::commit_style::Ask>,
@@ -518,6 +520,7 @@ fn context<'a>(
         time_left: None,
         change,
         failed,
+        last_gate,
         obligations: &[],
     }
 }
@@ -534,15 +537,24 @@ fn commit_ask(start: &Start) -> Option<crate::commit_style::Ask> {
         .and_then(|line| crate::commit_style::Ask::of_record(&line["commit"]))
 }
 
-/// What the step `start` describes was shown of the checks that failed before it, read from its
-/// record up to the step as a run reads it ([`crate::run::failed_checks`]).
-fn failed_of(start: &Start) -> Vec<crate::validator::FailedCheck> {
+/// What the step `start` describes was shown of the checks that failed before it and of the gate
+/// failure its record ended on, read from its record up to the step as a run reads them
+/// ([`crate::run::failed_checks`], [`crate::run::last_gate_failure`]).
+fn failed_of(
+    start: &Start,
+) -> (
+    Vec<crate::validator::FailedCheck>,
+    Option<crate::run::GateFailure>,
+) {
     let record: Vec<serde_json::Value> = start
         .record
         .split(|byte| *byte == b'\n')
         .filter_map(|line| serde_json::from_slice(line).ok())
         .collect();
-    crate::run::failed_checks(&record)
+    (
+        crate::run::failed_checks(&record),
+        crate::run::last_gate_failure(&record),
+    )
 }
 
 /// Writes the case directory as the step `start` describes found it under `tree`
@@ -747,7 +759,7 @@ pub fn replay_once(
     )?;
     let started_at = crate::events::instant();
     let change = change_of(start, &case_dir, &tree, &revision)?;
-    let failed = failed_of(start);
+    let (failed, last_gate) = failed_of(start);
     // The instruction files are read at the base the case pinned, as the run read them.
     let base = crate::case::Branch::read(&start.case_dir)
         .ok()
@@ -759,6 +771,7 @@ pub fn replay_once(
         &offer,
         &change,
         &failed,
+        last_gate.as_ref(),
         None,
         base.as_deref(),
         ask.as_ref(),

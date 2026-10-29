@@ -3,6 +3,9 @@
 //! without the line naming its action is tried before the run ends on the error, the bound the
 //! run keeps ([`takt::run::NO_ACTION_TRIES`]).
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::process::Command;
 
 /// `takt <args>`: its exit status and its stdout.

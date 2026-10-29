@@ -6,6 +6,9 @@
 //! a scratch directory, every run stops before its first step, and a `codex` and a
 //! `b10x-harness` double on the program path record whether they were started.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

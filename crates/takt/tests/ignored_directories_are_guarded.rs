@@ -5,6 +5,9 @@
 //! path, and undone; the next `tests.run` reads the source again. Every repository is a scratch
 //! one under the crate's build directory; nothing is written outside it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

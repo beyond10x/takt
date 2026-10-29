@@ -14,6 +14,9 @@
 //! The confined cases need an adapter of this host; where none serves the run, the case prints
 //! `skipped: missing prerequisite: …` with takt's refusal and returns.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

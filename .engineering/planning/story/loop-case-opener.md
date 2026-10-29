@@ -2,14 +2,16 @@
 format: aep.planning-md/3
 id: story:loop-case-opener
 kind: story
-status: draft
+status: archived
 title: takt run opens a loop.improvement/1 case its validators can drive
 relations:
 - depends_on: story:loop-scorecard
 - decomposes: epic:recursive-self-improvement
 - depends_on: story:promotion
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "archived", at: "2026-10-28T19:04:01Z", actor: "human:timo", revision: 3, executor: "agent:planner"}
 ---
 ## Outcome
 
@@ -29,3 +31,7 @@ From the reviewer's verdict on story:loop-scorecard at 00dab82 (needs-revision; 
 ## Acceptance
 
 After `takt run --protocol protocols/loop-improvement/1.yaml` opens a case, `loop_baseline` names the promoted revision (not `r0`) and `<case>/loop-baseline.json` exists; with the three recorded turns present, `loop.measure` becomes due without a hand-written `case.yaml`.
+
+## Archived
+
+Archived 2026-10-28: folded into story:loop-scorecard (implemented). Its commit 162260eb ("a loop case opens with its baseline", release 0.2.0) sets `loop_baseline` and snapshots the baseline right after the case opens (`CaseDir::open_loop_baseline`, which calls `loop_scorecard::snapshot_baseline`, `crates/takt/src/case.rs`), and says "This folds in story:loop-case-opener".

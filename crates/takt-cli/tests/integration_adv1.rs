@@ -1,6 +1,9 @@
 //! Adversary pass 1 over the wave 06 integration fixes, through the binary: the approval's own
 //! commit (`approvals_only`) and the case a plain run resumes (`Run::next_to_resume`).
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

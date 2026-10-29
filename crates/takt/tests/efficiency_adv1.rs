@@ -3,6 +3,9 @@
 //! recorder, the hand-over and `pr.open`, the approval stop and the stateless filter, each case
 //! named for the defect it shows. Fake harnesses and the in-memory forge only.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fs;

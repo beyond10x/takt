@@ -6,6 +6,42 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-29
+
+A run's console opens with the story and shows what each step cost; a failed gate or test run
+reaches the next prompt as what failed and where; takt ships its own `story.delivery/3`.
+
+### Added
+
+- `story.delivery/3`, takt's own story protocol (`protocols/story-delivery/3.yaml`), embedded in the binary: after a red gate the edit is admitted, and the handover reruns the gate.
+- A run stops `RepeatedGateFailure` after three `gate.run` results in a row, each at a new revision, fail the same gates.
+- A step after a failed gate is told in one line that the gate last failed at an earlier revision and runs after the action that enables it.
+- The obligations block names each gate's command, read from the gates project file at the case's base.
+- A harness that runs commands is asked to run the named checks that compile nothing and change no file before it ends a step that changes files.
+- The protocol `bench.task/1` for a benchmark task (`--protocol`).
+- A turn records the repository its forge reads, and its merge reads the same one.
+
+### Changed
+
+- The console opens with the story, keeps the frontier to what changed, and prints one compact line per step with its duration, tokens, cached input tokens and cost.
+- A harness's repeated hermetic verdict is printed once, and again only when it changes.
+- A failed `tests.run` leads the next prompt, before the intent, with each failing test and its last error line.
+- A step offering `implementation.edit` after a red test run is shown where each failing test's assertion is, read from the runner's output.
+- A failed gate's block writes paths under the tree relative to it; lines the secret scan refuses are withheld one by one, and the gate's heading says how many.
+- A failed gate keeps or counts the failing lines of seven more linter shapes.
+- A file a failed gate's output names is part of the change, even outside the story's Scope.
+- A revision that changes only documentation is no new attempt at the failing tests; the red run a story's new tests give is no repeated failure.
+- The engineering-protocols pin moves to 0.12.2 and loom to 0.47.0.
+
+### Fixed
+
+- A duplicate YAML key is refused at its own line, named from the parser's own error.
+- A resume stopped `HarnessUnqualified` leaves its case scorable.
+- A run of validator steps only adds no harness layer to a comparison.
+- The console's header prints no control character.
+- The proposal scan reads what a proposal adds, not the whole file.
+- The gate tests keep their own git maintenance and aep cache, and the step-running test binaries their own program directories.
+
 ## [0.18.1] - 2026-10-28
 
 Under `story.delivery/2` a red gate admits the edit once the story's tests pass, so a gate failure
@@ -747,7 +783,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.18.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.19.0...HEAD
+[0.19.0]: https://github.com/beyond10x/takt/compare/0.18.1...0.19.0
 [0.18.1]: https://github.com/beyond10x/takt/compare/0.18.0...0.18.1
 [0.18.0]: https://github.com/beyond10x/takt/compare/0.17.0...0.18.0
 [0.17.0]: https://github.com/beyond10x/takt/compare/0.16.0...0.17.0

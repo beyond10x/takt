@@ -7,6 +7,9 @@
 //! rule is the one `CaseDir::resume` reads, so an accepted case resumed by id stays at its
 //! granted revision and nothing becomes due again.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -4,6 +4,9 @@
 //! here are doubles on the program path that leave the argv they were started with behind. No run
 //! reaches a network: each run stops at its one step, the double exiting before it does anything.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

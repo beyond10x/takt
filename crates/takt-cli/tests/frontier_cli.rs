@@ -2,6 +2,9 @@
 //! `--intent`: what the store says about the story once the run has ended, whichever way it
 //! ended, and the exit codes the binary maps a frontier answer to.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

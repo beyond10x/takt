@@ -44,7 +44,8 @@ A field added to an event later is optional, so older lines still read.
 ## The stop line
 
 `stop` opens with the stop's name, followed by its detail in parentheses. 0.14.0 added no event
-kind: its two new stops are `stop` lines like the others.
+kind: its two new stops are `stop` lines like the others, and so is 0.19.0's
+`RepeatedGateFailure`.
 
 | name | the run stopped because | exit |
 |---|---|---|
@@ -52,7 +53,9 @@ kind: its two new stops are `stop` lines like the others.
 | `Iterations`, `Hours`, `Tokens`, `ActiveTime` | the budget ended | 3 |
 | `NothingAdmissible`, `StepRefused`, `NoProgress` | no admissible step, a step refused, or nothing changed | 3 |
 | `RedBase` | the case's first `tests.run` failed before any step changed the base | 3 |
-| `RepeatedTestFailure` | two `tests.run` results in a row, each at a new revision, failed the same tests | 3 |
+| `RepeatedTestFailure` | two `tests.run` results in a row, each at a new revision, failed the same tests; from 0.19.0 neither the red run of newly written tests nor a result at a revision that changed only documentation counts | 3 |
+| `RepeatedGateFailure` | three `gate.run` results in a row, each at a new revision, failed the same gates (0.19.0) | 3 |
+| `HarnessUnqualified`, `SetupFailed` | the harness binary does not qualify under the run's hermetic mode, or a `setup` command of the run file did not end 0 | 1 |
 | `ApprovalRequired` | a capability needs a grant (`takt approve`) | 4 |
 | `Waiting` | the forge or a local file the run waits on is not ready and the budget ended | 6 |
 | `Unperformable` | the only action that decides a claim has no performer in this run | 7 |

@@ -4,6 +4,9 @@
 //! effect too, under `takt.choice`. With an authority provider that allows every capability, the
 //! merge effect still merges only under a grant of `repository.merge` at the case's revision.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::{BTreeSet, VecDeque};
 use std::fs;
@@ -718,9 +721,10 @@ fn the_port_guard_finds_a_record_written_past_it_in_any_crate() {
 
 /// Every line of takt's crates that may write a record into a case or names a path into a
 /// case's `evidence/` ([`evidence_lines`]), with what it does: the port's one write, and
-/// otherwise a read, a name, the empty directory a case opens with, or replay's copy into a
-/// scratch tree. A line found and not here, or here and not found, fails the guard.
-const EVIDENCE_LINES: [(&str, &str, &str); 17] = [
+/// otherwise a read, a name, the empty directory a case opens with, replay's copy into a
+/// scratch tree, or a unit test's write into its own scratch case. A line found and not here,
+/// or here and not found, fails the guard.
+const EVIDENCE_LINES: [(&str, &str, &str); 20] = [
     (
         "takt/src/evidence.rs",
         "match self.case.borrow_mut().add_evidence(&record) {",
@@ -806,12 +810,28 @@ const EVIDENCE_LINES: [(&str, &str, &str); 17] = [
         ".join(\"evidence\");",
         "names the case's own evidence directory, relative to the tree, where observed_pass reads a record it recorded",
     ),
+    (
+        "takt/src/run.rs",
+        "let dir = case_dir.join(\"evidence\");",
+        "reads the case's tests_change records for the revisions its tests were written at (tests_written_at), never writes one",
+    ),
+    (
+        "takt/src/harness.rs",
+        "} else if let Some(kind) = field(\"evidence\") {",
+        "reads the `evidence` key of a blocked action's reason in the decision (`reason_text`), never a case's directory",
+    ),
+    (
+        "takt/src/harness.rs",
+        "case.add_evidence(&crate::evidence::Record::new(",
+        "a unit test's case in its own scratch tree (`after_a_red_gate`), never a run's",
+    ),
 ];
 
 /// Acceptance 2, for every run: no code of takt writes a record into a case but the case's
 /// evidence port. In every crate's source, `CaseDir::add_evidence` is called from `evidence.rs`
-/// alone, and every other line that names a path into a case's `evidence/` reads, names, opens
-/// the empty directory, or copies a record into replay's scratch tree ([`EVIDENCE_LINES`]).
+/// alone outside a unit test's scratch case, and every other line that names a path into a
+/// case's `evidence/` reads, names, opens the empty directory, or copies a record into replay's
+/// scratch tree ([`EVIDENCE_LINES`]).
 #[test]
 fn no_record_reaches_a_case_but_through_the_case_evidence_port() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))

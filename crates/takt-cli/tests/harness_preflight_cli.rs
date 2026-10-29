@@ -6,6 +6,9 @@
 //! `crates/takt/tests/preflight_fakes`; the four named scenarios are
 //! `crates/takt/tests/harness_preflight.rs`.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 #[path = "../../takt/tests/preflight_fakes/mod.rs"]
 mod preflight_fakes;
 

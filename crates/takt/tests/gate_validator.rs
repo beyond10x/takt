@@ -5,6 +5,9 @@
 //! the claim is false; an assertion the provider cannot observe writes nothing, because unknown
 //! is not false. Every record comes from the validator.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

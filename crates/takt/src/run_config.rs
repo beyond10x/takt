@@ -830,6 +830,208 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
     }
 }
 
+/// Whether `key` is a name takt or Loom declares: one the shape text quotes, a member of a
+/// `loom.agent/1` document, or `takt`. Only such a key is named in a refusal; the comparison is
+/// whole names, so a key that quotes a stretch of the shape text is not one.
+fn declared(key: &str) -> bool {
+    SHAPE.split('`').skip(1).step_by(2).any(|name| name == key)
+        || LOOM_AGENT_MEMBERS.contains(&key)
+        || key == "takt"
+}
+
+/// The refusal of the file at `path` for a key written twice in one `container` (a YAML mapping,
+/// a TOML table), at the second one's `line`, naming the key when it is one takt or Loom
+/// declares and repeating nothing else written in it.
+fn refused_duplicate(
+    path: &Path,
+    line: usize,
+    key: Option<&str>,
+    container: &str,
+) -> anyhow::Error {
+    match key.filter(|key| declared(key)) {
+        Some(key) => anyhow!(
+            "the run configuration file {} is refused at line {line}: it holds the key `{key}` \
+             twice in one {container}",
+            path.display()
+        ),
+        None => anyhow!(
+            "the run configuration file {} is refused at line {line}: it holds a key twice in one \
+             {container}",
+            path.display()
+        ),
+    }
+}
+
+/// The key a TOML key is when it is `written` bare, or quoted with no escape in it; none when it
+/// is written otherwise.
+fn toml_key(written: &str) -> Option<&str> {
+    let written = written.trim();
+    let bare = !written.is_empty()
+        && written
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_');
+    if bare {
+        return Some(written);
+    }
+    let quoted = |mark: char| {
+        written
+            .strip_prefix(mark)
+            .and_then(|inner| inner.strip_suffix(mark))
+            .filter(|inner| !inner.contains(['\\', '"', '\'']))
+    };
+    quoted('"').or_else(|| quoted('\''))
+}
+
+/// Where serde_yaml_ng's `error` found a key twice in the YAML `text`: the line of the second
+/// one, from one, and the key when it is a string. serde_yaml_ng locates that error at the start
+/// of the mapping and names the key in its message (`duplicate entry with key "a"`); the
+/// parser's events are read again ([`repeated_key`]), and the key they find is taken only when
+/// the message names it. None for every other error, and where the events do not settle it.
+fn duplicate_yaml_key(text: &str, error: &serde_yaml_ng::Error) -> Option<(usize, Option<String>)> {
+    let at = error.location()?;
+    let message = error.to_string();
+    let message = message
+        .strip_suffix(&format!(" at line {} column {}", at.line(), at.column()))
+        .unwrap_or(&message);
+    let (line, key) = repeated_key(text, at.index())?;
+    let named = match &key {
+        serde_yaml_ng::Value::Null => "with null key".to_owned(),
+        serde_yaml_ng::Value::Bool(boolean) => format!("with key `{boolean}`"),
+        serde_yaml_ng::Value::Number(number) => format!("with key {number}"),
+        serde_yaml_ng::Value::String(string) => format!("with key {string:?}"),
+        _ => return None,
+    };
+    message
+        .ends_with(&format!("duplicate entry {named}"))
+        .then(|| (line, key.as_str().map(str::to_owned)))
+}
+
+/// A plain scalar's `text` as serde_yaml_ng resolves it (null, a boolean, a number or a string),
+/// read as a mapping's value; none when that reading is not one scalar or does not give the
+/// text back as the string it is.
+fn plain_scalar(text: &str) -> Option<serde_yaml_ng::Value> {
+    let read: serde_yaml_ng::Mapping = serde_yaml_ng::from_str(&format!("k: {text}")).ok()?;
+    let (_, value) = read.into_iter().next()?;
+    match &value {
+        serde_yaml_ng::Value::String(string) if string != text => None,
+        serde_yaml_ng::Value::Null
+        | serde_yaml_ng::Value::Bool(_)
+        | serde_yaml_ng::Value::Number(_)
+        | serde_yaml_ng::Value::String(_) => Some(value),
+        _ => None,
+    }
+}
+
+/// The line, from one, of the first key that repeats an earlier key of the mapping starting at
+/// byte `mapping` of the YAML `text`, and the key, read from the parser's own events: a scalar
+/// or a comment is never read as a key, and a key is compared as serde_yaml_ng compares it, as
+/// the value it resolves to. None when the mapping holds no such key, when one of its keys
+/// before it is an alias or carries a tag, which this does not resolve, or when the parser
+/// cannot be set up.
+fn repeated_key(text: &str, mapping: usize) -> Option<(usize, serde_yaml_ng::Value)> {
+    use unsafe_libyaml as unsafe_yaml;
+    /// An open sequence or mapping; a mapping's next node is a key or a value, and the one
+    /// starting at `mapping` holds the keys read so far.
+    struct Open {
+        mapping: bool,
+        key_next: bool,
+        keys: Option<Vec<serde_yaml_ng::Value>>,
+    }
+    let size = u64::try_from(text.len()).ok()?;
+    let mapping = u64::try_from(mapping).ok()?;
+    let mut parser = Box::<unsafe_yaml::yaml_parser_t>::new_uninit();
+    let parser = parser.as_mut_ptr();
+    let mut open: Vec<Open> = Vec::new();
+    let mut found = None;
+    // SAFETY: as `anchor_line`'s (`loop_scorecard`): the parser lives in its own allocation,
+    // never moved, initialized before any other call and deleted after the last; the input
+    // outlives it. Each event is filled by `yaml_parser_parse` before it is read, its union read
+    // only under the variant its type names, and deleted before the next.
+    unsafe {
+        if unsafe_yaml::yaml_parser_initialize(parser).fail {
+            return None;
+        }
+        unsafe_yaml::yaml_parser_set_encoding(parser, unsafe_yaml::YAML_UTF8_ENCODING);
+        unsafe_yaml::yaml_parser_set_input_string(parser, text.as_ptr(), size);
+        let mut event = std::mem::MaybeUninit::<unsafe_yaml::yaml_event_t>::uninit();
+        loop {
+            let event = event.as_mut_ptr();
+            if unsafe_yaml::yaml_parser_parse(parser, event).fail {
+                break;
+            }
+            let kind = (*event).type_;
+            let line = usize::try_from((*event).start_mark.line)
+                .unwrap_or(usize::MAX)
+                .saturating_add(1);
+            let counted = open
+                .last()
+                .is_some_and(|parent| parent.mapping && parent.key_next && parent.keys.is_some());
+            // Some(Some(key)): a key of the mapping, resolved; Some(None): one not resolved.
+            let key = match kind {
+                unsafe_yaml::YAML_SCALAR_EVENT if counted => {
+                    let scalar = (*event).data.scalar;
+                    let bytes = std::slice::from_raw_parts(
+                        scalar.value,
+                        usize::try_from(scalar.length).unwrap_or(0),
+                    );
+                    let resolved = match std::str::from_utf8(bytes) {
+                        Ok(_) if !scalar.tag.is_null() => None,
+                        Ok(text) if scalar.style == unsafe_yaml::YAML_PLAIN_SCALAR_STYLE => {
+                            plain_scalar(text)
+                        }
+                        Ok(text) => Some(serde_yaml_ng::Value::String(text.to_owned())),
+                        Err(_) => None,
+                    };
+                    Some(resolved)
+                }
+                unsafe_yaml::YAML_ALIAS_EVENT if counted => Some(None),
+                _ => None,
+            };
+            let complete = match kind {
+                unsafe_yaml::YAML_SCALAR_EVENT | unsafe_yaml::YAML_ALIAS_EVENT => true,
+                unsafe_yaml::YAML_SEQUENCE_START_EVENT | unsafe_yaml::YAML_MAPPING_START_EVENT => {
+                    let is_mapping = kind == unsafe_yaml::YAML_MAPPING_START_EVENT;
+                    open.push(Open {
+                        mapping: is_mapping,
+                        key_next: true,
+                        keys: (is_mapping && (*event).start_mark.index == mapping).then(Vec::new),
+                    });
+                    false
+                }
+                unsafe_yaml::YAML_SEQUENCE_END_EVENT | unsafe_yaml::YAML_MAPPING_END_EVENT => {
+                    open.pop();
+                    true
+                }
+                _ => false,
+            };
+            let end = kind == unsafe_yaml::YAML_STREAM_END_EVENT;
+            unsafe_yaml::yaml_event_delete(event);
+            match key {
+                Some(None) => break,
+                Some(Some(key)) => {
+                    let keys = open.last_mut().and_then(|parent| parent.keys.as_mut());
+                    if let Some(keys) = keys {
+                        if keys.contains(&key) {
+                            found = Some((line, key));
+                            break;
+                        }
+                        keys.push(key);
+                    }
+                }
+                None => {}
+            }
+            if complete && let Some(parent) = open.last_mut().filter(|parent| parent.mapping) {
+                parent.key_next = !parent.key_next;
+            }
+            if end {
+                break;
+            }
+        }
+        unsafe_yaml::yaml_parser_delete(parser);
+    }
+    found
+}
+
 /// `message` without the line and column llm appends to a YAML document's refusal: they locate the
 /// copy of an inline section that takt re-serialises, not the run file.
 fn without_position(message: &str) -> &str {
@@ -941,27 +1143,36 @@ fn llm_document(path: &Path, llm: &serde_yaml_ng::Value) -> Result<(Routes, Vec<
     Ok((routes, variables))
 }
 
-/// The run configuration in `text`, TOML.
+/// The run configuration in `text`, TOML. A key written twice is refused at the second one's
+/// line, where the toml parser points, named when takt or Loom declares it.
 fn from_toml(path: &Path, text: &str) -> Result<RunConfig> {
     toml::from_str(text).map_err(|error| {
-        refused(
-            path,
-            error
-                .span()
-                .and_then(|span| text.get(..span.start))
-                .map(|before| before.matches('\n').count() + 1),
-        )
+        let line = error
+            .span()
+            .and_then(|span| text.get(..span.start))
+            .map(|before| before.matches('\n').count() + 1);
+        match line {
+            Some(line) if error.message() == "duplicate key" => {
+                let key = error.span().and_then(|span| text.get(span));
+                refused_duplicate(path, line, key.and_then(toml_key), "table")
+            }
+            _ => refused(path, line),
+        }
     })
 }
 
 /// The run configuration in `text`, YAML: a `loom.agent/1` document's `takt` member, nothing
 /// when it has none, or else the whole document. A document with a `format` other than
 /// `loom.agent/1`, a member of one that is neither Loom's nor `takt`, or a YAML tag anywhere is
-/// refused without repeating what is written.
+/// refused without repeating what is written. A key written twice is refused at the second one's
+/// line, as TOML refuses it ([`duplicate_yaml_key`]).
 fn from_yaml(path: &Path, text: &str) -> Result<RunConfig> {
     let line = |error: &serde_yaml_ng::Error| error.location().map(|at| at.line());
     let document: serde_yaml_ng::Value =
-        serde_yaml_ng::from_str(text).map_err(|error| refused(path, line(&error)))?;
+        serde_yaml_ng::from_str(text).map_err(|error| match duplicate_yaml_key(text, &error) {
+            Some((at, key)) => refused_duplicate(path, at, key.as_deref(), "mapping"),
+            None => refused(path, line(&error)),
+        })?;
     if tagged(&document) {
         return Err(anyhow!(
             "the run configuration file {} is refused: it carries a YAML tag, which no member \

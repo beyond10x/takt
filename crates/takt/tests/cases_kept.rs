@@ -4,6 +4,9 @@
 //! them. takt edits no root file of the repository. Scenario 1 drives the real `worktree`
 //! binary found on `PATH`, release 0.19.0 or newer; without one the test fails and says so.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

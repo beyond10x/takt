@@ -3,6 +3,9 @@
 //! it the way it skips any torn line, the line after it naming it, and reads every other line;
 //! `record_accepted` and the scorecard read such a record.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

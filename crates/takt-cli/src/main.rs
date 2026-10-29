@@ -1189,6 +1189,11 @@ struct LoopArgs {
     /// whose tests fail on purpose.
     #[arg(long)]
     continue_past_red_base: bool,
+    /// Print every decision's full frontier, `frontier: <action> (<status>), …`, beside what the
+    /// run may do: without it the run says the admissible actions once (`may:`) and then only
+    /// when they change (`may now: +<added> -<removed>`).
+    #[arg(long)]
+    verbose: bool,
     /// The `setup` commands `--config` gave, run when the case opens; set from the file, never from
     /// a flag.
     #[arg(skip)]
@@ -1326,7 +1331,7 @@ const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it; or stopped: SetupFailed (<name> exited <code>): a command of the run file's `setup` list did not end 0 when the case opened, before the red-base check and any model call; its output is kept under the state directory
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint) or RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests); the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
@@ -1340,7 +1345,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it
   2  the arguments do not parse
-  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint) or RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests); the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
@@ -1386,7 +1391,7 @@ fn main() -> ExitCode {
 /// | 0 | `Completed`; the frontier had nothing ready; `approve` and `protocols` done |
 /// | 1 | refused before the run, the reason on stderr, no step run |
 /// | 2 | the arguments do not parse (clap) |
-/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `RedBase`, `RepeatedTestFailure` |
+/// | 3 | any other stop: a budget, `NothingAdmissible`, `StepRefused`, `NoProgress`, `RedBase`, `RepeatedTestFailure`, `RepeatedGateFailure` |
 /// | 4 | `ApprovalRequired`: `takt approve` is the next step |
 /// | 5 | `stopped: error:`, the run ended on an error once its case was open: a forge that refused, a validator or the harness that failed; a judgement step whose session names no action only after `NO_ACTION_TRIES` tries, each a step |
 /// | 6 | `Waiting`: the run waited on the forge until its budget ended, or waits on something local and stopped at once; the next run resumes the case |
@@ -1745,14 +1750,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 looping.state_dir.as_deref(),
             )?;
             // A resumed turn reads the mainline through the forge it recorded when it opened,
-            // as `takt approve` does: a run through another is refused before anything is
-            // written.
+            // from the repository it recorded, as `takt approve` does: a run through another,
+            // or on another repository, is refused before anything is written.
             if let Some(resuming) = &resuming {
                 let run_forge = forge.forge.as_ref().map_or("none", |forge| forge.name());
                 if let Some(why) = takt::case::turn_forge_refusal(
                     &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &resuming.id,
                     run_forge,
+                    forge.repository.as_deref(),
                 )? {
                     return Err(anyhow!(why));
                 }
@@ -1774,10 +1780,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     pushes,
                 )?;
             }
-            let mainline = forge.forge.clone().map_or(
-                takt::improvement::Mainline::Local,
-                takt::improvement::Mainline::Forge,
-            );
+            let mainline = forge.mainline();
             // An improvement turn opens with its finding and its candidate, `--input
             // finding=<story id>` and `--input candidate=<full commit id>`, no case inputs of the
             // protocol, taken out of the inputs and checked here with the promoted baseline, so
@@ -2780,11 +2783,28 @@ fn validators_of(
 }
 
 /// The forge a run goes through, the line that says so once its case is open, and, for the bot
-/// route, the route a scenario's trial bases are fetched and created through.
+/// route, the route a scenario's trial bases are fetched and created through and the repository
+/// it reads, which an improvement turn records and reads its mainline from.
 struct Forged {
     forge: Option<Rc<dyn Forge>>,
     line: Option<String>,
     trials: Option<TrialRoute>,
+    repository: Option<String>,
+}
+
+impl Forged {
+    /// The mainline an improvement turn reads through this forge: the repository's `main` for
+    /// the bot route, the forge's for another forge, the local `main` with none.
+    fn mainline(&self) -> takt::improvement::Mainline {
+        match (&self.forge, &self.repository) {
+            (Some(forge), Some(repository)) => takt::improvement::Mainline::Repository {
+                forge: forge.clone(),
+                repository: repository.clone(),
+            },
+            (Some(forge), None) => takt::improvement::Mainline::Forge(forge.clone()),
+            (None, _) => takt::improvement::Mainline::Local,
+        }
+    }
 }
 
 /// The bot route's two lines for a scenario's trial bases, beside the forge's own: a fetch of
@@ -2967,6 +2987,7 @@ fn forge_with(
             forge: Some(Rc::new(connectors)),
             line: Some(line),
             trials: None,
+            repository: None,
         });
     }
     if forge == Some("command") {
@@ -2992,6 +3013,7 @@ fn forge_with(
                     .to_owned(),
             ),
             trials: None,
+            repository: None,
         });
     }
     if forge == Some("gitlab")
@@ -3007,6 +3029,7 @@ fn forge_with(
             forge: Some(Rc::new(glab)),
             line: Some(line),
             trials: None,
+            repository: None,
         });
     }
     forge_of(repo, forge, scan)
@@ -3035,10 +3058,12 @@ fn forge_through(
             bot.repository
         );
         let trials = TrialRoute::of(&bot);
+        let repository = bot.repository.clone();
         Ok(Forged {
             forge: Some(Rc::new(bot)),
             line: Some(line),
             trials: Some(trials),
+            repository: Some(repository),
         })
     };
     let gitlab = |glab: Glab| -> Forged {
@@ -3050,12 +3075,14 @@ fn forge_through(
             forge: Some(Rc::new(glab)),
             line: Some(line),
             trials: None,
+            repository: None,
         }
     };
     let none = |line: Option<String>| Forged {
         forge: None,
         line,
         trials: None,
+        repository: None,
     };
     Ok(match forge {
         Some("none") => none(None),
@@ -3117,6 +3144,7 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Fo
                     BotRoute::HOST
                 )),
                 trials: None,
+                repository: None,
             }),
             _ => forge_of(repo, None, scan),
         },
@@ -3197,6 +3225,9 @@ fn finish(
         run.cap_active_time(seconds);
     }
     run.stop_when_unperformable();
+    run.console(takt::console::Console {
+        verbose: looping.verbose,
+    });
     if looping.continue_past_red_base {
         run.continue_past_red_base();
     }
@@ -3218,10 +3249,11 @@ fn finish(
         Err(error) => {
             writeln!(
                 out,
-                "stopped: error: {}; steps {}, tokens {}, case {}",
+                "stopped: error: {}; steps {}, tokens {}{}, case {}",
                 one_line(&format!("{error:#}")),
                 run.steps,
                 run.tokens,
+                stop_figures(run),
                 run.case.dir.display()
             )?;
             return Ok(EXIT_ERROR);
@@ -3229,9 +3261,10 @@ fn finish(
     };
     writeln!(
         out,
-        "stopped: {stop}; steps {}, tokens {}, case {}",
+        "stopped: {stop}; steps {}, tokens {}{}, case {}",
         run.steps,
         run.tokens,
+        stop_figures(run),
         run.case.dir.display()
     )?;
     Ok(match stop {
@@ -3245,6 +3278,15 @@ fn finish(
         Stop::Declined(_) => EXIT_DECLINED,
         _ => EXIT_STOPPED,
     })
+}
+
+/// What the `stopped:` line names between its tokens and its case: the run's wall time, its cost
+/// when a step reported one, and its commits with the paths they committed
+/// ([`takt::console::stop_figures`]).
+fn stop_figures(run: &Run<'_>) -> String {
+    let (commits, paths) = run.commits();
+    let wall = u64::try_from(run.elapsed().as_millis()).unwrap_or(u64::MAX);
+    takt::console::stop_figures(wall, run.cost_usd(), commits, paths)
 }
 
 /// A scenario as the repository declares it in [`SCENARIOS`]: one story of its store, run from
@@ -4340,6 +4382,20 @@ mod tests {
         Scratch(dir)
     }
 
+    /// Whether the run printed `action` admissible: listed on its `may:` line, or added on a
+    /// `may now:` line.
+    fn may(out: &str, action: &str) -> bool {
+        out.lines().any(|line| {
+            line.strip_prefix("  may: ")
+                .is_some_and(|actions| actions.split_whitespace().any(|a| a == action))
+                || line.strip_prefix("  may now: ").is_some_and(|changes| {
+                    changes
+                        .split_whitespace()
+                        .any(|change| change.strip_prefix('+') == Some(action))
+                })
+        })
+    }
+
     /// Runs `takt <args>` in this process; the exit code and what it printed.
     fn takt(args: &[&str]) -> (u8, String) {
         // These tests run takt in one process, side by side, under one home. The first run makes
@@ -4465,7 +4521,7 @@ mod tests {
             "true",
         ]);
         assert_eq!(code, 3, "{out}");
-        // The loop prints Canon's action frontier each evaluation; the store's lines are these.
+        // The loop says Canon's action frontier as `may:`; the store's lines are these.
         assert!(!out.contains("frontier: took"), "{out}");
         assert!(!out.contains("frontier: nothing ready"), "{out}");
         let case = the_case(&repo);
@@ -4588,9 +4644,11 @@ mod tests {
             GATE_PROTOCOL,
             "--test-cmd",
             "true",
+            "--verbose",
         ]);
         assert_eq!(code, 7, "{out}");
         assert!(out.contains("frontier: gate.run (admissible)"), "{out}");
+        assert!(may(&out, "gate.run"), "{out}");
         assert!(
             out.contains(
                 "stopped: Unperformable (gate.green; nothing performs it without the gates document); steps 0, tokens 0"
@@ -5052,7 +5110,7 @@ mod tests {
         );
         assert!(!out.contains("refused"), "{out}");
         assert!(!out.contains("ApprovalRequired"), "{out}");
-        assert!(out.contains("repository.merge (admissible)"), "{out}");
+        assert!(may(&out, "repository.merge"), "{out}");
         assert!(
             out.contains("step 1: repository.merge (none)"),
             "story:harness-none-takes-a-granted-action: the granted merge is the harness's step: {out}"

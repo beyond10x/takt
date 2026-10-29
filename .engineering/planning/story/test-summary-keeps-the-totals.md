@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:test-summary-keeps-the-totals
 kind: story
-status: draft
+status: archived
 title: The tests.run summary keeps the test command's totals
 tags:
 - finding
@@ -11,7 +11,9 @@ refs:
   reference: test-summary-keeps-the-totals
 relations:
 - informed_by: review-result:variety-runs-a0b8576
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "archived", at: "2026-10-28T19:04:00Z", actor: "human:timo", revision: 6, executor: "agent:planner"}
 ---
 ## Outcome
 
@@ -45,3 +47,7 @@ earlier in the output is hidden by a later block that passed.
 ## Acceptance
 
 On the predicate's run the effect line holds `SUITES-26-PASSED`; for `cargo test` the summary keeps each `test result:` line or their totals.
+
+## Archived
+
+Archived 2026-10-28: shipped. Commit 3080c5c2 ("tests.run: the summary keeps the test command's totals", 2026-10-18) is on main and in every release from 0.1.0 on.

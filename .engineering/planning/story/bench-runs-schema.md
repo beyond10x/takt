@@ -9,7 +9,8 @@ relations:
 - decomposes: epic:benchmark-integration
 - serves: vision:safe-agentic-coding
 - depends_on: story:bench-nouns-in-ess
-revision: 1
+- depends_on: story:baseline-runner-in-repo
+revision: 2
 ---
 ## Outcome
 
@@ -24,7 +25,7 @@ revision: 1
 - `case_dir`, for the takt arm
 - `source`
 
-`docs/metrics/check-bench-runs.py` refuses a row that breaks the schema. For a takt-arm row, it also refuses figures that differ from the stop events of the case the row names.
+`takt-bench check-runs <file>`, a subcommand of the `takt-bench` binary (crate `crates/takt-bench`, story:baseline-runner-in-repo, clap derive), refuses a row that breaks the schema. For a takt-arm row, it also refuses figures that differ from the stop events of the case the row names.
 
 ## Context
 
@@ -42,18 +43,21 @@ The schema adds two rules:
 
 The schema follows `BenchRun` in takt's specification, so spec comes first (story:bench-nouns-in-ess, AGENTS.md § Rules). The check is offline, against a committed fixture case.
 
+The checker was planned as `docs/metrics/check-bench-runs.py`. Running code committed to this repository is Rust with clap derive (approval-record:store-replan-2026-10-28), so it is a `takt-bench` subcommand instead; the crate is story:baseline-runner-in-repo's, and this story adds the subcommand to it.
+
 ## Expected before
 
 On takt at main, holds; after the change, fails:
 
-- `ls docs/metrics/check-bench-runs.py` exits non-zero.
+- `grep -rqs check-runs crates/takt-bench/src || echo no-check-runs` prints `no-check-runs`.
 
 ## Scope
 
+- `crates/takt-bench/src/main.rs`: the `check-runs` subcommand (inferred)
+- `crates/takt-bench/tests/check_runs.rs` (inferred)
 - `docs/metrics/README.md` (inferred)
-- `docs/metrics/check-bench-runs.py` (inferred)
 - `docs/metrics/fixtures/` (inferred)
 
 ## Acceptance
 
-On the fixture `docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` (a takt-arm row with `tokens.sum` 900 whose `case_dir` names a committed fixture case with two `stop` events of 1000 and 500 tokens), `python3 -I docs/metrics/check-bench-runs.py docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` exits 1 printing `line 1: tokens.sum 900, the case's stop events sum 1500`, where at fb3c3bc `docs/metrics/check-bench-runs.py` does not exist.
+On the fixture `docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` (a takt-arm row with `tokens.sum` 900 whose `case_dir` names a committed fixture case with two `stop` events of 1000 and 500 tokens), `takt-bench check-runs docs/metrics/fixtures/bench-runs-takt-mismatch.jsonl` exits 1 printing `line 1: tokens.sum 900, the case's stop events sum 1500`, checked in `crates/takt-bench/tests/check_runs.rs` under `task test-library`, where at fb3c3bc no `check-runs` subcommand exists.

@@ -6,6 +6,9 @@
 //! retry loop asks for the bound before it asks for the budget, so a third try that spends the
 //! budget ends the run on the error.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

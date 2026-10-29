@@ -3,6 +3,9 @@
 //! earlier revision reaching the base with a later grant, and an approver the commit says is
 //! refused that is not.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

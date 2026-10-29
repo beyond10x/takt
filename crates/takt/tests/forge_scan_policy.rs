@@ -14,6 +14,9 @@
 //! file: `scan-text` and `api` refuse unless the line names `--policy` or the environment the
 //! fake is given names one, as the real program does. Nothing leaves the machine.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};

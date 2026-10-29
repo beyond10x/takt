@@ -1,6 +1,9 @@
 //! Adversary pass 1 on story:scorecard-reader, through the binary. The case directories are
 //! written through `takt::events`, as the run loop writes them.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -31,7 +31,7 @@ detail (`website/docs/`); it duplicates none of them.
 | `crates/takt` | the library `b10x-takt` (`use takt::…`): protocol loading (`protocol`), case files, the decision the governor of Loom renders and the evidence records (`case`, `evidence`), the loop (`run`, on Commission's runtime of `loom-sdk`, each harness session through its session executor `b10x-loom-session-executor`), the seams and their first adapters (`harness`, `frontier`, `validator`, `forge`), the git reads and writes (`git`), the run record read back (`scorecard`, `trace`, `report`) |
 | `crates/takt/tests`, `crates/takt-cli/tests` | integration tests and their fixtures |
 | `crates/takt-cli` | the binary `takt` |
-| `protocols/` | `loop-improvement/metrics.yaml` only, the loop metrics' definitions; the protocols takt runs (`story.delivery/1`, `self.improvement/1`, `loop.improvement/1`) are the engineering protocols' built-ins (`b10x-canon-engineering`) |
+| `protocols/` | `loop-improvement/metrics.yaml`, the loop metrics' definitions; `bench-task/1.yaml`, the `bench.task/1` protocol of a benchmark task (`--protocol`); and `story-delivery/3.yaml`, takt's own `story.delivery/3`, embedded in the binary (`crates/takt/src/protocol.rs`); the other protocols takt runs (`story.delivery/1`, `story.delivery/2`, `self.improvement/1`, `loop.improvement/1`) are the engineering protocols' built-ins (`b10x-canon-engineering`) |
 | `ess/` | the ESS specification of takt's nouns and their relations |
 | `docs/design/` | design documents |
 | `docs/waves/`, `docs/runs/`, `docs/handoff/` | wave pages, recorded runs, handoff notes |
@@ -114,6 +114,10 @@ by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
   self-improvement work carries the tag `rsi`, and every open `rsi` story is scheduled before any
   story without it: a wave takes the `rsi` stories first, and opens without one only for a unit it
   depends on (owner, 2026-10-19).
+- Delivery is in batches: a wave's units run only the tests of what they change, never a full
+  `task check`; their waves merge into `integration/takt`, where one local `task check` runs
+  after the batch is in, then one pull request to `main` through the bot route, set to merge on
+  its required checks, and one release (owner, 2026-10-28).
 - A finding goes into the planning store with an `expected_before` predicate a machine can check.
   A sub-agent's return is its message; the four hand-overs between the dispatcher and the trial
   agent are in § Messages below.

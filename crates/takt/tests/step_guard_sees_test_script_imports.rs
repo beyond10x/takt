@@ -5,6 +5,9 @@
 //! its working directory and `PYTHONPATH`, and Python's start-up files; a line it cannot read
 //! fails closed on every Python file of the tree.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

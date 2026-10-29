@@ -7,6 +7,9 @@
 //! still binds the implementation revision; the merge observation names it, and what it
 //! retains names the head merged.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

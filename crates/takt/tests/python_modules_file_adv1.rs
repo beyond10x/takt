@@ -5,6 +5,9 @@
 //! observation plants where none was, a fail-closed answer at open, a resume whose test command
 //! now runs a Python, and the reference page's listing of a `--test-cmd true` case.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};

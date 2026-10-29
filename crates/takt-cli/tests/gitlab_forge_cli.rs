@@ -3,6 +3,9 @@
 //! program path (a `git` shim answers every line naming an `https://` URL and hands every other
 //! line to the real git), so nothing in these tests reaches a host.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

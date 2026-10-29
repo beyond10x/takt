@@ -6,6 +6,9 @@
 //! with those of the turns before. The turns here are fixture cases written file by file: a
 //! `case.yaml`, the decisions Canon wrote for them, a run record, the story they were opened for.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

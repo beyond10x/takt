@@ -7,6 +7,9 @@
 //! timeout and a bounded tail of its output; the harness child loads no project or user
 //! settings, hooks or plugins.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

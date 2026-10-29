@@ -5,6 +5,9 @@
 //! does not run gives no result. Scratch stores and a scratch takt only; nothing reaches a
 //! network or a real credential.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

@@ -1,6 +1,9 @@
 //! Adversary pass 2 on story:run-record-and-story-evidence: the store guard around a judgement
 //! step, both-or-neither for a store write and its line, and the record's end.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

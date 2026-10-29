@@ -5,6 +5,9 @@
 //! program that could not start, a JSON line naming no action), are not retried. Each session
 //! here is metaharness's scripted b10x-harness one: no vendor process, no credential, no network.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
@@ -366,6 +369,45 @@ fn the_run_ends_on_the_error_after_the_third_try() {
     let record = events(&tree, id);
     let last = record.last().expect("a line");
     assert_eq!(last["event"], "error", "{last}\n{text}");
+}
+
+/// A try whose session named no action proposed nothing, and only a session that proposed is
+/// observed into the case: of two such tries and a third that names its action, the case holds
+/// that third session's `AgentSession` alone, and none naming no action.
+#[test]
+fn a_try_that_named_no_action_leaves_no_session_in_the_case() {
+    let scratch = repository("observed");
+    let tree = scratch.tree();
+    let id = "no-action-observed";
+    let (stop, text, _) = run(
+        &tree,
+        id,
+        &[Reply::NoLine, Reply::NoLine, Reply::Fixes],
+        None,
+    );
+    assert!(stop.is_ok(), "{stop:?}\n{text}");
+    let path = tree
+        .join(takt::case::CASES_DIR)
+        .join(id)
+        .join("observations.json");
+    let held = fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("read {}: {error}\n{text}", path.display()));
+    let observations: Vec<serde_json::Value> = serde_json::from_str(&held).expect("json");
+    let sessions: Vec<&serde_json::Value> = observations
+        .iter()
+        .filter(|observation| observation["payload"]["record"] == "loom.session.AgentSession")
+        .collect();
+    assert!(!sessions.is_empty(), "the third try's session: {held}");
+    assert_eq!(
+        sessions[0]["payload"]["action"], "implementation.edit",
+        "the first session observed is the third try's: {held}"
+    );
+    assert!(
+        sessions
+            .iter()
+            .all(|session| session["payload"]["action"] != ""),
+        "no session that named no action: {held}"
+    );
 }
 
 /// A retry is a step like any: the run's token budget spent by a failed try stops the run on

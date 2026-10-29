@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-28T20:40:00Z",
+  "actor": "human:timo",
+  "artifact": "story:unqualified-stop-records-no-layer",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check's commands at 7c9e7129 (wave/39): specification, citations, release notes, format and lint exit 0; workspace test --no-fail-fast 2338 passed, 2 failed, 5 ignored; the two (active_time_budget's forge wait at load 24-40, approval_riders_adv2 refused on an ess install written into ~/.cargo/bin during the run) passed alone at the same sha, 3 and 10 passed"
+  }
+}

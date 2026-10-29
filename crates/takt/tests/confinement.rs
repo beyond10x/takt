@@ -22,6 +22,9 @@
 //! test binary starts itself again and runs the case there. Where no adapter of the host serves
 //! a test command, the case prints `skipped: missing prerequisite: …` and returns.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

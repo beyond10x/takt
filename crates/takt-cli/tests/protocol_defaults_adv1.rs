@@ -3,6 +3,9 @@
 //! nothing". The refusal runs in `main.rs` after `Run::resume`, and `CaseDir::resume` checks the
 //! tree out onto the case's branch and rewrites the case's implementation revision before it.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

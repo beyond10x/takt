@@ -7,6 +7,9 @@
 //! run took before the grant was given, at the same revisions, is rebuilt without the action,
 //! as the run offered it. No live `claude` runs: the harness program is a script.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

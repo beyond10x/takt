@@ -1,9 +1,9 @@
 ---
 title: How a run ends
 sidebar_position: 6
-description: Every stop a takt run can end on, grouped, with its exit code and what the next run does; the two test stops added in 0.14.0.
+description: Every stop a takt run can end on, grouped, with its exit code and what the next run does; the two test stops added in 0.14.0 and the gate stop added in 0.19.0.
 lede: Every run ends on one named stop, printed as one stopped line and recorded in the case, with an exit code a script or a Loom Job can read; every stop but Completed leaves the case open, and the next run resumes it.
-source: takt run --help (Exit codes) at 0.14.0; crates/takt/src/run.rs (Stop, STOP_KINDS, REPEATED_FAILURES, Run::tests_stop, Run::before_any_effect), crates/takt-cli/src/main.rs (EXIT_*); crates/takt-cli/tests/test_failure_stops_cli.rs; CHANGELOG.md 0.14.0; Loom 0.44.0 CHANGELOG (status.run); scratch runs of takt 0.14.0; one case record of a cluster run of takt 0.13.1
+source: takt run --help (Exit codes) at 0.14.0; crates/takt/src/run.rs (Stop, STOP_KINDS, REPEATED_FAILURES, REPEATED_GATE_FAILURES, is_documentation_path, Run::tests_stop, Run::before_any_effect), crates/takt/src/console.rs (stop_figures), crates/takt-cli/src/main.rs (EXIT_*); crates/takt-cli/tests/test_failure_stops_cli.rs; CHANGELOG.md 0.14.0; Loom 0.44.0 CHANGELOG (status.run); scratch runs of takt 0.14.0; one case record of a cluster run of takt 0.13.1
 ---
 
 # How a run ends
@@ -12,8 +12,12 @@ A run ends on exactly one stop. takt prints it as the last line, records it in t
 `events.jsonl` as a `stop` line, and exits with the stop's code:
 
 ```text
-stopped: <stop>; steps <n>, tokens <n>, case <case directory>
+stopped: <stop>; steps <n>, tokens <n>, wall <duration>[, cost $<dollars>], commits <n>[ (<p> paths)], case <case directory>
 ```
+
+From 0.19.0 the line names the run's wall time, its cost when a step reported one, and the
+commits its steps made with how many paths they committed. The examples on this page are from
+takt 0.14.0 and end at `tokens`. An error's `stopped: error:` line carries the same figures.
 
 Every stop but `Completed` leaves the case open. The next `takt run` on the repository resumes
 it: a story's open case is found on its own, and an intent's case is resumed with
@@ -26,7 +30,7 @@ it: a story's open case is found on its own, and an intent's case is resumed wit
 | 0 | `Completed (<outcome>)`, or `frontier: nothing ready` | nothing to resume: the case has its outcome, or no story was ready |
 | 1 | refused before the run | nothing was opened; fix what stderr names |
 | 2 | the arguments do not parse | nothing was opened |
-| 3 | a budget, a loop stop or a test stop (below) | resumes the case |
+| 3 | a budget, a loop stop, a test stop or the gate stop (below) | resumes the case |
 | 4 | `ApprovalRequired` | resumes once `takt approve` granted it |
 | 5 | `stopped: error: …` | resumes the case |
 | 6 | `Waiting` | resumes and observes again |
@@ -82,10 +86,32 @@ before it spends model calls on them.
 - **`RepeatedTestFailure`**: two `tests.run` results in a row, each at a new revision, fail the
   same tests. The edits between them moved nothing the tests decide; the run stops before
   another judgement step, naming the tests. A failing set that changes, or a failure whose output
-  names no test, does not stop the run.
+  names no test, does not stop the run. From 0.19.0 two results do not count: the red run at the
+  revision a `tests.write` step committed, which shows the story's new tests failing as the
+  protocol asks, and a result at a revision that changed only documentation (`docs/`,
+  `README.md`, `CHANGELOG.md`) since the last one. A first edit that leaves the new tests red no
+  longer ends the run.
 
 A resume after either stop runs the tests again before any model call, and stops again while
 they fail the same way. Once they pass, or fail differently, the run goes on.
+
+### The gate stop
+
+0.19.0 adds one stop on `gate.run` results, exit 3:
+
+- **`RepeatedGateFailure`**: three `gate.run` results in a row, each at a new revision, fail the
+  same gates. The run stops before another judgement step, naming the gates; the case stays open:
+
+  ```text
+  stopped: RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: <gates>); steps <n>, …
+  ```
+
+A pass, or a failure on another set of gates, ends the row; a result at the revision of the one
+before it counts once. The row is read from the case's record, not from the run, so after a
+resume the next gate run that fails the same gates at a new revision stops the run again.
+
+Before it, a red gate reaches the next judgement step's prompt with what each failed gate
+printed ([A judgement step's prompt](./one-step-at-a-time.md#a-judgement-steps-prompt)).
 
 A red base, on a one-crate repository whose only test fails:
 

@@ -1,6 +1,9 @@
 //! Adversary pass 1 against the authority hardening: the cases the unit's own suite does not
 //! state.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

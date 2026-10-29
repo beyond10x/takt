@@ -6,6 +6,9 @@
 //! authority. A grant reaches the run as the answer of `CaseAuthority`, the authority provider
 //! over the case's `authority.yaml`: allowed only at the revision of its subject it was given at.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

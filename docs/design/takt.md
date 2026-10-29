@@ -118,6 +118,13 @@ the harness's loop opens the secret store itself, so the key never enters takt, 
 | M4 pluggable | the five traits; a second harness adapter proves the seam; validators from the engineering assertion providers; Substrate optional | the M2 story runs under both adapters with the same decision documents | built: the five traits; three harnesses through Loom's session executor (`--harness claude\|codex\|harness`, story:second-harness-adapter); the gate validator through the assertions library; `--confinement none\|substrate` (story:confinement-seam). Not built: confining the harness session, git, the forge and aep (story:harness-child-confined) |
 | M5 prove | three repositories, each a daily `run --hours 2` for a week; units accepted, tokens, human interventions, defects escaped | the numbers | not started (story:week-of-daily-runs) |
 
+Since M2: `story.delivery/2` of the engineering protocols is the default for a store story from
+0.16.0, and takt's own `story.delivery/3` (`protocols/story-delivery/3.yaml`) is embedded from
+0.19.0. On 2026-10-29 five runs on `story.delivery/3`, with Codex and `--forge none`, took one
+story of takt's own store through its tests, the gate and the handover to `pr.opened`
+(`docs/runs/2026-10-29-self-run-story-delivery.md`). A delivery on this repository with a forge,
+pull request opened, CI read and merged, is not proven.
+
 ## 5. Not in this design
 
 A hosted service, a console, a database and cross-repository scheduling. Loom's own model executor

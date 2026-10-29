@@ -2,6 +2,9 @@
 //! first step: exit 1 naming the link, no step taken, the tree on the branch it was on, and
 //! nothing written through the link.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -6,10 +6,11 @@ description: The protocols takt runs and the ones it holds for its own improveme
 
 # Protocols
 
-The [protocol viewer](pathname:///takt/protocols/) shows all nine protocols `takt protocols`
-lists, `software.change/1` first: their actions, evidence kinds, claims, obligations and outcomes
-as tables, and as one graph of how they connect. It is built on every site build from the documents of the
-`b10x-canon-engineering` release takt pins.
+The [protocol viewer](pathname:///takt/protocols/) shows eight of the ten protocols `takt
+protocols` lists, `software.change/1` first: their actions, evidence kinds, claims, obligations
+and outcomes as tables, and as one graph of how they connect. It is built on every site build
+from the documents of the `b10x-canon-engineering` release takt pins. It does not draw
+`story.delivery/2` or takt's own `story.delivery/3`.
 
 ## Built in
 
@@ -18,6 +19,7 @@ as tables, and as one graph of how they connect. It is built on every site build
 | id | from | a case is |
 |---|---|---|
 | `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store story, the default; its inputs and [their defaults](protocol-defaults.md) |
+| `story.delivery/3` (listed as `story-delivery/3`) | takt, `protocols/story-delivery/3.yaml`, from 0.19.0 | one planning-store story, as `/2` but `change.handover` is not admissible while the tests fail; the same inputs and defaults ([Protocol and case](../concepts/protocol-and-case.md#the-protocols-takt-runs)) |
 | `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story, no case input |
 | `self.improvement/1` (listed as `self-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |
@@ -28,6 +30,19 @@ as tables, and as one graph of how they connect. It is built on every site build
 a protocol by its directory, and a protocol's own id has a dot (and for `eval-gated-change`, an
 underscore: `eval.gated_change`). `--protocol` also takes the path of a `protocol/1` file, which
 wins over a built-in of the same name; a path is read against the directory `takt` runs in.
+
+A built-in of takt's own never shares a name and major with one the registry ships; a unit test
+refuses that.
+
+## In this repository, as files
+
+| file | id | a case is |
+|---|---|---|
+| `protocols/bench-task/1.yaml` | `bench.task/1`, from 0.19.0 | one benchmark task: no forge, no pull request, no merge; `completed` once the task's visible tests pass at the revision the harness handed over, `abandoned` on an explicit decision |
+
+Give it by path, read against the directory `takt` runs in:
+`takt run --protocol protocols/bench-task/1.yaml --test-cmd "<visible test command>" --forge none`.
+The benchmark's own grading tests stay outside the case.
 
 ## Settings of a protocol
 
@@ -67,7 +82,9 @@ end `unreproducible` or `declined`. From 0.2.2 there are also `candidate.merge`,
 `candidate.merge_judge_surface` and `binary.promote`, so a turn can reach `accepted`. How an
 operator runs one: [The loop](../self-improvement/the-loop.md#running-a-turn).
 
-Sources: `takt protocols`, engineering-protocols 0.10.0 `protocols/`, `crates/takt/src/protocol.rs`,
+Sources: `takt protocols`, engineering-protocols 0.10.0 `protocols/`, `protocols/` of this
+repository, `crates/takt/src/protocol.rs` (`OWN`, `builtins`), `crates/takt-cli/tests/bench_task_cli.rs`,
+`docs/site/protocols/scripts/collect.mjs`,
 `crates/takt-cli/src/main.rs` (`--input`), `crates/takt/src/loop_scorecard.rs`,
 `crates/takt/tests/improvement_protocols.rs`, `design:recursive-self-improvement` § The loops as
 protocols.

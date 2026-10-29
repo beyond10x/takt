@@ -3,6 +3,9 @@
 //! (`takt approve`, the real `aep`) wherever the store accepts the story as committed, so a refusal
 //! here is a refusal of the store's own record.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

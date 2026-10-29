@@ -69,6 +69,7 @@ fn card(cases: &[(&str, u64, Option<bool>)], margin: u32) -> Scorecard {
                 opened_binary: None,
                 completed: *completed,
                 step_tokens: BTreeMap::new(),
+                harness_steps: None,
                 layers: None,
             })
             .collect(),

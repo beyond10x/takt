@@ -4,6 +4,9 @@
 //! `active`), and a run opens a case on it whose `intent.md` is the story's title followed by
 //! its body. On a store with nothing ready the frontier gives no unit and moves nothing.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

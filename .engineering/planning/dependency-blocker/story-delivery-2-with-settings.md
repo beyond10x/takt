@@ -2,12 +2,14 @@
 format: aep.planning-md/3
 id: dependency-blocker:story-delivery-2-with-settings
 kind: dependency-blocker
-status: open
+status: cleared
 title: story.delivery/2 with tests_first and gate_on does not exist yet
 relations:
 - blocks: story:story-delivery-tests-first
 - blocks: story:takt-ships-default-protocol-settings
-revision: 2
+revision: 4
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-28T19:04:19Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"review_outcome":1,"verification":1}}, executor: "agent:planner"}
 ---
 # Dependency blocker: story-delivery-2-with-settings
 
@@ -24,3 +26,7 @@ Upstream state: that story's fixtures under `fixtures/story-delivery-2/` pass on
 workspace builds against that tree through an uncommitted `[patch]` path override. takt's `gate_deferral` and
 `protocol_defaults` scenarios are then the end-to-end check. engineering-protocols releases, and takt takes it as a
 pin-only hop.
+
+## Cleared
+
+Cleared 2026-10-28 by engineering-protocols 0.12.0 (tag 0.12.0, commit 2bb0eae5, GitHub Release published 2026-10-28). It ships `protocols/story-delivery/2.yaml` with the inputs `tests_first` and `gate_on` and the claim `change.complete`. takt pins that tag (`Cargo.toml:13`, `b10x-canon-engineering`).

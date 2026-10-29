@@ -4,6 +4,9 @@
 //! it reaches the tree (story:harness-proposes-takt-performs). Each session here is metaharness's
 //! scripted Claude Code: no vendor process, no credential, no network.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fs;

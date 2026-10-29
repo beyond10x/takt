@@ -2,6 +2,9 @@
 //! leave under a `$CARGO_HOME` (and `$RUSTUP_HOME`) that cargo or rustup reads or runs later,
 //! and what takt does to `~/.cargo` when it refuses a program planted in a fresh home.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

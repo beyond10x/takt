@@ -4,6 +4,9 @@
 //! decisions and record up to the step rebuilt there, and records each replay outside the case.
 //! The `claude` is a double that records the prompt it was given; nothing reaches a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

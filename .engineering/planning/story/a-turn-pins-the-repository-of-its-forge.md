@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-turn-pins-the-repository-of-its-forge
 kind: story
-status: draft
+status: active
 title: A turn records the repository its forge reads, and its merge reads the same one
 summary: the forge file records only a name, so the bot route reads whatever origin names at the call
 tags:
@@ -14,30 +14,58 @@ refs:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 2
+scope:
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/self_improvement_cli.rs
+- confidence: cited
+  path: crates/takt/src/case.rs
+- confidence: cited
+  path: crates/takt/src/forge/bot.rs
+- confidence: cited
+  path: crates/takt/src/improvement.rs
+- confidence: inferred
+  path: crates/takt/tests/self_improvement.rs
+- confidence: cited
+  path: ess/domains/takt.citations.tsv
+- confidence: cited
+  path: ess/domains/takt.yaml
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T19:03:57Z", actor: "human:timo", revision: 6}
+- {from: "proposed", to: "active", at: "2026-10-28T19:03:58Z", actor: "human:timo", revision: 7}
 ---
 # Story: a-turn-pins-the-repository-of-its-forge
 
 ## Outcome
 
 An improvement turn records, beside its forge's name, the repository that forge reads `main`
-from (`<owner>/<repo>` for the bot route), and the grant records it with the tip. A grant or a
-merge observation read from any other repository is refused, naming both.
+from (`<owner>/<repo>` for the bot route), and its judge-surface grant records that repository
+with the tip. A resume, a grant or a merge observation whose mainline is read from another
+repository than the one recorded is refused, naming both, with nothing written.
 
 ## Context
 
-Found by the wave 16 re-check at 622e8a0d (docs/waves/wave-16.md) as a residual and inferred
-there; the predicate below now shows it. Cited at 00a900ac.
+The finding's origin is its predicate below: no run record or review holds it. An earlier body
+named a wave page as its source; that page holds no such finding, and the predicate's `source`
+now names this story. Cited at 338082d8.
 
-The turn's `forge` file holds a name and nothing else (`crates/takt/src/case.rs:2221-2224`,
-`FORGE_FILE`, `case.rs:2430`). `Mainline::recorded` turns `bot` into a bot route for the tree
-(`crates/takt/src/improvement.rs:1146-1150`), and `BotRoute::for_tree` reads the `origin`
-remote each time it is called (`crates/takt/src/forge.rs:1293-1315`). A resume through another
-forge name is refused (`turn_forge_refusal`, `case.rs:2458`); a resume through the same name on
-another repository is not. So the tip a grant records can be read from one repository and the
-merge observed on another. When the other repository's `main` descends from the recorded tip
-(a fork) and already held the candidate before the grant, the turn records `merged`, and
-`merged_before_grant` (`improvement.rs:1353`) cannot see it, because it only compares commits.
+The turn's `forge` file holds a name and nothing else: `open_turn` writes it
+(`crates/takt/src/case.rs:3611-3614`), `FORGE_FILE` and `turn_forge` read it back
+(`case.rs:3840-3863`). `Mainline::recorded` turns `bot` into a bot route for the tree
+(`crates/takt/src/improvement.rs:1149-1159`), and `BotRoute::for_tree` reads the `origin` remote
+each time it is called (`crates/takt/src/forge/bot.rs:130-152`, the repository taken from the URL
+at `:131-148`); the CLI builds its forge the same way (`crates/takt-cli/src/main.rs:3032`). The
+grant reads the tip through that route (`mainline_at_grant`, `case.rs:1267-1281`) and records it
+as `AuthorityDecision.mainline_tip` (`case.rs:666-672`, written at `:1237-1250`), with no
+repository. A resume through another forge name is refused (`turn_forge_refusal`,
+`case.rs:3870-3880`, called at `crates/takt-cli/src/main.rs:1748-1758`); a resume through the same
+name on another repository is not. So the tip a grant records can be read from one repository and
+the merge observed on another (the observation reads its tip at `improvement.rs:1533`). When the
+other repository's `main` descends from the recorded tip (a fork) and already held the candidate
+before the grant, the turn records `merged`, and `merged_before_grant` (`improvement.rs:1356`,
+called at `:1544-1556`) cannot see it, because it only compares commits.
 
 The predicate runs in a checkout of this repository at the seed. It builds the turn world the
 self-improvement CLI tests build, under `$HOME`: this tree's confined finding scripts, a
@@ -51,16 +79,65 @@ the grant) and its object fetch with success, since the commits are already loca
 opens with `--forge bot` on `origin` `acme/one`, the owner grants (the tip is read from
 `acme/one`), `origin` is moved to `acme/two`, and the turn resumes. Exit 9 says a
 `merge_observation` `merged` was written. Exit 2 says the turn never reached the judge-surface
-gate, which verifies nothing. Editing the `forge` file after the grant is the same defect by
-another route and is not exercised.
+gate, which verifies nothing.
+
+The protocol file the predicate passes is the seed's (`protocols/self-improvement/1.yaml`, gone
+from `main` since takt reads its protocols from engineering-protocols; the clone at the seed
+still holds it). Every validator now runs `check_at_open` before the first step
+(`crates/takt/src/run.rs:9301-9309`); only the gate validator overrides it
+(`crates/takt/src/validator.rs:2290`), and it returns at once for a protocol with no `gate.run`
+action (`validator.rs:2291-2295`, `protocol_has_action` at `:4786`). `self.improvement/1` has
+none, so the stand-in `b10x-gates` needs to answer nothing more at open.
+
+## Decision
+
+One rule for every forge: the merge observation's repository must equal the repository the
+grant recorded, and the local `main` (`--forge none`) counts as no repository. So a grant given
+before grants recorded a repository authorises no judge-surface merge through the bot route
+(a new grant records it), and a turn whose `forge` file names `bot` without a repository (opened
+before this change) is not refused at resume but is held by its grant's record. The `forge`
+file keeps its one-line form readable.
+
+## Scope
+
+- `ess/domains/takt.yaml`: `takt.work.Case` fields `forge` and `authority` (the recorded
+  repository and the grant's), before code; `ess/domains/takt.citations.tsv` for their
+  citations
+- `crates/takt/src/case.rs`: `open_turn` (`:3611-3614`), `FORGE_FILE` and `turn_forge`
+  (`:3840-3863`), `turn_forge_refusal` (`:3870`), `AuthorityDecision` (`:672`), the grant and
+  `mainline_at_grant` (`:1237-1281`)
+- `crates/takt/src/improvement.rs`: `Mainline::recorded` (`:1149`), `judge_surface_refusal`
+  (`:1303`) and `merged_before_grant` (`:1343-1356`), the merge observation (`:1520-1556`)
+- `crates/takt/src/forge/bot.rs`: `BotRoute::for_tree` and its `repository` (`:130-152`)
+- `crates/takt-cli/src/main.rs`: the resume refusal (`:1748-1758`), the mainline built for the
+  run (`:1777-1780`), the bot forge (`:3032`)
+- `crates/takt-cli/tests/self_improvement_cli.rs`, `crates/takt/tests/self_improvement.rs`
+  (inferred)
+
+`crates/takt/src/improvement.rs` is also story:a-squash-merge-before-the-grant-is-refused's;
+that story is not in this wave.
+
+## Out of scope
+
+- Which repository a turn may open on: any the bot route serves, as now.
+- A forge other than `bot` and `none`.
 
 ## Acceptance
 
-1. A turn opened through the bot route records the repository it read `main` from, and the
-   grant records it with the tip: a test.
-2. A resume, a grant or a merge observation through a bot route on another repository than the
-   one recorded is refused, naming both, and writes nothing: a test.
-3. At the candidate, `scripts/check-finding story:a-turn-pins-the-repository-of-its-forge
+1. A turn opened through the bot route on `origin` `acme/one` writes `acme/one` into its
+   `forge` file beside `bot`, and its judge-surface grant writes `acme/one` into
+   `authority.yaml` beside `mainline_tip`: a test in
+   `crates/takt-cli/tests/self_improvement_cli.rs` reads both files.
+2. With `origin` moved to `acme/two` after the open, `takt run --case` through the bot route and
+   `takt approve` of the judge-surface capability each exit 1, standard error naming `acme/one`
+   and `acme/two`, and leave `state_of` of the repository (every file under the cases directory
+   with its bytes, the refs and `HEAD`) as it was: a test in
+   `crates/takt-cli/tests/self_improvement_cli.rs`, one case per command.
+3. With the grant given on `acme/one` and the `forge` file then edited to name `bot acme/two`
+   (or `none`), the turn's next run writes no `merge_observation` `merged`; its summary names
+   the grant's repository and the one read now, and the case's evidence directory holds no new
+   file: a test in `crates/takt-cli/tests/self_improvement_cli.rs`.
+4. At the candidate, `scripts/check-finding story:a-turn-pins-the-repository-of-its-forge
    <candidate>` prints `not_reproduced`, and at the promoted revision `reproduced`.
 
 ```expected_before
@@ -70,5 +147,5 @@ command: top=$PWD; w=$HOME/w; r=$w/repo; s=$w/scen; p=$w/state/takt/promotions; 
 exit: 9
 healthy_exit: 0
 output: under a grant whose mainline tip was read from acme/one
-source: docs/waves/wave-16.md
+source: .engineering/planning/story/a-turn-pins-the-repository-of-its-forge.md
 ```

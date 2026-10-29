@@ -7,6 +7,9 @@
 //! - The first line names the adapter and the facts it proved, as `takt run --help` and
 //!   `website/docs/getting-started.md` say it does.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

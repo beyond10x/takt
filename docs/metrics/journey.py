@@ -118,8 +118,8 @@ def stop_kind(stop):
     return "refusal", "refused"
 
 
-STEP_RE = re.compile(r"^step \d+: (\S+) (\{.*\}|\((.+)\))\s*$")
-STOP_RE = re.compile(r"^stopped: (.*?); steps \d+, tokens \d+, case ")
+STEP_RE = re.compile(r"^step \d+: (\S+) (\{.*\}|\((.+)\))(?: · .*)?\s*$")
+STOP_RE = re.compile(r"^stopped: (.*?); steps \d+, tokens \d+(?:, wall .*?)?, case ")
 NOTE_EXIT_RE = re.compile(r"^(\S+Z) (takt scenario run|resume \d+) exit=(\d+)$")
 NOTE_DONE_RE = re.compile(r"^(\S+Z) done: ")
 

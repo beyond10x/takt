@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T19:03:32Z",
+  "actor": "human:timo",
+  "artifact": "story:confinement-through-substrate-on-linux-and-macos",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "check run 40738419298 on main 338082d8 (release 0.18.0): takt-cli tests/confinement_substrate.rs 4 passed, 0 failed on Linux; darwin run 40720970583 on integration/takt a19f226b, test-cli and test-library success on macOS; acceptance 6 holds at c6408f6f (grep -rnE 'sandbox-exec|\"bwrap\"|libc::unshare' crates/ prints nothing, crates/takt/src/seatbelt.rs absent); delivered in 9a93b9de, released in 0.16.0",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/40738419298"
+  }
+}

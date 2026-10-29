@@ -4,6 +4,9 @@
 //! chooses the protocol a store story opens on and the story's `protocol:` tag overrides the key;
 //! each value is recorded with its source in the case's `case.yaml` and said on the run's output.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
