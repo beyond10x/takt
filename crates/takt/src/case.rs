@@ -2871,7 +2871,8 @@ impl CaseDir {
 
     /// Opens a new case under `tree` on `protocol` for `intent`: the `intent` artifact at the
     /// SHA-256 of the intent text, `implementation` at `HEAD`, every other artifact at `r0`, and
-    /// the inputs given; a declared input that is not given is refused, naming its values: the
+    /// the inputs given; a declared input that is not given is refused, naming its values and how
+    /// to give it (`--input <name>=<value>`, the story tag `input:<name>=<value>`): the
     /// kernel takes no default, because the inputs select the obligations the case owes. The
     /// case's branch `takt/<id>` is created and checked out at the tip of its base (the branch
     /// the tree is on, or that case's base when the tree is on another case's branch, so a
@@ -2980,7 +2981,11 @@ impl CaseDir {
                     .find(|(k, _)| k == input)
                     .map(|(_, v)| v.clone())
                     .ok_or_else(|| {
-                        anyhow!("the case input {input} is not given; it takes one of {allowed:?}")
+                        anyhow!(
+                            "the case input {input} is not given; it takes one of {allowed:?}; \
+                             give it with `--input {input}=<value>` or the story tag \
+                             `input:{input}=<value>`"
+                        )
                     })?;
                 if !allowed.is_empty() && !allowed.contains(&given) {
                     return Err(anyhow!(

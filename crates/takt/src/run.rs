@@ -168,6 +168,15 @@ pub enum Stop {
         /// The results in a row.
         count: u64,
     },
+    /// [`REPEATED_GATE_FAILURES`] `gate.run` results in a row failed the same set of gates, each
+    /// at a revision the one before was not at: the edits between them moved nothing the gates
+    /// decide. The run stops after the last, before another judgement step; the case stays open.
+    RepeatedGateFailure {
+        /// The gates every one of the results failed, never empty.
+        gates: Vec<String>,
+        /// The results in a row.
+        count: u64,
+    },
     /// The harness binary the run would start does not qualify under the run's hermetic mode:
     /// asked of metaharness before the first session, on open and on every resume, with no model
     /// call ([`Harness::preflight`]). The case stays open, and the next run asks again.
@@ -201,10 +210,14 @@ pub enum Stop {
 /// stop the run ([`Stop::RepeatedTestFailure`]).
 pub const REPEATED_FAILURES: u64 = 2;
 
+/// How many `gate.run` results in a row, each at a new revision, failing the same set of gates
+/// stop the run ([`Stop::RepeatedGateFailure`]).
+pub const REPEATED_GATE_FAILURES: u64 = 3;
+
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 16] = [
+pub const STOP_KINDS: [&str; 17] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -221,6 +234,7 @@ pub const STOP_KINDS: [&str; 16] = [
     "HarnessUnqualified",
     "SetupFailed",
     "Declined",
+    "RepeatedGateFailure",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -303,6 +317,11 @@ impl std::fmt::Display for Stop {
                 f,
                 "RepeatedTestFailure ({count} tests.run results in a row, each at a new revision, failed the same tests: {})",
                 tests.join(", ")
+            ),
+            Stop::RepeatedGateFailure { gates, count } => write!(
+                f,
+                "RepeatedGateFailure ({count} gate.run results in a row, each at a new revision, failed the same gates: {})",
+                gates.join(", ")
             ),
             Stop::HarnessUnqualified {
                 kind,
@@ -404,8 +423,9 @@ enum Taken {
     },
 }
 
-/// The `tests.run` results in a row that failed the same tests ([`Run::tests_stop`]): the set,
-/// the tests in the order the first result named them, the revision of the last, and how many.
+/// The `tests.run` results in a row that failed the same tests ([`Run::tests_stop`]), or the
+/// `gate.run` results that failed the same gates ([`gate_stop`]): the set, the tests or gates in
+/// the order the first result named them, the revision of the last, and how many.
 struct Failing {
     set: BTreeSet<String>,
     tests: Vec<String>,
@@ -8866,6 +8886,75 @@ pub fn failed_checks(record: &[serde_json::Value]) -> Vec<crate::validator::Fail
     last.into_iter().flat_map(|(_, failed)| failed).collect()
 }
 
+/// The last `gate.run` result a case's record holds, when it failed: the revision its step
+/// observed and the gates it failed, in the record's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateFailure {
+    /// The implementation revision the gate ran at.
+    pub revision: String,
+    /// The ids of the gates it failed; empty when its line named none.
+    pub gates: Vec<String>,
+}
+
+/// Each `gate.run` result `record` holds ([`crate::validator::GateRun::KIND`] records of a
+/// validator's `gate.run` step), in the record's order: its step's revision, and the ids of the
+/// gates it failed, none for a result that did not fail.
+fn gate_results(record: &[serde_json::Value]) -> Vec<(&str, Option<Vec<String>>)> {
+    let mut results = Vec::new();
+    // The `gate.run` step the lines that follow belong to: its number and revision.
+    let mut current: Option<(&serde_json::Value, &str)> = None;
+    for line in record {
+        if line["event"] == "step" {
+            current = (line["by"] == "validator"
+                && line["action"] == crate::validator::GateRun::ACTION)
+                .then(|| (&line["step"], line["revision"].as_str().unwrap_or_default()));
+        } else if line["event"] == "evidence"
+            && let Some((step, revision)) = current
+            && line["step"] == *step
+            && line["kind"] == crate::validator::GateRun::KIND
+        {
+            let failed = (line["result"] == "fail").then(|| {
+                line["failed"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|check| check["id"].as_str().map(str::to_owned))
+                    .collect()
+            });
+            results.push((revision, failed));
+        }
+    }
+    results
+}
+
+/// The gate failure `record` ends on ([`GateFailure`]): its last `gate.run` result when that
+/// failed; none when it passed or the record holds none. A run reads it before each judgement
+/// step; a replay reads it the same way for the step it rebuilds.
+#[must_use]
+pub fn last_gate_failure(record: &[serde_json::Value]) -> Option<GateFailure> {
+    let (revision, gates) = gate_results(record).pop()?;
+    Some(GateFailure {
+        revision: revision.to_owned(),
+        gates: gates?,
+    })
+}
+
+/// [`Stop::RepeatedGateFailure`] when the `gate.run` results `record` ends with are a row of
+/// [`REPEATED_GATE_FAILURES`] or more failing the same gates, each at a new revision
+/// ([`Failing::after`]: a pass, and a failure that names no gate, end the row); else none.
+fn gate_stop(record: &[serde_json::Value]) -> Option<Stop> {
+    let mut failing = None;
+    for (revision, failed) in gate_results(record) {
+        Failing::after(&mut failing, revision, failed);
+    }
+    failing
+        .filter(|row| row.count >= REPEATED_GATE_FAILURES)
+        .map(|row| Stop::RepeatedGateFailure {
+            gates: row.tests,
+            count: row.count,
+        })
+}
+
 /// The change the case at `case_dir` has made so far, as a judgement step is shown it
 /// ([`ChangeSoFar`]), read in the repository of `tree` at the revision `at` (its `HEAD` when none
 /// is given): not known for a case with no `base_commit`; none yet while no accepted step has
@@ -12114,6 +12203,17 @@ impl<'a> Run<'a> {
                     {
                         return Ok(stop);
                     }
+                    // A failing `gate.run` that ends a row of failures on the same gates, read
+                    // from the case's record, stops the run before another judgement step.
+                    if validator.action() == crate::validator::GateRun::ACTION
+                        && observation.records.iter().any(|record| {
+                            record.kind == crate::validator::GateRun::KIND
+                                && record.result.as_deref() == Some("fail")
+                        })
+                        && let Some(stop) = gate_stop(&events.read()?)
+                    {
+                        return Ok(stop);
+                    }
                     if observation.records.is_empty() {
                         observed_without_record
                             .insert((validator.name().to_owned(), revision.clone()));
@@ -12274,6 +12374,7 @@ impl<'a> Run<'a> {
         )?;
         let record = events.read()?;
         let failed = failed_checks(&record);
+        let last_gate = last_gate_failure(&record);
         let obligations = crate::obligations::of_run(self, &record)
             .ok()
             .flatten()
@@ -12295,6 +12396,7 @@ impl<'a> Run<'a> {
             time_left: None,
             change: &change,
             failed: &failed,
+            last_gate: last_gate.as_ref(),
             scope_revision: None,
             base_revision: base.as_deref(),
             commit: ask.as_ref(),
@@ -13484,5 +13586,95 @@ mod tests {
         assert!(whole.starts_with(kept) && !kept.is_empty());
         assert_eq!(reason_bounded(&cut), cut, "a cut reason is not cut again");
         assert!(declined_reason(&"\u{1b}".repeat(REASON_AT_MOST)).len() <= REASON_AT_MOST);
+    }
+
+    /// A record's lines for a `gate.run` step `step` at `revision` whose result is `result`,
+    /// failing `gates` when it fails.
+    fn gate_lines(
+        step: u64,
+        revision: &str,
+        result: &str,
+        gates: &[&str],
+    ) -> Vec<serde_json::Value> {
+        let failed: Vec<serde_json::Value> = gates
+            .iter()
+            .map(
+                |id| serde_json::json!({"id": id, "lines": [format!("{id} failed")], "omitted": 0}),
+            )
+            .collect();
+        vec![
+            serde_json::json!({"event": "step", "step": step, "by": "validator",
+                "action": crate::validator::GateRun::ACTION, "revision": revision}),
+            serde_json::json!({"event": "evidence", "step": step,
+                "kind": crate::validator::GateRun::KIND, "result": result, "failed": failed}),
+        ]
+    }
+
+    /// [`REPEATED_GATE_FAILURES`] `gate.run` results in a row failing the same gates, each at a
+    /// new revision, stop the run naming the gates; one fewer, the same revision observed again,
+    /// a pass between them or another set of gates does not.
+    #[test]
+    fn repeated_gate_failures_at_new_revisions_stop_the_run() {
+        assert_eq!(REPEATED_GATE_FAILURES, 3);
+        let row = |results: &[(&str, &str, &[&str])]| -> Vec<serde_json::Value> {
+            results
+                .iter()
+                .enumerate()
+                .flat_map(|(n, (revision, result, gates))| {
+                    gate_lines(n as u64 + 1, revision, result, gates)
+                })
+                .collect()
+        };
+        let both: &[&str] = &["citations", "format"];
+        let three = row(&[
+            ("r1", "fail", both),
+            ("r2", "fail", both),
+            ("r3", "fail", both),
+        ]);
+        let stop = gate_stop(&three).expect("the third stops the run");
+        assert_eq!(
+            stop.to_string(),
+            "RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed \
+             the same gates: citations, format)"
+        );
+        assert!(matches!(stop, Stop::RepeatedGateFailure { count: 3, .. }));
+        assert!(gate_stop(&row(&[("r1", "fail", both), ("r2", "fail", both)])).is_none());
+        let same = row(&[
+            ("r1", "fail", both),
+            ("r2", "fail", both),
+            ("r2", "fail", both),
+        ]);
+        assert!(gate_stop(&same).is_none(), "the same revision counts once");
+        let passed = row(&[
+            ("r1", "fail", both),
+            ("r2", "pass", &[]),
+            ("r3", "fail", both),
+            ("r4", "fail", both),
+        ]);
+        assert!(gate_stop(&passed).is_none(), "a pass ends the row");
+        let other = row(&[
+            ("r1", "fail", both),
+            ("r2", "fail", &["format"]),
+            ("r3", "fail", both),
+        ]);
+        assert!(gate_stop(&other).is_none(), "another set starts a row");
+    }
+
+    /// The gate failure a step is told of is the record's last `gate.run` result when it
+    /// failed, at its step's revision, naming its gates; none after a pass or with no result.
+    #[test]
+    fn the_last_gate_failure_is_read_from_the_record() {
+        let mut record = gate_lines(1, "r1", "fail", &["citations"]);
+        record.extend(gate_lines(2, "r2", "fail", &["citations", "format"]));
+        assert_eq!(
+            last_gate_failure(&record),
+            Some(GateFailure {
+                revision: "r2".to_owned(),
+                gates: vec!["citations".to_owned(), "format".to_owned()],
+            })
+        );
+        record.extend(gate_lines(3, "r3", "pass", &[]));
+        assert_eq!(last_gate_failure(&record), None);
+        assert_eq!(last_gate_failure(&[]), None);
     }
 }

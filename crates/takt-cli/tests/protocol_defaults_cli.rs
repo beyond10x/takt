@@ -868,12 +868,13 @@ fn protocols_lists_the_builtin_self_improvement() {
 }
 
 /// `takt protocols` lists the engineering protocols' `story-delivery/1` beside their other
-/// built-ins.
+/// built-ins, and takt's own `story-delivery/3`.
 #[test]
 fn protocols_lists_the_builtin_story_delivery() {
     let (code, out, err) = takt(&["protocols"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.lines().any(|line| line == "story-delivery/1"), "{out}");
+    assert!(out.lines().any(|line| line == "story-delivery/3"), "{out}");
     assert!(
         out.lines().any(|line| line == "loop-improvement/1"),
         "{out}"
