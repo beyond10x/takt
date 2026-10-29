@@ -9,6 +9,8 @@ takt's releases.
 ### Changed
 
 - A failed `tests.run`'s block makes paths under the tree relative and withholds only the lines the secret scan refuses, counted in its heading.
+- The loom pin moves to 0.48.0, which carries metaharness 0.23.0 and Harness 0.22.0; an older b10x-harness reads as an H9 gap in the preflight, advisory.
+- The container image ships b10x-harness 0.22.0.
 
 ## [0.19.0] - 2026-10-29
 
