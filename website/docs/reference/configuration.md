@@ -3,7 +3,7 @@ title: Configuration
 sidebar_position: 1
 description: The run configuration file takt run --config reads, the loom.agent/1 takt member, the endpoint file, and every takt run flag grouped by purpose.
 lede: A run's settings come from flags, from one configuration file and from defaults, in that order, and a file with a key takt does not know is refused before any case opens.
-source: crates/takt/src/run_config.rs (RunConfig, SHAPE, from_toml, from_yaml); crates/takt/src/case.rs (Records); crates/takt/src/events.rs (Opened); crates/takt/src/replay.rs; crates/takt/src/scan.rs (Scan, of_run, refused_at_open); crates/takt/src/forge/gitlab.rs, forge/bot.rs and forge/local.rs; crates/takt-cli/src/main.rs (RunArgs, LoopArgs, EndpointArgs, configured, local_forge, scenario_forge_of); crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/harness.rs (EndpointFields, EndpointConfig); takt run --help at 0.14.0; ADR 0099
+source: crates/takt/src/run_config.rs (RunConfig, SHAPE, from_toml, from_yaml); crates/takt/src/case.rs (Records); crates/takt/src/events.rs (Opened); crates/takt/src/replay.rs; crates/takt/src/scan.rs (Scan, of_run, refused_at_open); crates/takt/src/forge/gitlab.rs, forge/bot.rs and forge/local.rs; crates/takt-cli/src/main.rs (RunArgs, LoopArgs, EndpointArgs, configured, local_forge, scenario_forge_of); crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/harness.rs (EndpointFields, EndpointConfig); crates/takt/src/console.rs (LINE_WIDTH, READS_SHOWN, DIFF_SHOWN, fit); CHANGELOG.md 0.19.0 and 0.21.0; takt run --help at 0.14.0; ADR 0099
 ---
 
 # Configuration
@@ -24,43 +24,6 @@ generated [CLI reference](./cli.md); a walk-through is in
 | `.toml` | TOML: the fields at the top level |
 | `.yaml`, `.yml` | YAML: the fields at the top level, or in the `takt` member of a `loom.agent/1` document |
 | anything else | refused |
-
-Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `local_checks`, `setup`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
-for `_`; those seven have no flag.
-
-| field | meaning |
-|---|---|
-| `story` | string: the story to deliver, by id; taken only when none of `--story`, `--intent` and `--case` is given; refused by `takt scenario run`, whose scenario names the story |
-| `iterations` | integer: stop after this many steps |
-| `hours` | number: stop after this many hours |
-| `harness` | string: `claude`, `codex`, `harness` or `none`; default `claude` |
-| `model` | string: the harness's model, when it takes one; with an `llm` section under `--harness harness`, the route or alias of that section it names, whose endpoint, wire and upstream model the session uses |
-| `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
-| `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
-| `forge` | string: `bot`, `gitlab`, `command`, `connectors`, `local` or `none` |
-| `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
-| `state_dir` | path: the state directory, as `--state-dir`: the run's transcripts go to `<state_dir>/transcripts` and what a discarded step sets aside to `<state_dir>/set-aside` ([The state directory](#the-state-directory)); a relative path is read beside the configuration file |
-| `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
-| `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
-| `commit` | mapping of `style` (`semantic`, the default, `repository` or `action`), `trailer` (default `Refs`; empty for none) and `types` (an action to its commit type), as `--commit-style`, `--commit-trailer` and `--commit-types`: how a step commit's message is written ([Commit messages](#commit-messages)); checked when the file is read |
-| `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
-| `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
-| `forge_instance` | string: the instance `forge: connectors` invokes `connectors operations` on, one word of letters, digits, `.`, `_` and `-`; checked when the file is read, needed by `forge: connectors` and refused under any other forge ([The connectors forge](#the-connectors-forge)); no flag |
-| `local_checks` | argument list: the checks `forge: local` runs on a request's head, without a shell, as the test command is run (its confinement, environment and timeout), in a fresh repository under the state directory that fetched the head from the hub by its id and names no remote; exit 0 passes, any other exit or the timeout fails; a pass is kept for that head and that argument list, so changed `local_checks` run again, and a fail is run again on the next read; not run while less than `--min-free-gib` is free; under `--confinement none` they share the run's `CARGO_TARGET_DIR`, under `substrate` they build in the fresh repository's own `target/`, and a program the adapter cannot run (anything but `cargo`) is refused before any case opens; required by `forge: local` and refused under any other forge, before any case opens; no flag |
-| `setup` | a list of `{name, argv}` commands, run once in the tree when the case opens, before the red-base check and any model call, under the test command's environment and confinement; `argv` is a program and its arguments, run without a shell; each duration is recorded on a `setup` line of the run record and the output kept under the state directory; a command that does not end 0 stops the run `SetupFailed`, exit 1; a resumed case runs them again only when its base moved; no flag |
-| `transport` | `glab`, the default, or `api`: how `forge: gitlab` reaches the host ([The GitLab API transport](#the-gitlab-api-transport)); no flag |
-| `credential` | `{env: NAME}` or `{file: PATH}`, where the `api` transport's token comes from, by reference only; no flag |
-| `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
-| `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says; with none of them a story opens on `story.delivery/2` ([defaults](protocol-defaults.md)) |
-| `protocols` | a mapping of a protocol, by name (every revision) or `<name>/<major>`, to a mapping of its declared case inputs, each set to one of the values the protocol declares; an unknown protocol, input or value is refused at its line before any case opens. An input is taken from `--input`, else a story tag `input:<name>=<value>`, else this section, else takt's built-in default for the protocol; each value is recorded with its source in the case's `case.yaml` |
-
-`takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
-
-Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
-`--tokens`, `--active-seconds`, `--min-free-gib`, `--verbose`, `--color`, `--quiet-steps`, `--gate`, `--gates`, `--project`,
-`--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
-`--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
-`--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
 
 ### A minimal TOML file
 
@@ -111,6 +74,45 @@ in `spec.command.args`.
 A YAML file with no `format` is read whole, as the fields themselves. A file with another
 `format` is refused.
 
+### Every field
+
+Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `local_checks`, `setup`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
+for `_`; those seven have no flag.
+
+| field | meaning |
+|---|---|
+| `story` | string: the story to deliver, by id; taken only when none of `--story`, `--intent` and `--case` is given; refused by `takt scenario run`, whose scenario names the story |
+| `iterations` | integer: stop after this many steps |
+| `hours` | number: stop after this many hours |
+| `harness` | string: `claude`, `codex`, `harness` or `none`; default `claude` |
+| `model` | string: the harness's model, when it takes one; with an `llm` section under `--harness harness`, the route or alias of that section it names, whose endpoint, wire and upstream model the session uses |
+| `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
+| `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
+| `forge` | string: `bot`, `gitlab`, `command`, `connectors`, `local` or `none` |
+| `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
+| `state_dir` | path: the state directory, as `--state-dir`: the run's transcripts go to `<state_dir>/transcripts` and what a discarded step sets aside to `<state_dir>/set-aside` ([The state directory](#the-state-directory)); a relative path is read beside the configuration file |
+| `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
+| `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
+| `commit` | mapping of `style` (`semantic`, the default, `repository` or `action`), `trailer` (default `Refs`; empty for none) and `types` (an action to its commit type), as `--commit-style`, `--commit-trailer` and `--commit-types`: how a step commit's message is written ([Commit messages](#commit-messages)); checked when the file is read |
+| `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
+| `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
+| `forge_instance` | string: the instance `forge: connectors` invokes `connectors operations` on, one word of letters, digits, `.`, `_` and `-`; checked when the file is read, needed by `forge: connectors` and refused under any other forge ([The connectors forge](#the-connectors-forge)); no flag |
+| `local_checks` | argument list: the checks `forge: local` runs on a request's head, without a shell, as the test command is run (its confinement, environment and timeout), in a fresh repository under the state directory that fetched the head from the hub by its id and names no remote; exit 0 passes, any other exit or the timeout fails; a pass is kept for that head and that argument list, so changed `local_checks` run again, and a fail is run again on the next read; not run while less than `--min-free-gib` is free; under `--confinement none` they share the run's `CARGO_TARGET_DIR`, under `substrate` they build in the fresh repository's own `target/`, and a program the adapter cannot run (anything but `cargo`) is refused before any case opens; required by `forge: local` and refused under any other forge, before any case opens; no flag |
+| `setup` | a list of `{name, argv}` commands, run once in the tree when the case opens, before the red-base check and any model call, under the test command's environment and confinement; `argv` is a program and its arguments, run without a shell; each duration is recorded on a `setup` line of the run record and the output kept under the state directory; a command that does not end 0 stops the run `SetupFailed`, exit 1; a resumed case runs them again only when its base moved; no flag |
+| `transport` | `glab`, the default, or `api`: how `forge: gitlab` reaches the host ([The GitLab API transport](#the-gitlab-api-transport)); no flag |
+| `credential` | `{env: NAME}` or `{file: PATH}`, where the `api` transport's token comes from, by reference only; no flag |
+| `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
+| `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says; with none of them a story opens on `story.delivery/2` ([defaults](protocol-defaults.md)) |
+| `protocols` | a mapping of a protocol, by name (every revision) or `<name>/<major>`, to a mapping of its declared case inputs, each set to one of the values the protocol declares; an unknown protocol, input or value is refused at its line before any case opens. An input is taken from `--input`, else a story tag `input:<name>=<value>`, else this section, else takt's built-in default for the protocol; each value is recorded with its source in the case's `case.yaml` |
+
+`takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
+
+Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
+`--tokens`, `--active-seconds`, `--min-free-gib`, `--verbose`, `--color`, `--quiet-steps`, `--gate`, `--gates`, `--project`,
+`--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
+`--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
+`--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
+
 ### What is refused
 
 A file is refused before the case opens, exit 1, naming the file and the line where it knows one,
@@ -120,8 +122,7 @@ and never a value written in it:
 |---|---|
 | a key takt does not know | `refused at line 3`, then the shape below |
 | a value of another type (`iterations: 1.5`, a number for a string) | `refused at line 1`, then the shape |
-| a TOML key written twice | `refused at line 3`, the second one's line |
-| a YAML key written twice | `refused at line 1` or the line where its mapping starts: not the duplicate's own line (naming it is planned) |
+| a key written twice, TOML or YAML | `refused at line 4`, the duplicate's own line, saying it holds the key twice in one mapping (a table in TOML) and naming the key when takt or Loom declares it ([an example](../guides/configure-a-run.md#a-key-written-twice)); three rare YAML shapes keep the line where the mapping starts, without the key ([Known limitations](../known-limitations.md)) |
 | a member of a `loom.agent/1` document that is neither Loom's nor `takt` | `refused`, listing Loom's members |
 | a `format` other than `loom.agent/1` | `refused`, saying so |
 | a YAML tag anywhere | `refused`, saying so |
@@ -617,7 +618,13 @@ How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
 | `--color <WHEN>` | `auto` (default): colour when standard output is a terminal and `NO_COLOR` is unset or empty; `always`; `never`. Colour never reaches a case's records (0.21.0) |
 | `--quiet-steps` | list neither a harness step's tool calls under its `said:` line nor its commit's diff before its `effect:` line; nothing else changes (0.21.0) |
 
-What the console prints: [The console](../guides/run-a-story.md#the-console).
+A harness step lists at most 20 tool calls, then `… <n> more`, and at most 120 lines of its
+commit's diff, then `… <n> more lines (git show <sha>)`. Each listed line is escaped, and cut at
+100 terminal columns with a wide character counting two; a tab prints as spaces to the next
+multiple of four columns (0.21.0).
+
+What the console prints: [The console](../guides/run-a-story.md#the-console) and
+[What a step lists](../guides/run-a-story.md#what-a-step-lists).
 
 ### Harness and endpoint
 

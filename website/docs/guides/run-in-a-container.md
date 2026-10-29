@@ -2,8 +2,8 @@
 title: Run in a container
 sidebar_position: 6
 description: Build the takt image, give it a repository and a configuration, run it with docker, and get past the two things a container's defaults refuse.
-lede: The image is one takt run on a mounted repository; it needs seccomp and AppArmor unconfined for the test command and an existing cargo home for the first test.
-source: Dockerfile at 0.14.0; examples/loom-agent/agent.yaml and endpoint.toml (checked by crates/takt/tests/examples_config.rs); three docker runs of a local takt:0.14.0 build on a seeded volume, 2026-10-26
+lede: The image is one takt run on a mounted repository. At 0.14.0 its test command needed seccomp and AppArmor unconfined and an existing cargo home; neither need has been measured again at 0.21.0.
+source: Dockerfile at 0.14.0, its tool pins checked against the 0.21.0 Dockerfile; CHANGELOG.md 0.15.0 and 0.16.0; examples/loom-agent/agent.yaml and endpoint.toml (checked by crates/takt/tests/examples_config.rs); three docker runs of a local takt:0.14.0 build on a seeded volume, 2026-10-26
 ---
 
 # Run in a container
@@ -18,13 +18,13 @@ image holds is in [Container image](../reference/container-image.md).
 No image is published, so build it from the tag:
 
 ```sh
-git clone --branch 0.14.0 https://github.com/beyond10x/takt
+git clone --branch 0.21.0 https://github.com/beyond10x/takt
 cd takt
 docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.21.0 .
 ```
 
 The image carries takt, `aep`, `b10x-harness` 0.22.0, `ess`, `b10x-gates` (the `gates` scan
-adapter's program and the `bot` forge's) and a Rust toolchain with `clippy` and `rustfmt`. The
+adapter's program and the `bot` [forge](/docs/concepts/glossary#forge)'s) and a Rust toolchain with `clippy` and `rustfmt`. The
 toolchain is owned by root and cannot be written by the run, so
 neither a step nor a test can change the tools the gates trust. takt runs under `tini`, not as
 PID 1, so `docker stop` or a pod's stop ends it on SIGTERM rather than SIGKILL.
@@ -58,7 +58,7 @@ model = "example-model"
 env = "LLM_API_KEY"
 ```
 
-The image holds b10x-harness and no other harness, and no `gh` or `glab`: `harness: harness`
+The image holds b10x-harness and no other [harness](/docs/concepts/glossary#harness), and no `gh` or `glab`: `harness: harness`
 (or `none`) and `forge: none` are the settings that work in it. A test in the repository reads
 both files through takt's own readers, so they stay valid.
 
@@ -74,7 +74,7 @@ docker run --rm -v "$PWD/my-repo.bundle:/src/my-repo.bundle:ro" -v takt-demo-ws:
   --entrypoint git takt:0.21.0 clone -q -b main /src/my-repo.bundle /workspace
 ```
 
-A story run needs what [Run a story](./run-a-story.md#1-prepare-the-repository) lists, committed
+A [story](/docs/concepts/glossary#story) run needs what [Run a story](./run-a-story.md#1-prepare-the-repository) lists, committed
 in the repository.
 
 ## 4. Run it
@@ -94,18 +94,28 @@ An edit by b10x-harness also needs a [scan adapter](../reference/configuration.m
 naming a `b10x-gates` policy file in the container. `b10x-gates` reads it only when uid 10001 owns
 the file and its directory, the file
 has no group or other bits and the directory is not group- or other-writable; a bind mount keeps
-the host's owner. This page's runs used `--harness none` and no policy. The two pieces that are
-not the image's default are:
+the host's owner. This page's runs used `--harness none` and no policy, on a takt 0.14.0 image.
+The two pieces that are not the image's default are:
 
-1. **seccomp and AppArmor unconfined.** Under the default `--confinement none` of 0.14.0 the test
-   command ran in a user and mount namespace of its own, and both default profiles refuse to create
-   one: with only seccomp or only AppArmor unconfined, the first test run still failed. Since then
-   `none` starts it through Substrate's `local` adapter, in no namespace of takt's own; whether a
-   container still needs both unconfined has not been measured again.
+1. **seccomp and AppArmor unconfined.**
+
+   :::caution[Unverified at 0.21.0]
+   This need was observed on takt 0.14.0 and has not been measured again.
+   :::
+
+   Under the default `--confinement none` of 0.14.0 the test command ran in a user and mount
+   namespace of its own. Both default profiles refuse to create one: with only seccomp or only
+   AppArmor unconfined, the first test run still failed. From 0.15.0 `none` starts the test
+   command through [Substrate](/docs/concepts/glossary#substrate)'s `local` adapter, in no namespace of takt's own. Whether a
+   container still needs either flag has not been measured.
 2. **`mkdir -p "$HOME/.cargo/bin"` before takt.** In a fresh `HOME` the first test run creates
-   `~/.cargo`, and takt refuses a test run that writes outside the tree.
+   `~/.cargo`, and takt 0.14.0 refused a test run that writes outside the tree. The 0.16.0
+   changelog says the cache cargo makes in `~/.cargo` is no longer refused, while a program in
+   `~/.cargo/bin` still stops the run. This step was not run again at 0.21.0, so it stays in the
+   command.
 
-Each was run with `--harness none` on the story repository. Under the default seccomp profile:
+Each was run with `--harness none` on the story repository, on takt 0.14.0. Under the default
+seccomp profile:
 
 ```console
 frontier: took story:add-sub: Add a subtraction
@@ -143,12 +153,12 @@ takt: the endpoint's credential variable LLM_API_KEY is not set; nothing was sta
 
 ## 5. Read the result
 
-The case is in `/workspace/.takt/cases/` on the volume, and the exit code is the run's
+The [case](/docs/concepts/glossary#case) is in `/workspace/.takt/cases/` on the volume, and the exit code is the run's
 ([How a run ends](../concepts/how-a-run-ends.md)). With `forge: none` a delivery ends at
 `pr.opened` with a candidate commit on the volume. Transcripts and what a discarded step sets
 aside are under `HOME`, which `docker run --rm` drops with the container; `--state-dir` (or
 `state_dir`) names a mounted directory to keep both
 ([The state directory](../reference/configuration.md#the-state-directory)).
 
-On Kubernetes the same image runs as a Loom agent:
+On Kubernetes the same image runs as a [Loom](/docs/concepts/glossary#loom) agent:
 [Deploy on Kubernetes](./deploy-on-kubernetes.md).

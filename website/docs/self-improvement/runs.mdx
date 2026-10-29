@@ -1,6 +1,6 @@
 ---
 title: Runs
-description: Every recorded scenario and variety run, by arm and revision, with its source and its caveats.
+description: This page lists every scenario and variety run takt has recorded, by arm and revision, each with its source and its caveats.
 hide_table_of_contents: true
 ---
 
@@ -13,15 +13,15 @@ All runs are from 2026-10-18 (UTC). Each is one line of
 [`docs/metrics/scenario-runs.jsonl`](https://github.com/beyond10x/takt/blob/main/docs/metrics/scenario-runs.jsonl),
 68 lines, naming the raw usage record it was read from. How the figures are read:
 [Methodology](./methodology.md). The 30 scenario 1 runs of the self-improvement trials of
-2026-10-19 are not lines there. They stopped on `NoProgress` in an origin with no forge, not at
+2026-10-19 are not lines there. They stopped on `NoProgress` in an origin with no [forge](/docs/concepts/glossary#forge), not at
 the merge approval ([Turns](./turns.md)).
 
 ## Scenario 1
 
-One story, "remove a todo by its number", a 31-line change to a toy CLI. Finish line: a pull
+One [story](/docs/concepts/glossary#story), "remove a todo by its number", a 31-line change to a toy CLI. Finish line: a pull
 request open against its own trial branch with CI green; for takt, the stop at the merge approval.
 Held-out check: a script no agent saw. Tokens are input + output + cache read + cache write, as
-each harness reported them. Under each median, the lowest and the highest run.
+each [harness](/docs/concepts/glossary#harness) reported them. Under each median, the lowest and the highest run.
 
 | arm | runs of | n | median wall time | median tokens | median cost | held-out check |
 |---|---|---|---|---|---|---|
@@ -72,7 +72,7 @@ the plot, and the free-running medians as reference lines. Drawn by `docs/metric
 
 What it shows:
 
-- **2026-10-19: the first turn accepted by validators** (dashed line, square, at the right edge).
+- **2026-10-19: the first turn accepted by [validators](/docs/concepts/glossary#validator)** (dashed line, square, at the right edge).
   In self-improvement trial 2, takt drove a `self.improvement/1` turn to `accepted` and promoted
   its candidate, and a validator recorded every claim. Trials 3 and 4 did it again. All three ran
   in scratch state under `--forge none` ([Turns](./turns.md)). The mark is the one line of

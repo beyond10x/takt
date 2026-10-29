@@ -2,9 +2,9 @@
 title: The step loop and the frontier
 sidebar_label: The step loop and the frontier
 sidebar_position: 3
-description: The loop takt runs, what the frontier is, which step comes next, and what a judgement step may do.
+description: A takt run is a loop that evaluates the case, takes one step and evaluates again. This page explains the frontier, how the next step is picked and what a model's step may do.
 lede: A run is a loop of evaluate, pick one step, perform it, observe, and evaluate again; the frontier Canon computes decides what may be done, and a harness is offered only what the frontier admits and no validator performs.
-source: crates/takt/src/lib.rs, run.rs (the loop in Run::run_held, Shape::for_harness, Shape::for_stateless), harness.rs (SessionHarness, ClaudeCode::ISOLATION, ClaudeCode::TOOLS, prompt_with, red_tests_block, red_tests_block_scanned, scanned_per_line, ChangeSoFar, tests_path_block, failed_block, earlier_gate_line, CHECKS_RULE), obligations.rs (block, commands_at), console.rs (may, may_now), frontier.rs; docs/design/takt.md § 3; takt run --help at 0.14.0; a scratch run of takt 0.14.0
+source: crates/takt/src/lib.rs, run.rs (the loop in Run::run_held, Shape::for_harness, Shape::for_stateless), harness.rs (SessionHarness, ClaudeCode::ISOLATION, ClaudeCode::TOOLS, prompt_with, red_tests_block, red_tests_block_scanned, scanned_per_line, ChangeSoFar, tests_path_block, failed_block, earlier_gate_line, CHECKS_RULE), obligations.rs (block, commands_at), console.rs (may, may_now), frontier.rs; docs/design/takt.md § 3; takt run --help at 0.14.0; a scratch run of takt 0.14.0; the console lines checked against 0.21.0 source (console.rs Console, may, may_now and their tests)
 ---
 
 # The step loop and the frontier
@@ -20,9 +20,9 @@ It goes round until an outcome is legitimate or the run reaches a named stop
 
 ## Evaluate
 
-Before every step, Loom's governor evaluates the case with
+Before every step, [Loom](/docs/concepts/glossary#loom)'s [governor](/docs/concepts/glossary#governor) evaluates the [case](/docs/concepts/glossary#case) with
 [Canon](https://beyond10x.github.io/canon/) ([GitHub](https://github.com/beyond10x/canon)). The
-evaluation is a pure function from the protocol, the case, its evidence records, its authority
+evaluation is a pure function from the [protocol](/docs/concepts/glossary#protocol), the case, its [evidence](/docs/concepts/glossary#evidence) records, its authority
 and the instant to:
 
 - each **claim**: `true`, `false` or `unknown`;
@@ -34,11 +34,18 @@ takt writes each evaluation as `decisions/NNNN.json` in the case. A case keeps e
 alone by default; `--records trial` keeps every one ([Records
 profiles](../reference/configuration.md#records-profiles)).
 
-From 0.19.0 the console says the frontier as what the run may do: `may: <action> …` once, at the
-first decision, then `may now: +<added> -<removed>` only when the admissible set changes.
-`takt run --verbose` also prints the full `frontier:` line at every decision, as takt printed it
-before 0.19.0 and as the example below shows. From 0.21.0 a harness step also lists its tool
-calls and its commit's diff ([The console](../guides/run-a-story.md#the-console)).
+The console prints what the run may do, not each evaluation in full:
+
+```text
+  may: tests.run tests.write
+  may now: +implementation.edit -tests.write
+```
+
+`may:` comes once, at the first decision, and lists the admissible actions. `may now:` comes only
+when that set changes: `+` an action that became admissible, `-` one that stopped being so.
+`takt run --verbose` also prints the full `frontier:` line at every decision, as takt did before
+0.19.0. What a [harness](/docs/concepts/glossary#harness) step lists under its own line:
+[What a step lists](/docs/guides/run-a-story#what-a-step-lists).
 
 ## The frontier
 
@@ -47,13 +54,13 @@ The frontier is the actions of the protocol with their status at this evaluation
 | status | meaning |
 |---|---|
 | `admissible` | may be taken now |
-| `approval-required` | its precondition holds, but it requires a capability the case holds no grant of |
+| `approval-required` | its precondition holds, but it requires a capability the case holds no [grant](/docs/concepts/glossary#grant) of |
 | `blocked` | its precondition does not hold, or the capability is denied |
 
 Here is a real run of takt 0.14.0 on a repository whose one test passes. Before the tests ran,
-the merge was
-`blocked`; once a `test_result` pass is recorded at this revision, `implementation.verified` is
-true and the merge becomes `approval-required`:
+the merge was `blocked`; once a `test_result` pass is recorded at this revision,
+`implementation.verified` is true and the merge becomes `approval-required`. takt 0.14.0 printed
+every `frontier:` line; a 0.21.0 run prints them only with `--verbose`:
 
 ```console
 $ takt run --repo ~/demo --intent "make the failing test pass" --harness none --forge none --iterations 1
@@ -67,17 +74,17 @@ stopped: Iterations (1); steps 1, tokens 0, case ~/demo/.takt/cases/takt-2026102
 ```
 
 The word frontier has a second use in takt: the `Frontier` seam is the planning store, which
-answers which stories are ready. It is a list of units of work, not of actions, and no model takes
+answers which [stories](/docs/concepts/glossary#story) are ready. It is a list of units of work, not of actions, and no model takes
 part in it.
 
 ## Which step comes next
 
 Each turn of the loop takes at most one step. takt picks it in this order:
 
-1. **A due validator.** A deterministic step whose action is admissible and whose evidence the
+1. **A due [validator](/docs/concepts/glossary#validator).** A deterministic step whose action is admissible and whose evidence the
    case lacks at this revision: `tests.run`, `gate.run`, `change.read`, `pr.open`, `ci.read`,
    `repository.merge`. After a stop on the tests, `tests.run` is observed again first.
-2. **A wait.** When a validator waits on the forge (checks still running, a pull request's head
+2. **A wait.** When a validator waits on the [forge](/docs/concepts/glossary#forge) (checks still running, a pull request's head
    not yet shown), the run pauses, observes again, and offers no judgement step meanwhile.
 3. **Two pre-checks.** When only a grant stands between the case and its outcome, the run stops
    `ApprovalRequired` without asking anyone. When the only action that decides a claim left has
