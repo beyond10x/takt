@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-default-confinement-is-named-as-the-default
 kind: story
-status: draft
+status: proposed
 title: A run says it started with --confinement none when no flag was passed
 summary: the start line names a flag the operator did not pass
 tags:
@@ -14,7 +14,9 @@ refs:
   reference: the-default-confinement-is-named-as-the-default
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T03:40:14Z", actor: "human:timo", revision: 2}
 ---
 # A run says it started with `--confinement none` when no flag was passed
 
