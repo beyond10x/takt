@@ -723,7 +723,7 @@ fn the_port_guard_finds_a_record_written_past_it_in_any_crate() {
 /// case's `evidence/` ([`evidence_lines`]), with what it does: the port's one write, and
 /// otherwise a read, a name, the empty directory a case opens with, or replay's copy into a
 /// scratch tree. A line found and not here, or here and not found, fails the guard.
-const EVIDENCE_LINES: [(&str, &str, &str); 17] = [
+const EVIDENCE_LINES: [(&str, &str, &str); 18] = [
     (
         "takt/src/evidence.rs",
         "match self.case.borrow_mut().add_evidence(&record) {",
@@ -808,6 +808,11 @@ const EVIDENCE_LINES: [(&str, &str, &str); 17] = [
         "takt/src/run.rs",
         ".join(\"evidence\");",
         "names the case's own evidence directory, relative to the tree, where observed_pass reads a record it recorded",
+    ),
+    (
+        "takt/src/run.rs",
+        "let dir = case_dir.join(\"evidence\");",
+        "reads the case's tests_change records for the revisions its tests were written at (tests_written_at), never writes one",
     ),
 ];
 
