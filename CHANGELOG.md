@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Security
+
+- `libz-sys` moves from 1.1.30 to 1.1.31 in the lock, for RUSTSEC-2026-0418 (fixed in 1.1.31; the lock already holds `cc` 1.9.0).
+
 ## [0.22.0] - 2026-10-29
 
 Evidence records are stamped to the microsecond and nothing waits for the next second; loom 0.50.0
