@@ -529,10 +529,25 @@ const HOST_DOMAINS: [&str; 14] = [
     "invalid",
 ];
 
+/// Whether `name` is a host's name: one part or more, joined by `.`, each of letters, digits and
+/// `-`.
+fn host_name(name: &str) -> bool {
+    name.split('.').all(|part| {
+        !part.is_empty() && part.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    })
+}
+
 /// Whether `place`, the text before a located line's first `:`, is a host's: `localhost`, an
-/// IPv4 address, or a name of letters, digits, `-` and `.` whose last part is one of
-/// [`HOST_DOMAINS`].
+/// IPv4 address, a name of letters, digits, `-` and `.` whose last part is one of
+/// [`HOST_DOMAINS`], or a user's at a host's name (`deploy@db.example.com`).
 fn host(place: &str) -> bool {
+    if let Some((user, name)) = place.split_once('@') {
+        return !user.is_empty()
+            && user
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
+            && host_name(name);
+    }
     let parts: Vec<&str> = place.split('.').collect();
     place == "localhost"
         || (parts.len() == 4
@@ -548,12 +563,26 @@ fn host(place: &str) -> bool {
                 .is_some_and(|domain| HOST_DOMAINS.contains(&domain.to_ascii_lowercase().as_str())))
 }
 
+/// Whether `place`, the text before a located line's first `:` with one number after it, is a
+/// host's and that number its port: a host ([`host`]), or a host's name ([`host_name`]) of
+/// three parts or more whose last is letters, under any domain (`db.corp.example.de`), which a
+/// file's name at the root of a tree seldom is.
+fn host_with_port(place: &str) -> bool {
+    let parts: Vec<&str> = place.split('.').collect();
+    host(place)
+        || (parts.len() >= 3
+            && host_name(place)
+            && parts
+                .last()
+                .is_some_and(|domain| domain.bytes().all(|c| c.is_ascii_alphabetic())))
+}
+
 /// Whether `path`, the text before a located line's first `:`, is a file's path: it holds a `/`;
 /// or its last part has an extension that starts with a letter (`x.c`, `app.py`) and it is no
-/// host's ([`host`]); or it is a name without one that starts with a capital and holds a small
-/// letter, of letters, digits, `_` and `-` (`Dockerfile`, `Makefile`). So a time (`12`,
-/// `2026-10-28T19`), a host (`localhost`, `127.0.0.1`, `example.com`) and a word (`make[1]`,
-/// `BUILD`) are not.
+/// host's ([`host`]); or it is a name without one that starts with a capital, holds a small
+/// letter, is of letters, digits, `_` and `-`, and ends in `file` (`Dockerfile`, `Makefile`,
+/// `Justfile`). So a time (`12`, `2026-10-28T19`), a host (`localhost`, `127.0.0.1`,
+/// `example.com`, `Redis`) and a word (`make[1]`, `BUILD`) are not.
 fn file_path(path: &str) -> bool {
     path.contains('/')
         || (!host(path)
@@ -562,6 +591,7 @@ fn file_path(path: &str) -> bool {
             }))
         || (path.starts_with(|c: char| c.is_ascii_uppercase())
             && path.bytes().any(|c| c.is_ascii_lowercase())
+            && path.to_ascii_lowercase().ends_with("file")
             && path
                 .bytes()
                 .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-'))
@@ -665,8 +695,9 @@ enum Failing {
 ///   located finding ([`located`]) at a file ([`file_path`]) whose message names a failure
 ///   ([`names_failure`]); black's and ruff's `would reformat <path>` (`Would reformat: <path>`);
 ///   rustfmt's `Diff in <path> at line <n>:` or `Diff in <path>:<n>:`;
-/// - a failing line at a host ([`Failing::Host`]): a located line at a host ([`host`]) with one
-///   number, its port, whose message names an error ([`names_error`]);
+/// - a failing line at a host ([`Failing::Host`]): a located line at a host with one
+///   number, its port ([`host_with_port`]), whose message names an error ([`names_error`]); a
+///   located line at a host with one number that names none is not failing;
 /// - a code line ([`Failing::Code`]): not indented, a linter's code ([`linter_code`]) then a space;
 /// - a location line ([`Failing::Location`]): indented, `--> <path>:<line>` with an optional
 ///   `:<col>`, `<path>` a file's.
@@ -718,11 +749,15 @@ fn failing(line: &str) -> Failing {
         }
     }
     if let Some((place, numbers, message)) = located(line) {
+        if numbers == 1 && host_with_port(place) {
+            return if names_error(message) {
+                Failing::Host
+            } else {
+                Failing::No
+            };
+        }
         if file_path(place) && names_failure(message) {
             return Failing::Line;
-        }
-        if host(place) && numbers == 1 && names_error(message) {
-            return Failing::Host;
         }
         return Failing::No;
     }

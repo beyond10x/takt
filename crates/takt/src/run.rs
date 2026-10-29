@@ -164,7 +164,9 @@ pub enum Stop {
     /// since the one before: the edits between them moved nothing the tests decide. A failing
     /// result at a revision a `tests.write` step committed (its `tests_change` record's), the red
     /// run that shows the new tests failing, is not counted, nor one at a revision that changed
-    /// documentation only. The run stops after the last, before another judgement step; the
+    /// documentation only. A result that fails the set and, besides it, only tests such a red
+    /// run failed since continues the row: a test written after an edit that fixed nothing does
+    /// not reset it. The run stops after the last, before another judgement step; the
     /// case stays open, and a run that resumes it counts from none.
     RepeatedTestFailure {
         /// The tests every one of the results failed, never empty.
@@ -429,17 +431,41 @@ enum Taken {
 }
 
 /// The `tests.run` results in a row that failed the same tests ([`Run::tests_stop`]): the set,
-/// the tests in the order the first result named them, the revision of the last, and how many.
+/// the tests in the order the first result named them, the revision of the last, how many, and
+/// the tests outside the set that a red run after a `tests.write` failed since the row began
+/// ([`Failing::after_written`]).
 struct Failing {
     set: BTreeSet<String>,
     tests: Vec<String>,
     revision: String,
     count: u64,
+    written: BTreeSet<String>,
 }
 
 impl Failing {
+    /// `failing` after a failing `tests.run` result at a revision a `tests.write` step committed
+    /// ([`tests_written_at`]), the red run of the tests just written: the count stays as it was,
+    /// and the tests `failed` names outside the row's set are noted as written, so an edit that
+    /// leaves the row's set and only those failing continues the row ([`Failing::after`]).
+    fn after_written(failing: &mut Option<Failing>, failed: &[String]) {
+        if let Some(row) = failing {
+            let new = failed.iter().filter(|test| !row.set.contains(*test));
+            row.written.extend(new.cloned());
+        }
+    }
+
+    /// Whether a failure of `set` continues the row: it fails every test of the row's set, and
+    /// besides them only tests a red run after a `tests.write` failed since the row began.
+    fn continued_by(&self, set: &BTreeSet<String>) -> bool {
+        self.set.is_subset(set)
+            && set
+                .difference(&self.set)
+                .all(|test| self.written.contains(test))
+    }
+
     /// `failing` after a `tests.run` result at `revision`: `failed` the tests it failed, none
-    /// for a pass. A failure of the set the row failed adds one at a revision the last was not
+    /// for a pass. A failure that continues the row ([`Failing::continued_by`]: its set, or its
+    /// set and tests written since) adds one at a revision the last was not
     /// at whose change since it `advanced` (given the last's revision) finds a new attempt
     /// ([`code_changed`]), and none at the same or at one that changed documentation only,
     /// which leaves the row as it was; another set starts a row of one; a pass, and a failure
@@ -456,7 +482,7 @@ impl Failing {
         };
         let set: BTreeSet<String> = tests.iter().cloned().collect();
         match failing {
-            Some(row) if row.set == set => {
+            Some(row) if row.continued_by(&set) => {
                 if row.revision != revision && advanced(&row.revision) {
                     row.revision = revision.to_owned();
                     row.count += 1;
@@ -468,6 +494,7 @@ impl Failing {
                     tests,
                     revision: revision.to_owned(),
                     count: 1,
+                    written: BTreeSet::new(),
                 });
             }
         }
@@ -538,7 +565,10 @@ impl TestsSoFar {
                     let failed = (line["result"] == "fail")
                         .then(|| crate::validator::failures_in(summary).tests);
                     last_failed = failed.iter().flatten().cloned().collect();
-                    if failed.is_some() && written.contains(revision) {
+                    if let Some(tests) = failed.as_deref()
+                        && written.contains(revision)
+                    {
+                        Failing::after_written(&mut failing, tests);
                         continue;
                     }
                     Failing::after(&mut failing, revision, failed, |from| {
@@ -11581,6 +11611,7 @@ impl<'a> Run<'a> {
             }));
         }
         if tests_written_at(&self.case.dir)?.contains(revision) {
+            Failing::after_written(&mut so_far.failing, &failures.tests);
             return Ok(None);
         }
         Failing::after(

@@ -816,7 +816,10 @@ fn a_runners_heading_outside_its_failures_names_no_failed_test() {
                  b broke\n\n\nfailures:\n    b\n\ntest result: FAILED. 1 passed; 1 failed\n";
     assert_eq!(
         failing_lines(mixed, FAILED_LINES_PER_CHECK),
-        (vec!["FAILED b - panicked at src/lib.rs:4:5: b broke".to_owned()], 0)
+        (
+            vec!["FAILED b - panicked at src/lib.rs:4:5: b broke".to_owned()],
+            0
+        )
     );
     let pytest = "=================================== FAILURES ===================================
 ___________________________________ test_x ____________________________________
@@ -886,7 +889,8 @@ test result: FAILED. 0 passed; 1 failed
         (
             vec![
                 "FAILED tests::unit - panicked at src/lib.rs:10:9: boom".to_owned(),
-                "FAILED src/lib.rs - add (line 3) - panicked at src/lib.rs:5:1: doc example wrong".to_owned(),
+                "FAILED src/lib.rs - add (line 3) - panicked at src/lib.rs:5:1: doc example wrong"
+                    .to_owned(),
             ],
             0
         )
@@ -922,7 +926,10 @@ test result: FAILED. 0 passed; 1 failed
          error: kept out too\n"
     );
     let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
-    assert_eq!(lines, ["FAILED tests::b - panicked at src/lib.rs:2:2: b broke"]);
+    assert_eq!(
+        lines,
+        ["FAILED tests::b - panicked at src/lib.rs:2:2: b broke"]
+    );
     assert_eq!(omitted, 2, "the two headings withheld whole");
     assert!(!lines.iter().any(|line| line.contains(&token)));
 }
@@ -1009,7 +1016,9 @@ fn a_key_block_without_its_end_hides_no_failed_test() {
     let (lines, omitted) = read_keyed(&printed);
     assert_eq!(
         lines,
-        ["FAILED tests::rejects_truncated_key - panicked at src/lib.rs:3:5: parsed a truncated key"]
+        [
+            "FAILED tests::rejects_truncated_key - panicked at src/lib.rs:3:5: parsed a truncated key"
+        ]
     );
     assert_eq!(lines.len() as u64 + omitted, 3, "three failed tests");
     let unittest = format!(

@@ -472,7 +472,7 @@ fn a_handover_at_a_red_revision_is_not_the_next_step() {
             .find(FAILING_TEST)
             .unwrap_or_else(|| panic!("the prompt does not name the failing test:\n{prompt}"));
         let located = prompt
-            .find(&format!("- {FAILING_TEST}: {ASSERTION_AT}"))
+            .find(&format!("- {FAILING_TEST} at {ASSERTION_AT}"))
             .unwrap_or_else(|| panic!("the prompt does not say where the assertion is:\n{prompt}"));
         assert!(
             named < intent && located < intent,
