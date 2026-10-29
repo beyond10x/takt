@@ -260,6 +260,9 @@ pub struct RunConfig {
     pub forge_instance: Option<String>,
     /// The `forge_commands` section, the argument lists `forge: command` runs.
     pub forge_commands: Option<ForgeCommands>,
+    /// The argument list `forge: local` runs as the checks on a request's head, without a shell,
+    /// as the test command is, in a fresh repository at the head; checked when the file is read.
+    pub local_checks: Option<Vec<String>>,
     /// How `forge: gitlab` reaches the host: `glab` (the default) or `api`.
     pub transport: Option<Transport>,
     /// Where the `api` transport's credential comes from, by reference; a relative `file` is
@@ -275,6 +278,8 @@ pub struct RunConfig {
 pub struct ForgeSettings {
     /// `forge_commands`.
     pub commands: Option<ForgeCommands>,
+    /// `local_checks`.
+    pub local_checks: Option<Vec<String>>,
     /// `forge_instance`.
     pub instance: Option<String>,
     /// `transport`.
@@ -285,7 +290,8 @@ pub struct ForgeSettings {
 
 impl ForgeSettings {
     /// Refuses what does not fit the forge `forge` names, before any case opens: `forge_commands`
-    /// belongs to `forge: command` and `forge: command` needs it; `transport` and `credential`
+    /// belongs to `forge: command` and `forge: command` needs it, as `local_checks` and
+    /// `forge: local` go together; `transport` and `credential`
     /// belong to `forge: gitlab`, and `transport: api` needs a `credential` which only it takes.
     /// The refusal names keys, never a value.
     pub fn check_for(&self, forge: Option<&str>) -> Result<()> {
@@ -307,6 +313,16 @@ impl ForgeSettings {
         if forge == Some("command") && self.commands.is_none() {
             return Err(anyhow!(
                 "`forge: command` runs the commands of a `forge_commands` section in the run file, and there is none; nothing was opened"
+            ));
+        }
+        if self.local_checks.is_some() && forge != Some("local") {
+            return Err(anyhow!(
+                "`local_checks` is set, and it belongs to `forge: local`, which this run does not use; nothing was opened"
+            ));
+        }
+        if forge == Some("local") && self.local_checks.is_none() {
+            return Err(anyhow!(
+                "`forge: local` runs the checks a `local_checks` argument list in the run file names, and there is none: no check is never a pass; nothing was opened"
             ));
         }
         if (self.transport.is_some() || self.credential.is_some()) && forge != Some("gitlab") {
@@ -332,6 +348,7 @@ impl RunConfig {
     pub fn forge_settings(&self) -> ForgeSettings {
         ForgeSettings {
             commands: self.forge_commands.clone(),
+            local_checks: self.local_checks.clone(),
             instance: self.forge_instance.clone(),
             transport: self.transport,
             credential: self.credential.clone(),
@@ -768,7 +785,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1306,6 +1323,16 @@ impl RunConfig {
         {
             return Err(anyhow!(
                 "the run configuration file {} is refused: `forge_instance` is one word of letters, digits, `.`, `_` and `-`, not starting with `-`",
+                path.display()
+            ));
+        }
+        if config.local_checks.as_deref().is_some_and(|checks| {
+            checks
+                .first()
+                .is_none_or(|program| program.trim().is_empty())
+        }) {
+            return Err(anyhow!(
+                "the run configuration file {} is refused: `local_checks` is an argument list whose first element is the program, and it names none",
                 path.display()
             ));
         }

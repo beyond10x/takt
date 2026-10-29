@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:codex-step-gets-each-file-once
 kind: story
-status: draft
+status: implemented
 title: A Codex step is given a file twice
 tags:
 - finding
@@ -14,7 +14,11 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:codex-step-context
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T05:12:56Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-29T05:12:57Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-29T05:12:58Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A Codex step is given a file twice
 

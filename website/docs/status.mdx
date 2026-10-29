@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.19.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
+0.20.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
 `scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and
 `self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS
 (aarch64). Its harnesses are Claude Code (`--harness claude`), Codex (`codex`) and b10x-harness
@@ -44,6 +44,7 @@ How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGE
 | 0.18.0 | a `story.delivery/2` case records `tests_change` and `paths_changed` (a deleted test counts for neither side); a gates file the gate would refuse stops the run at open; a bot merge commit carries a title and a body naming the story and its evidence; adopted orphans are reaped while a test command runs; engineering-protocols 0.12.0, ESS 0.74.0 |
 | 0.18.1 | engineering-protocols 0.12.1: under `story.delivery/2` with `tests_first=required` a red gate admits the edit while the story's tests are written and pass, so a gate failure no test reads (formatting, lint, citations) can be fixed |
 | 0.19.0 | takt's own `story.delivery/3`, where a red gate admits the edit and the handover reruns the gate; a run stops `RepeatedGateFailure` after three `gate.run` results in a row fail the same gates at new revisions; a failed gate's block makes paths relative and withholds only the lines the secret scan refuses; a failed `tests.run` opens the next prompt with each failing test and its assertion's location; the obligations block names each gate's command when it passes the scan; the console opens with the story and prints one line per step with its duration, tokens and cost; engineering-protocols 0.12.2, loom 0.47.0 |
+| 0.20.0 | `--forge local`: a bare repository on this machine, the tree's `origin`, is the forge; a run opens a request record there, runs the run file's `local_checks` as the test command is, and on a grant merges into the target branch; a Codex step is given each file once (no `AGENTS.md` Codex loads itself, no `CLAUDE.md` that adds nothing to it, no file the change so far shows whole); a credential joined to the word before it is withheld; a failed `tests.run`'s block makes paths relative and withholds only the lines the secret scan refuses; a run without `--confinement` says it got `none` as the default; loom 0.48.0 with metaharness 0.23.0, b10x-harness 0.22.0 in the image; ESS 0.76.0 for the specification, CI and the image |
 
 | milestone | state |
 |---|---|

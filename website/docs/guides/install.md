@@ -1,14 +1,14 @@
 ---
 title: Install
 sidebar_position: 1
-description: Install takt 0.19.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build, and the tools each kind of run needs beside it.
+description: Install takt 0.20.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build, and the tools each kind of run needs beside it.
 lede: takt is one binary; what else you install depends on the harness, the forge and whether you deliver stories.
 source: the release assets of 0.14.0 (checksum commands run); cargo install --git at the tag 0.14.0 (run, 3 min 27 s); docker build of the Dockerfile at 0.14.0 (run); takt run --help at 0.14.0; Dockerfile
 ---
 
 # Install
 
-Three ways to get takt 0.19.0. They give the same `takt` binary.
+Three ways to get takt 0.20.0. They give the same `takt` binary.
 
 | way | needs | gets you |
 |---|---|---|
@@ -19,7 +19,7 @@ Three ways to get takt 0.19.0. They give the same `takt` binary.
 ## From a release asset
 
 ```sh
-version=0.19.0 target=x86_64-unknown-linux-gnu
+version=0.20.0 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
@@ -44,7 +44,7 @@ The archive holds `takt`, `README.md`, `CHANGELOG.md` and `LICENSE` in the direc
 From the tag, without a checkout:
 
 ```sh
-cargo install --locked --git https://github.com/beyond10x/takt --tag 0.19.0 b10x-takt-cli
+cargo install --locked --git https://github.com/beyond10x/takt --tag 0.20.0 b10x-takt-cli
 ```
 
 The package is `b10x-takt-cli`, and the binary it installs is `takt`. A build took 3 minutes 27
@@ -57,7 +57,7 @@ cargo install --locked --path crates/takt-cli
 
 ```console
 $ takt --version
-takt 0.19.0 (<the commit the 0.19.0 tag names>)
+takt 0.20.0 (<the commit the 0.20.0 tag names>)
 ```
 
 ## As a container image
@@ -65,9 +65,9 @@ takt 0.19.0 (<the commit the 0.19.0 tag names>)
 No takt image is published. Build one from a checkout of the tag:
 
 ```sh
-git clone --branch 0.19.0 https://github.com/beyond10x/takt
+git clone --branch 0.20.0 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.19.0 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.20.0 .
 ```
 
 The image is about 1.3 GB. It holds takt, `aep`, `b10x-harness`, `ess`, `b10x-gates` and a Rust
@@ -85,10 +85,11 @@ takt starts other programs and finds them on the `PATH`. Which ones depends on t
 | every run | `git`, and the test command's toolchain (`cargo` by default) |
 | `--harness claude`, the default | `claude` (Claude Code), logged in |
 | `--harness codex` | `codex`, and a [scan adapter](../reference/configuration.md#the-scan): `b10x-gates` with `B10X_GATES_POLICY` set for the default `gates`, or `scan: none` declared in the run's file |
-| `--harness harness` | `b10x-harness` 0.20.0, an LLM endpoint, and a scan adapter, as for `codex` |
+| `--harness harness` | `b10x-harness` 0.22.0, an LLM endpoint, and a scan adapter, as for `codex` |
 | a story | `aep` and a planning store; a gates document for the gate |
 | `--forge bot` (beyond10x's route, github.com only) | `b10x-gates` acting as the bot's GitHub App, and `gh` |
 | `--forge gitlab` | `glab`, with `glab auth status --hostname <host>` exiting 0 |
+| `--forge local` | nothing beyond `git`: a bare repository on this machine as the tree's `origin`, and the programs its `local_checks` name |
 | `takt promote` | `bwrap` on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
 
 A gate's commands are the exception: they find a program by name on `/usr/local/bin:/usr/bin:/bin`,

@@ -3,7 +3,7 @@ title: What takt is built on
 sidebar_position: 1
 description: The layers inside the takt binary, from the command line down to the model endpoint, what each one decides, and what happens in one run.
 lede: takt is an application on Loom's loom-sdk; Loom's runtime steps the case and its governor decides with Canon, a harness session only proposes, and takt keeps the validators, the evidence, git, the forge and the case record.
-source: Cargo.toml and Cargo.lock at 0.14.0; crates/takt/src/lib.rs, run.rs, harness.rs, frontier.rs, validator.rs, case.rs, evidence.rs, run_config.rs; crates/takt/tests/no_own_evaluation.rs; docs/design/takt.md § 2, § 3 and § 5; CHANGELOG.md 0.12.0 to 0.14.0; ADR 0099; Loom 0.44.0 website/docs/index.md; metaharness website/docs/index.md
+source: Cargo.toml and Cargo.lock at 0.14.0 and 0.20.0 (loom 0.48.0); CHANGELOG.md 0.20.0; crates/takt/src/lib.rs, run.rs, harness.rs, frontier.rs, validator.rs, case.rs, evidence.rs, run_config.rs; crates/takt/tests/no_own_evaluation.rs; docs/design/takt.md § 2, § 3 and § 5; CHANGELOG.md 0.12.0 to 0.14.0; ADR 0099; Loom 0.44.0 website/docs/index.md; metaharness website/docs/index.md
 ---
 
 # What takt is built on
@@ -17,21 +17,21 @@ the case record, and the self-improvement tools (`scorecard`, `trace`, `report`,
 
 ## The layer stack
 
-Top to bottom, as the binary is linked (versions from `Cargo.lock` at 0.14.0):
+Top to bottom, as the binary is linked (versions from `Cargo.lock` at 0.20.0, with the loom 0.48.0 pin):
 
 | layer | crate | version | sits under |
 |---|---|---|---|
-| takt, the binary | `b10x-takt-cli` | 0.14.0 | |
-| the takt library | `b10x-takt` | 0.14.0 | the binary |
-| loom-sdk | `b10x-loom-sdk` | 0.43.0 | the library |
-| Commission, the runtime (`run_until_blocked`) | `b10x-loom-commission` | 0.43.0 | loom-sdk |
-| the governor (`CanonGovernor`) | `b10x-loom-governor` | 0.43.0 | loom-sdk |
-| the session executor | `b10x-loom-session-executor` | 0.43.0 | loom-sdk |
-| metaharness | `metaharness` | 0.19.0 | the session executor |
-| harness adapters: Claude Code, Codex, b10x-harness | `b10x-harness-*` | 0.20.0 | metaharness |
+| takt, the binary | `b10x-takt-cli` | 0.20.0 | |
+| the takt library | `b10x-takt` | 0.20.0 | the binary |
+| loom-sdk | `b10x-loom-sdk` | 0.48.0 | the library |
+| Commission, the runtime (`run_until_blocked`) | `b10x-loom-commission` | 0.48.0 | loom-sdk |
+| the governor (`CanonGovernor`) | `b10x-loom-governor` | 0.48.0 | loom-sdk |
+| the session executor | `b10x-loom-session-executor` | 0.48.0 | loom-sdk |
+| metaharness | `metaharness` | 0.23.0 | the session executor |
+| harness adapters: Claude Code, Codex, b10x-harness | `b10x-harness-*` | 0.22.0 | metaharness |
 | llm: model routes and credentials | `b10x-llm-*` | 0.8.1 | loom-sdk |
 | Canon | `b10x-canon` | 0.6.0 | the library |
-| the protocols | `b10x-canon-engineering` | 0.10.0 | the library |
+| the protocols | `b10x-canon-engineering` | 0.12.2 | the library |
 | the planning store | the `aep` command line (AEP) | | the library, as a program it runs |
 
 ### takt-cli: the binary
@@ -62,7 +62,7 @@ readers of a run record (`scorecard`, `trace`, `report`, `view`).
 
 ### loom-sdk: runtime, governor, session executor
 
-`b10x-loom-sdk` 0.43.0, pinned by tag in `Cargo.toml`, is Loom's library for building on Loom.
+`b10x-loom-sdk` 0.48.0, pinned by tag in `Cargo.toml`, is Loom's library for building on Loom.
 takt uses three of its parts:
 
 | part | crate | what it does for takt |
@@ -84,7 +84,7 @@ loom-sdk; takt makes no model call through them.
 ### metaharness and the harness adapters
 
 [metaharness](https://beyond10x.github.io/metaharness/)
-([GitHub](https://github.com/beyond10x/metaharness)) 0.19.0 is one interface to many agent
+([GitHub](https://github.com/beyond10x/metaharness)) 0.23.0 is one interface to many agent
 harnesses: it drives each from outside and keeps the run observable and hermetic. takt names
 the harness with `--harness`:
 
@@ -92,7 +92,7 @@ the harness with `--harness`:
 |---|---|---|
 | `claude` (default) | Claude Code | the user's claude.ai login |
 | `codex` | Codex | the user's ChatGPT login |
-| `harness` | b10x-harness 0.20.0, on the `PATH` | the endpoint you configure, by default the Anthropic Messages API on the claude.ai login |
+| `harness` | b10x-harness 0.22.0, on the `PATH` | the endpoint you configure, by default the Anthropic Messages API on the claude.ai login |
 | `none` | no harness; only validators run | nothing |
 
 Each judgement step is one session in a scratch copy of the tree, never the tree itself. The
@@ -144,8 +144,9 @@ repository, validated by `ess specify validate --path ess` in `task check`.
 ## Versions that changed in 0.13.0
 
 The 0.13.0 changelog marks it breaking: `b10x-loom-sdk` moves from loom 0.41.0 to 0.43.0 with
-metaharness 0.19.0, so `--harness harness` needs b10x-harness 0.20.0 on the `PATH`. The container
-image ships it.
+metaharness 0.19.0, so from then on `--harness harness` needed b10x-harness 0.20.0 on the `PATH`.
+The loom 0.48.0 pin of 0.20.0 brings metaharness 0.23.0 and raises that to b10x-harness 0.22.0.
+The preflight reports an older harness as an advisory gap, and the container image ships 0.22.0.
 
 ## takt as a Loom agent
 

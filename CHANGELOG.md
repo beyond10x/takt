@@ -6,6 +6,34 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-29
+
+`--forge local` merges a story into a target branch on this machine; a Codex step is given each
+file once; a credential joined to a word is withheld; ESS 0.76.0.
+
+### Added
+
+- `--forge local`: a local bare repository, the tree's `origin`, is the forge; a run opens a request record there, runs the run file's `local_checks` confined and merges into the target branch.
+
+### Changed
+
+- The specification, CI and the container image use ESS 0.76.0 (was 0.75.0).
+- A failed `tests.run`'s block makes paths under the tree relative and withholds only the lines the secret scan refuses, counted in its heading.
+- The loom pin moves to 0.48.0, which carries metaharness 0.23.0 and Harness 0.22.0; an older b10x-harness reads as an H9 gap in the preflight, advisory.
+- The container image ships b10x-harness 0.22.0.
+- A run started without `--confinement` says it got `none` as the default, on its `case` line and in its `opened` event, instead of naming a flag nobody passed.
+- Library: `confinement::Unconfined` carries its reason (`Unconfined::new(flag_given)`), and `confinement::check_none` takes whether the flag was given and returns the adapter to install.
+- A Codex step is not given an `AGENTS.md` Codex loads itself from the session's copy at the base's bytes.
+- Beside an `AGENTS.md`, a Codex step is not given a `CLAUDE.md` that only points at it or whose text it holds; any other `CLAUDE.md` is still given.
+- A Codex step whose rollout shows Codex did not load that `AGENTS.md` stops `StepRefused`.
+- The change so far shows every file whole within its 8 KiB bound, test files in the intent's scope too, so such a test file is no longer given again as a context file.
+- A test file outside the scope keeps its changed lines; past the bound the change falls back as before.
+- A file the change so far shows without its text as it is (binary, mode only, a carriage return) is still given as a context file or a mention.
+
+### Fixed
+
+- A credential joined to a word before it (`test_ghp_…`) is withheld. After a letter or digit, `sk-` needs a capital and a digit after it, so `xsk-` and lower-case hex is shown.
+
 ## [0.19.0] - 2026-10-29
 
 A run's console opens with the story and shows what each step cost; a failed gate or test run
@@ -783,7 +811,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.19.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.20.0...HEAD
+[0.20.0]: https://github.com/beyond10x/takt/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/beyond10x/takt/compare/0.18.1...0.19.0
 [0.18.1]: https://github.com/beyond10x/takt/compare/0.18.0...0.18.1
 [0.18.0]: https://github.com/beyond10x/takt/compare/0.17.0...0.18.0

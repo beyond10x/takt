@@ -144,7 +144,7 @@ struct Held(#[allow(dead_code)] MutexGuard<'static, ()>);
 
 fn held() -> Held {
     let guard = ADAPTER.lock().unwrap_or_else(PoisonError::into_inner);
-    confinement::install(Arc::new(Unconfined));
+    confinement::install(Arc::new(Unconfined::default()));
     Held(guard)
 }
 
@@ -156,7 +156,7 @@ impl Held {
 
 impl Drop for Held {
     fn drop(&mut self) {
-        confinement::install(Arc::new(Unconfined));
+        confinement::install(Arc::new(Unconfined::default()));
     }
 }
 

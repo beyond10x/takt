@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-29T05:07:56Z",
+  "actor": "human:timo",
+  "artifact": "task:ess-0-76-0",
+  "kind": "task",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "ess 0.76.0 specify validate --path ess: takt v1, 2 file(s), valid"
+  }
+}

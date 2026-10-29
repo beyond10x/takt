@@ -14,7 +14,7 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:an-unrelated-program-install-refuses-no-step
-revision: 1
+revision: 2
 ---
 # The takt binary's unit tests run guarded steps over the operator's program directories
 
@@ -66,3 +66,11 @@ of its own the same way.
 - `crates/takt-cli/tests/`: a new integration test file for those cases, if they move (inferred)
 - `crates/takt/tests/w42_adv_prompt_lines.rs`: the ignored case un-ignored (cited)
 - `crates/takt/tests/tests_have_a_home_of_their_own.rs` (inferred)
+
+## Release 0.19.0
+
+0.19.0 ships this story's case `#[ignore]`d, accepted at its release check as a tracked finding on
+two conditions: the ignore's reason names this story (done on `integration/wave-43`), and the
+story is delivered in wave 44, the wave after 43, because a unit-test module in `crates/*/src`
+can start a step over the operator's `PATH` and `~/.cargo/bin` and so touch the operator's own
+binaries.

@@ -274,9 +274,9 @@ fn a_declared_scan_none_opens_the_case_and_says_so_before_the_first_step() {
             assert!(
                 first.contains(&format!(
                     "confinement none: Substrate local, declared insecure: {}; proved: ",
-                    takt::confinement::LOCAL_REASON
+                    takt::confinement::DEFAULT_REASON
                 )),
-                "{label}: story:confinement-through-substrate-on-linux-and-macos: the run's first line is unchanged but for the adapter `none` runs on: {first}"
+                "{label}: story:confinement-through-substrate-on-linux-and-macos: the run's first line is unchanged but for the adapter `none` runs on, the default without --confinement: {first}"
             );
             // The tree's path may hold any word; what the line says after it does not name the
             // scan.

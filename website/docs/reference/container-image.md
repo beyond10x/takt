@@ -13,7 +13,7 @@ of this repository builds or pushes an image, and none is published: you build i
 loads your build.
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.19.0 .
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.20.0 .
 ```
 
 Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a Loom agent:
@@ -34,13 +34,14 @@ The tools are downloaded by release URL and checked against a SHA256 in the Dock
 | tool | version |
 |---|---|
 | [aep](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) | 0.77.1 |
-| [b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness)) | 0.20.0 |
-| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.75.0 |
+| [b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness)) | 0.22.0 |
+| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.76.0 |
 | b10x-gates | 0.1.23 |
 
-`b10x-harness` 0.20.0 is the harness takt 0.14.0's Loom 0.43.0 and metaharness 0.19.0 need. Checked
-in a local build of this Dockerfile (0.13.1, with ess 0.69.2; only the ess pin has changed since,
-and that is not rebuilt here):
+`b10x-harness` 0.22.0 is the harness that Loom 0.48.0 and metaharness 0.23.0 need. The transcript
+below was recorded from a local build of this Dockerfile at takt 0.13.1, when it pinned
+`b10x-harness` 0.20.0 and ess 0.69.2. The harness and ess pins have changed since then, and the
+image has not been rebuilt with them, so the versions printed below are the ones from that build:
 
 ```console
 $ docker run --rm --entrypoint sh takt:0.13.1 -c 'takt --version; aep --version; b10x-harness --version; ess --version; b10x-gates --version; rustc --version'
@@ -79,7 +80,7 @@ argument, so the configuration file is read only when they name it again. The ar
 of `takt run` and win over the file:
 
 ```console
-$ docker run --rm takt:0.19.0 --config /config/agent.yaml --story <story-id> --hours 1
+$ docker run --rm takt:0.20.0 --config /config/agent.yaml --story <story-id> --hours 1
 ```
 
 A `LABEL` names the source (`org.opencontainers.image.source`), the licence (`Apache-2.0`) and the

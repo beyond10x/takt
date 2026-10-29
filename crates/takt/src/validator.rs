@@ -4449,8 +4449,9 @@ impl Validator for CiRead {
 /// is one CI was not read on: its checks are read before the merge, and pending or failing checks merge nothing and
 /// write no record, the summary saying which; a later run merges it. Pending checks, a head
 /// pushed that the pull request does not show yet, and a merge the forge refuses for a required
-/// check that has not reported ([`crate::forge::refused_for_a_pending_check`]) merge nothing,
-/// write no record and wait on the forge. The merge names
+/// check that has not reported ([`crate::forge::refused_for_a_pending_check`]) or for a base
+/// moved after the judge guard judged it ([`crate::forge::local::refused_for_a_moved_base`])
+/// merge nothing, write no record and wait on the forge. The merge names
 /// the head, so a head that moved meanwhile is refused by the forge rather than merged. The
 /// record is about the revision the grant authorises; the head merged is retained beside it as
 /// `artifacts/merged-head-<seq>.json`. A pull request already merged is recorded without a
@@ -5364,6 +5365,18 @@ impl Validator for PrMerged {
                         return Ok((
                             nothing(format!(
                                 "the forge {forge} refused the merge of pull request #{number} at its head {} for a required check that has not reported ({}); nothing merged, the claim stays unknown",
+                                short(&view.head.sha),
+                                format!("{error:#}").replace('\n', " ")
+                            )),
+                            true,
+                        ));
+                    }
+                    // A base another writer moved after the guard judged it: nothing merged,
+                    // and the next run judges the merge again on the base where it is now.
+                    if crate::forge::local::refused_for_a_moved_base(&error) {
+                        return Ok((
+                            nothing(format!(
+                                "the forge {forge} refused the merge of pull request #{number} at its head {}, because {target} moved after the judge guard judged it ({}); nothing merged, the claim stays unknown",
                                 short(&view.head.sha),
                                 format!("{error:#}").replace('\n', " ")
                             )),

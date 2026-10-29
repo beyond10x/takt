@@ -934,6 +934,29 @@ test result: FAILED. 0 passed; 1 failed
     assert!(!lines.iter().any(|line| line.contains(&token)));
 }
 
+/// story:credential-shape-sees-a-token-after-a-word-character, acceptance 2: a failed test whose
+/// name joins a token to the word before it (`test_` and a GitHub token, `test_` and an Anthropic
+/// one) is withheld whole and counted, never kept, beside a test that is kept.
+#[test]
+fn a_token_joined_to_a_test_name_is_withheld() {
+    let github = ["gh", "p_", &"A".repeat(36)].concat();
+    let anthropic = ["sk", "-ant-", &"b".repeat(30)].concat();
+    let printed = format!(
+        "============ short test summary info ============\n\
+         FAILED tests/t.py::test_{github} - boom\n\
+         FAILED tests/t.py::test_{anthropic} - boom\n\
+         FAILED tests/t.py::test_b - boom\n"
+    );
+    let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+    assert_eq!(lines, ["FAILED tests/t.py::test_b - boom"]);
+    assert_eq!(omitted, 2, "the two joined tokens' lines, withheld");
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.contains(&github) || line.contains(&anthropic))
+    );
+}
+
 /// libtest's `assert_eq!` failure keeps its `left:` and `right:` values on the test's line, and a
 /// value withheld for a credential leaves the message alone, counted.
 #[test]

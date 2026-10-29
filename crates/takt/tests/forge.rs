@@ -3487,7 +3487,7 @@ fn gitlab_tokens_and_glab_s_token_key_are_credential_shapes() {
     ] {
         assert_eq!(credential_shape(clean), None, "{clean}");
     }
-    // A prefix inside a longer word starts no token.
+    // A token joined to the word before it is still a token: `test_glpat-…` in a test's name.
     let inside = format!("x{}{body}", GITLAB_TOKEN_PREFIXES[0]);
-    assert_eq!(credential_shape(&inside), None, "{inside}");
+    assert_eq!(credential_shape(&inside), Some("gitlab-token"), "{inside}");
 }
