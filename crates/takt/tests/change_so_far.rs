@@ -563,13 +563,30 @@ outcomes:
       claim: tests.pass
 ";
 
-/// Opens a case `id` on `tree` under [`EDIT`] (written to `scripts`) and runs 2 steps with
-/// `harness`, the change so far unscanned; the run's output.
+/// The intent of [`run_edits`]: its scope names both files [`BOTH`] edits.
+const BOTH_IN_SCOPE: &str =
+    "show the change so far\n\n## Scope\n\n- `app.py`\n- `tests/test_app.py`\n";
+
+/// Opens a case `id` on `tree` under [`EDIT`] (written to `scripts`) with the intent
+/// [`BOTH_IN_SCOPE`] and runs 2 steps with `harness`, the change so far unscanned; the run's
+/// output.
 fn run_edits(tree: &Path, scripts: &Path, id: &str, harness: &ClaudeCode) -> String {
+    run_edits_for(tree, scripts, id, harness, BOTH_IN_SCOPE)
+}
+
+/// [`run_edits`] with the intent `intent`.
+fn run_edits_for(
+    tree: &Path,
+    scripts: &Path,
+    id: &str,
+    harness: &ClaudeCode,
+    intent: &str,
+) -> String {
     let protocol = scripts.join("protocol.yaml");
     fs::write(&protocol, EDIT).expect("the protocol");
     let options = RunOptions {
         protocol: protocol.display().to_string(),
+        intent: intent.to_owned(),
         inputs: Vec::new(),
         gate: None,
         ..options(id, 2)
@@ -589,10 +606,10 @@ fn run_edits(tree: &Path, scripts: &Path, id: &str, harness: &ClaudeCode) -> Str
 const BOTH: &str = r#"echo "app-change-$n" >> app.py
 echo "test-change-$n" >> tests/test_app.py"#;
 
-/// Acceptance (re-trial 1): the step that hands over needs no file read. Each file that is not
-/// a test path is shown whole, as it is now, every line of it; each test file shows its changed
-/// lines with 3 around each; and the block says it is the complete change and that every line
-/// and file not shown is as at the commit the case forked from.
+/// Acceptance (re-trial 1, and story:codex-step-gets-each-file-once): the step that hands over
+/// needs no file read. Within the bound every file is shown whole, as it is now, every line of
+/// it, a test file in the intent's scope too; and the block says it is the complete change and
+/// that every file not shown is as at the commit the case forked from.
 #[test]
 fn each_file_that_is_not_a_test_is_shown_whole_and_the_block_says_it_is_complete() {
     let app = numbered("app", 30);
@@ -617,16 +634,97 @@ fn each_file_that_is_not_a_test_is_shown_whole_and_the_block_says_it_is_complete
         inside.contains(&"+app-change-1") && inside.contains(&"+test-change-1"),
         "both changes: {inside:#?}"
     );
-    assert!(
-        inside.contains(&" test line 28") && !inside.contains(&" test line 26"),
-        "the test file shows its change with 3 lines around it: {inside:#?}"
-    );
+    for n in 1..=30 {
+        assert!(
+            inside.contains(&format!(" test line {n}").as_str()),
+            "the test file is shown whole, line {n}: {inside:#?}"
+        );
+    }
     let label = &shown[..shown.find("```").expect("a fence")];
     assert!(
         label.contains("complete")
             && label.contains("shown whole")
+            && label.contains("test files too")
             && label.contains("as at the commit"),
         "the block says it is the whole change: {label}"
+    );
+}
+
+/// Acceptance (story:codex-step-gets-each-file-once): a test file whose whole would put the
+/// diff past the bound is shown as its changed lines with 3 around each, while each file that
+/// is not a test is still shown whole, and the block says which.
+#[test]
+fn a_test_file_too_large_to_show_whole_shows_its_changed_lines() {
+    let tests = numbered("a longer test", 400);
+    assert!(tests.len() > 8192, "past the bound whole: {}", tests.len());
+    let tree = repository(
+        "test-hunks-tree",
+        &[
+            ("app.py", &numbered("app", 30)),
+            ("tests/test_app.py", &tests),
+        ],
+    );
+    let scripts = directory("test-hunks-scripts");
+    let harness = fake_claude_acting(&scripts, BOTH, "implementation.edit");
+    let text = run_edits(&tree, &scripts, "test-hunks", &harness);
+    let second = prompt(&scripts, 2);
+    let shown = block(&second);
+    let (_, inside) = fenced(shown);
+    for n in 1..=30 {
+        assert!(
+            inside.contains(&format!(" app line {n}").as_str()),
+            "app.py is shown whole, line {n}: {inside:#?}\n{text}"
+        );
+    }
+    assert!(
+        inside.contains(&"+test-change-1")
+            && inside.contains(&" a longer test line 398")
+            && !inside.contains(&" a longer test line 1"),
+        "the test file's changed lines with 3 around them: {inside:#?}"
+    );
+    let label = &shown[..shown.find("```").expect("a fence")];
+    assert!(
+        label.contains("is not a test is shown whole") && !label.contains("test files too"),
+        "the block says the test file is not whole: {label}"
+    );
+}
+
+/// story:codex-step-gets-each-file-once: a test file the intent's scope does not name keeps its
+/// changed lines with 3 around each within the bound, since the step is given no test file
+/// outside its scope either, while each file that is not a test is shown whole; and the block
+/// says which.
+#[test]
+fn a_test_file_outside_the_scope_shows_its_changed_lines() {
+    let tree = repository(
+        "outside-tree",
+        &[
+            ("app.py", &numbered("app", 30)),
+            ("tests/test_app.py", &numbered("test", 30)),
+        ],
+    );
+    let scripts = directory("outside-scripts");
+    let harness = fake_claude_acting(&scripts, BOTH, "implementation.edit");
+    let intent = "show the change so far\n\n## Scope\n\n- `app.py`\n";
+    let text = run_edits_for(&tree, &scripts, "outside", &harness, intent);
+    let second = prompt(&scripts, 2);
+    let shown = block(&second);
+    let (_, inside) = fenced(shown);
+    for n in 1..=30 {
+        assert!(
+            inside.contains(&format!(" app line {n}").as_str()),
+            "app.py is shown whole, line {n}: {inside:#?}\n{text}"
+        );
+    }
+    assert!(
+        inside.contains(&"+test-change-1")
+            && inside.contains(&" test line 28")
+            && !inside.contains(&" test line 27"),
+        "the test file outside the scope shows its changed lines with 3 around them: {inside:#?}"
+    );
+    let label = &shown[..shown.find("```").expect("a fence")];
+    assert!(
+        label.contains("test file outside the intent's scope") && !label.contains("test files too"),
+        "the block says the test file is not whole: {label}"
     );
 }
 

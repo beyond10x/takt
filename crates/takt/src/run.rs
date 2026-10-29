@@ -9171,12 +9171,29 @@ fn gate_stop(record: &[serde_json::Value]) -> Option<Stop> {
 /// when the scan passes it. A diff that cannot be read and a scan that refuses or cannot run show
 /// nothing, and `out` says why, never what the scan said; neither is an error. A run reads it
 /// before each judgement step, under its scan ([`Run::scan_change_with`]); a replay reads it the
-/// same way for the step it rebuilds ([`crate::replay`]).
+/// same way for the step it rebuilds ([`crate::replay`]). Every changed test file counts as in
+/// the step's scope ([`change_so_far_for`]).
 pub fn change_so_far(
     tree: &Path,
     case_dir: &Path,
     record: impl FnOnce() -> Result<Vec<serde_json::Value>>,
     at: Option<&str>,
+    scan: Option<&ChangeScan>,
+    out: &mut dyn Write,
+) -> Result<ChangeSoFar> {
+    change_so_far_for(tree, case_dir, record, (at, None), scan, out)
+}
+
+/// [`change_so_far`] for a step whose intent is `intent`, when one is given: within the bound,
+/// a changed test file its `## Scope` section does not name shows its changed lines, not the
+/// whole file, since the step is given no test file outside its scope either; every other file
+/// is shown whole as before ([`ChangeSoFar::ShownWholeBut`]). With no intent, every test file
+/// counts as in scope.
+pub fn change_so_far_for(
+    tree: &Path,
+    case_dir: &Path,
+    record: impl FnOnce() -> Result<Vec<serde_json::Value>>,
+    (at, intent): (Option<&str>, Option<&str>),
     scan: Option<&ChangeScan>,
     out: &mut dyn Write,
 ) -> Result<ChangeSoFar> {
@@ -9221,35 +9238,60 @@ pub fn change_so_far(
                 count_to,
             )
         };
-        // Each file that is not a test whole, each test file as its changed lines: a step
-        // that hands over reads the implementation for what the changed lines alone do not
-        // show (the rest of the path they are on, what calls them). Past the bound, every
-        // file as its changed lines; past that, the size alone.
+        // Every file whole, test files in the step's scope too: a step that hands over reads
+        // the implementation for what the changed lines alone do not show (the rest of the path
+        // they are on, what calls them), and no file it is shown whole is given it again as a
+        // context file or a mention. A test file outside the scope, which the step is not given
+        // either, shows its changed lines. Past the bound, each file that is not a test whole
+        // and each test file as its changed lines; past that, every file as its changed lines;
+        // past that, the size alone.
         let (tests, others): (Vec<String>, Vec<String>) =
             paths.iter().cloned().partition(|path| is_test_path(path));
+        let scope = intent.map(crate::harness::scope_paths);
+        let (in_scope, outside): (Vec<String>, Vec<String>) =
+            tests.iter().cloned().partition(|path| {
+                scope
+                    .as_ref()
+                    .is_none_or(|scope| scope.contains(&path.as_str()))
+            });
+        let whole_first: Vec<String> = others.iter().chain(&in_scope).cloned().collect();
         let mut whole = None;
-        if !others.is_empty()
+        if let BoundedDiff::Within(diff) = diff_of(
+            &[
+                (&whole_first, DiffContext::Whole),
+                (&outside, DiffContext::Hunks),
+            ],
+            0,
+        )? {
+            whole = Some((diff, Some(outside.clone())));
+        } else if !others.is_empty()
+            && !in_scope.is_empty()
             && let BoundedDiff::Within(diff) = diff_of(
                 &[(&others, DiffContext::Whole), (&tests, DiffContext::Hunks)],
                 0,
             )?
         {
-            whole = Some(diff);
+            whole = Some((diff, None));
         }
-        let shows_whole = whole.is_some();
+        let tests_whole = whole.as_ref().map(|(_, hunks)| hunks.clone());
         let diff = match whole {
-            Some(diff) => BoundedDiff::Within(diff),
+            Some((diff, _)) => BoundedDiff::Within(diff),
             None => diff_of(
                 &[(&paths, DiffContext::Hunks)],
                 crate::git::DIFF_COUNTED_BYTES,
             )?,
         };
+        let shown = |diff: &[u8]| match &tests_whole {
+            Some(Some(hunks)) => ChangeSoFar::shown_whole_but(diff, hunks.clone()),
+            Some(None) => ChangeSoFar::shown(diff, true),
+            None => ChangeSoFar::shown(diff, false),
+        };
         Ok(match diff {
             BoundedDiff::Within(diff) if diff.is_empty() => ChangeSoFar::NoneYet,
             BoundedDiff::Within(diff) => match scan {
-                None => ChangeSoFar::shown(&diff, shows_whole),
+                None => shown(&diff),
                 Some(scan) => match scan_change(tree, scan, &diff) {
-                    Ok(()) => ChangeSoFar::shown(&diff, shows_whole),
+                    Ok(()) => shown(&diff),
                     Err(why) => {
                         writeln!(out, "  the change so far is not shown: {why}")?;
                         ChangeSoFar::NotShown(if why.starts_with(SCAN_DID_NOT_RUN) {
@@ -12590,11 +12632,11 @@ impl<'a> Run<'a> {
                 granted.push(action.clone());
             }
         }
-        let change = change_so_far(
+        let change = change_so_far_for(
             &self.tree,
             &self.case.dir,
             || events.read(),
-            None,
+            (None, Some(&self.options.intent)),
             self.change_scan.as_ref(),
             out,
         )?;
@@ -13048,6 +13090,26 @@ impl<'a> Run<'a> {
                             )));
                         }
                     };
+                    let why = format!("step {}: {refusal}{moved}{note}", self.steps);
+                    self.refused(events, BY_TAKT, &why)?;
+                    writeln!(out, "{why}")?;
+                    return Ok(Judgement::Stop(Stop::StepRefused(why)));
+                }
+                // A Codex session that did not load the `AGENTS.md` it was left to load: it ran,
+                // so it is charged what it reported; its change is discarded and the run stops
+                // with it named, as for an instruction file that cannot be given.
+                if let Some(refusal) = error.downcast_ref::<crate::harness::InstructionsNotLoaded>()
+                {
+                    let moved = match undo() {
+                        Ok(moved) => moved,
+                        Err(undo) => {
+                            return Err(error.context(format!(
+                                "step {}: the session did not load its instruction files, and its change could not be discarded: {undo:#}{note}",
+                                self.steps
+                            )));
+                        }
+                    };
+                    self.charge_unproposed(events, transcript.clone())?;
                     let why = format!("step {}: {refusal}{moved}{note}", self.steps);
                     self.refused(events, BY_TAKT, &why)?;
                     writeln!(out, "{why}")?;
