@@ -1,7 +1,7 @@
 ---
 title: Getting started
 sidebar_position: 2
-description: Install takt 0.21.0, run it on a repository with no model, then with Claude Code, grant the merge and take the change.
+description: Install takt 0.22.0, run it on a repository with no model, then with Claude Code, grant the merge and take the change.
 lede: Two runs on your repository, the first with no model and no account, the second with Claude Code; then the grant and the change.
 source: runs of a build of takt 0.21.0's source on a fresh cargo crate with Claude Code 2.1.312 and 2.1.309, takt approve and git merge --ff-only, 2026-10-29; takt run --help and takt approve --help of 0.21.0; the install commands as on the Install page
 ---
@@ -24,7 +24,7 @@ Codex, b10x-harness, a forge or a planning store need more: [the tools beside ta
 ## Install
 
 ```sh
-version=0.21.0 target=x86_64-unknown-linux-gnu
+version=0.22.0 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"

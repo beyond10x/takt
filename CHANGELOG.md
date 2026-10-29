@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-29
+
+Evidence records are stamped to the microsecond and nothing waits for the next second; loom 0.50.0
+with Canon 0.8.0 and engineering-protocols 0.14.0.
+
 ### Changed
 
 - The loom pin moves to 0.50.0, which carries Canon 0.8.0 and engineering-protocols 0.14.0; takt pins both with it, one copy of each in the lock.
@@ -847,7 +852,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.21.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.22.0...HEAD
+[0.22.0]: https://github.com/beyond10x/takt/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/beyond10x/takt/compare/0.20.0...0.21.0
 [0.20.0]: https://github.com/beyond10x/takt/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/beyond10x/takt/compare/0.18.1...0.19.0

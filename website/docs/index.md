@@ -73,7 +73,7 @@ samples: these are first results, not a benchmark.
 
 ## Next
 
-- [Getting started](./getting-started.md): install takt 0.21.0, run it with no model, then with
+- [Getting started](./getting-started.md): install takt 0.22.0, run it with no model, then with
   Claude Code, and take the change.
 - [Run a story](./guides/run-a-story.md): deliver a story from a planning store.
 - [Known limitations](./known-limitations.md): what does not work yet.

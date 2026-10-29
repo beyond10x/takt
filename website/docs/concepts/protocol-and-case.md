@@ -27,8 +27,8 @@ takt has no Rust model of a protocol. Canon reads the document and computes ever
 
 Most protocols takt runs are built-ins of
 [engineering protocols](https://beyond10x.github.io/engineering-protocols/)
-([GitHub](https://github.com/beyond10x/engineering-protocols)); takt 0.21.0 pins its release
-0.13.0. One is takt's own: `story.delivery/3`. `takt protocols` lists them all, takt's own after
+([GitHub](https://github.com/beyond10x/engineering-protocols)); takt 0.22.0 pins its release
+0.14.0. One is takt's own: `story.delivery/3`. `takt protocols` lists them all, takt's own after
 the registry's `story-delivery/2`:
 
 ```text

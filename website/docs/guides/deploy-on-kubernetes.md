@@ -50,8 +50,8 @@ nodes:
 
 ```sh
 kind create cluster --config examples/loom-agent/kind-cluster.yaml
-docker tag takt:0.21.0 registry.example/takt:0.21.0
-kind load docker-image registry.example/takt:0.21.0 --name takt-demo
+docker tag takt:0.22.0 registry.example/takt:0.22.0
+kind load docker-image registry.example/takt:0.22.0 --name takt-demo
 kind load docker-image registry.example/loom-operator:0.45.0 --name takt-demo
 kind load docker-image registry.example/loom-agent:0.45.0 --name takt-demo
 ```
@@ -121,7 +121,7 @@ metadata:
   name: takt-demo
   namespace: agents
 spec:
-  image: {repository: registry.example/takt, tag: "0.21.0"}
+  image: {repository: registry.example/takt, tag: "0.22.0"}
   command:
     entrypoint:
       - tini

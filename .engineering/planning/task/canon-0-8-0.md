@@ -2,17 +2,18 @@
 format: aep.planning-md/3
 id: task:canon-0-8-0
 kind: task
-status: active
+status: implemented
 title: 'Canon moves to 0.8.0: sub-second order, and the whole-second wait goes'
 summary: takt's Canon pin moves from 0.7.0 to 0.8.0, which orders records to the fraction of a second; takt drops the wait to the next whole second and writes tests_change and test_result at one precision.
 tags:
 - dependency
 relations:
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T14:46:23Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T14:46:23Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-29T15:34:10Z", actor: "human:timo", revision: 4}
 ---
 ## What
 

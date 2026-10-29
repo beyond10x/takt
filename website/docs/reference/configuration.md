@@ -581,7 +581,7 @@ story; it never reads one from the reply, and a case opened on an intent has non
 ## Every takt run flag
 
 One line each, from `takt run --help` at 0.14.0, and the console flags from `LoopArgs` in
-`crates/takt-cli/src/main.rs` at 0.21.0. The generated [CLI reference](./cli.md) has the
+`crates/takt-cli/src/main.rs` at 0.22.0. The generated [CLI reference](./cli.md) has the
 full text of each, and the [exit codes](./exit-codes.md) are generated from the same help.
 
 ### What to work on
