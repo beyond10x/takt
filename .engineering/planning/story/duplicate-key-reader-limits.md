@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:duplicate-key-reader-limits
 kind: story
-status: proposed
+status: implemented
 title: Three duplicate keys the YAML reader does not find at their line
 tags:
 - finding
@@ -16,9 +16,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 4
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T06:37:36Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-29T06:59:56Z", actor: "human:timo", revision: 5, executor: "agent:takt"}
+- {from: "active", to: "implemented", at: "2026-10-29T08:46:45Z", actor: "agent:takt", revision: 9, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 # Three duplicate keys the YAML reader does not find at their line
 
@@ -64,3 +66,38 @@ key when it is a declared name.
 
 0.19.0 ships this story's cases `#[ignore]`d, accepted at its release check as a tracked finding
 on the condition that each ignore's reason names this story.
+
+## Decision (wave 44, review)
+
+The second adversarial pass (on 0170e66f) found seven cases red, now in
+`crates/takt/tests/w44_adv_dup_keys_b.rs`; all seven come from the lines the first fix added. The
+planner's decision on how the reader holds them:
+
+- A line is counted from a running byte cursor over the text (libyaml's mark index counts
+  bytes), with `\r\n`, `\r` and `\n` each one break, never by walking the text from its start for
+  each event: the reader is linear in the file.
+- A tagged key's value is built from the event's resolved tag, not from a slice of the source
+  text: the core tags (`int`, `float`, `bool`, `null`, `str`) by serde's rules, a local tag (`!x`)
+  as a tagged value around the plain-resolved text, any other tag as a string.
+- A key the reader cannot resolve stops it, as it did before the first fix: it gives up and the
+  generic refusal stands, rather than reporting a later pair.
+
+## Decision (wave 44, third review)
+
+The third adversarial pass (on 71c38d32) found three cases red, now in
+`crates/takt/tests/w44_adv_dup_keys_c.rs`; each breaks a rule of the decision above as written.
+The planner's decision, which keeps that decision and settles how it reads an alias:
+
+- A key with a local tag (`!x iterations`) is a tagged value around its plain-resolved text, so
+  it never equals the untagged key (`iterations`).
+- A plain key with a global tag that is not a core tag (`!<tag:example.com,2000:x> 1`) is the
+  string of its text, never a number or a boolean.
+- A key the reader cannot resolve stops it, and the generic refusal stands. An alias whose anchor
+  is, at that point of the file, a mapping or a sequence is not such a key: a collection never
+  equals a scalar key, so the reader goes on past it, as
+  `adv_w44_u3_anchor_redefined_on_a_mapping_is_not_the_old_scalar`,
+  `adv_w44_u3_anchor_redefined_on_a_sequence_is_not_the_old_scalar` and
+  `adv_w44_u3b_alias_of_a_mapping_as_a_key_before_the_duplicate` hold. A key the reader skips
+  this way and a later key that serde finds equal to it give the generic refusal.
+- Keys `-0.0` and `0.0` (serde names `-0.0`, the reader prints `0.0`) give the generic refusal;
+  that stands, out of this story's scope.

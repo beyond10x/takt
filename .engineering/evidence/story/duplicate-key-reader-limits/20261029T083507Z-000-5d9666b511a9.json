@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-29T08:35:07Z",
+  "actor": "agent:takt",
+  "artifact": "story:duplicate-key-reader-limits",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "takt",
+    "reference": ".takt/cases/story-duplicate-key-reader-limits-20261029T065955Z/evidence/0068-test-result-96.json#sha256=866a0c9177c88eb3a3dee955e27a1d2dc88633194aa6a6c09410821741689cf1&result=pass&revision=97115763eddc5e88252d4e8c1406d69d2477d185&producer=takt.tests-run"
+  }
+}

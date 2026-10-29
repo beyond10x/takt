@@ -619,12 +619,12 @@ types:
   # A container started from takt's image reads it at `/config/agent.yaml`.
   # read from: crates/takt/src/run_config.rs:196-226
   # read from: crates/takt/src/run_config.rs:839-842
-  # read from: crates/takt/src/run_config.rs:1305-1310
-  # read from: crates/takt/src/run_config.rs:1210-1225
-  # read from: crates/takt/src/run_config.rs:1258-1259
+  # read from: crates/takt/src/run_config.rs:1395-1400
+  # read from: crates/takt/src/run_config.rs:1300-1315
+  # read from: crates/takt/src/run_config.rs:1348-1349
   # read from: crates/takt/src/run_config.rs:145-151
   # read from: crates/takt/src/run_config.rs:153-188
-  # read from: crates/takt/src/run_config.rs:1267-1268
+  # read from: crates/takt/src/run_config.rs:1357-1358
   # read from: crates/takt-cli/src/main.rs:798-816
   # read from: crates/takt-cli/src/main.rs:841-845
   # read from: crates/takt-cli/src/main.rs:780-786
@@ -672,7 +672,7 @@ types:
       - name: llm
         type: Optional<takt.work.LlmRoutes>
       # read from: crates/takt/src/run_config.rs:228
-      # read from: crates/takt/src/run_config.rs:1274-1279
+      # read from: crates/takt/src/run_config.rs:1364-1369
       - name: records
         type: Optional<String>
       - name: commit
@@ -3830,7 +3830,7 @@ types:
   # against what the protocol declares under `case.inputs` when the case's protocol is known, and
   # refuses what does not match at its line. An opaque reference here; the declared values are the
   # protocol's.
-  # read from: crates/takt/src/run_config.rs:1400-1433
+  # read from: crates/takt/src/run_config.rs:1490-1523
   - name: takt.work.ProtocolsSection
     kind: newtype
     of: Json
