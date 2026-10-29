@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T23:19:38Z",
+  "actor": "human:timo",
+  "artifact": "story:bench-task-protocol",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "cargo test -p b10x-takt-cli --test bench_task_cli at 7be207a5 (wave/40, U1): 2 passed, 0 before; the acceptance run on the fixture task exits 0 with 'stopped: Completed (completed)'; protocols/bench-task/1.yaml and the test unchanged since, to b0dd8047",
+    "reference": "7be207a5"
+  }
+}

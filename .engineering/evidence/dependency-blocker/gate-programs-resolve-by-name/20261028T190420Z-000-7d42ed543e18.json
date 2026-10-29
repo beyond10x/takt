@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T19:04:20Z",
+  "actor": "human:timo",
+  "artifact": "dependency-blocker:gate-programs-resolve-by-name",
+  "kind": "dependency-blocker",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "engineering-protocols 0.12.0 (commit 2bb0eae5): crates/assertion-providers/src/lib.rs:55 a bare program name resolved on a search_path; crates/assertion-providers/src/process.rs:266-292 uses the runtime default when the project's search_path is empty; takt pins tag 0.12.0 (Cargo.toml:14)",
+    "reference": "https://github.com/beyond10x/engineering-protocols/releases/tag/0.12.0"
+  }
+}

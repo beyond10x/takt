@@ -1130,8 +1130,17 @@ impl Validator for ScorecardCompare {
 /// trusted, as everything else under no forge is: whoever moves it decides what is merged.
 #[derive(Clone)]
 pub enum Mainline {
-    /// The forge's `main`, read through [`Forge::target_tip`] when the turn reads it.
+    /// The forge's `main`, read through [`Forge::target_tip`] when the turn reads it, of a
+    /// forge that names no repository (a test's double).
     Forge(Rc<dyn Forge>),
+    /// The `main` of `repository` (`<owner>/<repo>`), read through `forge`'s
+    /// [`Forge::target_tip`]: the bot route's, which reads the repository its `origin` names.
+    Repository {
+        /// The forge that reads it.
+        forge: Rc<dyn Forge>,
+        /// The repository it reads `main` from.
+        repository: String,
+    },
     /// The case repository's `refs/heads/main`.
     Local,
 }
@@ -1143,18 +1152,34 @@ impl std::fmt::Debug for Mainline {
 }
 
 impl Mainline {
-    /// The mainline of the forge named `forge`, as a turn records it when it opens
+    /// The mainline of the forge `forge`, as a turn records it when it opens
     /// ([`crate::case::FORGE_FILE`]): `none` the local `main`, `bot` the bot route's report of
-    /// `main` for `tree` ([`crate::forge::BotRoute::for_tree`]); any other name is refused.
-    pub fn recorded(tree: &Path, forge: &str) -> Result<Self> {
-        match forge {
-            "none" => Ok(Self::Local),
-            "bot" => Ok(Self::Forge(Rc::new(crate::forge::BotRoute::for_tree(
-                tree,
-            )?))),
-            other => bail!(
-                "the turn records the forge `{}`, which takt does not read the mainline through: bot or none",
-                other.escape_debug()
+    /// `main` for `tree` ([`crate::forge::BotRoute::for_tree`]), from the repository `origin`
+    /// names now, which must be the one recorded beside it when one is (a file that names `bot`
+    /// alone, written before turns recorded a repository, takes `origin`'s); refused naming both
+    /// otherwise. Any other name, or `none` with a repository, is refused.
+    pub fn recorded(tree: &Path, forge: &crate::case::TurnForge) -> Result<Self> {
+        match (forge.name.as_str(), forge.repository.as_deref()) {
+            ("none", None) => Ok(Self::Local),
+            ("bot", recorded) => {
+                let bot = crate::forge::BotRoute::for_tree(tree)?;
+                if let Some(recorded) = recorded
+                    && recorded != bot.repository
+                {
+                    bail!(
+                        "the turn recorded the forge `bot` on {recorded} when it opened, and the origin remote now names {}; a turn reads the mainline from the repository it opened on, so point the origin remote at {recorded} again",
+                        bot.repository
+                    );
+                }
+                let repository = bot.repository.clone();
+                Ok(Self::Repository {
+                    forge: Rc::new(bot),
+                    repository,
+                })
+            }
+            _ => bail!(
+                "the turn records the forge `{}`, which takt does not read the mainline through: bot <owner>/<repo> or none",
+                forge.to_string().escape_debug()
             ),
         }
     }
@@ -1163,8 +1188,43 @@ impl Mainline {
     #[must_use]
     pub fn forge(&self) -> String {
         match self {
-            Self::Forge(forge) => forge.name().to_owned(),
+            Self::Forge(forge) | Self::Repository { forge, .. } => forge.name().to_owned(),
             Self::Local => "none".to_owned(),
+        }
+    }
+
+    /// The repository `main` is read from, `<owner>/<repo>`; none for the local `main` and a
+    /// forge that names none.
+    #[must_use]
+    pub fn repository(&self) -> Option<&str> {
+        match self {
+            Self::Repository { repository, .. } => Some(repository),
+            Self::Forge(_) | Self::Local => None,
+        }
+    }
+
+    /// The line a turn records it as when it opens ([`crate::case::FORGE_FILE`]): the forge's
+    /// name and, when it reads a named repository, that repository after one space.
+    #[must_use]
+    pub fn recorded_as(&self) -> String {
+        crate::case::TurnForge {
+            name: self.forge(),
+            repository: self.repository().map(str::to_owned),
+        }
+        .to_string()
+    }
+
+    /// The mainline as a summary names it: the forge's `main`, with its repository when it
+    /// names one, or with none the local `main`.
+    #[must_use]
+    pub fn named(&self) -> String {
+        let main = crate::promotion::MAINLINE;
+        match self {
+            Self::Forge(forge) => format!("{main} (forge: {})", forge.name()),
+            Self::Repository { forge, repository } => {
+                format!("{main} of {repository} (forge: {})", forge.name())
+            }
+            Self::Local => format!("the local {main}"),
         }
     }
 
@@ -1172,12 +1232,14 @@ impl Mainline {
     pub fn tip(&self, tree: &Path) -> Result<String> {
         let main = crate::promotion::MAINLINE;
         let tip = match self {
-            Self::Forge(forge) => forge.target_tip(tree, main).with_context(|| {
-                format!(
-                    "read the tip of {main}, the mainline, through the forge {}",
-                    forge.name()
-                )
-            })?,
+            Self::Forge(forge) | Self::Repository { forge, .. } => {
+                forge.target_tip(tree, main).with_context(|| {
+                    format!(
+                        "read the tip of {main}, the mainline, through the forge {}",
+                        forge.name()
+                    )
+                })?
+            }
             Self::Local => crate::git::run(
                 tree,
                 &[
@@ -1426,6 +1488,64 @@ fn merged_before_grant(
     )))
 }
 
+/// Why the case at `dir`'s grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] does not
+/// authorise recording a merge read from `mainline`: the grant read the mainline's tip from
+/// another repository than the one `mainline` reads now
+/// ([`crate::case::MainlineTip::repository`], [`Mainline::repository`]), the local `main`
+/// counting as no repository, so a grant given before grants recorded a repository holds no
+/// merge read through the bot route. Named both; none when they are the same, and none for a
+/// grant that records no tip, which [`merged_before_grant`] refuses. `held` says whether the
+/// mainline holds the candidate now, read only for a grant that records no repository: a grant
+/// given again would then come after the merge, and authorise none.
+fn grant_repository_refusal(
+    dir: &Path,
+    mainline: &Mainline,
+    held: impl FnOnce() -> bool,
+) -> Result<Option<String>> {
+    let capability = crate::validator::JUDGE_SURFACE_CAPABILITY;
+    let main = crate::promotion::MAINLINE;
+    let authority = crate::case::Authority::read(dir)?.unwrap_or_default();
+    let Some(decision) = authority.decision(capability) else {
+        return Ok(None);
+    };
+    let Some(at_grant) = &decision.mainline_tip else {
+        return Ok(None);
+    };
+    let now = mainline.repository();
+    if at_grant.repository.as_deref() == now {
+        return Ok(None);
+    }
+    // The remedy the refusal names is one `takt approve` accepts: a grant that records no
+    // repository is given again where the turn reads one (`crate::case::prepare_grant` replaces
+    // it then), and a grant that records one is never replaced at its revision.
+    let (read_at_grant, remedy) = match at_grant.repository.as_deref() {
+        Some(repository) => (
+            format!("read {main} from {repository}"),
+            format!("so resume the turn where it reads {main} of {repository}"),
+        ),
+        None => (
+            format!(
+                "records no repository it read {main} from (given under no forge, or before grants recorded one)"
+            ),
+            if held() {
+                format!(
+                    "and {main} holds the candidate already, so no grant given now authorises that merge: a grant authorises no merge made before it"
+                )
+            } else {
+                "so grant it again".to_owned()
+            },
+        ),
+    };
+    Ok(Some(format!(
+        "the grant given at {} {read_at_grant}, and this run reads {}, so the tip the grant recorded is not that mainline's; a grant authorises a merge read from the repository it read {main}'s tip from, {remedy}",
+        decision.granted_at,
+        match now {
+            Some(repository) => format!("{main} of {repository}"),
+            None => format!("the local {main}, no repository"),
+        }
+    )))
+}
+
 /// Whether `ancestor` is `descendant` or an ancestor of it, read on `mirror`; any answer of git
 /// but yes or no is an error.
 fn is_ancestor(mirror: &crate::git::Mirror, ancestor: &str, descendant: &str) -> Result<bool> {
@@ -1527,10 +1647,24 @@ impl CandidateMerged {
         let forge = self.mainline.forge();
         // The mainline as a summary names it: the forge's, or with none the local one, its
         // summaries then saying nothing of a forge.
-        let named = match self.mainline {
-            Mainline::Forge(_) => format!("{main} (forge: {forge})"),
-            Mainline::Local => format!("the local {main}"),
-        };
+        let named = self.mainline.named();
+        if self.action == Self::JUDGE_SURFACE_ACTION
+            && let Some(why) = grant_repository_refusal(&dir, &self.mainline, || {
+                self.mainline
+                    .tip(tree)
+                    .and_then(|tip| Mainline::holds(tree, &tip, revision))
+                    .is_ok_and(|holds| holds == Ok(true))
+            })?
+        {
+            return Ok((
+                nothing(format!(
+                    "{} at {} is granted, but {why}; nothing recorded",
+                    self.action,
+                    short(revision)
+                )),
+                false,
+            ));
+        }
         let tip = self.mainline.tip(tree)?;
         if self.action == Self::JUDGE_SURFACE_ACTION
             && let Some(why) = judge_surface_refusal(&dir, tree, &tip, revision)?

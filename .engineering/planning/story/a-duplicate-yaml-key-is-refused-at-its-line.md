@@ -2,13 +2,18 @@
 format: aep.planning-md/3
 id: story:a-duplicate-yaml-key-is-refused-at-its-line
 kind: story
-status: draft
+status: implemented
 title: A duplicate key in a YAML run configuration is refused at its line
 tags:
 - finding
 relations:
 - decomposes: epic:takt-as-a-loom-agent
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T19:06:34Z", actor: "human:timo", revision: 2, decided_on: {"recorded":{"test_result":1}}}
+- {from: "proposed", to: "active", at: "2026-10-28T19:06:34Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"test_result":1}}}
+- {from: "active", to: "implemented", at: "2026-10-28T23:19:44Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":2}}, executor: "agent:planner", correlation: "wave-40"}
 ---
 ## Outcome
 

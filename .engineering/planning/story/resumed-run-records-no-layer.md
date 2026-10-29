@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:resumed-run-records-no-layer
 kind: story
-status: draft
+status: archived
 title: A resumed run that takes no harness step records no harness or model layer
 tags:
 - finding
@@ -10,7 +10,9 @@ tags:
 refs:
 - provider: finding
   reference: resumed-run-records-no-layer
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "archived", at: "2026-10-28T19:04:01Z", actor: "human:timo", revision: 4, executor: "agent:planner"}
 ---
 # A resumed run that takes no harness step records no harness or model layer
 
@@ -40,3 +42,7 @@ healthy_exit: 0
 output: records none: the runs' layers differ
 source: .engineering/planning/approval-record/trial-2026-10-21-bb4072a3-hand-over.md
 ```
+
+## Archived
+
+Archived 2026-10-28 as a duplicate of story:validator-only-run-records-no-layer, filed by wave 39 with a checkable `expected_before` predicate. Both are the same cause: a run that takes only validator steps (a resume among them) records no harness or model layer, and `layers_differ` compares it with the case's other runs. This story carries no predicate; the defect is tracked there.

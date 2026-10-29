@@ -2,11 +2,13 @@
 format: aep.planning-md/3
 id: story:harness-tools-allowlist
 kind: story
-status: draft
+status: archived
 title: The Claude adapter names its tools with --tools, not only --disallowedTools
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "archived", at: "2026-10-28T19:04:01Z", actor: "human:timo", revision: 3, executor: "agent:planner"}
 ---
 ## Outcome
 
@@ -23,3 +25,7 @@ docs/runs/2026-10-18-efficiency-analysis.md (inferred there, not measured in iso
 ## Acceptance
 
 With the change, the first iteration of a takt step on scenario 1 costs at most the isolated arm's 7,448 tokens plus 10 %, and Bash stays unavailable to the harness.
+
+## Archived
+
+Archived 2026-10-28: done by story:claude-step-offers-tools-it-never-allows (implemented 2026-10-19), whose change passes `--tools` beside `--allowedTools` (`crates/takt/src/harness.rs`, the Claude adapter's arguments).

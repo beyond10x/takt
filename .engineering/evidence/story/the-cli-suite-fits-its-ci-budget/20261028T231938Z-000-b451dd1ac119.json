@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T23:19:38Z",
+  "actor": "human:timo",
+  "artifact": "story:the-cli-suite-fits-its-ci-budget",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "c6408f6f (wave/40, U2): check.yml timeout-minutes back at 30, asserted by ci_runs_the_check_tasks_commands_as_three_jobs, takt_gates_document 8 passed; 11 green check.yml runs on 2026-10-27/28, test-cli median 488 s max 611 s, test-library median 693 s max 1062 s, under 1200 s; unchanged since, to b0dd8047",
+    "reference": "c6408f6f"
+  }
+}

@@ -647,6 +647,7 @@ impl std::fmt::Display for Grant {
 /// and would refuse the others, which are the case's own record of the operator's decision;
 /// the revision is enforced by takt, not by Canon.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "AuthorityEntry", into = "AuthorityEntry")]
 pub struct AuthorityDecision {
     /// The capability decided, `repository.merge`.
     pub capability: String,
@@ -667,9 +668,80 @@ pub struct AuthorityDecision {
     /// the forge the improvement turn recorded at open ([`FORGE_FILE`]): what
     /// `candidate.merge_judge_surface` decides a merge made before the grant by, never a date.
     /// Recorded for a turn's grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] only; a
-    /// grant without one authorises no judge-surface merge.
+    /// grant without one authorises no judge-surface merge. Beside it in the file, the
+    /// repository it was read from ([`MainlineTip`]).
+    pub mainline_tip: Option<MainlineTip>,
+}
+
+/// An [`AuthorityDecision`] as `authority.yaml` holds it: the mainline's tip and its repository
+/// two keys of the entry, `mainline_tip` and `mainline_repository`. A repository with no tip
+/// beside it is no tip, and a grant without a tip authorises no judge-surface merge.
+#[derive(Clone, Serialize, Deserialize)]
+struct AuthorityEntry {
+    capability: String,
+    decision: Grant,
+    approver: String,
+    granted_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mainline_tip: Option<String>,
+    revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mainline_tip: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    mainline_repository: Option<String>,
+}
+
+impl From<AuthorityEntry> for AuthorityDecision {
+    fn from(entry: AuthorityEntry) -> Self {
+        Self {
+            capability: entry.capability,
+            decision: entry.decision,
+            approver: entry.approver,
+            granted_at: entry.granted_at,
+            revision: entry.revision,
+            mainline_tip: entry.mainline_tip.map(|tip| MainlineTip {
+                tip,
+                repository: entry.mainline_repository,
+            }),
+        }
+    }
+}
+
+impl From<AuthorityDecision> for AuthorityEntry {
+    fn from(decision: AuthorityDecision) -> Self {
+        let (mainline_tip, mainline_repository) = decision
+            .mainline_tip
+            .map_or((None, None), |at| (Some(at.tip), at.repository));
+        Self {
+            capability: decision.capability,
+            decision: decision.decision,
+            approver: decision.approver,
+            granted_at: decision.granted_at,
+            revision: decision.revision,
+            mainline_tip,
+            mainline_repository,
+        }
+    }
+}
+
+/// The mainline's tip a judge-surface grant records ([`AuthorityDecision::mainline_tip`]), and
+/// the repository the forge read it from: `<owner>/<repo>` for the bot route, none for the
+/// local `main` (`--forge none`) and a grant given before grants recorded one. A merge
+/// observation reading the mainline from another repository is held to nothing
+/// (`candidate.merge_judge_surface`). It dereferences to the tip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MainlineTip {
+    /// The commit the mainline was at, `mainline_tip` in `authority.yaml`.
+    pub tip: String,
+    /// The repository the tip was read from, `mainline_repository` beside it.
+    pub repository: Option<String>,
+}
+
+impl std::ops::Deref for MainlineTip {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.tip
+    }
 }
 
 impl AuthorityDecision {
@@ -1107,7 +1179,9 @@ pub fn grant(tree: &Path, id: &str, capability: &str, approver: &str) -> Result<
 /// are about no single artifact ([`LoadedProtocol::grant_subject`]), a case that is not at the
 /// gate for the capability (its latest decision does not find an action requiring it
 /// approval-required, or was computed at another revision of that artifact than the case is at
-/// now), and a capability the case already decides at that revision. A grant given at another
+/// now), and a capability the case already decides at that revision, but for a turn's
+/// judge-surface grant whose tip records no repository ([`records_no_repository`]), which a grant
+/// reading a repository replaces. A grant given at another
 /// revision is replaced: it authorises nothing here, and Canon refuses a capability decided
 /// twice. An improvement turn's grant of [`crate::validator::JUDGE_SURFACE_CAPABILITY`] records
 /// the mainline's tip read once the grant's instant is taken ([`mainline_at_grant`]), none for a
@@ -1216,14 +1290,41 @@ pub fn prepare_grant(
         );
     }
     let mut authority = Authority::read(&dir)?.unwrap_or_default();
-    if let Some(decided) = authority.decision(capability)
-        && decided.applies_at(Some(&revision))
+    let judge_surface_turn =
+        protocol == TURN_PROTOCOL && capability == crate::validator::JUDGE_SURFACE_CAPABILITY;
+    // The decision this grant may replace at its own revision: only a turn's judge-surface
+    // grant whose tip records no repository, which authorises no merge read through the bot
+    // route (the merge's refusal asks for it again); any other decision there is refused.
+    let unpinned = match authority.decision(capability) {
+        Some(decided) if decided.applies_at(Some(&revision)) => {
+            let already = format!(
+                "the case {id} already decides {capability} at {revision}: {} by {} at {}",
+                decided.decision, decided.approver, decided.granted_at
+            );
+            if !(judge_surface_turn && records_no_repository(decided)) {
+                bail!("{already}");
+            }
+            Some(already)
+        }
+        _ => None,
+    };
+    let granted_at = crate::now();
+    // A turn's judge-surface grant records the mainline's tip, read after its instant, so a
+    // merge made before the grant is found by ancestry, never by a date.
+    let mainline_tip = if judge_surface_turn {
+        mainline_at_grant(tree, &dir, id)?
+    } else {
+        None
+    };
+    // A grant that records no repository is replaced only by one that records a repository.
+    if let Some(already) = unpinned
+        && mainline_tip
+            .as_ref()
+            .is_none_or(|tip| tip.repository.is_none())
     {
         bail!(
-            "the case {id} already decides {capability} at {revision}: {} by {} at {}",
-            decided.decision,
-            decided.approver,
-            decided.granted_at
+            "{already}; it records no repository it read {} from, and this grant would read none either",
+            crate::promotion::MAINLINE
         );
     }
     // A decision on the capability at another revision authorises nothing at this one; the
@@ -1231,15 +1332,6 @@ pub fn prepare_grant(
     authority
         .decisions
         .retain(|decision| decision.capability != capability);
-    let granted_at = crate::now();
-    // A turn's judge-surface grant records the mainline's tip, read after its instant, so a
-    // merge made before the grant is found by ancestry, never by a date.
-    let mainline_tip =
-        if protocol == TURN_PROTOCOL && capability == crate::validator::JUDGE_SURFACE_CAPABILITY {
-            mainline_at_grant(tree, &dir, id)?
-        } else {
-            None
-        };
     authority.decisions.push(AuthorityDecision {
         capability: capability.to_owned(),
         decision: Grant::Granted,
@@ -1264,20 +1356,37 @@ pub fn prepare_grant(
     })
 }
 
+/// Whether `decided` is a grant whose mainline tip records no repository it was read from
+/// ([`MainlineTip::repository`]): one given under no forge, or before grants recorded one.
+fn records_no_repository(decided: &AuthorityDecision) -> bool {
+    decided.decision == Grant::Granted
+        && decided
+            .mainline_tip
+            .as_ref()
+            .is_some_and(|tip| tip.repository.is_none())
+}
+
 /// The commit the mainline is at now for the turn `id` at `dir` under `tree`, read through the
 /// forge the turn recorded when it opened ([`turn_forge`],
-/// [`crate::improvement::Mainline::recorded`]): what its judge-surface grant records. None for
-/// a turn that recorded no forge, whose grant then authorises no judge-surface merge; a tip that
-/// cannot be read is an error, and nothing is written then.
-fn mainline_at_grant(tree: &Path, dir: &Path, id: &str) -> Result<Option<String>> {
+/// [`crate::improvement::Mainline::recorded`]), with the repository it was read from: what its
+/// judge-surface grant records. None for a turn that recorded no forge, whose grant then
+/// authorises no judge-surface merge; a forge whose repository is another than the one the turn
+/// recorded, or a tip that cannot be read, is an error, and nothing is written then.
+fn mainline_at_grant(tree: &Path, dir: &Path, id: &str) -> Result<Option<MainlineTip>> {
     let main = crate::promotion::MAINLINE;
     let Some(forge) = turn_forge(dir)? else {
         return Ok(None);
     };
-    let mainline = crate::improvement::Mainline::recorded(tree, &forge)?;
-    mainline.tip(tree).map(Some).with_context(|| {
+    let mainline = crate::improvement::Mainline::recorded(tree, &forge).with_context(|| {
+        format!("the grant to the turn {id} reads {main} through the forge it recorded; nothing was written")
+    })?;
+    let tip = mainline.tip(tree).with_context(|| {
         format!("the tip of {main} at this grant to the turn {id} could not be read; nothing was written")
-    })
+    })?;
+    Ok(Some(MainlineTip {
+        tip,
+        repository: mainline.repository().map(str::to_owned),
+    }))
 }
 
 /// What `story.yaml` holds: the story the case was opened for.
@@ -3533,14 +3642,14 @@ impl CaseDir {
     /// independence. The sha256 of the binary that judges the turn goes into [`JUDGE_FILE`], and
     /// the install root given, an existing directory named canonically, into
     /// [`INSTALL_ROOT_FILE`]; any other root is refused before anything is written. The forge
-    /// given goes into [`FORGE_FILE`]; a name that is empty or holds white space is refused
-    /// before anything is written.
+    /// given goes into [`FORGE_FILE`]; a line that is not a name and, after one space, a
+    /// repository ([`TurnForge::parse`]) is refused before anything is written.
     pub fn open_turn(&mut self, opening: &TurnOpening) -> Result<()> {
         if let Some(forge) = &opening.forge
-            && (forge.is_empty() || forge.chars().any(|c| c.is_whitespace() || c.is_control()))
+            && let Err(why) = TurnForge::parse(forge)
         {
             bail!(
-                "the forge `{}` is no forge's name; a turn records the forge it reads the mainline through",
+                "the forge `{}` {why}; a turn records the forge it reads the mainline through",
                 forge.escape_debug()
             );
         }
@@ -3805,10 +3914,11 @@ pub struct TurnOpening {
     /// installed binary under, recorded at open ([`INSTALL_ROOT_FILE`]); none, and it is read
     /// from the environment when the validator observes.
     pub install_root: Option<PathBuf>,
-    /// The forge whose mainline the turn reads ([`crate::improvement::Mainline::forge`]: `bot`,
-    /// or `none` for the local `main`), recorded at open ([`FORGE_FILE`]) for `takt approve` to
-    /// read the mainline's tip at a judge-surface grant through; none records nothing, and such
-    /// a grant records no tip and authorises no judge-surface merge.
+    /// The forge whose mainline the turn reads ([`crate::improvement::Mainline::recorded_as`]:
+    /// `bot` and, after one space, the repository it reads `main` from, or `none` for the local
+    /// `main`; [`TurnForge`]), recorded at open ([`FORGE_FILE`]) for `takt approve` to read the
+    /// mainline's tip at a judge-surface grant through; none records nothing, and such a grant
+    /// records no tip and authorises no judge-surface merge.
     pub forge: Option<String>,
 }
 
@@ -3837,24 +3947,78 @@ pub fn install_root_of(case_dir: &Path) -> Result<Option<PathBuf>> {
     }
 }
 
-/// The file of an improvement turn's case that holds the forge it was opened with, its name on
-/// one line ([`TurnOpening::forge`]).
+/// The file of an improvement turn's case that holds the forge it was opened with on one line:
+/// its name and, for a forge that reads a named repository's `main` (the bot route), that
+/// repository after one space, `bot <owner>/<repo>` ([`TurnOpening::forge`], [`TurnForge`]).
 pub const FORGE_FILE: &str = "forge";
 
+/// The forge a turn recorded when it opened ([`FORGE_FILE`]): its name, and the repository it
+/// reads `main` from. `none` names no repository; nor does `bot` in a file written before turns
+/// recorded one, which still reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnForge {
+    /// The forge's name, `bot` or `none`.
+    pub name: String,
+    /// The repository, `<owner>/<repo>` for the bot route.
+    pub repository: Option<String>,
+}
+
+impl TurnForge {
+    /// The forge `line` names, a name and an optional repository after one space; why it names
+    /// none: an empty part, a part that holds white space or a control character, or a third
+    /// part.
+    pub fn parse(line: &str) -> std::result::Result<Self, &'static str> {
+        let mut parts = line.split(' ');
+        let name = parts.next().unwrap_or_default();
+        let repository = parts.next();
+        if parts.next().is_some() {
+            return Err("names more than a forge and its repository");
+        }
+        let plain = |part: &str| {
+            !part.is_empty() && !part.chars().any(|c| c.is_whitespace() || c.is_control())
+        };
+        if !plain(name) {
+            return Err("is no forge's name");
+        }
+        if repository.is_some_and(|repository| !plain(repository)) {
+            return Err("names no repository after its name");
+        }
+        Ok(Self {
+            name: name.to_owned(),
+            repository: repository.map(str::to_owned),
+        })
+    }
+
+    /// The repository as a refusal names it, or that it names none.
+    #[must_use]
+    pub fn shown_repository(repository: Option<&str>) -> String {
+        repository.map_or_else(|| "no repository".to_owned(), str::to_owned)
+    }
+}
+
+impl std::fmt::Display for TurnForge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)?;
+        if let Some(repository) = &self.repository {
+            write!(f, " {repository}")?;
+        }
+        Ok(())
+    }
+}
+
 /// The forge the turn at `case_dir` was opened with ([`FORGE_FILE`]); none when it recorded none.
-pub fn turn_forge(case_dir: &Path) -> Result<Option<String>> {
+pub fn turn_forge(case_dir: &Path) -> Result<Option<TurnForge>> {
     let path = case_dir.join(FORGE_FILE);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
-            let forge = text.strip_suffix('\n').unwrap_or(&text);
-            if forge.is_empty() || forge.chars().any(|c| c.is_whitespace() || c.is_control()) {
-                bail!(
-                    "{} names `{}`, which is no forge's name",
+            let line = text.strip_suffix('\n').unwrap_or(&text);
+            TurnForge::parse(line).map(Some).map_err(|why| {
+                anyhow!(
+                    "{} names `{}`, which {why}",
                     path.display(),
-                    forge.escape_debug()
-                );
-            }
-            Ok(Some(forge.to_owned()))
+                    line.escape_debug()
+                )
+            })
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
@@ -3862,21 +4026,36 @@ pub fn turn_forge(case_dir: &Path) -> Result<Option<String>> {
 }
 
 /// Why a resume of the case `id` at `case_dir` by a run whose forge is `run_forge` (`bot`, or
-/// `none` for the local `main`, [`crate::improvement::Mainline::forge`]) is refused before
-/// anything is written, or none: a turn reads the mainline through the forge it recorded when it
-/// opened ([`turn_forge`]), `takt approve` at a judge-surface grant and the merge validators
-/// alike, so a run through another forge would read another `main`. A case that recorded no
-/// forge, any case but a turn and a turn opened before turns recorded one, is not refused here.
-pub fn turn_forge_refusal(case_dir: &Path, id: &str, run_forge: &str) -> Result<Option<String>> {
+/// `none` for the local `main`, [`crate::improvement::Mainline::forge`]), reading `main` from
+/// `run_repository` ([`crate::improvement::Mainline::repository`]), is refused before anything
+/// is written, or none: a turn reads the mainline through the forge it recorded when it opened
+/// ([`turn_forge`]), from the repository it recorded, `takt approve` at a judge-surface grant
+/// and the merge validators alike, so a run through another forge, or the same forge on another
+/// repository, would read another `main`. A case that recorded no forge, any case but a turn
+/// and a turn opened before turns recorded one, is not refused here; nor, for its repository,
+/// is a turn that recorded none beside its forge, whose grant's record holds its merge.
+pub fn turn_forge_refusal(
+    case_dir: &Path,
+    id: &str,
+    run_forge: &str,
+    run_repository: Option<&str>,
+) -> Result<Option<String>> {
     let Some(recorded) = turn_forge(case_dir)? else {
         return Ok(None);
     };
-    if recorded == run_forge {
-        return Ok(None);
+    if recorded.name != run_forge {
+        let name = &recorded.name;
+        return Ok(Some(format!(
+            "{TURN_PROTOCOL}: the turn {id} recorded the forge `{name}` when it opened, and this run's forge is `{run_forge}`; a turn reads the mainline through the forge it opened with, `takt approve` and the merge validators alike, so resume it with `--forge {name}`; nothing was resumed"
+        )));
     }
-    Ok(Some(format!(
-        "{TURN_PROTOCOL}: the turn {id} recorded the forge `{recorded}` when it opened, and this run's forge is `{run_forge}`; a turn reads the mainline through the forge it opened with, `takt approve` and the merge validators alike, so resume it with `--forge {recorded}`; nothing was resumed"
-    )))
+    match recorded.repository.as_deref() {
+        Some(repository) if Some(repository) != run_repository => Ok(Some(format!(
+            "{TURN_PROTOCOL}: the turn {id} recorded the forge `{run_forge}` on {repository} when it opened, and this run's forge `{run_forge}` reads {}; a turn reads the mainline from the repository it opened on, `takt approve` and the merge validators alike, so resume it where the origin remote names {repository}; nothing was resumed",
+            TurnForge::shown_repository(run_repository)
+        ))),
+        _ => Ok(None),
+    }
 }
 
 /// The case input a turn's judge surface is, `surface`.
@@ -4181,7 +4360,7 @@ pub fn turn_opening(
         title: finding_title(finding, filed.as_deref().unwrap_or_default()),
         judge_sha256: digest,
         install_root: None,
-        forge: Some(mainline.forge()),
+        forge: Some(mainline.recorded_as()),
     })
 }
 

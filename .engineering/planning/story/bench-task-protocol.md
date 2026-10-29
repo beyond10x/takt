@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:bench-task-protocol
 kind: story
-status: draft
+status: implemented
 title: 'A protocol for a benchmark task: visible tests, no forge, the benchmark''s own tests held out'
 summary: 'protocols/bench-task/1.yaml: tests.pass on the visible test command, outcome completed, no pull request or merge'
 relations:
@@ -11,13 +11,17 @@ relations:
 scope:
 - confidence: inferred
   path: protocols/bench-task/1.yaml
-revision: 6
+revision: 10
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T17:56:51Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-28T17:56:51Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-28T23:19:43Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}, executor: "agent:planner", correlation: "wave-40"}
 ---
 # Story: bench-task-protocol
 
 ## Outcome
 
-takt runs a benchmark task under its own `protocol/1` document, `bench.task/1`: one claim `tests.pass` on the task's visible test command, the judgement actions to inspect, edit and test, no forge, pull request or merge, and outcomes `completed` and `abandoned`. The benchmark's own grading tests stay outside the case, as a held-out acceptance check does.
+takt runs a benchmark task under its own `protocol/1` document, `bench.task/1`: two claims, `tests.pass` on the task's visible test command (validator evidence) and `change.handed_over` (a handover choice record that takt writes, gating no outcome alone), the judgement actions to inspect, edit and test, no forge, pull request or merge, and outcomes `completed` and `abandoned`. The benchmark's own grading tests stay outside the case, as a held-out acceptance check does.
 
 ## Context
 

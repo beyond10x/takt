@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T19:03:31Z",
+  "actor": "human:timo",
+  "artifact": "story:takt-lists-a-protocols-settings",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "check run 40738419298 on main 338082d8 (release 0.18.0), all three task check jobs success: tests/protocol_show.rs 5 passed and takt-cli tests/protocol_show_cli.rs 4 passed, 0 failed; delivered in b6631593",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/40738419298"
+  }
+}

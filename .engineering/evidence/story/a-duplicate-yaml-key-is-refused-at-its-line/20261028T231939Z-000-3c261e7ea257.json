@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T23:19:39Z",
+  "actor": "human:timo",
+  "artifact": "story:a-duplicate-yaml-key-is-refused-at-its-line",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "dcae6b06 (wave/40, U4 fix round 1 on takt's own run 7ca2db5d): run_config_adv1 6 passed, its case asserting line 3 and the key for YAML as for TOML; run_config_dup_adv2 10 passed (8 red before); --lib 170 passed; clippy and fmt exit 0; run_config.rs and both tests unchanged since, to b0dd8047",
+    "reference": "dcae6b06"
+  }
+}

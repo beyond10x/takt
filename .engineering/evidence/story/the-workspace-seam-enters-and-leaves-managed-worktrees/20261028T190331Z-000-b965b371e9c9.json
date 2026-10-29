@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T19:03:31Z",
+  "actor": "human:timo",
+  "artifact": "story:the-workspace-seam-enters-and-leaves-managed-worktrees",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "check run 40738419298 on main 338082d8 (release 0.18.0), all three task check jobs success: tests/workspace_seam.rs 6 passed, 0 failed; delivered in 636899e2, released in 0.16.0",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/40738419298"
+  }
+}

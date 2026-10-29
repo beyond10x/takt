@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-workspace-seam-enters-and-leaves-managed-worktrees
 kind: story
-status: active
+status: implemented
 title: The dispatcher's Workspace seam creates, leases, archives and finishes managed worktrees
 summary: continuous orchestration owns the outer lifecycle, no --worktree flag
 tags:
@@ -23,10 +23,11 @@ scope:
   path: crates/takt/tests/workspace_seam.rs
 - confidence: inferred
   path: ess/domains/takt.yaml
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T12:00:46Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":3}}}
 - {from: "proposed", to: "active", at: "2026-10-27T12:00:46Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":3}}}
+- {from: "active", to: "implemented", at: "2026-10-28T19:03:32Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":2,"review_outcome":3}}, executor: "agent:planner"}
 ---
 # Story: the-workspace-seam-enters-and-leaves-managed-worktrees
 

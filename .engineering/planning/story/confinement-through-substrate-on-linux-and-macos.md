@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:confinement-through-substrate-on-linux-and-macos
 kind: story
-status: active
+status: implemented
 title: takt confines through Substrate on Linux and macOS; its own Seatbelt, unshare and bwrap code is retired
 summary: 'ADR 0109 hop T1: Substrate''s confinement contract is takt''s only confinement'
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:takt-on-loom-sdk
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T11:42:53Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-27T11:42:53Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-28T19:03:33Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}, executor: "agent:planner"}
 ---
 # Story: confinement-through-substrate-on-linux-and-macos
 

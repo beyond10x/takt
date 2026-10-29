@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T23:19:39Z",
+  "actor": "human:timo",
+  "artifact": "story:a-turn-pins-the-repository-of-its-forge",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "targeted tests at b0dd8047 (wave/40, U3 fix round 2): self_improvement_cli 57 passed, w40_adv_turn_pin 3 passed, w40_adv2_regrant 6 passed; clippy exit 0; check-citations 1311 of 1311 resolved",
+    "reference": "b0dd8047"
+  }
+}
