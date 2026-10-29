@@ -53,7 +53,8 @@ readers of a run record (`scorecard`, `trace`, `report`, `view`).
 
 - Decides: what a step may touch (the step guard), which validator is due, the two pre-checks
   before each step (`ApprovalRequired` when only a grant is left, `Unperformable` when nothing in
-  the run can perform what is left), the two test stops (`RedBase`, `RepeatedTestFailure`),
+  the run can perform what is left), the two test stops (`RedBase`, `RepeatedTestFailure`) and
+  the gate stop (`RepeatedGateFailure`),
   budgets and the free-disk check.
 - Never decides: a claim, an obligation or an outcome. takt calls no Canon evaluation of its
   own; a test fails the build if it does (`no_own_evaluation.rs`). It never writes evidence from

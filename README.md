@@ -39,7 +39,7 @@ the plan, and no container image is published: you build one from `Dockerfile`.
 
 ## Status
 
-0.18.1 is the latest release. Under `story.delivery/2` a red gate admits the edit once the tests pass, so a gate failure no test reads can be fixed. Since 0.18.0 a story case on `story.delivery/2` writes the `tests_change` and
+0.19.0 is the latest release. takt ships its own `story.delivery/3`, a failed gate or test run reaches the next prompt as what failed and where, a run stops `RepeatedGateFailure` after three red gates in a row, and the console opens with the story and shows what each step cost. Since 0.18.1 a red gate under `story.delivery/2` admits the edit once the tests pass; since 0.18.0 a story case on `story.delivery/2` writes the `tests_change` and
 `paths_changed` evidence its tests-first guards read, a gates file the gate would refuse stops the
 run at open, and a bot merge commit names the story and its evidence. What exists and what is planned: [Status](https://beyond10x.github.io/takt/docs/status).
 Prebuilt binaries for Linux (x86_64, aarch64) and macOS (aarch64) are on the

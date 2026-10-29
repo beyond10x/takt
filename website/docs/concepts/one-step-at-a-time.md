@@ -4,7 +4,7 @@ sidebar_label: The step loop and the frontier
 sidebar_position: 3
 description: The loop takt runs, what the frontier is, which step comes next, and what a judgement step may do.
 lede: A run is a loop of evaluate, pick one step, perform it, observe, and evaluate again; the frontier Canon computes decides what may be done, and a harness is offered only what the frontier admits and no validator performs.
-source: crates/takt/src/lib.rs, run.rs (the loop in Run::run_held, Shape::for_harness, Shape::for_stateless), harness.rs (SessionHarness, ClaudeCode::ISOLATION, ClaudeCode::TOOLS), frontier.rs; docs/design/takt.md § 3; takt run --help at 0.14.0; a scratch run of takt 0.14.0
+source: crates/takt/src/lib.rs, run.rs (the loop in Run::run_held, Shape::for_harness, Shape::for_stateless), harness.rs (SessionHarness, ClaudeCode::ISOLATION, ClaudeCode::TOOLS, prompt_with, red_tests_block, tests_path_block, failed_block, earlier_gate_line, CHECKS_RULE), obligations.rs (block, commands_at), console.rs (may, may_now), frontier.rs; docs/design/takt.md § 3; takt run --help at 0.14.0; a scratch run of takt 0.14.0
 ---
 
 # The step loop and the frontier
@@ -30,9 +30,14 @@ and the instant to:
 - each **action**'s status;
 - the **legitimate outcomes**.
 
-takt writes each evaluation as `decisions/NNNN.json` in the case and prints it as one line. A
-case keeps each run's latest alone by default; `--records trial` keeps every one ([Records
+takt writes each evaluation as `decisions/NNNN.json` in the case. A case keeps each run's latest
+alone by default; `--records trial` keeps every one ([Records
 profiles](../reference/configuration.md#records-profiles)).
+
+From 0.19.0 the console says the frontier as what the run may do: `may: <action> …` once, at the
+first decision, then `may now: +<added> -<removed>` only when the admissible set changes.
+`takt run --verbose` also prints the full `frontier:` line at every decision, as takt printed it
+before 0.19.0 and as the example below shows.
 
 ## The frontier
 
@@ -44,7 +49,8 @@ The frontier is the actions of the protocol with their status at this evaluation
 | `approval-required` | its precondition holds, but it requires a capability the case holds no grant of |
 | `blocked` | its precondition does not hold, or the capability is denied |
 
-Here is a real run on a repository whose one test passes. Before the tests ran, the merge was
+Here is a real run of takt 0.14.0 on a repository whose one test passes. Before the tests ran,
+the merge was
 `blocked`; once a `test_result` pass is recorded at this revision, `implementation.verified` is
 true and the merge becomes `approval-required`:
 
@@ -95,6 +101,44 @@ it.
 - A proposal that names an action not offered, or changes what that action may not change, is
   refused and nothing of it is kept ([Capabilities and approvals](./capabilities-and-approvals.md)).
 - What the harness says is a trace in the record, never evidence.
+
+## A judgement step's prompt
+
+The prompt is the same for every harness but for how it names the scope files and its rules. In
+order, it holds:
+
+1. **The failed tests, first.** From 0.19.0, when the last `tests.run` failed, the prompt opens
+   with `The last test run failed`: each failing test and its last error line, fenced as data
+   the command printed, and the ask to act on them first. For a step that offers
+   `implementation.edit`, a list follows of where each failing test's assertion is,
+   `- <test> at <file>:<line>[:<col>]`, read from the runner's output, with the ask to follow the
+   calls from each assertion to the behaviour the intent names and change every function on that
+   path.
+2. **The intent**, and the files of the story's `## Scope`: attached as `@<path>` for Claude
+   Code, or named as given in full for Codex.
+3. **The protocol, the step, the claims and the open obligations.**
+4. **The repository obligations**: each gate of the gates document at the case's base, with its
+   status at this revision. From 0.19.0 each line also names the gate's commands,
+   ``Runs `<command>`.``, read from `.engineering/assertions-project.yaml` at the case's base:
+   a command belongs to a gate when one of the gate's assertions names it. The commands are left out when
+   one has a credential's shape or the block does not pass the secret scan.
+5. **The failed gates.** After a red gate, `The last gate run failed`: for each failed gate, the
+   lines its command printed that name what failed, fenced as data, and that a file the failed
+   gates' output names is part of this change even outside the story's Scope. From 0.19.0 paths
+   under the tree are written relative to it, and a line the secret scan refuses is withheld on
+   its own; the gate's heading says how many lines were withheld.
+6. **Where the gate stands.** From 0.19.0, when the gate failed at an earlier revision and has not
+   run at this one, one line says so: `The gate last failed at <revision> on <gates>; it has not
+   run at this revision; it runs after <actions>.`
+7. **The change so far, the offered actions** with their meaning, the write actions that are not
+   admissible now with what their precondition lacks, the actions that need an approval, and
+   `decline`.
+8. **The rules.** For a harness that runs commands (Codex) and a step that may change files,
+   when the obligations name commands, from 0.19.0 the rules ask it to run each named command that
+   compiles nothing and changes no file (a format, specification or citation check, never a
+   build, test or lint) before it ends the step, and to fix what it reports at its cause.
+
+`takt replay` rebuilds a recorded step's prompt from the case and checks it byte for byte.
 
 The harness session is hermetic. metaharness builds the child's environment from its own
 allowlist, so no variable takt withholds reaches it, and every child takt starts gets a timeout

@@ -3,7 +3,7 @@ title: Protocol and case
 sidebar_position: 2
 description: A protocol says what must be true before work counts; a case is one unit of work held to one protocol, kept as files in the repository.
 lede: takt holds every unit of work as a case on a Canon protocol, read from the engineering protocols' built-ins, and keeps the case as files in the repository so that any later run can resume it and any reviewer can replay it.
-source: takt protocols and takt run --help at 0.14.0; engineering-protocols 0.10.0 protocols/software-change/1.yaml and protocols/story-delivery/1.yaml; crates/takt/src/case.rs, frontier.rs, protocol.rs; CHANGELOG.md 0.13.0; a scratch run of takt 0.14.0
+source: takt protocols and takt run --help at 0.14.0; engineering-protocols 0.10.0 protocols/software-change/1.yaml and protocols/story-delivery/1.yaml, 0.12.2 protocols/story-delivery/2.yaml; protocols/story-delivery/3.yaml and protocols/bench-task/1.yaml; crates/takt/src/protocol.rs (OWN, builtins); crates/takt-cli/tests/bench_task_cli.rs; crates/takt/src/case.rs, frontier.rs, protocol.rs; CHANGELOG.md 0.13.0; a scratch run of takt 0.14.0
 ---
 
 # Protocol and case
@@ -25,13 +25,14 @@ takt has no Rust model of a protocol. Canon reads the document and computes ever
 
 ### The protocols takt runs
 
-Since 0.13.0 takt holds no protocol of its own: the protocols it runs are built-ins of
+The protocols takt runs are built-ins of
 [engineering protocols](https://beyond10x.github.io/engineering-protocols/)
-([GitHub](https://github.com/beyond10x/engineering-protocols)) 0.10.0. `takt protocols` lists
-them all:
+([GitHub](https://github.com/beyond10x/engineering-protocols)), 0.12.2 from takt 0.19.0, and one
+of takt's own: `story.delivery/3`, the document `protocols/story-delivery/3.yaml` of this
+repository, embedded in the binary from 0.19.0. `takt protocols` lists them all, takt's own after
+the registry's `story-delivery/2`:
 
-```console
-$ takt protocols
+```text
 eval-gated-change/1
 incident-response/1
 loop-improvement/1
@@ -40,19 +41,33 @@ self-improvement/1
 software-change/1
 story-delivery/1
 story-delivery/2
+story-delivery/3
 support-triage/1
 ```
 
-Four of them are the ones takt's defaults and validators are written for. The last three were
-takt's own until 0.13.0 moved them into engineering protocols 0.10.0.
+The ones takt's defaults and validators are written for:
 
 | protocol | a case is | opened by |
 |---|---|---|
 | `software.change/1` | one change for an intent | `--intent` (the default protocol) |
 | `story.delivery/2` | one story of the planning store, delivered to a merged pull request, with the case inputs `tests_first` and `gate_on` | a story the store gives (the default; [defaults](../reference/protocol-defaults.md)) |
+| `story.delivery/3` | the same story delivery, takt's own revision of `/2` (below) | `--protocol story.delivery/3` |
 | `story.delivery/1` | the same story delivery with no case input | `--protocol story.delivery/1` |
 | `self.improvement/1` | one improvement turn of takt itself | `--protocol self.improvement/1` |
 | `loop.improvement/1` | one change to the improvement loop | `--protocol loop.improvement/1` |
+
+`story.delivery/3` is `story.delivery/2` of engineering protocols 0.12.2 with one change of rule:
+`change.handover` is not admissible while the tests fail at the current revision. Its words for
+the two actions say what a run does after a red gate: `change.handover` says that the gate runs
+at the handed-over revision and that a red gate admits `implementation.edit` again, and
+`implementation.edit` says that a failure no test reads (formatting, lint, citations, another
+platform) is fixed where it is. Its actions, inputs and artifacts are those of `/2`, and so are
+its input defaults.
+
+`bench.task/1` (`protocols/bench-task/1.yaml`, from 0.19.0) is a file, not a built-in: one
+benchmark task, worked under `--protocol protocols/bench-task/1.yaml --forge none`. It has no
+pull request and no merge; a case is `completed` once the task's visible tests pass at the
+revision the harness handed over. The benchmark's own grading tests stay outside the case.
 
 `takt protocols` prints names with a hyphen (`story-delivery/1`); the cases, the help and these
 pages write them with a dot (`story.delivery/1`). `--protocol` takes either spelling, and the

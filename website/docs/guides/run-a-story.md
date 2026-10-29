@@ -3,15 +3,17 @@ title: Run a story
 sidebar_position: 3
 description: Prepare a repository for story delivery, let takt take the next ready story or the one you name, follow its steps to a pull request, and grant the merge.
 lede: takt delivers one story of the planning store per case, through tests and gates it runs itself, and the merge waits for your grant.
-source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; the aep commands of step 1 run with aep 0.78.0 in a fresh repository, 2026-10-27; docs/design/takt.md § 4
+source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/console.rs, run.rs (said_line, gate_stop); docs/runs/2026-10-29-self-run-story-delivery.md; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; the aep commands of step 1 run with aep 0.78.0 in a fresh repository, 2026-10-27; docs/design/takt.md § 4
 ---
 
 # Run a story
 
 A story run takes a story from the repository's
 [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
-planning store and delivers it on the protocol `story.delivery/2`. takt does not write or rank
-stories; AEP keeps them, and `aep` is the tool you use to add one.
+planning store and delivers it on the protocol `story.delivery/2`, or, with `--protocol
+story.delivery/3`, on takt's own revision of it, which hands a change over only while its tests
+pass ([Protocol and case](../concepts/protocol-and-case.md#the-protocols-takt-runs)). takt does
+not write or rank stories; AEP keeps them, and `aep` is the tool you use to add one.
 
 ## 1. Prepare the repository
 
@@ -106,7 +108,8 @@ takt: --story story:nope: the store lists no story:nope; the frontier would not 
 
 ## 3. Follow the steps
 
-The run on `~/my-repo`, with the `frontier:` lines left out:
+The run on `~/my-repo`, on takt 0.14.0 and `story.delivery/1`, with the `frontier:` lines left
+out (from 0.19.0 the console reads as in [The console](#the-console) below):
 
 ```console
 frontier: took story:add-sub: Add a subtraction
@@ -149,6 +152,57 @@ stopped: Unperformable (pr.opened; nothing performs it without the forge); steps
    stopped `Unperformable`, exit 7. Before it stopped, it printed the candidate: the code commits
    replayed on `main`'s tip under the commit identity, kept at `refs/takt/candidates/<case>`.
    Merge or push it yourself, or run again with a forge.
+
+### The console
+
+From 0.19.0 a run's console opens with the story: `takt <version> · <story id>`, the story's
+title, and up to three lines of the first paragraph of its `## Outcome`. A line names the
+harness and the confinement. The frontier is said as what the run may do, `may:` once and then
+`may now: +<added> -<removed>` when that changes; `--verbose` adds the full `frontier:` line at
+each decision. Each step is one line: a validator's result, the failed tests or gates it names,
+and its duration; a harness step's duration, tokens, the cached input tokens among them, and its
+cost when the harness reports one. Before a harness step a `working` line names what it may do.
+The harness's hermetic verdict is printed once with what the harness said, and again only when
+it changes.
+
+The opening of a run on takt's own repository, from a development build that preceded 0.19.0 and
+printed `takt 0.18.0` (the record is
+[`docs/runs/2026-10-29-self-run-story-delivery.md`](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-29-self-run-story-delivery.md),
+run 15; the tree's path is written `<tree>` and the `case` line is cut at `…`):
+
+```console
+frontier: took story:duplicate-key-reader-limits: Three duplicate keys the YAML reader does not find at their line
+settings: protocol story.delivery/3 (flag); tests_first=required (flag); gate_on=after_handover (flag)
+takt 0.18.0 · story:duplicate-key-reader-limits
+  Three duplicate keys the YAML reader does not find at their line
+  Each of the three is refused at the duplicate's line, saying a key is held twice, and naming the
+  key when it is a declared name.
+case story-duplicate-key-reader-limits-20261029T013214Z on story.delivery/3 in <tree>; inputs tests_first=required(flag) gate_on=after_handover(flag); confinement none: …
+  harness codex 0.165.0 · confinement none
+harness: codex 0.165.0; advisory: H9 gap: the vendor is 0.165.0 and the adapter is pinned to ["0.153.4", "0.160.0"]; a verdict that changed because the reader changed must be visible as such
+  may: change.handover repository.inspect tests.run tests.write
+step 1: tests.run {} · pass · 14.8s
+  effect: the test command exited 0: pass; 19 passed, 0 failed, 3 ignored over 3 result lines
+  evidence: test_result pass
+step 2: codex working (may: change.handover tests.write)
+step 2: tests.write (codex) · 9.9s · 103.4k tok (88.3k cached)
+  said: Enable three duplicate-key regression cases [metaharness hermetic on: H1a unk, H1b unk, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 gap, H10 ok, H11 ok]
+  effect: committed 1 path(s); implementation is now 28f82ddc: crates/takt/tests/w40_adv_dup_and_pin.rs
+  evidence: tests_change -
+```
+
+The gate failed on format at step 8, the edit at step 9 fixed it, and the gate passed at step 13.
+With `--forge none` the run then stopped at the pull request:
+
+```console
+step 13: gate.run {} · pass · 11.6s
+  effect: the gates document .engineering/gates.yaml from wave/40 at 8b8ac758, pinned at open: pass; every gate true: specification, citations, changelog, format, lint; retained as gate-result-13.bundle.json
+  artifact: .takt/cases/story-duplicate-key-reader-limits-20261029T013214Z/artifacts/gate-result-13.bundle.json
+  evidence: gate_result pass
+  may now: +pr.open
+candidate: d8ffdee5e480c9c893ea4ab71ef3fd2b7bbffd28
+stopped: Unperformable (pr.opened; nothing performs it without the forge); steps 13, tokens 1087139, wall 4m07s, commits 3 (3 paths), case <tree>/.takt/cases/story-duplicate-key-reader-limits-20261029T013214Z
+```
 
 ## 4. With a forge
 
@@ -341,6 +395,7 @@ refused ([Approve a capability](./approve-a-capability.md)).
 | `Unperformable` | 7 | resumes the case; give it what was missing (a forge, a gates document) |
 | a budget, `StepRefused`, `NoProgress`, `NothingAdmissible` | 3 | resumes the case |
 | `RedBase`, `RepeatedTestFailure` | 3 | runs the tests again first and stops again while they fail the same way |
+| `RepeatedGateFailure` (0.19.0): three gate runs in a row, each at a new revision, failed the same gates | 3 | resumes the case; the row is read from the case's record, so the next gate run that fails the same gates stops it again |
 
 `--case <id>` resumes a named case instead. Every stop is explained in
 [How a run ends](../concepts/how-a-run-ends.md).
@@ -350,3 +405,10 @@ refused ([Approve a capability](./approve-a-capability.md)).
 The design's proof for a story, one ready story merged with no manual step but the merge grant,
 has not been recorded. The one recorded merge of a scenario, on 2026-10-18, took 4 invocations
 where 2 were the target.
+
+On 2026-10-29 takt delivered one of its own stories up to the pull request: five runs in a row on
+`story.delivery/3`, with Codex and `--forge none`, each passed the story's tests and the
+repository's five gates, handed the change over and stopped `Unperformable (pr.opened)`, exit 7.
+No run opened a pull request, read its CI or merged it, so delivery with a forge on takt's own
+repository is not proven
+([run record](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-29-self-run-story-delivery.md)).

@@ -3,7 +3,7 @@ title: Known limitations
 sidebar_position: 4
 description: What takt 0.14.0 does not do yet, what a run on a cluster still needs by hand, and which open story addresses each.
 lede: Each limitation below was met in a real run of takt as a Loom agent, and each takt one is an open story in the planning store.
-source: .engineering/planning/story (status active and draft, epic takt-as-a-loom-agent); CHANGELOG.md 0.12.0 to 0.14.0; Loom CHANGELOG 0.44.0
+source: .engineering/planning/story (status active and draft, epic takt-as-a-loom-agent; story:duplicate-key-reader-limits); CHANGELOG.md 0.12.0 to 0.14.0 and 0.19.0; Loom CHANGELOG 0.44.0; docs/runs/2026-10-29-self-run-story-delivery.md
 ---
 
 # Known limitations
@@ -27,9 +27,24 @@ told the failing lines, unresolved citations included.
 
 | limitation | what to do today | planned fix |
 |---|---|---|
-| A duplicate key in a YAML run configuration is refused at line 1, the line its mapping starts, with the general message of what the file may hold. TOML names the duplicate's own line. | Read the file for a repeated key. | YAML names the duplicate's line and key, as TOML does |
+| From 0.19.0 a duplicate key in a YAML run configuration is refused at its own line, named from the parser's error. Three shapes are still refused at the line the mapping starts, with the general message: a duplicate written as an alias key (`*k : 2`), a duplicate after a tagged key (`!!str model: x`), and a plain key ending in a colon written twice (`x:: 1`). The file is refused in each case; only the line and the key are lost. | Read the file for a repeated key. | `story:duplicate-key-reader-limits` |
 | A file the repository's git excludes (`.git/info/exclude`) still counts as a change a step made. | Keep a deployment's own files out of the checkout. | git-excluded files are not step changes |
 | Resuming an intent case without `--case`, in a repository with no planning store, is refused with "has no planning store". | Name the case: `takt run --case <id>`. | none planned yet |
+
+## A story with a forge is not proven yet
+
+On 2026-10-29 takt delivered one of its own stories, `story:duplicate-key-reader-limits`, up to
+the pull request: five runs in a row on `story.delivery/3`, with Codex and `--forge none`, each
+enabled the story's three ignored tests, edited the code, passed the tests and the repository's
+five gates, handed the change over and stopped `Unperformable (pr.opened; nothing performs it
+without the forge)`, exit 7. The runs used development builds without the work of waves 40 and
+42 that 0.19.0 also releases. The record is
+[`docs/runs/2026-10-29-self-run-story-delivery.md`](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-29-self-run-story-delivery.md).
+
+| limitation | what to do today |
+|---|---|
+| No run on this repository has opened a pull request, read its CI and merged it under a grant with `--forge bot`. Every delivery above ended at `pr.opened`. | Take the printed `candidate: <commit>` (`refs/takt/candidates/<case>`) and open its pull request yourself, or run again with a forge. |
+| In four of those five runs, the Codex session said it could not run the format and specification checks: `ess` was unavailable and rustup's home could not be written. Only the gate ran them, so a format failure cost one more edit and one more gate run. | Expect the first gate to find formatting under Codex; the gate's output reaches the next step's prompt. |
 
 ## Running under Loom
 
