@@ -14,7 +14,7 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:a-revision-without-code-is-no-new-attempt
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T06:37:36Z", actor: "human:timo", revision: 3}
 ---
@@ -73,3 +73,24 @@ path under `docs/`. A revision that changes only documentation no test reads sti
 
 0.19.0 ships this story's cases `#[ignore]`d, accepted at its release check as a tracked finding
 on the condition that each ignore's reason names this story.
+
+## Decision (wave 44)
+
+A first run declined this story (wave 44): in the scripted case nothing names `docs/fixture.txt`,
+so takt holds no information that tells it from documentation no test reads. The planner's
+decision, which settles that:
+
+- The rule is the first of the two in § Outcome: a path under `docs/`, `README.md` or
+  `CHANGELOG.md` is documentation unless a test file at the revision names it. A test file is a
+  path the case's test-writing steps changed (the paths the tests' own commits touched), and
+  "names it" is the path's text occurring in that file's content. A test in this repository that
+  reads a documentation file names its path, as `crates/takt-cli/tests/cases_under_dot_takt.rs`
+  names `docs/runs/`.
+- The scripted case is in this story's scope and may be changed so its tests file names the
+  fixture, as a real test does: the `Developer`'s first `tests.write` in
+  `crates/takt/tests/w42_adv_repeat_count.rs` writes a tests file whose content includes
+  `docs/fixture.txt` (for example a first line `# reads docs/fixture.txt` that the `Scripted`
+  validator does not count as a test name). The case's assertion (`RepeatedTestFailure`) does not
+  change.
+- The other case of that file and the cases of story:a-revision-without-code-is-no-new-attempt
+  keep passing unchanged: their documentation edits are to files no tests file names.
