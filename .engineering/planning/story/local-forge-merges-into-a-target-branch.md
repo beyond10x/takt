@@ -2,14 +2,18 @@
 format: aep.planning-md/3
 id: story:local-forge-merges-into-a-target-branch
 kind: story
-status: draft
+status: implemented
 title: A run delivers a story into a local target branch, --forge local
 summary: 'A local hub repository is the forge: takt pushes, opens a request record, runs local checks and merges the case into the source branch in the hub with a compare-and-swap.'
 tags:
 - priority:high
 relations:
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T04:44:13Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-29T04:44:13Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-29T05:12:57Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A run delivers a story into a local target branch, `--forge local`
 

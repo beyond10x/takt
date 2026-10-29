@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:credential-shape-sees-a-token-after-a-word-character
 kind: story
-status: draft
+status: implemented
 title: A credential after a word character is never withheld
 tags:
 - finding
@@ -18,7 +18,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: cited
   path: crates/takt/tests/failed_gate_lines.rs
-revision: 2
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T04:44:13Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-29T04:44:14Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-29T05:12:57Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A credential after a word character is never withheld
 

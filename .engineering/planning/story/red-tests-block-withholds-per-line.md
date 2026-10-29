@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:red-tests-block-withholds-per-line
 kind: story
-status: draft
+status: implemented
 title: The red tests' block is all or nothing under the secret scan
 summary: A red test run's block makes no path relative and withholds no single line; one refused line hides every failing test.
 tags:
@@ -14,7 +14,11 @@ refs:
   reference: red-tests-block-withholds-per-line
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T04:44:14Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-29T04:44:14Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-29T05:12:57Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # The red tests' block is all or nothing under the secret scan
 
