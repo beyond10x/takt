@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-28T21:33:45Z",
+  "actor": "human:timo",
+  "artifact": "story:an-unrelated-program-install-refuses-no-step",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "proof 2 run 1: StepRefused at 2026-10-28T21:33:45.611Z, inside wave 42 U3's test loop (21:33:05-21:37:00Z) that installed takt-probe into the shared program directory; cause confirmed, fixed by 46905fc2",
+    "reference": "46905fc2"
+  }
+}
