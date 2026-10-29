@@ -297,6 +297,10 @@ types:
   # read from: crates/takt/src/frontier.rs:435-476
   # read from: crates/takt/src/frontier.rs:693-718
   # read from: crates/takt/src/frontier.rs:415-416
+  # A run's own grant of the merge as `agent:takt-delivery` (takt.work.Delegation) records none
+  # either: it is written into the case's `authority.yaml` alone, with the checks `takt approve`
+  # makes but the hold, which the run already has.
+  # read from: crates/takt/src/case.rs:1213-1230
   - name: takt.work.Approval
     kind: struct
     fields:
@@ -351,7 +355,7 @@ types:
   # read from: crates/takt/src/harness.rs:106-108
   # read from: crates/takt/src/harness.rs:708-712
   # read from: crates/takt/src/harness.rs:2997-3001
-  # read from: crates/takt/src/harness.rs:3652
+  # read from: crates/takt/src/harness.rs:3749
   # read from: crates/takt-cli/src/main.rs:2592-2639
   - name: takt.work.HarnessName
     kind: newtype
@@ -528,7 +532,7 @@ types:
   # read from: crates/takt/src/harness.rs:4233-4238
   # read from: crates/takt/src/harness.rs:4251-4258
   # read from: crates/takt/src/harness.rs:4386-4403
-  # read from: crates/takt/src/harness.rs:4205
+  # read from: crates/takt/src/harness.rs:4302
   # read from: crates/takt/src/harness.rs:4319
   # read from: crates/takt/src/harness.rs:4276
   # read from: crates/takt/src/harness.rs:4068-4074
@@ -563,6 +567,12 @@ types:
   # `--intent` or `--case` is given, and left out for a `self.improvement/1` turn, which opens
   # no story; a scenario run, whose scenario names its story, refuses a file with `story`
   # before anything is fetched, cut or opened, naming the file and the key.
+  # `tokens`, a whole number above zero, is the run's token budget as `--tokens` gives it
+  # (takt.work.Run `token_budget`), for `takt run` and `takt scenario run` alike; any other value
+  # (0, a negative or fractional number, a string) is refused when the file is read, before any
+  # case opens, exit 2 as an argument that does not parse, naming the file and the line `tokens`
+  # is written on and repeating no value. With neither `--tokens` nor `tokens`, the budget is
+  # 3,000,000.
   # `endpoint_token_env` names the variable holding the endpoint's API key as
   # `--endpoint-token-env` does, staged and refused the same way, its value never recorded, and
   # taken only when the harness in effect is `harness` and the command line names no
@@ -617,7 +627,7 @@ types:
   # than `name` and `argv` in an entry is refused naming the file and the line, as is an empty
   # `argv`, a name that is not one plain word or is given twice. `takt scenario run` runs them too.
   # A container started from takt's image reads it at `/config/agent.yaml`.
-  # read from: crates/takt/src/run_config.rs:196-226
+  # read from: crates/takt/src/run_config.rs:196-234
   # read from: crates/takt/src/run_config.rs:847-850
   # read from: crates/takt/src/run_config.rs:1438-1443
   # read from: crates/takt/src/run_config.rs:1332-1347
@@ -638,7 +648,13 @@ types:
   # read from: crates/takt/src/scan.rs:30-52
   # read from: crates/takt-cli/src/main.rs:826
   # read from: crates/takt-cli/src/main.rs:653-659
-  # read from: crates/takt/src/run_config.rs:196-222
+  # read from: crates/takt/src/run_config.rs:196-230
+  # read from: crates/takt/src/run_config.rs:1396-1406
+  # read from: crates/takt/src/run_config.rs:858-878
+  # read from: crates/takt-cli/src/main.rs:858-860
+  # read from: crates/takt-cli/src/main.rs:1435-1440
+  # read from: crates/takt-cli/src/main.rs:1079-1083
+  # read from: crates/takt-cli/src/main.rs:1380-1381
   - name: takt.work.RunConfiguration
     kind: struct
     fields:
@@ -648,6 +664,8 @@ types:
         type: Optional<Integer>
       - name: hours
         type: Optional<Decimal>
+      - name: tokens
+        type: Optional<Integer>
       - name: harness
         type: Optional<takt.work.HarnessSetting>
       - name: model
@@ -851,7 +869,7 @@ types:
 
   # A step's number within its run, counted from 1 as the run prints it (`step 3: tests.run {}`).
   # read from: crates/takt/src/run.rs:9475-9476
-  # read from: crates/takt/src/run.rs:9800
+  # read from: crates/takt/src/run.rs:9808
   # read from: crates/takt/src/run.rs:13427
   - name: takt.work.StepNumber
     kind: newtype
@@ -862,7 +880,7 @@ types:
   # case, continued across its runs, so no decision is overwritten and no record id repeats.
   # read from: crates/takt/src/case.rs:3450
   # read from: crates/takt/src/run.rs:12387-12390
-  # read from: crates/takt/src/run.rs:9800
+  # read from: crates/takt/src/run.rs:9808
   # read from: crates/takt/src/run.rs:13427
   - name: takt.work.StepKey
     kind: struct
@@ -1003,7 +1021,7 @@ types:
   # read from: crates/takt/src/run.rs:11949
   # read from: crates/takt/src/run.rs:12755-12756
   # read from: crates/takt-cli/src/main.rs:3447-3455
-  # read from: crates/takt-cli/src/main.rs:1392-1398
+  # read from: crates/takt-cli/src/main.rs:1404-1410
   # read from: crates/takt/src/run.rs:105-121
   # read from: crates/takt/src/run.rs:12527-12540
   # read from: crates/takt-cli/src/main.rs:3449
@@ -1015,7 +1033,7 @@ types:
   # read from: crates/takt/src/run.rs:12583-12596
   # read from: crates/takt/src/run.rs:2018-2025
   # read from: crates/takt-cli/src/main.rs:3450
-  # read from: crates/takt-cli/src/main.rs:1400
+  # read from: crates/takt-cli/src/main.rs:1412
   # read from: crates/takt/src/scorecard.rs:621-634
   # read from: crates/takt-cli/src/main.rs:3401
   # read from: crates/takt/src/run.rs:10557-10563
@@ -1030,7 +1048,7 @@ types:
   # read from: crates/takt/src/run.rs:10830-10863
   # read from: crates/takt/src/run.rs:1384-1386
   # read from: crates/takt-cli/src/main.rs:1187-1194
-  # read from: crates/takt-cli/src/main.rs:1401
+  # read from: crates/takt-cli/src/main.rs:1413
   # read from: crates/takt-cli/src/main.rs:3417-3419
   # read from: crates/takt-cli/src/main.rs:3451
   # read from: crates/takt/src/scorecard.rs:595-614
@@ -1601,7 +1619,7 @@ types:
   # read from: crates/takt/src/run.rs:464-476
   # read from: crates/takt/src/harness.rs:76-85
   # read from: crates/takt/src/harness.rs:111-115
-  # read from: crates/takt/src/harness.rs:113-707
+  # read from: crates/takt/src/harness.rs:716-717
   # read from: crates/takt/src/harness.rs:87-103
   # read from: crates/takt/src/harness.rs:131-135
   # read from: crates/takt/src/harness.rs:3680-3696
@@ -1695,7 +1713,7 @@ types:
   # What a judgement step changed: the paths committed and the implementation revision they were
   # committed as; no path and no revision when it changed no file.
   # read from: crates/takt/src/events.rs:191-197
-  # read from: crates/takt/src/run.rs:13810-13815
+  # read from: crates/takt/src/run.rs:13878-13883
   # read from: crates/takt/src/run.rs:14023-14033
   - name: takt.work.RunEffect
     kind: struct
@@ -2310,19 +2328,32 @@ types:
   # during a step (`refs/stash`, a note) is taken for the step's and put back, that is removed, as a
   # tag already was; a branch another worktree has checked out is not guarded. The push is held to
   # HTTPS as git's one transport, so a rewrite in the repository's configuration acts after the scan
-  # and to HTTPS only, and one that would send it over another transport is refused naming it; `gh`
-  # reads the state, the head and the checks, and the merge goes through `b10x-gates` with the head
-  # sha so a head that moved is refused; `none` opens nothing and registers none of the three forge
-  # validators. The bot route is a GitHub forge: the origin URL names a host and a repository, `bot`
-  # is the default only when the host is github.com (compared case-insensitively), and `--forge bot`
-  # on another host is refused before any case is opened. A remote URL is shown without its userinfo
+  # and to HTTPS only, and one that would send it over another transport is refused naming it. The
+  # reads go through the same App as the writes, never through `gh`: `b10x-gates api --method GET
+  # --path <path> --output <file>` under the same repository and policy, the response written to
+  # `response.json` in a new directory of takt's own under the temporary directory, mode 0700
+  # (`b10x-gates` refuses one another user can write), removed after; a read that does not exit 0
+  # or writes no JSON is an error naming the line, never a reading. The pull request is read at
+  # `/repos/<owner>/<repo>/pulls/<number>`: `open` is open, `closed` is merged when `merged` is
+  # true and closed when it is false, any other answer, or a missing head branch, head commit or
+  # base branch, an error; its checks are read as takt.work.ChecksState says. The merge goes
+  # through `b10x-gates` with the head sha so a head that moved is refused; `none` opens nothing
+  # and registers none of the three forge validators. The bot route is a GitHub forge: the origin
+  # URL names a host and a repository, `bot` is the default only when the host is github.com
+  # (compared case-insensitively), and `--forge bot` on another host is refused before any case
+  # is opened. A run whose forge is `bot`, asked for or by default, is refused before its case
+  # opens, its message naming what is missing and `--forge none`, unless `b10x-gates` is an
+  # executable regular file in an absolute directory of `PATH` and `B10X_GATES_POLICY` is set and
+  # names a regular file takt can open; `gh` is not looked for (story:forge-preflight). So such a
+  # run no longer opens with its commit identity `not scanned` for want of either
+  # (takt.work.Step `committed`). A remote URL is shown without its userinfo
   # wherever takt prints one. The `bot` adapter is `crates/takt/src/forge/bot.rs`: every
   # `b10x-gates bot` and `b10x-gates api` line takt runs is built there, the scenario run's trial
   # fetch and push included, and it scans with `b10x-gates scan-text` whatever the run's scan
   # adapter (`takt.work.ScanName`) is, since it is that adapter.
-  # read from: crates/takt/src/forge.rs:342-378
+  # read from: crates/takt/src/forge.rs:342-388
   # read from: crates/takt/src/forge/bot.rs:619
-  # read from: crates/takt/src/forge/bot.rs:114-123
+  # read from: crates/takt/src/forge/bot.rs:117-134
   # read from: crates/takt/src/forge.rs:2132
   # read from: crates/takt/src/forge.rs:1613-1663
   # read from: crates/takt/src/forge/bot.rs:98
@@ -2345,8 +2376,13 @@ types:
   # read from: crates/takt/src/forge/bot.rs:248-313
   # read from: crates/takt/src/forge/bot.rs:659-668
   # read from: crates/takt/src/forge.rs:1570-1585
-  # read from: crates/takt/src/forge/bot.rs:1-13
+  # read from: crates/takt/src/forge/bot.rs:1-15
   # read from: crates/takt/src/forge/bot.rs:341-365
+  # read from: crates/takt/src/forge/bot.rs:448-474
+  # read from: crates/takt/src/forge/bot.rs:525-544
+  # read from: crates/takt/src/forge/bot.rs:785-815
+  # read from: crates/takt/src/forge/bot.rs:920-950
+  # read from: crates/takt/src/forge/bot.rs:165-210
   # `gitlab` is the forge of a repository on a GitLab host, through `glab`: the default for an
   # origin on any host but github.com while `glab auth status --hostname <host>` exits 0, else
   # `none`, said in one line with what glab said; `--forge gitlab` without that login or without
@@ -2551,9 +2587,19 @@ types:
     variants: [open, merged, closed]
 
   # What the checks on a pull request's head report, as a `ci_result` record's result; `pending`
-  # writes no record. `gh` answering "no checks reported" for a head with no check run yet is
-  # read as pending (its message as of gh 2.100.0, not yet verified live).
-  # read from: crates/takt/src/forge/bot.rs:119
+  # writes no record. Through `bot`, the pull request is read for its head, and the head's check
+  # runs and the statuses of its combined status are read with `b10x-gates api --method GET`
+  # (takt.work.ForgeName), 100 of each at most; never with `gh`. A completed check run concluding
+  # `failure`, `cancelled`, `timed_out`, `action_required`, `startup_failure` or `stale`, or a
+  # status `failure` or `error`, fails; else a run `queued`, `in_progress`, `waiting`, `requested`
+  # or `pending`, a status `pending`, or no run and no status at all (a head in the seconds after
+  # its push) is pending; else (`success`, `neutral`, `skipped`; `success`) it passes. Any other
+  # status or conclusion, a response with no list or no `total_count`, a `total_count` above the
+  # entries listed (a truncated page), and a head that is no object id are each an error naming
+  # the read, never a reading. The combined status's own `state` is not read.
+  # read from: crates/takt/src/forge/bot.rs:547-594
+  # read from: crates/takt/src/forge/bot.rs:822-842
+  # read from: crates/takt/src/forge/bot.rs:896-918
   # read from: crates/takt/src/forge.rs:81-92
   # Through `gitlab`, the merge request's `head_pipeline`: none yet, one whose `sha` is not the
   # head's (a pipeline of an older push), or one that names no `sha`, is pending; `success` and
@@ -3470,6 +3516,9 @@ types:
   # UNMAPPED: whether `agent:<role>` must name one of the four (an enum) or may name any role (a
   # name, as declared); story:judge-guard's acceptance grants as `agent:planner`.
   # read from: .engineering/planning/story/judge-guard.md:113-116
+  # A run itself grants the merge as `agent:takt-delivery`, a role none of the five holds, and
+  # only under the owner's delegation to it on record (takt.work.Delegation).
+  # read from: crates/takt/src/run.rs:429-431
   - name: takt.work.AgentRole
     kind: newtype
     of: String
@@ -3518,15 +3567,41 @@ types:
       agent: takt.work.AgentRole
 
   # One entry of the delegation record: the delegating owner, the role delegated to, the
-  # capability (`repository.merge.judge_surface`), the instant it was given and, once revoked,
-  # the instant of its revocation. A revoked delegation grants nothing from then on; a
+  # capability, the instant it was given and, once revoked, the instant of its revocation. Two
+  # capabilities are read: `repository.merge.judge_surface`, which an agent role's grant of a
+  # judge-surface merge needs, and `repository.merge` itself, under which a run grants the merge
+  # as `agent:takt-delivery` (below). A revoked delegation grants nothing from then on; a
   # revocation is data on the entry, written by the owner, not a state takt moves. The record's
-  # keys are these fields' names; an entry admits an `agent:` grant only when its owner is
-  # `human:`, its role is exactly the approver, its capability is the judge-surface merge and it
-  # holds no revocation.
+  # keys are these fields' names; an entry admits an `agent:` grant of a capability only when its
+  # owner is `human:`, its role is exactly the approver, its capability is exactly that
+  # capability, it says when it was given, and it holds no revocation.
   # read from: .engineering/planning/story/judge-guard.md:58-62
   # read from: .engineering/planning/design/recursive-self-improvement.md:54-58
-  # read from: crates/takt/src/validator.rs:4548-4568
+  # read from: crates/takt/src/validator.rs:4622-4642
+  # read from: crates/takt/src/validator.rs:4553-4562
+  # An unattended run grants the merge itself as `agent:takt-delivery`
+  # (story:an-unattended-run-merges-under-a-delegated-grant): when an evaluation of the open case
+  # finds `repository.merge` approval-required, the case holds no grant of it, and
+  # `tests.pass`, `gate.green` and `ci.green` hold in that decision (validator evidence at the
+  # revision alone), the run asks its merge validator, before any step and with no harness asked, whether that role may grant it:
+  # the owner's unrevoked delegation of `repository.merge` to the role in the record at the tip
+  # of the case's base as the forge reports it, and the merge's own judge guard passing for a
+  # grant by that role there, so a judge-surface change needs the role's delegation of
+  # `repository.merge.judge_surface` too and a change to an owner-only file is refused; a case
+  # with no pull request or no base delegates nothing. When it may, takt writes the grant into
+  # the case's `authority.yaml` as `takt approve` writes one (takt.work.Approval), by that role
+  # at the revision the case reached the gate at, records nothing in the planning store, prints
+  # `granted: repository.merge at <revision> by agent:takt-delivery, under the owner's delegation
+  # on record`, and evaluates the case again; the merge validator reads that grant as it reads a
+  # person's and stays the only gate. Otherwise it prints `not granted as agent:takt-delivery:
+  # <why>`, a delegation it cannot read included, grants nothing, and the run goes on as it
+  # would without a delegation.
+  # read from: crates/takt/src/run.rs:429-435
+  # read from: crates/takt/src/run.rs:11250-11297
+  # read from: crates/takt/src/run.rs:12482-12488
+  # read from: crates/takt/src/validator.rs:5263-5295
+  # read from: crates/takt/src/validator.rs:5053-5075
+  # read from: crates/takt/src/case.rs:1213-1230
   - name: takt.work.Delegation
     kind: struct
     fields:
@@ -4550,7 +4625,7 @@ entities:
   # the run is given; the steps taken, the tokens spent and the stop are what it records.
   # read from: crates/takt/src/run.rs:1-5
   # read from: crates/takt/src/run.rs:9464-9510
-  # read from: crates/takt/src/run.rs:12375-12538
+  # read from: crates/takt/src/run.rs:12436-12606
   # A run holds its case for its whole duration: `run.lock`, holding the instant it took hold, is
   # created with `create_new` at start, so of two that try at once exactly one holds, and removed
   # at every stop, on error and on a panic, the panic recorded first, unless a link or a part that is not a
@@ -4673,7 +4748,16 @@ entities:
         summary: >-
           Stop after this many hours, a decimal number; the kernel holds it as an `f64`. A
           judgement step is held to what is left of it.
+      # The library's default is none. The CLI gives every run one, `takt run` and `takt scenario
+      # run` alike: `--tokens`, else the run file's `tokens` (takt.work.RunConfiguration), else
+      # 3,000,000, so no run goes unbounded. It counts the tokens reported in this invocation
+      # alone, a resumed case starting again at 0, and is read before every step, so a step under
+      # way runs to its end; once spent the run stops `tokens` (takt.work.Stop), exit 3.
       # read from: crates/takt/src/run.rs:65-66
+      # read from: crates/takt-cli/src/main.rs:1079-1083
+      # read from: crates/takt-cli/src/main.rs:1380-1381
+      # read from: crates/takt-cli/src/main.rs:2372
+      # read from: crates/takt/src/run.rs:9808-9809
       - name: token_budget
         type: Optional<Integer>
         summary: Stop once the harness has reported this many tokens.
@@ -4716,8 +4800,11 @@ entities:
           local `main` under `--forge none`.
       # The forge the run's pull request goes through: `bot` when asked for or when `origin` is
       # on github.com, `gitlab` when asked for or when `origin` is on another host `glab` is
-      # logged in to, `none` registers none of the three forge validators.
-      # read from: crates/takt-cli/src/main.rs:3195-3264
+      # logged in to, `none` registers none of the three forge validators. `bot`, asked for or
+      # taken by default, is checked as the forge is made, before the case opens: no `b10x-gates`
+      # on `PATH` or no readable `B10X_GATES_POLICY` refuses the run (takt.work.ForgeName).
+      # read from: crates/takt-cli/src/main.rs:3213-3283
+      # read from: crates/takt-cli/src/main.rs:3223-3225
       - name: forge
         type: takt.work.ForgeName
       # The least free space a step needs, in GiB, on the file system of the tree and, when
@@ -5016,7 +5103,11 @@ entities:
   # session still reported tokens (a session the hermetic floor held back ran to its end) is
   # charged them, at the run's end or before it: a step line with no action, its tokens, their
   # components and what the harness reported of the call, written after the step's change was
-  # put back. An accepted change
+  # put back. A Claude Code session killed by the hour budget or ended in an error, whose
+  # result states no total, is charged what its messages reported up to its end, each message
+  # counted once (story:a-killed-step-records-its-tokens); a session that started and reported
+  # no tokens has that line with no count, so its tokens, and the run's, are unknown, never 0;
+  # a step whose session never started writes no such line. An accepted change
   # is committed, exactly the paths it changed, under a one-line message (`<action>:
   # <summary>`, the summary's line breaks as spaces), and `implementation` moved to the new head.
   # read from: crates/takt/src/run.rs:2162-2189
@@ -5135,11 +5226,13 @@ entities:
   # read from: crates/takt/src/run.rs:6179-6194
   # read from: crates/takt/src/run.rs:6296-6344
   # read from: crates/takt/src/run.rs:6375-6378
-  # read from: crates/takt/src/run.rs:11473-11478
+  # read from: crates/takt/src/run.rs:11530-11538
   # read from: crates/takt/src/run.rs:2392-2396
   # read from: crates/takt/src/run.rs:6930-6932
   # read from: crates/takt/src/run.rs:7022-7030
   # read from: crates/takt/src/run.rs:6980
+  # read from: crates/takt/src/harness.rs:1102-1116
+  # read from: crates/takt/src/harness.rs:1184-1192
   - name: takt.work.Step
     naming:
       summary: >-
@@ -5147,7 +5240,7 @@ entities:
         said or observed, the evidence it wrote, the tokens it used and the commit it made.
     identity:
       # The pair of the run and the number within it; a number alone repeats with every run.
-      # read from: crates/takt/src/run.rs:9800
+      # read from: crates/takt/src/run.rs:9808
       # read from: crates/takt/src/run.rs:9475-9476
       # read from: crates/takt/src/run.rs:13427
       name: key
@@ -5245,10 +5338,12 @@ entities:
       # every refusal of what was given and before the case opens or resumes; `takt scenario run`
       # scans its trial's after the trial fetch and before the trial base is pushed, a refusal
       # removing the local trial branch. A refusal ends the run before step 1, exit 1, naming the
-      # identity's source and what the scan said, with nothing written or pushed. A scan that
-      # could not run (no policy file found, no `b10x-gates` on the program path, a forge with no
-      # such scan) is never a pass: the run prints `not scanned` with the reason and opens, and
-      # the scan before the push still applies. Through `gitlab` under a declared `scan: none`
+      # identity's source and what the scan said, with nothing written or pushed. Through the bot
+      # route, no `b10x-gates` on `PATH` and no readable `B10X_GATES_POLICY` are refused before
+      # this scan, as the forge is made (takt.work.ForgeName; story:forge-preflight). A scan that
+      # could not run otherwise (`b10x-gates` finding no policy file, a forge with no such scan)
+      # is never a pass: the run prints `not scanned` with the reason and opens, and the scan
+      # before the push still applies. Through `gitlab` under a declared `scan: none`
       # (`takt.work.ScanName`) the identity is not scanned, said in one line naming the file, and
       # nothing is scanned before the push either. With `--forge none`, or with no forge (an
       # `origin` not on github.com), nothing is scanned. The scanned text is kept under
@@ -5275,6 +5370,7 @@ entities:
       # read from: crates/takt/src/scan/gates.rs:18-20
       # read from: crates/takt/src/forge/gitlab.rs:714-723
       # read from: crates/takt/src/scan.rs:207-212
+      # read from: crates/takt/src/forge/bot.rs:165-210
       - name: committed
         type: Optional<takt.work.Revision>
     relations:
@@ -5526,10 +5622,10 @@ entities:
   # read from: crates/takt/src/git.rs:3042-3046
   # read from: crates/takt/src/validator.rs:5838-5948
   # read from: crates/takt/src/git.rs:3711-3718
-  # read from: crates/takt/src/validator.rs:2112-2120
+  # read from: crates/takt/src/validator.rs:2130-2138
   # read from: crates/takt/src/run.rs:11976-11999
   # read from: crates/takt/src/validator.rs:2146-2162
-  # read from: crates/takt/src/validator.rs:3065-3073
+  # read from: crates/takt/src/validator.rs:3083-3091
   # read from: crates/takt/src/validator.rs:3483-3488
   # read from: crates/takt/src/validator.rs:4175-4187
   # read from: crates/takt/src/validator.rs:5423-5441
@@ -6411,8 +6507,9 @@ entities:
       states: [Cut]
       terminal: [Cut]
 
-  # The delegation record, `.engineering/delegations.yaml`: the owner's delegations of a grant
-  # reserved for the owner to a named agent role, each with its revocation once revoked, read
+  # The delegation record, `.engineering/delegations.yaml`: the owner's delegations of a merge
+  # grant to a named agent role, of a judge-surface merge (`repository.merge.judge_surface`) or of
+  # `repository.merge` itself (takt.work.Delegation), each with its revocation once revoked, read
   # like the allow-list at the merge target's tip as the forge reports it, never from the
   # candidate's tree, so a candidate's own edit of it counts for nothing. The file is itself a
   # judge surface: adding, widening or revoking a delegation is a change only the owner's grant
@@ -6421,14 +6518,14 @@ entities:
   # read from: .engineering/planning/story/judge-guard.md:122
   # Decided by the planner (story:judge-guard, D3, D7): both files are read at the merge target's
   # tip as the forge reports it; a forge that cannot report it merges nothing.
-  # read from: crates/takt/src/validator.rs:4482-4484
-  # read from: crates/takt/src/validator.rs:5085-5091
+  # read from: crates/takt/src/validator.rs:4553-4558
+  # read from: crates/takt/src/validator.rs:4648-4662
   # read from: crates/takt/src/forge.rs:419-422
   - name: takt.work.DelegationRecord
     naming:
       summary: >-
-        The owner's delegations of judge-surface grants to agent roles, each revocable, read at the
-        tip of the branch the pull request targets.
+        The owner's delegations of merge grants to agent roles, each revocable, read at the tip of
+        the branch the pull request targets.
     identity:
       name: path
       type: String
