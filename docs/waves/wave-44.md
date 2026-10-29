@@ -1,6 +1,6 @@
 # Wave 44: three stories delivered by takt, each merging into one integration branch
 
-Stage: **running**. Shape: one coordinator and three takt runs at once, each on the local forge
+Stage: **gate green, pull request next**. Shape: one coordinator and three takt runs at once, each on the local forge
 (`--forge local`). The integration branch `integration/wave-44`, from 463c349f (the 0.20.0
 release), is held in a bare repository on this machine, the hub; each run works in its own
 `git clone --no-local` of the hub, opens its request there, runs its `local_checks` and, on a
@@ -93,3 +93,5 @@ The three stories' scopes do not share a source file: `crates/takt-cli/src/main.
 - The documentation pass found U2's merged code reading a path boundary otherwise than the
   story's decision (`:` and `#` end a path; the top directory alone names nothing). The planner
   kept the code, after its four review rounds, and amended the story.
+- The full gate passed at 17328394 (`task check`, exit 0: 315 test binaries, 2694 tests passed,
+  7 ignored). The planner revoked its judge-surface delegation before the pull request.

@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-29T09:52:04Z",
+  "actor": "human:timo",
+  "artifact": "story:console-shows-reads-and-diffs",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "task check at 17328394 (wave 44 gate run 3, exit 0)"
+  }
+}

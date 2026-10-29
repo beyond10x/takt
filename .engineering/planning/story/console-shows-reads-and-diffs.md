@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:console-shows-reads-and-diffs
 kind: story
-status: active
+status: implemented
 title: The console shows what a step read and the diff it made, in colour
 summary: After each harness step the console lists the step's tool calls and the diff of its commit, escaped and bounded, with colour under --color auto|always|never
 tags:
@@ -17,10 +17,11 @@ scope:
   path: crates/takt/src/console.rs
 - confidence: cited
   path: crates/takt/src/trace.rs
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T08:33:52Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T08:33:52Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-29T10:16:17Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1}}}
 ---
 # The console shows what a step read and the diff it made, in colour
 

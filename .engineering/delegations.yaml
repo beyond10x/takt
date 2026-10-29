@@ -3,3 +3,4 @@ delegations:
     role: agent:planner
     capability: repository.merge.judge_surface
     given_at: 2026-10-29T07:25:00Z
+    revoked_at: 2026-10-29T10:16:13Z
