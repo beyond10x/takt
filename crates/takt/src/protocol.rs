@@ -28,10 +28,11 @@ pub struct LoadedProtocol {
 
 /// takt's own built-in protocols, `(name, major, document)` each, the name as the registry spells
 /// it: `protocols/<name>/<major>.yaml`, embedded in the binary. `story.delivery/3` is
-/// `story.delivery/2` of the engineering protocols with two changes: `implementation.edit` is
-/// also admissible while the tests pass and the gate is red, so a gate's failure is fixed in the
-/// implementation; and `change.handover` is not admissible while the tests fail at the current
-/// revision. A name and major the registry also ships is refused by a unit test.
+/// `story.delivery/2` of the engineering protocols (0.12.2, which admits `implementation.edit`
+/// while the tests pass and the gate is red) with one change of rule: `change.handover` is not
+/// admissible while the tests fail at the current revision. Its words for `change.handover` and
+/// `implementation.edit` say that the gate runs after the handover and that a red gate's failure
+/// is fixed where it is. A name and major the registry also ships is refused by a unit test.
 const OWN: [(&str, u32, &str); 1] = [(
     "story-delivery",
     3,
@@ -1084,9 +1085,9 @@ mod tests {
         assert!(LoadedProtocol::resolve("no.such/1").is_err());
     }
 
-    /// Each of takt's own built-ins loads under its id, is `story.delivery/2` of the registry
-    /// but its revision and `implementation.edit`, and is a name and major the registry does not
-    /// ship, so a dependency upgrade that ships one is a decision, never a silent swap.
+    /// Each of takt's own built-ins loads under its id, declares the actions, inputs and
+    /// artifacts of the registry's `story.delivery/2`, and is a name and major the registry does
+    /// not ship, so a dependency upgrade that ships one is a decision, never a silent swap.
     #[test]
     fn takts_own_builtins_are_not_the_registrys() {
         for (name, major, _) in OWN {

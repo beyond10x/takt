@@ -65,7 +65,8 @@ pub struct Obligation {
     /// Where the gate stands.
     pub status: Status,
     /// The command lines of the gate's assertions, as the project file at the case's base admits
-    /// them ([`commands_at`]); given to the step, never recorded.
+    /// them ([`commands_at`]); not serialised with the obligation. The step's prompt, which its
+    /// transcript keeps, names them only when they pass the secret scan.
     #[serde(skip)]
     pub commands: Vec<String>,
 }

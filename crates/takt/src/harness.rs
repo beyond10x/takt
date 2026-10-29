@@ -1306,9 +1306,39 @@ fn scan_refusal(
     })
 }
 
+/// The repository obligations' block of `obligations` ([`crate::obligations::block`]) and
+/// whether it names the gates' commands: it names them when some gate has one, none has a
+/// credential's shape ([`crate::run::credential_shape`]) and the block passes `scan`
+/// ([`scan_refusal`]); else the block is written without any command.
+fn obligations_block_scanned(
+    obligations: &[crate::obligations::Obligation],
+    tree: &Path,
+    scan: Option<&crate::scan::gates::ChangeScan>,
+) -> (String, bool) {
+    let block = crate::obligations::block(obligations);
+    let mut commands = obligations.iter().flat_map(|o| &o.commands).peekable();
+    if commands.peek().is_none() {
+        return (block, false);
+    }
+    if commands.all(|command| crate::run::credential_shape(command).is_none())
+        && scan_refusal(&block, tree, scan).is_none()
+    {
+        return (block, true);
+    }
+    let bare: Vec<crate::obligations::Obligation> = obligations
+        .iter()
+        .map(|o| crate::obligations::Obligation {
+            commands: Vec::new(),
+            ..o.clone()
+        })
+        .collect();
+    (crate::obligations::block(&bare), false)
+}
+
 /// `line` with each path under the tree written relative to it: `<root>/<rest>` as `<rest>`, and
-/// `<root>` itself, where no path character follows it, as `.`; for each of `roots`, the tree's
-/// path as given and canonicalised, the longer first, so neither leaves part of the other.
+/// `<root>` itself, where no path character follows it, as `.`; a `<root>` right after a path
+/// character is inside a longer path and kept. For each of `roots`, the tree's path as given and
+/// canonicalised, the longer first, so neither leaves part of the other.
 fn relative_to_tree(line: &str, roots: &[String]) -> String {
     let mut line = line.to_owned();
     for root in roots.iter().filter(|root| root.len() > 1) {
@@ -1317,6 +1347,15 @@ fn relative_to_tree(line: &str, roots: &[String]) -> String {
         while let Some(at) = rest.find(root.as_str()) {
             out.push_str(&rest[..at]);
             let after = &rest[at + root.len()..];
+            let inside = out
+                .chars()
+                .last()
+                .is_some_and(|c| c.is_alphanumeric() || "-_.~/".contains(c));
+            if inside {
+                out.push_str(root);
+                rest = after;
+                continue;
+            }
             match after.chars().next() {
                 Some('/') => rest = &after[1..],
                 Some(c) if c.is_alphanumeric() || "-_.~".contains(c) => {
@@ -2647,7 +2686,9 @@ impl ClaudeCode {
                 text.push_str(&format!("- {obligation}\n"));
             }
         }
-        text.push_str(&crate::obligations::block(context.obligations));
+        let (obligations, commands_shown) =
+            obligations_block_scanned(context.obligations, context.tree, scan);
+        text.push_str(&obligations);
         text.push_str(&failed_block_scanned(
             &gates,
             context.offered,
@@ -2676,7 +2717,7 @@ impl ClaudeCode {
         text.push_str(DECLINE_PARAGRAPH);
         text.push_str(&format!("\nRules: {}", given_tools.unwrap_or(rule.tools)));
         if rule.runs_checks
-            && context.obligations.iter().any(|o| !o.commands.is_empty())
+            && commands_shown
             && context
                 .offered
                 .iter()
@@ -5540,6 +5581,83 @@ mod tests {
             "{shown}"
         );
         assert!(!shown.contains("REFUSED-TEXT"), "{shown}");
+    }
+
+    /// For a step offering `implementation.edit`, a failing test's line the scan refuses is
+    /// withheld from the gates' block and from the block naming the assertions, while the test
+    /// whose line passes keeps both.
+    #[test]
+    fn a_withheld_failing_test_is_named_in_neither_block() {
+        let dir = scratch("withheld-path");
+        let tools = scratch("withheld-path-tools");
+        committed(&dir.0, &[TODO]);
+        let scan = refusing_scan(&tools.0, &["REFUSED-TEXT"]);
+        let failed = [crate::validator::FailedCheck {
+            id: "tests".to_owned(),
+            lines: vec![
+                "FAILED tests::kept - panicked at src/lib.rs:12:9: left 1".to_owned(),
+                "FAILED tests::hidden - panicked at src/x.rs:1:1: REFUSED-TEXT".to_owned(),
+            ],
+            omitted: 0,
+        }];
+        let offered = vec!["implementation.edit".to_owned()];
+        let shown = failed_block_scanned(&failed, &offered, &dir.0, Some(&scan));
+        assert!(
+            shown.contains(
+                "gate tests (1 line withheld: it did not pass the secret scan):\n```text\n\
+                 FAILED tests::kept - panicked at src/lib.rs:12:9: left 1\n```\n"
+            ),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("- tests::kept at src/lib.rs:12:9"),
+            "{shown}"
+        );
+        assert!(shown.contains(TESTS_PATH_ASK), "{shown}");
+        assert!(!shown.contains("tests::hidden"), "{shown}");
+        assert!(!shown.contains("REFUSED-TEXT"), "{shown}");
+    }
+
+    /// The obligations' block names the gates' commands only when none has a credential's
+    /// shape and the block passes the scan; else it is written without any.
+    #[test]
+    fn the_gates_commands_are_named_only_when_they_pass_the_scan() {
+        let dir = scratch("obligation-commands");
+        let tools = scratch("obligation-commands-tools");
+        committed(&dir.0, &[TODO]);
+        let scan = refusing_scan(&tools.0, &["REFUSED-TEXT"]);
+        let gate = |command: &str| crate::obligations::Obligation {
+            id: "format".to_owned(),
+            text: "Formatted.".to_owned(),
+            status: crate::obligations::Status::Fail,
+            commands: vec![command.to_owned()],
+        };
+        let (block, named) =
+            obligations_block_scanned(&[gate("cargo fmt --check")], &dir.0, Some(&scan));
+        assert!(named, "{block}");
+        assert!(block.contains("Runs `cargo fmt --check`."), "{block}");
+        let (block, named) =
+            obligations_block_scanned(&[gate("fmt REFUSED-TEXT")], &dir.0, Some(&scan));
+        assert!(!named, "{block}");
+        assert!(block.contains("- format: Formatted."), "{block}");
+        assert!(!block.contains("Runs"), "{block}");
+        assert!(!block.contains("REFUSED-TEXT"), "{block}");
+        let token = ["ghp", "_", &"a".repeat(36)].concat();
+        assert!(crate::run::credential_shape(&token).is_some());
+        let (block, named) =
+            obligations_block_scanned(&[gate(&format!("push {token}"))], &dir.0, None);
+        assert!(!named, "{block}");
+        assert!(!block.contains(&token), "{block}");
+    }
+
+    /// A tree's path inside a longer path is kept as it is; standing alone it is made relative.
+    #[test]
+    fn a_tree_path_inside_a_longer_path_is_kept() {
+        let roots = ["/srv/w/tree".to_owned()];
+        assert_eq!(
+            relative_to_tree("cp /mnt/srv/w/tree/x /srv/w/tree/y", &roots),
+            "cp /mnt/srv/w/tree/x y"
+        );
     }
 
     /// Revision A of the implementation, where the gate failed, and B, an edit after it.
