@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-29T07:53:32Z",
+  "actor": "agent:takt",
+  "artifact": "story:docs-edits-the-tests-read-are-attempts",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "takt",
+    "reference": ".takt/cases/story-docs-edits-the-tests-read-are-attempts-20261029T070534Z/evidence/0083-test-result-89.json#sha256=48dba128573bb1f47f10dac7b993ffa22242eb7a116c4ade0922dff5f959793c&result=pass&revision=e26a8b08fc48852fdee7e7832df0c0891c261717&producer=takt.tests-run"
+  }
+}

@@ -219,21 +219,49 @@ pub enum Stop {
 /// changed nothing but documentation since the row's last ([`code_changed`]).
 pub const REPEATED_FAILURES: u64 = 2;
 
-/// Whether `path`, relative to the tree, is documentation the tests cannot depend on: under
-/// `docs/`, or `README.md` or `CHANGELOG.md` at the root. The paths the repository's own rules
-/// leave off the judge surface; no protocol or case names its documentation paths.
+/// Whether `path`, relative to the tree, is a documentation path.
 fn is_documentation_path(path: &str) -> bool {
     path.starts_with("docs/") || path == "README.md" || path == "CHANGELOG.md"
 }
-
 /// Whether the tree of revision `to` differs from that of `from` at a path that is not
 /// documentation ([`is_documentation_path`]): a new attempt at what the tests decide. True when
 /// git cannot compare them, so a result is counted as it was before the rule.
-fn code_changed(tree: &Path, from: &str, to: &str) -> bool {
-    match crate::git::paths_differing_outside(tree, from, to, "docs") {
-        Ok(paths) => paths.iter().any(|path| !is_documentation_path(path)),
-        Err(_) => true,
-    }
+fn code_changed(tree: &Path, from: &str, to: &str, written: &BTreeSet<String>) -> bool {
+    let check = || -> Option<bool> {
+        let paths = crate::git::paths_differing_outside(tree, from, to, ".engineering").ok()?;
+        if paths.iter().any(|path| !is_documentation_path(path)) {
+            return Some(true);
+        }
+        let mut test_paths = BTreeSet::new();
+        for revision in written {
+            let parent = format!("{revision}^");
+            test_paths.extend(
+                crate::git::paths_differing_outside(tree, &parent, revision, ".engineering")
+                    .ok()?,
+            );
+        }
+        for path in test_paths {
+            let out = std::process::Command::new("git")
+                .args(["show", &format!("{to}:{path}")])
+                .current_dir(tree)
+                .output()
+                .ok()?;
+            if !out.status.success() {
+                continue;
+            }
+            if paths.iter().any(|path| {
+                // A directory named in a test also names the files underneath it.
+                // Match against the revision's test content, not the working tree.
+                // A path continuation is not a boundary after a name.
+                // Relative prefixes may precede the repository-relative path.
+                names_doc_path(&out.stdout, path)
+            }) {
+                return Some(true);
+            }
+        }
+        Some(false)
+    };
+    check().unwrap_or(true)
 }
 /// How many `gate.run` results in a row, each at a new revision, failing the same set of gates
 /// stop the run ([`Stop::RepeatedGateFailure`]).
@@ -609,7 +637,7 @@ impl TestsSoFar {
                         continue;
                     }
                     Failing::after(&mut failing, revision, failed, |from| {
-                        code_changed(tree, from, revision)
+                        code_changed(tree, from, revision, written)
                     });
                 }
                 _ => {}
@@ -12010,7 +12038,8 @@ impl<'a> Run<'a> {
                 rerun: failures.rerun,
             }));
         }
-        if tests_written_at(&self.case.dir)?.contains(revision) {
+        let written = tests_written_at(&self.case.dir)?;
+        if written.contains(revision) {
             Failing::after_written(&mut so_far.failing, &failures.tests);
             return Ok(None);
         }
@@ -12018,7 +12047,7 @@ impl<'a> Run<'a> {
             &mut so_far.failing,
             revision,
             Some(failures.tests),
-            |from| code_changed(&self.tree, from, revision),
+            |from| code_changed(&self.tree, from, revision, &written),
         );
         Ok(so_far
             .failing
@@ -13936,6 +13965,32 @@ pub const TESTS_CHANGE: &str = "tests_change";
 
 /// The producer of a `tests_change` record: takt, attesting the commit of a `tests.write` step.
 pub const TESTS_CHANGE_PRODUCER: &str = "takt.tests-write";
+
+/// Whether the text names the path or one of its parent directories at a path boundary.
+fn names_doc_path(text: &[u8], path: &str) -> bool {
+    std::iter::once(path)
+        .chain(
+            path.match_indices('/')
+                .map(|(i, _)| &path[..i])
+                .filter(|p| p.contains('/')),
+        )
+        .any(|candidate| {
+            text.windows(candidate.len()).enumerate().any(|(i, bytes)| {
+                if bytes != candidate.as_bytes() {
+                    return false;
+                }
+                let rest = &text[i + candidate.len()..];
+                let rest = if candidate != path && rest.starts_with(b"/") {
+                    &rest[1..]
+                } else {
+                    rest
+                };
+                rest.first().is_none_or(|b| {
+                    !(b.is_ascii_alphanumeric() || !b.is_ascii() || b"_-./~".contains(b))
+                })
+            })
+        })
+}
 
 #[cfg(test)]
 mod tests {
