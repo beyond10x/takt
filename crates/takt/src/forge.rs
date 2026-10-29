@@ -7,6 +7,7 @@
 //! | `bot` | [`bot`] ([`BotRoute`]) | the organization's bot route, whose credential never enters takt |
 //! | `gitlab` | [`gitlab`] ([`gitlab::Glab`]) | `glab` under the user's own GitLab login |
 //! | `connectors` | [`connectors`] ([`connectors::ConnectorsForge`]) | `connectors operations invoke` on the run file's `forge_instance`; named, never a default |
+//! | `local` | [`local`] ([`local::Local`]) | a bare repository on this machine, the hub `origin` names, outside the tree; named, never a default, and nothing leaves the machine |
 //! | `none` | none | nothing; nothing leaves the machine |
 //!
 //! Before any of it leaves the machine, an adapter that publishes has a scan read what a push
@@ -46,6 +47,7 @@ pub mod command;
 pub mod connectors;
 pub mod credential;
 pub mod gitlab;
+pub mod local;
 
 pub use bot::BotRoute;
 

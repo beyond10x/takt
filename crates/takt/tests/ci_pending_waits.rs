@@ -2,7 +2,8 @@
 //! pull request's head lags the push, waits for the forge inside its budget and then records
 //! the result, offering the harness no judgement step meanwhile; a run whose budget ends first
 //! stops `Waiting`, not `NoProgress`, and the next run resumes the case. A merge the forge
-//! refuses for a required check that has not reported is nothing merged, no record, and waited
+//! refuses for a required check that has not reported, or the local forge refuses for a base
+//! moved after the judge guard judged it, is nothing merged, no record, and waited
 //! on like pending checks.
 
 #[path = "support/own_home.rs"]
@@ -15,7 +16,7 @@ use std::process::Command;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail};
+use anyhow::anyhow;
 use takt::case::CASES_DIR;
 use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Head, Memory, PullRequest, PullRequestView};
@@ -868,12 +869,33 @@ fn shape_merge_a_head_lagging_the_approval_push_is_waited_on_and_merged_once_it_
     assert_eq!(merged[0]["subject_revision"], granted.as_str());
 }
 
-/// The double whose merge the forge refuses, the way the API refuses it, for a required check
-/// that has not reported on the head, the first `refusals` times; its checks read pass, as a
-/// read that answers for the head before the push does.
+/// The double whose merge the forge refuses with `refusal` the first `refusals` times: the way
+/// the API refuses it for a required check that has not reported on the head
+/// ([`pending_check`]), or the way the local forge refuses a base moved after the judge guard
+/// judged it ([`moved_base`]); its checks read pass, as a read that answers for the head before
+/// the push does.
 struct RefusesFor {
     memory: Rc<Memory>,
     refusals: Cell<usize>,
+    refusal: fn(u64) -> anyhow::Error,
+}
+
+/// The API's refusal of the merge of `number` for a required check that has not reported.
+fn pending_check(number: u64) -> anyhow::Error {
+    anyhow!(
+        "b10x-gates api --method PUT --path /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"task check\" is expected"
+    )
+}
+
+/// The local forge's refusal of the merge of `number` for a base another writer moved.
+fn moved_base(number: u64) -> anyhow::Error {
+    takt::forge::local::LocalRefused::BaseMoved {
+        number,
+        base: "main".to_owned(),
+        expected: "1".repeat(40),
+        found: Some("2".repeat(40)),
+    }
+    .into()
 }
 
 impl Forge for RefusesFor {
@@ -924,9 +946,7 @@ impl Forge for RefusesFor {
         let left = self.refusals.get();
         if left > 0 {
             self.refusals.set(left - 1);
-            bail!(
-                "b10x-gates api --method PUT --path /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"task check\" is expected"
-            );
+            return Err((self.refusal)(number));
         }
         self.memory.merge(tree, dir, number, head)
     }
@@ -937,7 +957,21 @@ impl Forge for RefusesFor {
 /// accepted with one merge observation.
 #[test]
 fn a_merge_refused_for_a_pending_required_check_is_waited_on_and_merged() {
-    let repo = repository("merge-refused");
+    refused_twice_then_merged("merge-refused", pending_check);
+}
+
+/// A merge the local forge refuses for a base moved after the judge guard judged it is nothing
+/// merged and no record, not an error: the run judges the merge again on the base where it is
+/// now and merges it, the case accepted with one merge observation.
+#[test]
+fn a_merge_refused_for_a_moved_base_is_judged_again_and_merged() {
+    refused_twice_then_merged("merge-moved-base", moved_base);
+}
+
+/// The case's merge refused twice with `refusal`, then taken: the run completes with one merge
+/// and one merge observation, and says nothing merged twice.
+fn refused_twice_then_merged(name: &str, refusal: fn(u64) -> anyhow::Error) {
+    let repo = repository(name);
     let (id, granted) = worked_case(&repo);
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
@@ -966,6 +1000,7 @@ fn a_merge_refused_for_a_pending_required_check_is_waited_on_and_merged() {
     let forge = Rc::new(RefusesFor {
         memory: memory.clone(),
         refusals: Cell::new(2),
+        refusal,
     });
 
     let (stop, text) = resumed_run(&repo, &id, options(Some(20), None), forge, &NoHarness);

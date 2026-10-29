@@ -297,6 +297,17 @@ pub trait Confinement: Send + Sync {
         self.admit(program)
     }
 
+    /// Whether [`Confinement::run_test`] can run an argument line whose program is `program`,
+    /// known before anything runs: [`Confinement::admit`] unless the adapter says otherwise. A
+    /// refusal is an error naming the adapter and the program.
+    ///
+    /// # Errors
+    ///
+    /// The refusal.
+    fn admit_test(&self, program: &str) -> anyhow::Result<()> {
+        self.admit(OsStr::new(program)).map_err(anyhow::Error::from)
+    }
+
     /// Runs the test command and returns how it ended; [`unconfined`] unless the adapter says
     /// otherwise.
     ///
@@ -1256,14 +1267,20 @@ impl Confinement for Substrate {
         ))
     }
 
+    /// Refuses every program but `cargo`, the one toolchain the profile serves.
+    fn admit_test(&self, program: &str) -> anyhow::Result<()> {
+        if program != "cargo" {
+            return Err(refused(self.name(), program, unserved(program)).into());
+        }
+        Ok(())
+    }
+
     fn run_test(&self, test: &TestRun<'_>) -> anyhow::Result<Finished> {
         let (program, args) = test
             .argv
             .split_first()
             .ok_or_else(|| anyhow!("an empty test command"))?;
-        if program != "cargo" {
-            return Err(refused(self.name(), program, unserved(program)).into());
-        }
+        self.admit_test(program)?;
         let tree = test
             .tree
             .canonicalize()
