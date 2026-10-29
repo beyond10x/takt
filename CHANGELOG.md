@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- A failed `tests.run`'s block makes paths under the tree relative and withholds only the lines the secret scan refuses, counted in its heading.
+
 ## [0.19.0] - 2026-10-29
 
 A run's console opens with the story and shows what each step cost; a failed gate or test run
