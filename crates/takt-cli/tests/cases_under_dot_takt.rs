@@ -5,6 +5,9 @@
 //! step leaves survive its undo; and the readers list a case under each root. The `claude` and
 //! the forge are doubles: nothing reaches a model or a network.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -295,13 +298,7 @@ exit 2
 fn takt_through(bin: &Path, args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env(
-            "B10X_GATES_POLICY",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../takt/tests/fixtures/gates-policy-stand-in.json"
-            ),
-        )
+        .env("B10X_GATES_POLICY", stand_in_policy::path())
         .env(
             "PATH",
             format!(

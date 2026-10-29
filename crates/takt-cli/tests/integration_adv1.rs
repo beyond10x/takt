@@ -1,6 +1,9 @@
 //! Adversary pass 1 over the wave 06 integration fixes, through the binary: the approval's own
 //! commit (`approvals_only`) and the case a plain run resumes (`Run::next_to_resume`).
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -91,13 +94,7 @@ fn takt(bin: Option<&Path>, args: &[&str]) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
     command.args(args).env_remove("B10X_GATES_POLICY");
     if let Some(bin) = bin {
-        command.env(
-            "B10X_GATES_POLICY",
-            concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../takt/tests/fixtures/gates-policy-stand-in.json"
-            ),
-        );
+        command.env("B10X_GATES_POLICY", stand_in_policy::path());
         command.env(
             "PATH",
             format!(

@@ -111,10 +111,12 @@ impl Setup {
         self
     }
 
-    /// A policy file, `<scratch>/policy.json`.
+    /// A policy file, `<scratch>/policy.json`, at mode `0600`, as `b10x-gates` loads one.
     fn policy(&self) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
         let policy = self.outer.0.join("policy.json");
         fs::write(&policy, "{}\n").expect("a policy file");
+        fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).expect("mode 0600");
         policy
     }
 

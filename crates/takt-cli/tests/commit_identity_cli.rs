@@ -7,6 +7,9 @@
 //! commits with the identity its case was opened with. The harness is a double on the program
 //! path; nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -22,13 +25,6 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtu
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
                      text: The repository has its manifest.\n    assertions:\n      \
                      - 'fs.file.exists(\"Cargo.toml\")'\n";
-
-/// A `b10x-gates` policy file the doubles never read: the bot route needs one named
-/// (story:forge-preflight).
-const GATES_POLICY: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../takt/tests/fixtures/gates-policy-stand-in.json"
-);
 
 /// Where a repository configures the identity takt commits with.
 const IDENTITY_FILE: &str = ".engineering/commit-identity.conf";
@@ -175,12 +171,12 @@ fn identity_file(name: &str, email: &str) -> String {
 impl World {
     /// The built `takt` with `args`, the doubles first on the program path, the operator's
     /// identity variables ([`OPERATOR_ENV`]) in its environment, and a `b10x-gates` policy file
-    /// the doubles never read ([`GATES_POLICY`]) unless `args` give `--forge none`, where no
-    /// policy keeps the run's own scan adapter from calling the refusing double: the exit code,
-    /// stdout, stderr.
+    /// the doubles never read ([`stand_in_policy::path`]) unless `args` give `--forge none`,
+    /// where no policy keeps the run's own scan adapter from calling the refusing double: the
+    /// exit code, stdout, stderr.
     fn takt(&self, args: &[&str]) -> (i32, String, String) {
         let forge_none = args.windows(2).any(|pair| pair == ["--forge", "none"]);
-        self.takt_under(args, (!forge_none).then_some(GATES_POLICY))
+        self.takt_under(args, (!forge_none).then_some(stand_in_policy::path()))
     }
 
     /// [`Self::takt`] with `B10X_GATES_POLICY` set to `policy`, or unset when none.

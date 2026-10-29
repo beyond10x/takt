@@ -850,7 +850,7 @@ fn the_bot_route_adapter_merges_through_the_api_with_the_head_to_match() {
     }
     let forge = BotRoute::new(
         "owner/repo",
-        Some(PathBuf::from("policy.yaml")),
+        Some(PathBuf::from("/policies/policy.yaml")),
         Box::new(Shared(recording.clone())),
     );
     forge.merge(&tree, &dir, 7, "abc123").expect("merges");
@@ -859,7 +859,7 @@ fn the_bot_route_adapter_merges_through_the_api_with_the_head_to_match() {
     assert_eq!(
         recording.lines.borrow().as_slice(),
         [format!(
-            "b10x-gates api --method PUT --path /repos/owner/repo/pulls/7/merge --input {} --output {} --repository owner/repo --policy policy.yaml",
+            "b10x-gates api --method PUT --path /repos/owner/repo/pulls/7/merge --input {} --output {} --repository owner/repo --policy /policies/policy.yaml",
             input.display(),
             output.display()
         )]

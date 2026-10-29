@@ -690,7 +690,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     }
     let forge = BotRoute::new(
         "owner/repo",
-        Some(PathBuf::from("policy.yaml")),
+        Some(PathBuf::from("/policies/policy.yaml")),
         Box::new(Shared(recording.clone())),
     );
     forge.push(&tree, "takt/c1").expect("pushes");
@@ -737,7 +737,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
         .collect();
     let read = |path: &str| {
         format!(
-            "b10x-gates api --method GET --path {path} --output OUT --repository owner/repo --policy policy.yaml"
+            "b10x-gates api --method GET --path {path} --output OUT --repository owner/repo --policy /policies/policy.yaml"
         )
     };
     assert_eq!(
@@ -747,12 +747,12 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
                 "b10x-gates bot -- push https://github.com/owner/repo.git {c1}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
             ),
             format!(
-                "b10x-gates scan-text --repository owner/repo --policy policy.yaml {} {}",
+                "b10x-gates scan-text --repository owner/repo --policy /policies/policy.yaml {} {}",
                 input.display(),
                 dir.join("pull-request.published.txt").display()
             ),
             format!(
-                "b10x-gates api --method POST --path /repos/owner/repo/pulls --input {} --output {} --repository owner/repo --policy policy.yaml",
+                "b10x-gates api --method POST --path /repos/owner/repo/pulls --input {} --output {} --repository owner/repo --policy /policies/policy.yaml",
                 input.display(),
                 output.display()
             ),

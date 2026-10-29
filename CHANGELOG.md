@@ -6,6 +6,27 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- A run that names no token budget stops at 3,000,000 tokens (exit 3); `takt scenario run` shares the default, and `--tokens` wins over the run file.
+- The run file takes a `tokens` key, a whole number above zero; any other value, null included, exits 2 naming the file and the line.
+- A `--forge bot` run is refused with exit 1 before its case opens when `b10x-gates` is not on `PATH` or `B10X_GATES_POLICY` names no policy file `b10x-gates` would load.
+- That policy file must be a regular file, not a symbolic link, owned by the user, mode 0600 or stricter, in a directory only the user can write; a relative path is made absolute.
+- When `.engineering/delegations.yaml` at the target's tip delegates `repository.merge` to `agent:takt-delivery`, a run whose merge waits on approval grants it as that role.
+- That grant needs `tests.pass`, `gate.green` and `ci.green` at the revision, and `repository.merge.judge_surface` too for a judge-surface diff; it is written as `takt approve` writes one.
+- The merge reads that delegation again at the tip the forge reports, so a delegation revoked after the grant stops a resumed merge.
+
+### Changed
+
+- The bot forge reads a pull request, its check runs and its status through `b10x-gates api --method GET`; takt runs no `gh`.
+- An unmapped check conclusion or status, or a page of check runs shorter than its `total_count`, is an error.
+- Through the bot forge, `pr.open` reads the open pull request for the case's head and base before it posts and after a failed post, and takes it, so a resumed run posts once.
+- An open pull request whose head repository is absent or another repository is not taken.
+- A step killed by `--hours` or ending in an error counts the tokens its session reported.
+- A session that started and reported no tokens writes a step line with no count: the run's tokens are unknown and `takt scorecard --against` refuses the case.
+- Forge children no longer receive `GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN`.
+- A `--forge bot` run with no policy no longer opens with its identity "not scanned"; the preflight refuses it.
+
 ## [0.22.1] - 2026-10-29
 
 `libz-sys` 1.1.31, for RUSTSEC-2026-0418.

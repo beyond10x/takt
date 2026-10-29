@@ -30,7 +30,7 @@ use takt::{Run, RunOptions, Stop};
 /// The delivery protocol, the engineering protocols' built-in.
 const PROTOCOL: &str = "story.delivery/1";
 
-/// The credentials no child but the forge's receives, set in the child test process below.
+/// The credentials no child receives, the forge's included, set in the child test process below.
 const CREDENTIALS: [&str; 7] = [
     "GH_TOKEN",
     "GITHUB_TOKEN",
@@ -596,11 +596,7 @@ fn children_receive_no_credential_they_do_not_need() {
         .run(&store, &[gh.display().to_string()])
         .expect("runs");
     assert!(exit.success(), "{exit:?}");
-    leaked(
-        "the forge",
-        &names(&forge_names),
-        &["GH_TOKEN", "GITHUB_TOKEN"],
-    );
+    leaked("the forge", &names(&forge_names), &[]);
 }
 
 /// The harness child loads no project or user settings, hooks, plugins or MCP servers: its

@@ -4550,6 +4550,47 @@ impl LatestStamp {
 mod tests {
     use super::*;
 
+    /// A grant from inside a run ([`CaseDir::grant_while_held`]) is refused when the case's
+    /// `run.lock` is not there, and writes no `authority.yaml`; with the lock there, the refusal
+    /// is no longer the hold's.
+    #[test]
+    fn a_grant_while_held_is_refused_when_run_lock_is_missing() {
+        let tree = std::env::temp_dir().join(format!("takt-grant-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        let dir = tree.join(CASES_DIR).join("c1");
+        std::fs::create_dir_all(&dir).expect("the case's directory");
+        let case = CaseDir {
+            id: "c1".to_owned(),
+            dir: dir.clone(),
+            branch: "takt/c1".to_owned(),
+            tree: tree.clone(),
+            protocol: LoadedProtocol::builtin("story.delivery/1").expect("the protocol"),
+            doc: serde_yaml_ng::Value::Null,
+            written: 0,
+        };
+        assert!(!dir.join(LOCK_FILE).exists());
+        let refused = case
+            .grant_while_held("repository.merge", crate::run::DELIVERY_ROLE)
+            .expect_err("no run holds the case");
+        let refusal = format!("{refused:#}");
+        assert!(
+            refusal.contains("is not held by a run"),
+            "refused for another reason: {refusal}"
+        );
+        assert!(!dir.join(AUTHORITY_FILE).exists(), "{refusal}");
+
+        std::fs::write(dir.join(LOCK_FILE), "2026-10-30T00:00:00Z\n").expect("the lock");
+        let other = case
+            .grant_while_held("repository.merge", crate::run::DELIVERY_ROLE)
+            .map(|_| ())
+            .map_err(|error| format!("{error:#}"));
+        let _ = std::fs::remove_dir_all(&tree);
+        assert!(
+            !matches!(&other, Err(why) if why.contains("is not held by a run")),
+            "held, and still refused for the hold: {other:?}"
+        );
+    }
+
     /// story:a-run-keeps-every-decision-only-on-a-trial: an improvement case keeps every decision
     /// whatever is asked, a story's case keeps what is asked, and the names are the flag's.
     #[test]

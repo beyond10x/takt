@@ -37,6 +37,12 @@ stopped: Iterations (1); steps 1, tokens 0, case ~/cfg-demo/.takt/cases/takt-202
 (The `case` and `frontier` lines are left out.) `--iterations 1` on the command line won over the
 file's `4`. A flag wins over the file, and the file wins over the default.
 
+The budgets are `iterations`, `hours` and `tokens`, each a key and a flag of the same name. A run
+always has a token budget: with neither `tokens` nor `--tokens` it stops once the harness has
+reported 3,000,000 tokens, `Tokens (3000000)`, exit 3. `tokens` must be a whole number above
+zero. `tokens: 0` or `tokens: x` is refused with exit 2 and names its line. `takt scenario run`
+has the same default. (Not in 0.22.1.)
+
 Every key the file may hold, and which of them have no flag, is in
 [The run configuration file](../reference/configuration.md#the-run-configuration-file). The
 file's `story` is taken only when none of `--story`, `--intent` and `--case` is given.
@@ -155,10 +161,16 @@ takt: the endpoint's credential variable LLM_API_KEY is empty; nothing was start
 | `forge` | what happens at the pull request |
 |---|---|
 | not set | `bot` for a github.com `origin`, `gitlab` for another host `glab` is logged in to, else `none` |
-| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its checks |
+| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the branch under a GitHub App, and `b10x-gates api` opens the pull request, reads it and its checks (`--method GET`) and merges it, under the same App; takt runs no `gh` |
 | `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request, after the run's scan adapter scanned what it publishes |
 | `local` | a bare repository on this machine, the tree's `origin`, is the forge: `git` pushes to it, a request record in it is the pull request, the run file's `local_checks` are the checks, and the merge is made in it; never a default ([The local forge](../reference/configuration.md#the-local-forge)) |
 | `none` | no pull request: a story stops `Unperformable` at `pr.opened`, exit 7, and prints its candidate commit |
+
+`forge: bot` is checked before the case opens. The run is refused with exit 1, and no case is
+opened, when `b10x-gates` is not on `PATH`, or when `B10X_GATES_POLICY` does not name the policy
+file. That file must be a regular file, not a symbolic link, owned by you, and at mode 0600 or
+stricter, in a directory you own that no other user can write. These are the checks `b10x-gates`
+makes when it loads a policy. (Not in 0.22.1.)
 
 How each forge is set up: [Configuration](../reference/configuration.md#the-forge). The local
 forge needs `local_checks` beside it in the file:

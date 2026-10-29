@@ -55,7 +55,8 @@ For `story.delivery/1` and `software.change/1`:
 | `repository.merge` | the forge merges, under a [grant](/docs/concepts/glossary#grant) | `merge_observation` |
 
 The forge is an adapter ([The forge](../reference/configuration.md#the-forge)): `glab` on a GitLab
-host, beyond10x's bot route on github.com (`b10x-gates` pushes and opens, `gh` reads checks), or
+host, beyond10x's bot route on github.com (`b10x-gates` pushes, opens, reads the pull request and
+its checks with `b10x-gates api --method GET`, and merges), or
 none (`--forge none`), when the last three have no
 performer. A failing `tests.run` names up to 64 failed tests (cargo, Python unittest, pytest)
 and cargo's rerun hint in its summary; the [two test stops](./how-a-run-ends.md#the-two-test-stops)
@@ -86,8 +87,11 @@ from the tree the harness edits, so a step cannot change what judges it.
 The merge validator is the one check written in Rust: it merges only under a grant of
 `repository.merge` recorded for the revision the case reached the gate at, and it checks that
 grant again itself, after Canon admitted the step. `takt approve` writes the grant; without one
-the run stops `ApprovalRequired`, exit 4. How grants work:
-[Capabilities and approvals](./capabilities-and-approvals.md).
+the run stops `ApprovalRequired`, exit 4. The owner can also delegate the grant to the role
+`agent:takt-delivery` in `.engineering/delegations.yaml`. A run then grants the merge itself, as
+that role, once `tests.pass`, `gate.green` and `ci.green` hold at the revision; the merge
+validator checks that grant as it checks a person's. How grants work, and the delegated grant:
+[Capabilities and approvals](./capabilities-and-approvals.md#a-grant-under-the-owners-delegation).
 
 ## The judge: whose grant merges a judge surface
 
@@ -96,8 +100,9 @@ at the merge target's tip as the forge reports it, never from the case's tree:
 
 - `.engineering/judge-allow.yaml`, a list of path globs that are not judge surfaces. Every
   other path is one, and so is any path that is a link or a submodule, whatever its name.
-- `.engineering/delegations.yaml`, the owner's delegations of the judge-surface grant to agent
-  roles, each revocable.
+- `.engineering/delegations.yaml`, the owner's delegations to agent roles, each revocable: of
+  `repository.merge.judge_surface`, the judge-surface grant, and of `repository.merge` itself,
+  under which a run grants the merge as `agent:takt-delivery`.
 
 A change that touches a judge surface merges under a person's grant (`human:<id>`), or under an
 agent role's grant (`agent:<role>`) only while the delegation file names an unrevoked delegation

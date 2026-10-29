@@ -206,8 +206,9 @@ pub struct RunConfig {
     #[serde(skip)]
     pub tokens: Option<u64>,
     /// The `tokens` member as written, which [`RunConfig::read`] checks into
-    /// [`RunConfig::tokens`] or refuses at its line ([`TokensRefused`]).
-    #[serde(rename = "tokens")]
+    /// [`RunConfig::tokens`] or refuses at its line ([`TokensRefused`]). A `tokens` written with
+    /// no value (YAML's null) is a value written, refused as any other ([`written`]).
+    #[serde(rename = "tokens", default, deserialize_with = "written")]
     tokens_member: Option<serde_yaml_ng::Value>,
     /// `--harness`, or the `harness` mapping: metaharness's session request. Set by
     /// [`RunConfig::read`] from the member, never read from the file.
@@ -853,6 +854,15 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
             path.display()
         ),
     }
+}
+
+/// A member as written, null included: `Some` whenever the key is there, so a key written
+/// with no value is told from one not written (`#[serde(default)]` gives `None` for that).
+fn written<'de, D>(deserializer: D) -> std::result::Result<Option<serde_yaml_ng::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    <serde_yaml_ng::Value as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
 /// The refusal of a run file whose `tokens` is no whole number above zero, at the line it is

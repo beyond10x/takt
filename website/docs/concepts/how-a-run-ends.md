@@ -60,11 +60,12 @@ The reason is on stderr and no step was taken. Exit 2 is a command line that doe
 |---|---|
 | `Iterations (<n>)` | `--iterations`: steps taken |
 | `Hours (<h>)` | `--hours`: wall time |
-| `Tokens (<n>)` | `--tokens`: tokens the [harness](/docs/concepts/glossary#harness) reported |
+| `Tokens (<n>)` | `--tokens`, or the run file's `tokens`: tokens the [harness](/docs/concepts/glossary#harness) reported; with neither, 3000000 |
 | `ActiveTime (…)` | `--active-seconds`: wall time less the time spent waiting on the [forge](/docs/concepts/glossary#forge) |
 
 A budget is read before each step, so a step under way runs to its end. The next run starts with
-a fresh budget.
+a fresh budget. Every run has a token budget: one that names none stops at 3,000,000 tokens
+(not in 0.22.1, where such a run had none).
 
 ### Loop stops: exit 3
 

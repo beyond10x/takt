@@ -4,6 +4,9 @@
 
 #![allow(dead_code)]
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -14,13 +17,6 @@ use std::process::Command;
 
 /// The self-improvement protocol, the engineering protocols' built-in.
 const PROTOCOL: &str = "self.improvement/1";
-
-/// A `b10x-gates` policy file the stand-in never reads: the bot route needs one named
-/// (story:forge-preflight).
-const GATES_POLICY: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../takt/tests/fixtures/gates-policy-stand-in.json"
-);
 
 /// The finding scripts of this repository, committed into the scratch repository's base.
 const SCRIPTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts");
@@ -549,7 +545,7 @@ fn takt_in(world: &World, args: &[&str]) -> (i32, String, String) {
 
 /// `takt` run in `world` with `args` alone, the run's state and cache given, and `PATH` set to
 /// `path` when some, with a `b10x-gates` policy file the stand-in never reads
-/// ([`GATES_POLICY`]); no policy otherwise.
+/// ([`stand_in_policy::path`]); no policy otherwise.
 fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
     command
@@ -561,7 +557,7 @@ fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, Stri
     if let Some(path) = path {
         command
             .env("PATH", path)
-            .env("B10X_GATES_POLICY", GATES_POLICY);
+            .env("B10X_GATES_POLICY", stand_in_policy::path());
     }
     let output = command.output().expect("takt runs");
     (

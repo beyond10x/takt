@@ -97,7 +97,7 @@ takt starts other programs and finds them on the `PATH`. Which ones depends on t
 | a story | [`aep`](https://github.com/beyond10x/aep) and a planning store; a gates document for the gate ([Run a story](./run-a-story.md)) |
 | `--forge local` | nothing beyond `git`: a bare repository on this machine as the tree's `origin`, and the programs its `local_checks` name |
 | `--forge gitlab` | [`glab`](https://gitlab.com/gitlab-org/cli), with `glab auth status --hostname <host>` exiting 0 |
-| `--forge bot` (beyond10x's route, github.com only) | [`b10x-gates`](https://github.com/beyond10x/gates) acting as the bot's GitHub App, and [`gh`](https://cli.github.com) |
+| `--forge bot` (beyond10x's route, github.com only) | [`b10x-gates`](https://github.com/beyond10x/gates) acting as the bot's GitHub App, and `B10X_GATES_POLICY` naming its policy file: a regular file you own, not a symbolic link, at mode 0600 or stricter, in a directory you own that no other user can write. Without either the run is refused before its case opens, exit 1. No `gh`: the pull request and its checks are read through `b10x-gates api` (0.22.1 and earlier still need [`gh`](https://cli.github.com) for those reads) |
 | reading a case | [`jq`](https://jqlang.github.io/jq/), as [Read a case](./read-a-case.md) uses it |
 | `takt promote` | [`bwrap`](https://github.com/containers/bubblewrap) on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
 

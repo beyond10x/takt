@@ -14,6 +14,9 @@
 //! shell file or a program no gate command runs is judged by the gate, and one changing a script
 //! a gate command runs still stops it, naming the script.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -36,13 +39,6 @@ const GATE_EXEC: &str = "scripts/gate-exec";
 /// The test command a delivery on takt runs (`--test-cmd`): the one command of the `check` task
 /// the gate does not run, because it outlasts the gate's 300 s.
 const TEST_COMMAND: &str = "cargo test --workspace --locked";
-
-/// A `b10x-gates` policy file the doubles never read: the bot route needs one named
-/// (story:forge-preflight).
-const GATES_POLICY: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../takt/tests/fixtures/gates-policy-stand-in.json"
-);
 
 /// The log the test command's `cargo` stub appends to, in the scratch world: beside the
 /// repository, and on macOS in its git directory, which Seatbelt lets the test command write
@@ -511,7 +507,7 @@ impl World {
         args.extend_from_slice(extra);
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)
-            .env("B10X_GATES_POLICY", GATES_POLICY)
+            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env_remove("CARGO_TARGET_DIR")
             .env("HOME", self.outer.join("home"))
             .env("AEP_CACHE_DIR", aep_cache())

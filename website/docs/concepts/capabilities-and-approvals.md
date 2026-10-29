@@ -3,7 +3,7 @@ title: Capabilities and approvals
 sidebar_position: 4
 description: Which actions need a person's grant, how takt refuses a step that does more than admitted, how a grant is bound to a revision, and where credentials never go.
 lede: An action that requires a capability waits for a grant recorded in the case's authority.yaml, bound to the case revision and the commit it was given at; a step that does anything the frontier does not admit is refused and its change discarded; and no credential enters a harness, a prompt or the case record.
-source: crates/takt/src/case.rs (Authority, AuthorityDecision, CaseAuthority, prepare_grant, holds_grant), run.rs (proposal_refusal, JUDGE_SURFACE, Shape::only_behind), validator.rs (PrMerged), harness.rs (SessionHarness); crates/takt/tests/authority.rs, grant_subject.rs, merge_under_authority.rs, judge_guard.rs; takt approve --help and takt run --help at 0.14.0; engineering-protocols 0.10.0 protocols/software-change/1.yaml and protocols/story-delivery/1.yaml; AGENTS.md § Rules; scratch runs of takt 0.14.0
+source: crates/takt/src/case.rs (Authority, AuthorityDecision, CaseAuthority, prepare_grant, holds_grant, grant_while_held), run.rs (proposal_refusal, JUDGE_SURFACE, Shape::only_behind, DELIVERY_ROLE, DELEGATED_GRANT_CLAIMS, Run::grant_delegated), validator.rs (PrMerged, delegation_refusal, judge_guard, Delegation::admits, OWNER_ONLY), harness.rs (SessionHarness); crates/takt/tests/authority.rs, grant_subject.rs, merge_under_authority.rs, judge_guard.rs, unattended_merge.rs; takt approve --help and takt run --help at 0.14.0; engineering-protocols 0.10.0 protocols/software-change/1.yaml and protocols/story-delivery/1.yaml; AGENTS.md § Rules; scratch runs of takt 0.14.0
 ---
 
 # Capabilities and approvals
@@ -134,6 +134,54 @@ and the merge validator checks again itself, before it merges, that `authority.y
 the case holds no grant for is not merged, and the claim stays unknown. Whose grant a change to a
 judge surface needs is decided at the merge target's tip:
 [Evidence and the judge](./evidence-and-the-judge.md#the-judge-whose-grant-merges-a-judge-surface).
+
+## A grant under the owner's delegation
+
+Without a delegation, the merge waits for `takt approve`, as above. The owner can instead let a
+run grant the merge itself, with nobody present, as the role `agent:takt-delivery`. The owner
+records the delegation in `.engineering/delegations.yaml` on the merge target:
+
+```yaml
+delegations:
+  - owner: human:<id>
+    role: agent:takt-delivery
+    capability: repository.merge
+    given_at: "2026-10-29T08:00:00Z"
+  - owner: human:<id>
+    role: agent:takt-delivery
+    capability: repository.merge.judge_surface
+    given_at: "2026-10-29T08:00:00Z"
+```
+
+When the run reaches the gate with the merge approval-required and no grant in the case, it
+grants the merge itself only when all of these hold:
+
+- `tests.pass`, `gate.green` and `ci.green` are true at the case's revision, decided by validator
+  evidence alone. No harness is asked, and nothing a model wrote counts.
+- The file, read at the merge target's tip as the forge reports it and never from the case's
+  tree, holds an unrevoked delegation of `repository.merge` to `agent:takt-delivery`. The owner
+  must be `human:<id>`, and the entry must say when it was given, with no `revoked_at`.
+- For a change that touches a [judge surface](./evidence-and-the-judge.md#the-judge-whose-grant-merges-a-judge-surface),
+  the file also delegates `repository.merge.judge_surface` to the same role. A delegation of
+  `repository.merge.judge_surface` alone grants no merge.
+- The change does not touch `.engineering/judge-allow.yaml` or `.engineering/delegations.yaml`.
+  A change to either merges under the owner's grant alone.
+
+The run then writes the grant into `authority.yaml` as `takt approve` would, approver
+`agent:takt-delivery`, at the revision, and prints it:
+
+```console
+  granted: repository.merge at <revision> by agent:takt-delivery, under the owner's delegation on record
+```
+
+The merge validator reads that grant as it reads a person's and stays the one gate on the merge.
+The run records nothing in the planning store for it, where `takt approve` records a story's
+approval. When a condition fails, the run grants nothing and stops `ApprovalRequired`, exit 4, as
+before. With the evidence green and the delegation missing or refused, it first prints
+`not granted as agent:takt-delivery:` and the reason. Revoking is a later
+commit of the file that sets `revoked_at` on the entry; from then on that entry grants nothing.
+(Not in 0.22.1. Tests cover it against an in-memory forge; no recorded run has merged this way
+yet.)
 
 ## A step that does more is refused
 

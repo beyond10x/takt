@@ -11,7 +11,7 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - depends_on: story:a-killed-step-records-its-tokens
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:22:44Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T21:22:44Z", actor: "human:timo", revision: 3}
@@ -33,8 +33,9 @@ read with, and it is what the pod runs of the cluster example are reported with
 
 - units accepted: cases whose last `stop` line in `events.jsonl` is `Completed` with an accepted
   outcome (`crates/takt/src/events.rs`, `Event::Stop`).
-- tokens: the sum over the case's `stop` lines of `tokens`, one per run of the case; a stop line
-  whose tokens are unknown (story:a-killed-step-records-its-tokens) makes the sum `unknown`.
+- tokens: the sum over the case's `step` lines of `tokens`, read as `takt scorecard` reads them
+  (`crates/takt/src/scorecard.rs`); a step line with no count (story:a-killed-step-records-its-tokens)
+  makes the sum `unknown`. The `stop` line's `tokens` is not read: it counts such a step as 0.
 - interventions: grants by a person, one per approval in the case's `authority.yaml` whose
   approver is `human:`; a grant by an agent role (story:an-unattended-run-merges-under-a-delegated-grant)
   is not an intervention.

@@ -19,10 +19,22 @@ pub const PROGRAM: &str = "b10x-gates";
 /// names or its default: it then scanned nothing.
 pub const NO_POLICY: &str = "unavailable: not found";
 
-/// The policy [`POLICY_VAR`] names in the environment, when it is set (empty or not).
+/// The policy [`POLICY_VAR`] names in the environment, when it is set (empty or not), made
+/// absolute against takt's working directory ([`absolute`]).
 #[must_use]
 pub fn policy_from_env() -> Option<PathBuf> {
-    std::env::var_os(POLICY_VAR).map(PathBuf::from)
+    std::env::var_os(POLICY_VAR).map(|policy| absolute(PathBuf::from(policy)))
+}
+
+/// `policy` made absolute against takt's working directory, links not followed: every
+/// `b10x-gates` line runs in a tree, never there, so a relative policy would name another file
+/// or none. An empty path, or one the working directory cannot be read for, stays as given.
+#[must_use]
+pub fn absolute(policy: PathBuf) -> PathBuf {
+    if policy.is_absolute() || policy.as_os_str().is_empty() {
+        return policy;
+    }
+    std::path::absolute(&policy).unwrap_or(policy)
 }
 
 /// What the change a case has made so far passes before a judgement step's prompt shows it

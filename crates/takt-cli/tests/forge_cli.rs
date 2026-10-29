@@ -221,6 +221,12 @@ fn adv2_an_origin_host_written_in_upper_case_gets_the_bot_route_by_default() {
     }
     let policy = outer.join("policy.json");
     fs::write(&policy, "{}\n").expect("a policy file");
+    // At 0600, as b10x-gates loads a policy.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).expect("mode 0600");
+    }
     let mut path = vec![bin];
     path.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),

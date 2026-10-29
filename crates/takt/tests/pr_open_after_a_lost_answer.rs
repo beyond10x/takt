@@ -209,7 +209,7 @@ impl GitHub {
             "number": pull.number,
             "state": "open",
             "merged": false,
-            "head": { "ref": pull.head, "sha": sha },
+            "head": { "ref": pull.head, "sha": sha, "repo": { "full_name": "owner/repo" } },
             "base": { "ref": pull.base },
         })
     }

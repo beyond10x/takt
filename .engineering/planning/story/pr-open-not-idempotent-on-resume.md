@@ -15,7 +15,7 @@ relations:
 - decomposes: epic:takt-as-a-loom-agent
 - depends_on: story:forge-preflight
 - serves: vision:safe-agentic-coding
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:36:07Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-10-29T21:36:07Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":2}}}
@@ -78,3 +78,13 @@ generation's Job starts takt again, and takt resumes the case that is open for t
 This story owns `pr.open`'s lost answer: before a `POST`, and after a `POST` that failed, it reads
 the open pull requests for the case's branch and takes an existing one. story:fenced-forge-dispatch
 keeps the outcome record of the forge writes and the merge's `unknown`, and depends on this story.
+
+## The predicate after the fix
+
+The `expected_before` predicate above predates story:bot-forge-reads-through-the-app and
+story:forge-preflight, and exits non-zero on any takt that carries them: its `b10x-gates` double
+answers pull requests with no `base` and no `head.repo.full_name`, and the run sets no
+`B10X_GATES_POLICY`, so the preflight refuses it before the case opens. The Rust test
+`crates/takt/tests/pr_open_after_a_lost_answer.rs`,
+`a_post_that_fails_after_creating_the_pull_request_takes_its_number`, builds the same world (a
+POST that creates the pull request and answers 502) and checks one POST across both runs.

@@ -4,6 +4,9 @@
 //! story `proposed` again; no hand reset between runs. The bot route's programs and the harness
 //! are doubles on the program path; nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -13,13 +16,6 @@ use std::process::Command;
 
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
-
-/// A `b10x-gates` policy file the doubles never read: the bot route needs one named
-/// (story:forge-preflight).
-const GATES_POLICY: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../takt/tests/fixtures/gates-policy-stand-in.json"
-);
 
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
@@ -318,7 +314,7 @@ impl World {
             .args(args)
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
             .envs(env.iter().copied())
-            .env("B10X_GATES_POLICY", GATES_POLICY)
+            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env(
                 "PATH",
                 format!(
@@ -1146,7 +1142,7 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
                 "--test-cmd",
                 "true",
             ])
-            .env("B10X_GATES_POLICY", GATES_POLICY);
+            .env("B10X_GATES_POLICY", stand_in_policy::path());
         command
     };
     let outputs: Vec<std::process::Output> = match started {

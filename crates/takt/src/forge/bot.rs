@@ -97,7 +97,10 @@ impl BotRoute {
     /// alone, whatever URL the remote or the repository's configuration names.
     pub const PUSH_ENV: [(&str, &str); 1] = [("GIT_ALLOW_PROTOCOL", "https")];
 
-    /// Over `repository` with `policy`, running every line through `runner`.
+    /// Over `repository` with `policy`, running every line through `runner`. A relative
+    /// `policy` is made absolute against takt's working directory
+    /// ([`crate::scan::gates::absolute`]): every `b10x-gates` line runs in the tree, and is
+    /// given the file the preflight checked.
     #[must_use]
     pub fn new(
         repository: impl Into<String>,
@@ -106,7 +109,7 @@ impl BotRoute {
     ) -> Self {
         Self {
             repository: repository.into(),
-            policy,
+            policy: policy.map(crate::scan::gates::absolute),
             remote: "origin".to_owned(),
             scan_limit: Self::SCAN_LIMIT,
             runner,
@@ -165,12 +168,13 @@ impl BotRoute {
     /// Whether a run can reach the bot route at all, checked before its case opens, so a run
     /// that cannot is refused before any step instead of at `pr.open`: `b10x-gates` must be an
     /// executable file on takt's `PATH`, and the policy ([`crate::scan::gates::POLICY_VAR`])
-    /// must be given and name a file that can be read. `gh` is not looked for: the route runs
-    /// none.
+    /// must be given and name a file `b10x-gates` loads ([`protected`]). `gh` is not looked
+    /// for: the route runs none.
     ///
     /// # Errors
     /// Naming `b10x-gates` when it is on no directory of `PATH`, or naming
-    /// [`crate::scan::gates::POLICY_VAR`] when no policy is given or it names no readable file.
+    /// [`crate::scan::gates::POLICY_VAR`] when no policy is given or it names no file
+    /// `b10x-gates` loads.
     pub fn preflight(&self) -> Result<()> {
         use std::os::unix::fs::PermissionsExt as _;
         let runnable = std::env::var_os("PATH")
@@ -194,16 +198,9 @@ impl BotRoute {
             );
         };
         let shown = crate::git::shown(policy.as_os_str());
-        let readable = std::fs::File::open(policy).and_then(|file| {
-            if file.metadata()?.is_file() {
-                Ok(())
-            } else {
-                Err(std::io::Error::other("not a regular file"))
-            }
-        });
-        if let Err(error) = readable {
+        if let Err(error) = protected(policy) {
             bail!(
-                "the forge `bot` needs {var} naming the {PROGRAM} policy file, and `{shown}` is no file that can be read ({error}); set it, or give --forge none; no case was opened"
+                "the forge `bot` needs {var} naming the {PROGRAM} policy file, and `{shown}` is no file {PROGRAM} loads ({error}); set it, or give --forge none; no case was opened"
             );
         }
         Ok(())
@@ -732,8 +729,8 @@ impl Forge for BotRoute {
 
     /// `GET /repos/<owner>/<repo>/pulls` for the open pull requests of `branch` into `base`
     /// ([`Self::open_pulls_argv`]). Only an entry the answer itself reports open, with the head
-    /// `branch` and the base `base`, and of this repository when it names the head's repository,
-    /// is taken: the query is the forge's to honour, and its answer is checked. An answer that is
+    /// `branch` and the base `base`, and whose head repository it names as this repository, is
+    /// taken: the query is the forge's to honour, and its answer is checked. An answer that is
     /// not a list, a full page, an entry taken with no number, or two different numbers taken,
     /// is an error, never none.
     fn find_open_pull_request(&self, tree: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
@@ -759,8 +756,10 @@ impl Forge for BotRoute {
             let ours = text(pull, "/state").as_deref() == Some("open")
                 && text(pull, "/head/ref").as_deref() == Some(branch)
                 && text(pull, "/base/ref").as_deref() == Some(base)
+                // The head's repository named, and this one: an entry whose head repository is
+                // gone (`"repo": null`, a fork deleted) is no case's, its head never pushed to.
                 && text(pull, "/head/repo/full_name")
-                    .is_none_or(|full| full.eq_ignore_ascii_case(&self.repository));
+                    .is_some_and(|full| full.eq_ignore_ascii_case(&self.repository));
             if !ours {
                 continue;
             }
@@ -941,6 +940,42 @@ impl ReadDir {
             .with_context(|| format!("create a directory for a read at {}", dir.display()))?;
         Ok(Self(dir))
     }
+}
+
+/// Whether `policy` is a file `b10x-gates` loads its policy from, checked as it checks one
+/// (`protected_read`): a regular file, not a symbolic link, owned by this user and readable or
+/// writable by nobody else (mode & `0o077` is 0), in a directory owned by this user that nobody
+/// else can write (mode & `0o022` is 0), and that opens for reading. The error says which.
+fn protected(policy: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let refused = |why: &str| Err(std::io::Error::other(why.to_owned()));
+    let meta = std::fs::symlink_metadata(policy)?;
+    if meta.file_type().is_symlink() {
+        return refused("a symbolic link, which b10x-gates refuses");
+    }
+    if !meta.is_file() {
+        return refused("not a regular file");
+    }
+    // SAFETY: `geteuid` takes nothing and touches no memory of this process.
+    let uid = unsafe { libc::geteuid() };
+    if meta.uid() != uid {
+        return refused("owned by another user");
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        return refused(&format!(
+            "mode {:04o}, which another user can read or write; b10x-gates loads it at 0600",
+            meta.permissions().mode() & 0o7777
+        ));
+    }
+    let parent = policy
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let dir = std::fs::metadata(parent)?;
+    if dir.uid() != uid || dir.permissions().mode() & 0o022 != 0 {
+        return refused("in a directory another user owns or can write");
+    }
+    std::fs::File::open(policy).map(drop)
 }
 
 impl Drop for ReadDir {

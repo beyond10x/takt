@@ -82,7 +82,8 @@ architecture.svg` renders it again.
 
 llm was picked because these two stories each stay in one crate, test against fixtures or loopback
 only, and depend on no open story; it has a gates document (`.engineering/gates.yaml`) as takt
-has. Both are drafts until llm's store moves them to proposed.
+has. Both are proposed in llm's store, and llm's `.engineering/delegations.yaml` delegates
+`repository.merge` and `repository.merge.judge_surface` to `agent:takt-delivery`.
 
 ## Earlier trials
 

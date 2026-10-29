@@ -28,7 +28,8 @@
 //! killed once it outlives its [`Limits`], what it started killed with it when it ends, and
 //! only a bounded tail of what it prints kept (and a bounded head, for a harness step's
 //! transcript). Its environment holds no credential but the ones its adapter reads
-//! ([`without_credentials`]): the forge keeps the GitHub ones the bot route's programs read.
+//! ([`without_credentials`]): the forge keeps only the `B10X_*` ones the bot route's programs
+//! read, and no GitHub token.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -573,15 +574,13 @@ pub fn is_credential(name: &str) -> bool {
         || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
 }
 
-/// The credentials the bot route's programs read: `gh`'s GitHub tokens and the variables the
-/// bot route's own program reads (`B10X_*`). Not the SSH agent: a push or a fetch goes under
-/// the bot's credential, never the user's.
+/// The credentials the bot route's programs read: the variables the bot route's own program
+/// reads (`B10X_*`). No GitHub token: no forge program reads one, since the bot route writes
+/// and reads under its App and `glab` under its own login. Not the SSH agent: a push or a
+/// fetch goes under the bot's credential, never the user's.
 #[must_use]
 pub fn bot_route_reads(name: &str) -> bool {
-    matches!(
-        name,
-        "GH_TOKEN" | "GITHUB_TOKEN" | "GH_ENTERPRISE_TOKEN" | "GITHUB_ENTERPRISE_TOKEN"
-    ) || name.starts_with("B10X_")
+    name.starts_with("B10X_")
 }
 
 /// Removes from what `command` inherits every variable that [`is_credential`] and `keep` does

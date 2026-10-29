@@ -4952,7 +4952,8 @@ impl PrMerged {
     /// With `delegated` given, a capability, the approver must besides be an agent role that
     /// [`DELEGATIONS`] at the same tip records an unrevoked delegation of that capability to,
     /// whatever the change: what [`Validator::delegation_refusal`] asks before the run grants
-    /// the merge as a role itself. The merge passes none.
+    /// the merge as a role itself. The merge passes [`Self::ACTION`] for a grant by
+    /// [`crate::run::DELIVERY_ROLE`] and none for any other approver.
     #[expect(
         clippy::too_many_lines,
         clippy::too_many_arguments,
@@ -5389,8 +5390,12 @@ impl Validator for PrMerged {
                     .map_or("", |decision| decision.approver.as_str());
                 // The base judged: the merge goes into it or nowhere (R7).
                 let target = view.base.clone();
+                // A grant the run wrote as its own role holds only while the owner's delegation
+                // of the merge does: read again at the tip the merge goes into, so a delegation
+                // revoked after the grant was written merges nothing.
+                let delegated = (approver == crate::run::DELIVERY_ROLE).then_some(Self::ACTION);
                 if let Some(refusal) =
-                    self.judge_guard(tree, &dir, &branch, &target, revision, approver, None)?
+                    self.judge_guard(tree, &dir, &branch, &target, revision, approver, delegated)?
                 {
                     return Ok((
                         nothing(format!(

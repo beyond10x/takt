@@ -58,8 +58,11 @@ model = "example-model"
 env = "LLM_API_KEY"
 ```
 
-The image holds b10x-harness and no other [harness](/docs/concepts/glossary#harness), and no `gh` or `glab`: `harness: harness`
-(or `none`) and `forge: none` are the settings that work in it. A test in the repository reads
+The image holds b10x-harness and no other [harness](/docs/concepts/glossary#harness), and no `glab`: `harness: harness`
+(or `none`) and `forge: none` are the settings this page's runs used. The `bot` forge reads
+through `b10x-gates`, which the image ships, and no longer needs `gh` (0.22.1 still does); it
+needs a policy file as well ([What it cannot do](../reference/container-image.md#what-it-cannot-do)), and
+no run of the image through it is recorded. A test in the repository reads
 both files through takt's own readers, so they stay valid.
 
 ## 3. Put the repository on a volume
