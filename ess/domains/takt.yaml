@@ -3994,7 +3994,7 @@ types:
   # from takt's own claims.
   # read from: docs/metrics/README.md:61
   # read from: .engineering/planning/design/benchmark-integration.md:32
-  # read from: .engineering/planning/story/bench-subset-and-budget.md:31
+  # read from: .engineering/planning/story/bench-subset-and-budget.md:34
   # Maps to bench.fact of the organization's benchmark instrument with `source: hidden-test`: a
   # hidden test that passes is `held`, one that fails `contradicted`, one that could not run
   # `unknown`.
