@@ -2,6 +2,9 @@
 //! `takt run`'s `frontier: nothing ready`, which a scenario run never prints (it refuses a story
 //! that is not ready at the seed with exit 1, before anything is pushed).
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::process::Command;
 
 /// `takt <args>`: its exit status and its stdout.

@@ -378,6 +378,7 @@ fn row(case: &str, outcome: &str) -> Row {
         opened_binary: None,
         completed: None,
         step_tokens: Default::default(),
+        harness_steps: None,
         layers: None,
     }
 }

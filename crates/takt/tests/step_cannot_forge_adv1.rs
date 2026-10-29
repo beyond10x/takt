@@ -3,6 +3,9 @@
 //! expected to be refused (or to earn no `pass`). Every repository is a scratch one this file
 //! builds under the crate's build directory; nothing is written outside it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

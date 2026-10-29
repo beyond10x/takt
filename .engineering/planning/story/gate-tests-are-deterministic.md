@@ -2,13 +2,17 @@
 format: aep.planning-md/3
 id: story:gate-tests-are-deterministic
 kind: story
-status: draft
+status: active
 title: The gate's tests pass or fail on the code alone
 tags:
 - rsi
 relations:
 - decomposes: epic:composable-agentic-work
-revision: 3
+- serves: vision:safe-agentic-coding
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-28T22:47:56Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-28T22:47:56Z", actor: "human:timo", revision: 5}
 ---
 ## Outcome
 

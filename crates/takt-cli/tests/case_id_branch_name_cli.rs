@@ -2,6 +2,9 @@
 //! with takt's own message naming the id and the rule, before anything is written: no case
 //! directory, no branch, the tree on the branch it was on.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

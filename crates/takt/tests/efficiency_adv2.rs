@@ -4,6 +4,9 @@
 //! refusal of a choice kind read about no artifact. Each case is named for the defect it shows.
 //! Fake harnesses and the in-memory forge only.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;

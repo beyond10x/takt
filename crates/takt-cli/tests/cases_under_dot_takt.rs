@@ -5,6 +5,9 @@
 //! step leaves survive its undo; and the readers list a case under each root. The `claude` and
 //! the forge are doubles: nothing reaches a model or a network.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

@@ -9,6 +9,9 @@
 //! between two reads and has no flag to shorten it, so only [`Run::poll`] makes a run of several
 //! reads take milliseconds. Nothing here reaches a host.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

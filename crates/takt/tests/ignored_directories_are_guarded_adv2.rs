@@ -6,6 +6,9 @@
 //! the crate's build directory, and every run sets its own set-aside root beside it; nothing is
 //! written outside it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::ffi::OsStrExt as _;
 use std::os::unix::fs::PermissionsExt as _;

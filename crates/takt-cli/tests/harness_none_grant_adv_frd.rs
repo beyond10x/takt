@@ -4,6 +4,9 @@
 //! granted merge and the harness is never asked (the unit's own acceptance case says so), so the
 //! harness's new branch is reached only where no validator takes the merge: `--forge none`.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

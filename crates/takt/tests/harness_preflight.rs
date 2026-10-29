@@ -5,6 +5,9 @@
 //! ([`preflight_fakes`]); the run is the library's, and the exit code the stop gets is the
 //! command line's (`crates/takt-cli/tests/harness_preflight_cli.rs`).
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 mod preflight_fakes;
 
 use std::fs;

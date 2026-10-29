@@ -3,6 +3,9 @@
 //! refuses the pull request, the exit codes that tell the stops apart, and what `takt run
 //! --help` says about them.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -4,6 +4,9 @@
 //! is a scratch file, HOME is a scratch directory, and a `b10x-harness` double on the program
 //! path records whether it was started.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

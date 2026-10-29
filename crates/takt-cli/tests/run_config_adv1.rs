@@ -4,6 +4,9 @@
 //! then win: the file's `endpoint_file`, which only `--harness harness` reads, must not turn
 //! that flag into a refusal of a flag the operator never gave.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:unqualified-stop-records-no-layer
 kind: story
-status: proposed
+status: implemented
 title: A run that stops HarnessUnqualified makes its case's runs unscorable
 tags:
 - finding
@@ -19,9 +19,11 @@ scope:
   path: crates/takt/src/scorecard.rs
 - confidence: cited
   path: crates/takt/tests/layers.rs
-revision: 5
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T15:56:06Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-28T15:58:00Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-10-28T20:40:00Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}, executor: "agent:planner"}
 ---
 # A run that stops HarnessUnqualified makes its case's runs unscorable
 

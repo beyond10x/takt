@@ -3,6 +3,9 @@
 //! the seed, before any change exists. A harness that edits the implementation, then writes the
 //! tests, is the shape of scenario 1: on the base the run pushed and read CI after each edit.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::fs;

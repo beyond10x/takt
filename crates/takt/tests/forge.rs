@@ -7,6 +7,9 @@
 //! evidence. The bot-route adapter is tested for the argument lines it would run only: a
 //! recording runner stands in for `b10x-gates` and `gh`, and nothing leaves the machine.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};

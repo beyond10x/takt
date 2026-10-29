@@ -7,6 +7,9 @@
 //! way the real scanner's wrapped rule still matches (an optional `-`, blanks, a line break,
 //! then blanks or `>|*#`), so a soft-wrapped paragraph is refused as `b10x-gates` refuses it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};

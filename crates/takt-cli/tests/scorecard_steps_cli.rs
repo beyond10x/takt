@@ -5,6 +5,9 @@
 //! without `--against` does not parse; and a saved scorecard without the `step_tokens`
 //! definition is refused, exit 1.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

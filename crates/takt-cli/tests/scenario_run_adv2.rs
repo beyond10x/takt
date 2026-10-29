@@ -5,6 +5,9 @@
 //! real, unforced `git push` (every option takt gives passed through) against a bare repository
 //! standing in for the scratch repository. Nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

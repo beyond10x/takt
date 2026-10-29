@@ -5,6 +5,9 @@
 //! a git checkout that tracks it. What `-dirty` means is decided by the build script's own
 //! cases (`revision_build.rs`); this one checks what the binary prints.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::path::Path;
 use std::process::Command;
 

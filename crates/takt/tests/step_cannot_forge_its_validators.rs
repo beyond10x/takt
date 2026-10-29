@@ -7,6 +7,9 @@
 //! observation that leaves anything on the judge surface (a FIFO, an ignored file) is refused
 //! and put back like a step.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

@@ -2,6 +2,9 @@
 //! is the granted revision; a story's delivery merges a head that carries the approval's record
 //! above it (`takt approve` commits it on the case's branch), and its title is the story's.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

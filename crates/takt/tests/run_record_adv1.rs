@@ -1,6 +1,9 @@
 //! Adversary pass 1 on story:run-record-and-story-evidence: the run record (`events.jsonl`) and
 //! the `test_result` evidence and move a run writes on the story.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

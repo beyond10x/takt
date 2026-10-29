@@ -3,6 +3,9 @@
 //! `repository.merge` to the harness: with no performer for the deciding action it stops
 //! `Unperformable`, exit 7, and the case stays open.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::process::Command;
 
 /// `takt <args>`: its exit status and its stdout.

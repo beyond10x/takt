@@ -3,6 +3,9 @@
 //! the revision every table of an accepted run is recorded at, a resume after a stop that is not
 //! accepted, and a stop-time table at the store commits as takt 0.16 recorded it.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

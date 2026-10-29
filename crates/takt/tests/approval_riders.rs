@@ -6,6 +6,9 @@
 //! recorded twice is no approval's: the case moves to it, and the push and the merge take nothing
 //! above the granted revision. The records are read from the commit, never from the tree.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

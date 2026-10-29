@@ -8,6 +8,9 @@
 //! and what a refused step moves aside goes to a directory beside it; nothing is written outside
 //! it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::io::{Seek as _, Write as _};
 use std::os::unix::ffi::OsStrExt as _;

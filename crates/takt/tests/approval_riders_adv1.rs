@@ -3,6 +3,9 @@
 //! case builds a case approved through the real store (`takt approve`, the real `aep`), then a
 //! commit above the granted revision, and asks whether it rides.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

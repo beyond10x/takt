@@ -4,6 +4,9 @@
 //! (`Stop::Hours`), not on the harness's failure. No live `claude` runs: the harness program is
 //! a script that sleeps.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

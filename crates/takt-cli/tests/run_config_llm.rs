@@ -4,6 +4,9 @@
 //! line. These runs reach no network: the routes name no secret but a literal one that llm must
 //! refuse, and HOME is a scratch directory.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

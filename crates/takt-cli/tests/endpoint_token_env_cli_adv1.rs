@@ -5,6 +5,9 @@
 //! over it. These runs reach no network: the endpoint is `.invalid`, `--iterations 0` stops the
 //! run before any step, and the variable's value is a marker.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

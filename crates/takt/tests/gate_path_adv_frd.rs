@@ -4,6 +4,9 @@
 //! else on `/usr/local/bin:/usr/bin:/bin` [...]; a name found nowhere, or only inside the tree,
 //! refuses the gate". Each case observes `gate.run` over a scratch repository.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

@@ -7,6 +7,9 @@
 //! it too. A case opened with none commits as takt's own `takt <takt@localhost>`, unless the
 //! caller requires one (a run that pushes), and then it is refused before anything is written.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

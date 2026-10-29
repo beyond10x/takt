@@ -3,6 +3,9 @@
 //! story:run-state-directory-is-configurable added `--state-dir`, which no table of the page
 //! names. The case reads the flags from `takt run --help` and looks each up on the page.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::path::Path;
 use std::process::Command;
 

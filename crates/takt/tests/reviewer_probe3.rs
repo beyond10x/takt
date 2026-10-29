@@ -1,5 +1,8 @@
 //! Reviewer probes, round 3 (57c6462). Not part of the change.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;

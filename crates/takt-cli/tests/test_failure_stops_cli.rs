@@ -11,6 +11,9 @@
 //! the tests and the count, with no harness call after the second; a failing set that changes, or
 //! one the output does not name, does not stop it.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
@@ -516,10 +519,12 @@ fn a_restart_after_red_base_checks_again_and_goes_on_once_green() {
 }
 
 /// A restart after `RepeatedTestFailure` runs the tests again before any model call, at the
-/// revision the second failure was at: the same set stops it the same way, the count read from
-/// the case's record, with no further harness call.
+/// revision the second failure was at; that result starts the count over
+/// (story:a-revision-without-code-is-no-new-attempt), so the restart gets one implementation
+/// edit, whose result fails the same set and stops it the same way, with one further harness
+/// call.
 #[test]
-fn a_restart_after_repeated_failures_stops_again_without_a_model_call() {
+fn a_restart_after_repeated_failures_stops_again_after_one_model_call() {
     let script = cargo_script(SAME_TWO);
     let world = world("repeat-restart", &[("t.sh", &script, true)]);
     let (code, out, err) = world.scenario("./t.sh", "40");
@@ -536,6 +541,6 @@ fn a_restart_after_repeated_failures_stops_again_without_a_model_call() {
         stop.starts_with("stopped: RepeatedTestFailure (2 "),
         "{stop}\n{out}\n{err}"
     );
-    assert_eq!(world.calls(), 2, "{out}");
+    assert_eq!(world.calls(), 3, "{out}");
     assert_eq!(code, 3, "stdout {out} stderr {err}");
 }

@@ -2,6 +2,9 @@
 //! case completed, and a run with no harness on a case that holds everything but the grant.
 //! Adversary pass 1 over story:merge-under-authority.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

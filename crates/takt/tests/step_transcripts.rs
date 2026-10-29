@@ -7,6 +7,9 @@
 //! through. Each test gives its runs its own transcripts directory. No live `claude` runs: the
 //! harness program is a script.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

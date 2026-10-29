@@ -3,6 +3,9 @@
 //! token lived in is empty after the run. The key is a placeholder this test writes; HOME, the
 //! runtime directory and the double are scratch directories, and no run reaches a network.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

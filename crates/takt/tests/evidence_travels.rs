@@ -10,6 +10,9 @@
 //! proves the body is what the scan reads and that the pull request opens behind a scan that
 //! accepts it, with a stand-in for the program. It does not prove the policy's rules.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};

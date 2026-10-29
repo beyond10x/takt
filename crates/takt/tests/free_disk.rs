@@ -6,6 +6,9 @@
 //! reader that fails stops nothing and is said once. The free-space reader is injected
 //! ([`Run::read_free_space_with`]); no test fills a disk.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -712,6 +715,7 @@ fn trial_row(n: usize, stop: &str, passed: bool) -> Row {
         opened_binary: None,
         completed: Some(stop == "accepted"),
         step_tokens: Default::default(),
+        harness_steps: None,
         layers: None,
     }
 }
@@ -857,6 +861,7 @@ fn a_disk_low_stop_is_no_completion() {
         opened_binary: None,
         completed: None,
         step_tokens: Default::default(),
+        harness_steps: None,
         layers: None,
     };
     assert!(!row.disagrees());

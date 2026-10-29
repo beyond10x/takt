@@ -3,6 +3,9 @@
 //! change behind. Each case asserts what the story's acceptance asks: a step that writes under
 //! `.git/` or rewrites an ignored file is refused and leaves no trace of its change.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::io::{Seek as _, SeekFrom, Write as _};
 use std::os::unix::fs::PermissionsExt as _;

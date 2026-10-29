@@ -4,6 +4,9 @@
 //! and a branch name joined to a path before it is checked as a case id. Each case is named
 //! for what it asserts.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

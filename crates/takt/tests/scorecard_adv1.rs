@@ -3,6 +3,9 @@
 //! line comes from an older takt, it is rewritten from one the current `takt::events` wrote,
 //! so the bytes match what that takt wrote.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

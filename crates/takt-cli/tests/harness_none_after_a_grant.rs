@@ -4,6 +4,9 @@
 //! forge is the bot route's double on the program path (`forge_double`), so nothing reaches a
 //! network.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

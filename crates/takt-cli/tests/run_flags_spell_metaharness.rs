@@ -5,6 +5,9 @@
 //! `b10x-harness` double leaves a marker behind if it runs, HOME is an empty scratch directory, and
 //! each credential is a secret's name (takt reads no secret) or a scratch token file.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

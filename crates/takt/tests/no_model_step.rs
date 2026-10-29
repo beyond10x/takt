@@ -3,6 +3,9 @@
 //! `ApprovalRequired` naming the capability's action, with no harness call and no token spent.
 //! A case with a judgement action that could still change a claim still offers it.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};

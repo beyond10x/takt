@@ -9,6 +9,9 @@
 //! [`FORBIDDEN`], as a policy rule would, and says which file and line, never the text; every
 //! line is kept with what each file `scan-text` names held. Nothing leaves the machine.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};

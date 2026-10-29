@@ -160,8 +160,14 @@ pub enum Stop {
         rerun: Option<String>,
     },
     /// [`REPEATED_FAILURES`] `tests.run` results in a row failed the same set of tests, each at
-    /// a revision the one before was not at: the edits between them moved nothing the tests
-    /// decide. The run stops after the last, before another judgement step; the case stays open.
+    /// a revision that changed a path outside the documentation ([`is_documentation_path`])
+    /// since the one before: the edits between them moved nothing the tests decide. A failing
+    /// result at a revision a `tests.write` step committed (its `tests_change` record's), the red
+    /// run that shows the new tests failing, is not counted, nor one at a revision that changed
+    /// documentation only. A result that fails the set and, besides it, only tests such a red
+    /// run failed since continues the row: a test written after an edit that fixed nothing does
+    /// not reset it. The run stops after the last, before another judgement step; the
+    /// case stays open, and a run that resumes it counts from none.
     RepeatedTestFailure {
         /// The tests every one of the results failed, never empty.
         tests: Vec<String>,
@@ -198,8 +204,28 @@ pub enum Stop {
 }
 
 /// How many `tests.run` results in a row, each at a new revision, failing the same set of tests
-/// stop the run ([`Stop::RepeatedTestFailure`]).
+/// stop the run ([`Stop::RepeatedTestFailure`]). A failing result at a revision a `tests_change`
+/// record is about ([`tests_written_at`]), the red run a protocol asks for after its tests are
+/// written, is not one of them and leaves the row as it was; so does one at a revision that
+/// changed nothing but documentation since the row's last ([`code_changed`]).
 pub const REPEATED_FAILURES: u64 = 2;
+
+/// Whether `path`, relative to the tree, is documentation the tests cannot depend on: under
+/// `docs/`, or `README.md` or `CHANGELOG.md` at the root. The paths the repository's own rules
+/// leave off the judge surface; no protocol or case names its documentation paths.
+fn is_documentation_path(path: &str) -> bool {
+    path.starts_with("docs/") || path == "README.md" || path == "CHANGELOG.md"
+}
+
+/// Whether the tree of revision `to` differs from that of `from` at a path that is not
+/// documentation ([`is_documentation_path`]): a new attempt at what the tests decide. True when
+/// git cannot compare them, so a result is counted as it was before the rule.
+fn code_changed(tree: &Path, from: &str, to: &str) -> bool {
+    match crate::git::paths_differing_outside(tree, from, to, "docs") {
+        Ok(paths) => paths.iter().any(|path| !is_documentation_path(path)),
+        Err(_) => true,
+    }
+}
 
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
@@ -405,28 +431,59 @@ enum Taken {
 }
 
 /// The `tests.run` results in a row that failed the same tests ([`Run::tests_stop`]): the set,
-/// the tests in the order the first result named them, the revision of the last, and how many.
+/// the tests in the order the first result named them, the revision of the last, how many, and
+/// the tests outside the set that a red run after a `tests.write` failed since the row began
+/// ([`Failing::after_written`]).
 struct Failing {
     set: BTreeSet<String>,
     tests: Vec<String>,
     revision: String,
     count: u64,
+    written: BTreeSet<String>,
 }
 
 impl Failing {
+    /// `failing` after a failing `tests.run` result at a revision a `tests.write` step committed
+    /// ([`tests_written_at`]), the red run of the tests just written: the count stays as it was,
+    /// and the tests `failed` names outside the row's set are noted as written, so an edit that
+    /// leaves the row's set and only those failing continues the row ([`Failing::after`]).
+    fn after_written(failing: &mut Option<Failing>, failed: &[String]) {
+        if let Some(row) = failing {
+            let new = failed.iter().filter(|test| !row.set.contains(*test));
+            row.written.extend(new.cloned());
+        }
+    }
+
+    /// Whether a failure of `set` continues the row: it fails every test of the row's set, and
+    /// besides them only tests a red run after a `tests.write` failed since the row began.
+    fn continued_by(&self, set: &BTreeSet<String>) -> bool {
+        self.set.is_subset(set)
+            && set
+                .difference(&self.set)
+                .all(|test| self.written.contains(test))
+    }
+
     /// `failing` after a `tests.run` result at `revision`: `failed` the tests it failed, none
-    /// for a pass. A failure of the set the row failed adds one at a revision the last was not
-    /// at and none at the same; another set starts a row of one; a pass, and a failure that
-    /// names no test, end the row.
-    fn after(failing: &mut Option<Failing>, revision: &str, failed: Option<Vec<String>>) {
+    /// for a pass. A failure that continues the row ([`Failing::continued_by`]: its set, or its
+    /// set and tests written since) adds one at a revision the last was not
+    /// at whose change since it `advanced` (given the last's revision) finds a new attempt
+    /// ([`code_changed`]), and none at the same or at one that changed documentation only,
+    /// which leaves the row as it was; another set starts a row of one; a pass, and a failure
+    /// that names no test, end the row.
+    fn after(
+        failing: &mut Option<Failing>,
+        revision: &str,
+        failed: Option<Vec<String>>,
+        advanced: impl FnOnce(&str) -> bool,
+    ) {
         let Some(tests) = failed.filter(|tests| !tests.is_empty()) else {
             *failing = None;
             return;
         };
         let set: BTreeSet<String> = tests.iter().cloned().collect();
         match failing {
-            Some(row) if row.set == set => {
-                if row.revision != revision {
+            Some(row) if row.continued_by(&set) => {
+                if row.revision != revision && advanced(&row.revision) {
                     row.revision = revision.to_owned();
                     row.count += 1;
                 }
@@ -437,6 +494,7 @@ impl Failing {
                     tests,
                     revision: revision.to_owned(),
                     count: 1,
+                    written: BTreeSet::new(),
                 });
             }
         }
@@ -467,8 +525,14 @@ impl TestsSoFar {
     /// `tests.run` step wrote a `test_result` record; the row of failures of the same tests its
     /// results end with ([`Failing::after`], each result's tests read from its step's summary,
     /// [`crate::validator::failures_in`]); and the stop of its last run, from its last `stop`
-    /// line after the last `opened` one, when it is `RedBase` or `RepeatedTestFailure`.
-    fn read(record: &[serde_json::Value]) -> Self {
+    /// line after the last `opened` one, when it is `RedBase` or `RepeatedTestFailure`. A failing
+    /// result at a revision in `written`, the revisions the case's `tests_change` records are
+    /// about ([`tests_written_at`]), leaves the row as it was ([`REPEATED_FAILURES`]), as does
+    /// one at a revision of `tree` that changed documentation only since the row's last
+    /// ([`code_changed`]). After a `RepeatedTestFailure` stop the row is none: the run that
+    /// resumes the case counts from its check again, so it gets at least one implementation
+    /// edit before the count can stop it on the same reason.
+    fn read(record: &[serde_json::Value], written: &BTreeSet<String>, tree: &Path) -> Self {
         let mut first = true;
         let mut failing = None;
         let mut last_failed: BTreeSet<String> = BTreeSet::new();
@@ -501,14 +565,25 @@ impl TestsSoFar {
                     let failed = (line["result"] == "fail")
                         .then(|| crate::validator::failures_in(summary).tests);
                     last_failed = failed.iter().flatten().cloned().collect();
-                    Failing::after(&mut failing, revision, failed);
+                    if let Some(tests) = failed.as_deref()
+                        && written.contains(revision)
+                    {
+                        Failing::after_written(&mut failing, tests);
+                        continue;
+                    }
+                    Failing::after(&mut failing, revision, failed, |from| {
+                        code_changed(tree, from, revision)
+                    });
                 }
                 _ => {}
             }
         }
         let again = match stop.and_then(|stop| stop.split([' ', '(']).next()) {
             Some("RedBase") => Some(Again::RedBase(last_failed)),
-            Some("RepeatedTestFailure") => Some(Again::Repeated),
+            Some("RepeatedTestFailure") => {
+                failing = None;
+                Some(Again::Repeated)
+            }
             _ => None,
         };
         TestsSoFar {
@@ -517,6 +592,46 @@ impl TestsSoFar {
             again,
         }
     }
+}
+
+/// The revisions of the implementation the `tests_change` records of the case under `case_dir`
+/// are about: each one a `tests.write` step committed, attested by takt itself
+/// ([`TESTS_CHANGE_PRODUCER`]), in a case whose protocol lists `tests_change` among what
+/// `tests.write` may produce. A failing `tests.run` at one of them is the run that shows the new
+/// tests red, which a protocol asks for before the implementation is edited, so it counts toward
+/// no row of [`REPEATED_FAILURES`]. A case without the directory holds none; a record that does
+/// not read is an error naming its file, as [`CaseDir::has_evidence`] answers.
+fn tests_written_at(case_dir: &Path) -> Result<BTreeSet<String>> {
+    let dir = case_dir.join("evidence");
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeSet::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", dir.display())),
+    };
+    let mut written = BTreeSet::new();
+    for entry in entries {
+        let path = entry
+            .with_context(|| format!("read {}", dir.display()))?
+            .path();
+        if !matches!(
+            path.extension().and_then(|extension| extension.to_str()),
+            Some("json" | "yaml")
+        ) {
+            continue;
+        }
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("read the evidence record {}", path.display()))?;
+        let record: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text)
+            .with_context(|| format!("read the evidence record {}", path.display()))?;
+        if record["kind"].as_str() == Some(TESTS_CHANGE)
+            && record["producer"].as_str() == Some(TESTS_CHANGE_PRODUCER)
+            && record["subject"].as_str() == Some("implementation")
+            && let Some(revision) = record["subject_revision"].as_str()
+        {
+            written.insert(revision.to_owned());
+        }
+    }
+    Ok(written)
 }
 
 /// The reason [`Stop::Declined`] gives for a decline whose summary was empty.
@@ -11552,9 +11667,13 @@ impl<'a> Run<'a> {
     /// stopped on, failing the same tests; unless the run goes on past it
     /// ([`Run::continue_past_red_base`]). Else [`Stop::RepeatedTestFailure`] when it leaves the
     /// row of failures of the same tests ([`Failing::after`], seeded from the case's record) at
-    /// [`REPEATED_FAILURES`] or more: after a `RepeatedTestFailure` the check again at the same
-    /// revision failing the same set stops the same way, and a pass or another set goes on. An
-    /// observation that wrote no record changes nothing but the check again, which it uses up.
+    /// [`REPEATED_FAILURES`] or more: after a `RepeatedTestFailure` the case's record seeds no
+    /// row ([`TestsSoFar::read`]), so the check again starts one and the run stops on the same
+    /// reason only after an implementation edit. A failure at a revision a `tests_change` record
+    /// is about ([`tests_written_at`]), the red run after the tests are written, leaves the row
+    /// as it was, as does one at a revision that changed documentation only since the row's last
+    /// ([`code_changed`]). An observation that wrote no record changes nothing but the check
+    /// again, which it uses up.
     fn tests_stop(
         &self,
         revision: &str,
@@ -11589,7 +11708,16 @@ impl<'a> Run<'a> {
                 rerun: failures.rerun,
             }));
         }
-        Failing::after(&mut so_far.failing, revision, Some(failures.tests));
+        if tests_written_at(&self.case.dir)?.contains(revision) {
+            Failing::after_written(&mut so_far.failing, &failures.tests);
+            return Ok(None);
+        }
+        Failing::after(
+            &mut so_far.failing,
+            revision,
+            Some(failures.tests),
+            |from| code_changed(&self.tree, from, revision),
+        );
         Ok(so_far
             .failing
             .as_ref()
@@ -11645,13 +11773,14 @@ impl<'a> Run<'a> {
         // What the case's record holds of its tests before this run's own lines
         // ([`Run::tests_stop`]); a record that does not read names no first result and no row,
         // so it stops nothing, and a `RedBase` the run goes on past is not checked again.
+        let written = tests_written_at(&self.case.dir)?;
         let mut tests_so_far = events.read().map_or(
             TestsSoFar {
                 first: false,
                 failing: None,
                 again: None,
             },
-            |record| TestsSoFar::read(&record),
+            |record| TestsSoFar::read(&record, &written, &self.tree),
         );
         if !self.stops_red_base && matches!(tests_so_far.again, Some(Again::RedBase(_))) {
             tests_so_far.again = None;

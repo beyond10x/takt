@@ -5,6 +5,9 @@
 //! components beside their sum, instants below the second, the base revision on `opened` and
 //! the revision a validator observed on its step.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1007,6 +1010,7 @@ fn each_metric_prints_its_own_medians_or_is_known_to_have_none() {
             opened_binary: None,
             completed: None,
             step_tokens: BTreeMap::from([("implementation.edit".to_owned(), Some(tokens))]),
+            harness_steps: None,
             layers: None,
         }
     };

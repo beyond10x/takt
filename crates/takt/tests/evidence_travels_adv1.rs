@@ -3,6 +3,9 @@
 //! &revision=…&producer=…`, built with no escaping) or the bound on the pull request's body.
 //! Every repository is a scratch one this file builds under the crate's build directory.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

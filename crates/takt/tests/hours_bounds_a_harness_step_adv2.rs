@@ -5,6 +5,9 @@
 //! command before the budget ends ([`GATE_HOURS`]); the grace is 10 s. The gate's case runs by
 //! itself in a child process with a `PATH` and `HOME` of its own ([`sealed`]).
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

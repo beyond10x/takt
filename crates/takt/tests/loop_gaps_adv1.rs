@@ -3,6 +3,9 @@
 //! at exact equality (a step that overshoots it is never compared), and the time budget only
 //! with one step longer than the whole budget (a clock that restarts at every step passes).
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

@@ -3,6 +3,9 @@
 //! `turns` and `started_at`, each absent when the harness did not state it; and a record
 //! written before the fields existed still reads.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

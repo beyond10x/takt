@@ -7,6 +7,9 @@
 //! case has a pull request, so both ride to the base with it. A refusal of the store is relayed
 //! verbatim and the stop is unchanged.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

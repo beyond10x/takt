@@ -3,6 +3,9 @@
 //! file, and the step guard uses the built-in lists at open, at resume and in a replay, exactly
 //! as it does when the file holds them.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};

@@ -6,6 +6,9 @@
 //! the grant of `repository.merge`), each line under 100 characters, instead of the forge's
 //! default message.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

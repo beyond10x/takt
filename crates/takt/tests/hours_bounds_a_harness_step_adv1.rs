@@ -2,6 +2,9 @@
 //! fake or a `claude` script that sleeps; nothing reaches a model. Every process a case starts
 //! is killed before it ends.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;

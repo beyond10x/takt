@@ -14,6 +14,9 @@
 //! shell file or a program no gate command runs is judged by the gate, and one changing a script
 //! a gate command runs still stops it, naming the script.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

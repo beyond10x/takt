@@ -12,6 +12,9 @@
 //! `XDG_CONFIG_HOME/gh`, then `~/.config/gh`; the keyring through the session bus the address
 //! names, else `$XDG_RUNTIME_DIR/bus`, else `/run/user/<uid>/bus`), so no network is used.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;

@@ -4,6 +4,9 @@
 //! case takes none either. The harness is a double on the program path that counts its calls;
 //! nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;

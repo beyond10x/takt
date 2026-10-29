@@ -5,6 +5,9 @@
 //! program that could not start, a JSON line naming no action), are not retried. Each session
 //! here is metaharness's scripted b10x-harness one: no vendor process, no credential, no network.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::RefCell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
