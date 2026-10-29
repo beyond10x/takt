@@ -6,6 +6,16 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-28
+
+Under `story.delivery/2` a red gate admits the edit once the story's tests pass, so a gate failure
+no test reads can be fixed.
+
+### Fixed
+
+- The engineering-protocols pin moves to 0.12.1: with `tests_first=required` a gate red at the current revision admits `implementation.edit` while the story's tests are written and pass there.
+- In 0.18.0 a format, lint or citation failure after green tests left only `tests.write`, and the case could only decline.
+
 ## [0.18.0] - 2026-10-28
 
 A `story.delivery/2` case writes the evidence its tests-first guards read; a gates project file the
@@ -737,7 +747,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.18.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.18.1...HEAD
+[0.18.1]: https://github.com/beyond10x/takt/compare/0.18.0...0.18.1
 [0.18.0]: https://github.com/beyond10x/takt/compare/0.17.0...0.18.0
 [0.17.0]: https://github.com/beyond10x/takt/compare/0.16.0...0.17.0
 [0.16.0]: https://github.com/beyond10x/takt/compare/0.15.1...0.16.0
