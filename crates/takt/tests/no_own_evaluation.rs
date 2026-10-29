@@ -253,6 +253,47 @@ fn evaluate_calls(code: &str) -> usize {
         .count()
 }
 
+/// A file's code without the body of each unit tests' module, `#[cfg(test)] mod tests { … }`,
+/// from its `{` to the `}` that closes it: a unit test that evaluates its own scratch case is no
+/// evaluation of the library's, and everything around the module is still read. The braces are
+/// matched over [`code`]'s output, where none inside a string, a character or a comment is left.
+fn library(code: &str) -> String {
+    let squeezed: Vec<(usize, char)> = code
+        .char_indices()
+        .filter(|(_, c)| !c.is_whitespace())
+        .collect();
+    let text: String = squeezed.iter().map(|&(_, c)| c).collect();
+    let head = "#[cfg(test)]modtests{";
+    let mut kept = String::with_capacity(code.len());
+    let mut from = 0;
+    let mut searched = 0;
+    while let Some(found) = text[searched..].find(head) {
+        let open = searched + found + head.len() - 1;
+        let mut depth = 0usize;
+        let mut close = None;
+        for (n, c) in text[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + n);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else { break };
+        let index = |at: usize| squeezed[text[..at].chars().count()].0;
+        kept.push_str(&code[from..index(open)]);
+        from = index(close);
+        searched = close;
+    }
+    kept.push_str(&code[from..]);
+    kept
+}
+
 /// Whether the approved exception holds: `run.rs` runs both pre-checks over the decision the
 /// loop evaluates, and the library calls `evaluate` once, from the loop.
 fn pre_checks_read_the_evaluation(files: &[(PathBuf, String)]) -> Result<(), String> {
@@ -270,7 +311,10 @@ fn pre_checks_read_the_evaluation(files: &[(PathBuf, String)]) -> Result<(), Str
             return Err(format!("src/run.rs does not hold `{check}`"));
         }
     }
-    let calls: usize = files.iter().map(|(_, code)| evaluate_calls(code)).sum();
+    let calls: usize = files
+        .iter()
+        .map(|(_, code)| evaluate_calls(&library(code)))
+        .sum();
     if calls == 1 {
         Ok(())
     } else {
@@ -348,4 +392,20 @@ fn the_scan_finds_each_kind_it_refuses() {
     assert_eq!(canon_eval(&probe), vec![1, 2]);
     assert_eq!(case_dir_evaluate(&probe), vec![7]);
     assert_eq!(evaluate_calls(&probe), 2);
+}
+
+/// Only the body of a unit tests' module is left out of the count: a call after it, in a later
+/// test module's neighbour, in a module beside it or in a function around it is still counted.
+#[test]
+fn a_call_beside_a_test_module_is_counted() {
+    let probe = code(concat!(
+        "fn run(case: &CaseDir) { case.evaluate(0); }\n",
+        "#[cfg(test)]\nmod tests {\n    fn t(case: &CaseDir) { let s = \"}\"; case.evaluate(0); }\n}\n",
+        "#[cfg(test)]\nmod endpoint_tests { fn u() {} }\n",
+        "pub fn sneaky(case: &CaseDir) { case.evaluate(0); }\n",
+        "pub mod later { pub fn f(case: &CaseDir) { case.evaluate(0); } }\n",
+        "fn outer(case: &CaseDir) {\n    #[cfg(test)]\n    mod tests { fn v() {} }\n    case.evaluate(0);\n}\n",
+    ));
+    assert_eq!(evaluate_calls(&probe), 5);
+    assert_eq!(evaluate_calls(&library(&probe)), 4);
 }

@@ -1,6 +1,9 @@
 //! The help of `takt run` and of `takt scenario run` names, where it describes exit 3, the stop
 //! `RepeatedGateFailure` with the bound the run keeps ([`takt::run::REPEATED_GATE_FAILURES`]).
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::process::Command;
 
 /// `takt <args>`: its exit status and its stdout.

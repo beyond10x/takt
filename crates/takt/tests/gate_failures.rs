@@ -2,6 +2,9 @@
 //! the third such `gate.run` result, each at a new implementation revision, naming the gates; no
 //! judgement step follows it, and the case stays open.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::cell::Cell;
 use std::fs;
 use std::path::{Path, PathBuf};

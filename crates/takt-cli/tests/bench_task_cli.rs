@@ -6,6 +6,9 @@
 //! and stops `Completed (completed)`. The file declares no forge action, so `--forge none` leaves
 //! none of them to the harness. Nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

@@ -9,6 +9,9 @@
 //! vendor process, no credential, no network. Every key and token here is fake, and built at run
 //! time so no file of this repository holds one.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};

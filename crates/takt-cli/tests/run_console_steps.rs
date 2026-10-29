@@ -7,6 +7,9 @@
 //! for Claude Code: it writes two failing tests at its first call, reporting tokens, cost and
 //! duration, and declines every later call reporting none. Nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
