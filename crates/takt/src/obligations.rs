@@ -64,6 +64,10 @@ pub struct Obligation {
     pub text: String,
     /// Where the gate stands.
     pub status: Status,
+    /// The command lines of the gate's assertions, as the project file at the case's base admits
+    /// them ([`commands_at`]); given to the step, never recorded.
+    #[serde(skip)]
+    pub commands: Vec<String>,
 }
 
 /// The `event` the record names an observation's table by.
@@ -99,6 +103,79 @@ pub fn gates_at(tree: &Path, base: &str, gates: &Path) -> Result<Vec<(String, St
                 .collect()
         })
         .unwrap_or_default())
+}
+
+/// The command lines each gate of the gates document `gates` runs, as the commit `base` holds
+/// the document and the project file `project`: a command of the project file belongs to a gate
+/// when one of the gate's assertions names it as a quoted string, as the gate validator binds it.
+/// Keyed by gate id; a gate that names none, and a base without either file, give nothing.
+///
+/// # Errors
+/// A git read that fails.
+pub fn commands_at(
+    tree: &Path,
+    base: &str,
+    gates: &Path,
+    project: &Path,
+) -> Result<std::collections::BTreeMap<String, Vec<String>>> {
+    let mut commands = std::collections::BTreeMap::new();
+    let read = |path: &Path| -> Result<Option<serde_yaml_ng::Value>> {
+        Ok(crate::validator::file_at(tree, base, path)?
+            .and_then(|text| serde_yaml_ng::from_str(&text).ok()))
+    };
+    let (Some(document), Some(project)) = (read(gates)?, read(project)?) else {
+        return Ok(commands);
+    };
+    let Some(admitted) = project["commands"].as_mapping() else {
+        return Ok(commands);
+    };
+    for gate in document["gates"].as_sequence().into_iter().flatten() {
+        let Some(id) = gate["id"].as_str() else {
+            continue;
+        };
+        let assertions: Vec<&str> = gate["assertions"]
+            .as_sequence()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_yaml_ng::Value::as_str)
+            .collect();
+        let lines: Vec<String> = admitted
+            .iter()
+            .filter_map(|(name, command)| {
+                let name = name.as_str()?;
+                let quoted = format!("\"{name}\"");
+                if !assertions
+                    .iter()
+                    .any(|assertion| assertion.contains(&quoted))
+                {
+                    return None;
+                }
+                let words = std::iter::once(&command["executable"])
+                    .chain(command["args"].as_sequence().into_iter().flatten())
+                    .map(|word| word.as_str().map(shell_word))
+                    .collect::<Option<Vec<String>>>()?;
+                Some(words.join(" "))
+            })
+            .collect();
+        if !lines.is_empty() {
+            commands.insert(id.to_owned(), lines);
+        }
+    }
+    Ok(commands)
+}
+
+/// `word` as a shell reads it back: as it is when it holds only characters no shell treats
+/// specially, else in single quotes.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_./=:,+@%".contains(c))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
 }
 
 /// The last table `record` (the case's record so far) holds: its revision and its rows; none
@@ -145,7 +222,12 @@ pub fn current(
                 .as_ref()
                 .and_then(|rows| rows.iter().find(|row| row.id == id))
                 .map_or(Status::NotYetRun, |row| row.status);
-            Obligation { id, text, status }
+            Obligation {
+                id,
+                text,
+                status,
+                commands: Vec::new(),
+            }
         })
         .collect())
 }
@@ -162,11 +244,10 @@ pub fn of_run(
     run: &crate::Run<'_>,
     record: &[serde_json::Value],
 ) -> Result<Option<(String, Vec<Obligation>)>> {
-    let Some((gates, subject)) = run
-        .validators
-        .iter()
-        .find_map(|v| v.gates_document().map(|gates| (gates, v.subject())))
-    else {
+    let Some((gates, project, subject)) = run.validators.iter().find_map(|v| {
+        v.gates_document()
+            .map(|gates| (gates, v.gates_project(), v.subject()))
+    }) else {
         return Ok(None);
     };
     let Some(base) = crate::case::Branch::read(&run.case.dir)?.base_commit else {
@@ -176,7 +257,13 @@ pub fn of_run(
         Some(revision) => revision,
         None => crate::git::head(&run.tree)?,
     };
-    let obligations = current(&run.tree, &base, gates, record, &revision)?;
+    let mut obligations = current(&run.tree, &base, gates, record, &revision)?;
+    if let Some(project) = project {
+        let mut commands = commands_at(&run.tree, &base, gates, project)?;
+        for obligation in &mut obligations {
+            obligation.commands = commands.remove(&obligation.id).unwrap_or_default();
+        }
+    }
     Ok(Some((revision, obligations)))
 }
 
@@ -192,9 +279,13 @@ pub fn block(obligations: &[Obligation]) -> String {
     );
     for obligation in obligations {
         text.push_str(&format!(
-            "- {}: {} [{}]\n",
+            "- {}: {} [{}]",
             obligation.id, obligation.text, obligation.status
         ));
+        for command in &obligation.commands {
+            text.push_str(&format!(" Runs `{command}`."));
+        }
+        text.push('\n');
     }
     text
 }
@@ -259,6 +350,7 @@ mod tests {
             id: id.to_owned(),
             text: format!("The gate {id} holds."),
             status,
+            commands: Vec::new(),
         }
     }
 
@@ -317,8 +409,79 @@ mod tests {
     fn the_block_lists_each_gate_with_its_text_and_status() {
         let rows = [row("a", Status::Fail)];
         let text = block(&rows);
-        assert!(text.contains("- a: The gate a holds. [fail]"), "{text}");
+        assert!(text.contains("- a: The gate a holds. [fail]\n"), "{text}");
         assert_eq!(block(&[]), "");
+    }
+
+    #[test]
+    fn the_block_names_each_gate_command() {
+        let mut format = row("format", Status::NotYetRun);
+        format.commands = vec!["cargo fmt --all --check".to_owned()];
+        let text = block(&[format, row("b", Status::Pass)]);
+        assert!(
+            text.contains(
+                "- format: The gate format holds. [not yet run] Runs `cargo fmt --all --check`.\n"
+            ),
+            "{text}"
+        );
+        assert!(text.contains("- b: The gate b holds. [pass]\n"), "{text}");
+        assert!(text.ends_with("[pass]\n"), "{text}");
+    }
+
+    #[test]
+    fn a_gate_runs_the_commands_its_assertions_name_at_the_base() {
+        let dir = std::env::temp_dir().join(format!("takt-gate-commands-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("scratch");
+        let tree = dir.as_path();
+        let git = |args: &[&str]| {
+            let status = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args(args)
+                .current_dir(tree)
+                .status()
+                .expect("git");
+            assert!(status.success(), "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        std::fs::write(
+            tree.join("gates.yaml"),
+            "gates:\n  - id: format\n    text: Formatted.\n    assertions:\n      - 'process.succeeded(\"format\")'\n  - id: none\n    text: Nothing.\n    assertions:\n      - 'true'\n",
+        )
+        .expect("gates");
+        std::fs::write(
+            tree.join("project.yaml"),
+            "commands:\n  format:\n    executable: cargo\n    args: [fmt, --check, \"it's\"]\n  formats:\n    executable: other\n",
+        )
+        .expect("project");
+        git(&["add", "."]);
+        git(&["commit", "-qm", "base"]);
+        std::fs::write(tree.join("project.yaml"), "commands: {}\n").expect("tree edit");
+        let commands = commands_at(
+            tree,
+            "HEAD",
+            Path::new("gates.yaml"),
+            Path::new("project.yaml"),
+        )
+        .expect("commands");
+        assert_eq!(
+            commands.into_iter().collect::<Vec<_>>(),
+            vec![(
+                "format".to_owned(),
+                vec![r"cargo fmt --check 'it'\''s'".to_owned()]
+            )]
+        );
+        assert!(
+            commands_at(
+                tree,
+                "HEAD",
+                Path::new("gates.yaml"),
+                Path::new("absent.yaml")
+            )
+            .expect("commands")
+            .is_empty()
+        );
+        std::fs::remove_dir_all(&dir).expect("remove the scratch");
     }
 
     #[test]

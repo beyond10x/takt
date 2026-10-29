@@ -2033,7 +2033,19 @@ struct Rule {
     /// The rules naming its tools when its session is given context files
     /// ([`context_files`]), which the prompt then names: Codex's.
     given_tools: Option<&'static str>,
+    /// Whether it may run a command that changes nothing, so the rules ask it to run the gates'
+    /// checks the prompt names before it ends a step that changes files ([`CHECKS_RULE`]).
+    runs_checks: bool,
 }
+
+/// What the rules add for a harness that runs commands, when the repository's obligations name
+/// a gate's command and the step may change files.
+const CHECKS_RULE: &str = " Before you end a step that changes files, run each gate command \
+     named under the repository obligations that compiles nothing and changes no file (a format, \
+     specification or citation check; never a build, test or lint), and fix in the same step \
+     what it reports at its cause: never delete or shorten a comment or documentation to make a \
+     check pass; where a citation's lines moved or changed, update the citation as the check \
+     says. A file a check names is part of this change, even outside the story's Scope.";
 
 /// The meaning of each action the prompt explains: the adapter's own words for the actions it
 /// knows, else the description the protocol declares for the action, on one line.
@@ -2043,7 +2055,9 @@ fn describe(action: &str, protocol: &LoadedProtocol) -> String {
         "tests.write" => {
             "add or change test files only (paths under tests/ or test/, or named *_test.*, test_*.*, *.test.*, *.spec.*)"
         }
-        "implementation.edit" => "change the implementation so the intent holds",
+        "implementation.edit" => {
+            "change the implementation so the intent holds for every input of the kind its story names, not only the examples its tests give; where the code reads what a library already resolves (a parser's events, types or errors), take the library's answer rather than a rule written for the examples"
+        }
         "plan.edit" => "write or change the plan",
         _ => "",
     };
@@ -2320,6 +2334,7 @@ impl ClaudeCode {
         tools: Self::FILE_TOOLS_RULE,
         mentions: true,
         given_tools: None,
+        runs_checks: false,
     };
 
     /// b10x-harness's rule: file tools, and no file mentions.
@@ -2327,6 +2342,7 @@ impl ClaudeCode {
         tools: Self::FILE_TOOLS_RULE,
         mentions: false,
         given_tools: None,
+        runs_checks: false,
     };
 
     /// Codex's rule: a shell and `apply_patch`, no file mentions, and context files named.
@@ -2334,6 +2350,7 @@ impl ClaudeCode {
         tools: Self::SHELL_RULE,
         mentions: false,
         given_tools: Some(Self::SHELL_RULE_GIVEN),
+        runs_checks: true,
     };
 
     /// The rule of the harness of `kind` ([`Rule`]).
@@ -2426,6 +2443,15 @@ impl ClaudeCode {
         }
         text.push_str(DECLINE_PARAGRAPH);
         text.push_str(&format!("\nRules: {}", given_tools.unwrap_or(rule.tools)));
+        if rule.runs_checks
+            && context.obligations.iter().any(|o| !o.commands.is_empty())
+            && context
+                .offered
+                .iter()
+                .any(|action| action == "implementation.edit" || action == "tests.write")
+        {
+            text.push_str(CHECKS_RULE);
+        }
         text.push_str(
             " Do not commit. If the action \
              you pick is `repository.inspect`, change no file. If it is `tests.write`, change test \
@@ -5157,6 +5183,17 @@ mod tests {
         decision: &Decision,
         last_gate: Option<&crate::run::GateFailure>,
     ) -> String {
+        prompt_with_obligations(tree, protocol, decision, last_gate, &[])
+    }
+
+    /// As [`prompt_under`], with the repository's `obligations`.
+    fn prompt_with_obligations(
+        tree: &Path,
+        protocol: &LoadedProtocol,
+        decision: &Decision,
+        last_gate: Option<&crate::run::GateFailure>,
+        obligations: &[crate::obligations::Obligation],
+    ) -> String {
         let offered: Vec<String> = decision
             .admissible()
             .into_iter()
@@ -5180,12 +5217,43 @@ mod tests {
                 scope_revision: None,
                 base_revision: Some("HEAD"),
                 commit: None,
-                obligations: &[],
+                obligations,
             },
             ClaudeCode::CODEX_RULE,
             None,
             &[],
         )
+    }
+
+    /// A harness that runs commands is told, in its rules, to run the gates' checks the
+    /// obligations name before it ends a step that changes files; with no command named, it is
+    /// not.
+    #[test]
+    fn the_rules_ask_a_shell_harness_to_run_the_named_checks() {
+        let dir = scratch("named-checks");
+        let (protocol, decision) = after_a_red_gate(&dir.0, "story.delivery/3", false);
+        let format = crate::obligations::Obligation {
+            id: "format".to_owned(),
+            text: "Formatted.".to_owned(),
+            status: crate::obligations::Status::Fail,
+            commands: vec!["cargo fmt --all --check".to_owned()],
+        };
+        let named = prompt_with_obligations(
+            &dir.0,
+            &protocol,
+            &decision,
+            None,
+            std::slice::from_ref(&format),
+        );
+        let rules = named.find("\nRules: ").expect("the rules");
+        assert!(named[rules..].contains(CHECKS_RULE), "{named}");
+        assert!(named.contains("Runs `cargo fmt --all --check`."), "{named}");
+        let unnamed = crate::obligations::Obligation {
+            commands: Vec::new(),
+            ..format
+        };
+        let none = prompt_with_obligations(&dir.0, &protocol, &decision, None, &[unnamed]);
+        assert!(!none.contains(CHECKS_RULE), "{none}");
     }
 
     /// After a red gate with green tests under `story.delivery/2`, the prompt names, after the

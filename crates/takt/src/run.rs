@@ -389,6 +389,24 @@ fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
 }
 
+/// The text a step's `summary` is printed with on the console: whole, unless it ends in the
+/// same bracketed `[metaharness …]` verdict the console printed last (`last`), which is then
+/// left off; `last` becomes the verdict it ends in. The record keeps the summary whole.
+fn said_line(summary: &str, last: &mut Option<String>) -> String {
+    let Some(at) = summary
+        .rfind(" [metaharness ")
+        .filter(|_| summary.ends_with(']'))
+    else {
+        return summary.to_owned();
+    };
+    let (said, verdict) = summary.split_at(at);
+    if last.as_deref() == Some(verdict) {
+        return said.to_owned();
+    }
+    *last = Some(verdict.to_owned());
+    summary.to_owned()
+}
+
 /// Who took a step, with what its event records of it: a validator, and the revision it
 /// observed when it observed; or the harness, the tokens it reported, their components and
 /// what it reported about the call besides them, and the path of the transcript takt kept or
@@ -9171,6 +9189,9 @@ pub struct Run<'a> {
     pub steps: u64,
     /// Tokens the harness reported.
     pub tokens: u64,
+    /// The harness's bracketed verdict the console last printed after a step's summary
+    /// ([`said_line`]).
+    said_verdict: Option<String>,
     /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
     pub poll: Duration,
     /// The revision the running binary was built from, as its `--version` prints it, recorded
@@ -9499,6 +9520,7 @@ impl<'a> Run<'a> {
             validators,
             steps: 0,
             tokens: 0,
+            said_verdict: None,
             poll: Self::POLL,
             binary: None,
             llm_digest: None,
@@ -9808,6 +9830,7 @@ impl<'a> Run<'a> {
             validators,
             steps: 0,
             tokens: 0,
+            said_verdict: None,
             poll: Self::POLL,
             binary: None,
             llm_digest: None,
@@ -11116,7 +11139,8 @@ impl<'a> Run<'a> {
             return String::new();
         }
         let call = self.harness.last_call().unwrap_or_default();
-        crate::console::harness_figures(call.duration_ms, tokens, call.cost_usd)
+        let cached = self.harness.last_usage().map(|usage| usage.cache_read);
+        crate::console::harness_figures(call.duration_ms, tokens, cached, call.cost_usd)
     }
 
     /// Charges a harness step that failed, proposing nothing, with the tokens its session
@@ -12965,7 +12989,10 @@ impl<'a> Run<'a> {
             self.harness.name(),
             self.call_figures(report.tokens)
         )
-        .and_then(|()| writeln!(out, "  said: {}", crate::trace::escape(&report.summary)));
+        .and_then(|()| {
+            let said = said_line(&report.summary, &mut self.said_verdict);
+            writeln!(out, "  said: {}", crate::trace::escape(&said))
+        });
         if let Err(error) = told {
             let moved = undo()?;
             record_step(self)?;
@@ -13648,6 +13675,28 @@ pub const TESTS_CHANGE_PRODUCER: &str = "takt.tests-write";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The console prints a harness's bracketed verdict once, and again only when it changes.
+    #[test]
+    fn a_repeated_verdict_is_printed_once() {
+        let mut last = None;
+        let one = "Edited. [metaharness hermetic on: H1 ok, H2 gap]";
+        assert_eq!(said_line(one, &mut last), one);
+        assert_eq!(
+            said_line(
+                "Handed over. [metaharness hermetic on: H1 ok, H2 gap]",
+                &mut last
+            ),
+            "Handed over."
+        );
+        let other = "Fixed. [metaharness hermetic on: H1 ok, H2 ok]";
+        assert_eq!(said_line(other, &mut last), other);
+        assert_eq!(said_line("No verdict.", &mut last), "No verdict.");
+        assert_eq!(
+            said_line("Again. [metaharness hermetic on: H1 ok, H2 ok]", &mut last),
+            "Again."
+        );
+    }
 
     /// story:a-run-can-decline: a reason past [`REASON_AT_MOST`] bytes is cut on a character
     /// boundary and marked; one within it is kept whole.

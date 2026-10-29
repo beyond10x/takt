@@ -139,6 +139,11 @@ pub trait Validator {
     fn gates_document(&self) -> Option<&Path> {
         None
     }
+    /// The project file that admits the commands of [`Self::gates_document`]'s gates, relative to
+    /// the tree, read from the case's base revision. None by default.
+    fn gates_project(&self) -> Option<&Path> {
+        None
+    }
     /// Checks, when the case at `case_dir` in `tree` has just opened, what the validator reads
     /// from the base revision the case pinned and would refuse when it observes, running
     /// nothing it would run: a refusal is the error, and the case is not run. Nothing to check
@@ -2282,6 +2287,14 @@ impl Validator for GateRun {
         Some(&self.gates)
     }
 
+    fn gates_project(&self) -> Option<&Path> {
+        Some(
+            self.project
+                .as_deref()
+                .unwrap_or(Path::new(DEFAULT_PROJECT)),
+        )
+    }
+
     /// The gates document and the project file the case pinned at open, prepared as an
     /// observation prepares them ([`GateRun::prepare`]) and no command run: a file the gate would
     /// refuse (a `timeout_seconds` outside `1..300`, an unknown format, a program found nowhere)
@@ -2767,6 +2780,7 @@ impl GateRun {
                 id: gate.id.clone(),
                 text: gate.text.split_whitespace().collect::<Vec<_>>().join(" "),
                 status: crate::obligations::status_of(result.as_str().unwrap_or_default())?,
+                commands: Vec::new(),
             });
         }
         *self.obligations.borrow_mut() = Some(obligations);

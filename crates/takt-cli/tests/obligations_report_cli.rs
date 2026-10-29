@@ -622,6 +622,7 @@ fn a_stop_time_table_does_not_hide_the_gates_table() {
                     id: "manifest".to_owned(),
                     text: "The repository has its manifest.".to_owned(),
                     status: takt::obligations::Status::NotYetRun,
+                    commands: Vec::new(),
                 }],
             },
         )
