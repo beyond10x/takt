@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- A run started without `--confinement` says it got `none` as the default, on its `case` line and in its `opened` event, instead of naming a flag nobody passed.
+- Library: `confinement::Unconfined` carries its reason (`Unconfined::new(flag_given)`), and `confinement::check_none` takes whether the flag was given and returns the adapter to install.
+
 ## [0.19.0] - 2026-10-29
 
 A run's console opens with the story and shows what each step cost; a failed gate or test run

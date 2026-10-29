@@ -5,7 +5,7 @@
 //!
 //! | adapter | name | a program | the test command |
 //! |---|---|---|---|
-//! | [`Unconfined`] | `none` | admitted | run by Substrate's `local` adapter, requested with a reason ([`LOCAL_REASON`]), so the run is declared insecure ([`unconfined`]): on the host, no credential and no login location in its environment, a scratch home and `TMPDIR`, a timeout and a bounded tail |
+//! | [`Unconfined`] | `none` | admitted | run by Substrate's `local` adapter, requested with a reason ([`LOCAL_REASON`], or [`DEFAULT_REASON`] for a run that got `none` as the default), so the run is declared insecure ([`unconfined`]): on the host, no credential and no login location in its environment, a scratch home and `TMPDIR`, a timeout and a bounded tail |
 //! | [`Substrate`] | `substrate` | admitted, but a Python, which takt would otherwise start for a test command at case open, and every command a gate's library starts itself | run by the adapter chosen by facts from [`CANDIDATES`] (`systemd` around `linux`, `linux`, `macos`): the tree its workspace, its `target/` the build's, the toolchain and the cargo caches read-only, no network, process bounds where the adapter serves `limits`; one it cannot serve is refused by name, never run unconfined |
 //!
 //! [`Command`] is the one type of takt that starts a process: [`std::process::Command`] with
@@ -318,6 +318,10 @@ pub trait Confinement: Send + Sync {
 /// which declares it insecure: on the `opened` event and the run's first line.
 pub const LOCAL_REASON: &str = "the run was started with --confinement none: its test command runs on the host as this user, unconfined";
 
+/// [`LOCAL_REASON`] for a run started without `--confinement`, which gets `none` as the
+/// default: the same after its first `:`.
+pub const DEFAULT_REASON: &str = "the run was started with the default confinement none: its test command runs on the host as this user, unconfined";
+
 /// The contract families every test command needs: it is started, watched, its output read and
 /// waited for.
 const RUN_FAMILIES: [ContractFamily; 4] = [
@@ -335,9 +339,35 @@ const POLL: Duration = Duration::from_millis(10);
 const KILLED: Duration = Duration::from_secs(10);
 
 /// The adapter `none`: every program is admitted, and the test command is run by Substrate's
-/// `local` adapter, declared insecure ([`unconfined`]).
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Unconfined;
+/// `local` adapter, declared insecure ([`unconfined`]) with its reason: [`LOCAL_REASON`], or
+/// [`DEFAULT_REASON`] for a run that got `none` as the default ([`Unconfined::new`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Unconfined {
+    reason: &'static str,
+}
+
+impl Unconfined {
+    /// The adapter `none` of a run started with `--confinement none` (`flag_given`), or
+    /// without the flag, which gets `none` as the default.
+    #[must_use]
+    pub const fn new(flag_given: bool) -> Self {
+        Self {
+            reason: if flag_given {
+                LOCAL_REASON
+            } else {
+                DEFAULT_REASON
+            },
+        }
+    }
+}
+
+impl Default for Unconfined {
+    /// The adapter `none` as `--confinement none` names it, declared insecure with
+    /// [`LOCAL_REASON`].
+    fn default() -> Self {
+        Self::new(true)
+    }
+}
 
 impl Confinement for Unconfined {
     fn name(&self) -> &str {
@@ -348,10 +378,14 @@ impl Confinement for Unconfined {
         Ok(())
     }
 
+    fn run_test(&self, test: &TestRun<'_>) -> anyhow::Result<Finished> {
+        run_local(test, self.reason)
+    }
+
     fn substrate(&self) -> Option<AdapterRecord> {
         local()
             .ok()
-            .map(|adapter| AdapterRecord::of(adapter.facts(), Some(LOCAL_REASON)))
+            .map(|adapter| AdapterRecord::of(adapter.facts(), Some(self.reason)))
     }
 }
 
@@ -379,15 +413,15 @@ const KEEP_TAIL: OutputRetention = OutputRetention {
 };
 
 /// The profile a `none` run asks of `local`: the families every test command needs and those
-/// `needs` names, the facts it names, `tree` the workspace, [`LOCAL_REASON`], and the tail of
-/// its output kept ([`KEEP_TAIL`]).
-fn local_profile(tree: &Path, needs: &Needs) -> ConfinementProfile {
+/// `needs` names, the facts it names, `tree` the workspace, `reason` ([`LOCAL_REASON`] or
+/// [`DEFAULT_REASON`]), and the tail of its output kept ([`KEEP_TAIL`]).
+fn local_profile(tree: &Path, needs: &Needs, reason: &str) -> ConfinementProfile {
     let mut families = RUN_FAMILIES.to_vec();
     families.extend(needs.families.iter().cloned());
     ConfinementProfile {
         families,
         facts: needs.facts.clone(),
-        local_reason: Some(LOCAL_REASON.to_owned()),
+        local_reason: Some(reason.to_owned()),
         workspace: Some(tree.to_path_buf()),
         output_retention: KEEP_TAIL,
         ..ConfinementProfile::default()
@@ -397,21 +431,25 @@ fn local_profile(tree: &Path, needs: &Needs) -> ConfinementProfile {
 /// Checks before a `none` run opens that Substrate's `local` adapter admits its test command's
 /// profile on `tree` with what `options` needs: a family it does not serve, a fact it did not
 /// prove, or the host's policy forbidding it is refused by name, and nothing is started.
+/// `flag_given` says whether the run was started with `--confinement none` or got `none` as
+/// the default: `local` is asked with the reason that says which, and the adapter returned,
+/// to install, runs and records the run with it ([`Unconfined::new`]).
 ///
 /// # Errors
 ///
 /// The refusal, or a name in `options.needs` that is no family and no fact.
-pub fn check_none(tree: &Path, options: &Options) -> anyhow::Result<AdapterRecord> {
+pub fn check_none(tree: &Path, options: &Options, flag_given: bool) -> anyhow::Result<Unconfined> {
     let needs = Needs::parse(&options.needs)?;
-    let adapter = local()?;
-    adapter
-        .admit(&local_profile(tree, &needs))
+    let none = Unconfined::new(flag_given);
+    local()?
+        .admit(&local_profile(tree, &needs, none.reason))
         .map_err(|error| anyhow!("{}", describe(&error)))?;
-    Ok(AdapterRecord::of(adapter.facts(), Some(LOCAL_REASON)))
+    Ok(none)
 }
 
 /// Runs the test command as takt starts it under `none`: through Substrate's `local` adapter,
-/// requested with [`LOCAL_REASON`] and so declared insecure, without a shell, on the host, in
+/// requested with [`LOCAL_REASON`] (an [`Unconfined`] of a run that got `none` as the default
+/// asks with [`DEFAULT_REASON`]) and so declared insecure, without a shell, on the host, in
 /// `tree`. Its environment is takt's own without a credential ([`crate::forge::is_credential`]),
 /// a login location ([`crate::forge::LOGIN_LOCATIONS`]) or a variable outside Substrate's
 /// non-secret shape, with a scratch home and `TMPDIR` of its own
@@ -427,6 +465,11 @@ pub fn check_none(tree: &Path, options: &Options) -> anyhow::Result<AdapterRecor
 /// An empty line, a refusal, a failure to start or follow it, what it started still holding its
 /// output open once killed, or a [`TimedOut`] past its timeout.
 pub fn unconfined(test: &TestRun<'_>) -> anyhow::Result<Finished> {
+    run_local(test, LOCAL_REASON)
+}
+
+/// [`unconfined`], `local` asked with `reason` ([`LOCAL_REASON`] or [`DEFAULT_REASON`]).
+fn run_local(test: &TestRun<'_>, reason: &str) -> anyhow::Result<Finished> {
     let (program, _) = test
         .argv
         .split_first()
@@ -434,7 +477,7 @@ pub fn unconfined(test: &TestRun<'_>) -> anyhow::Result<Finished> {
     current().admit(OsStr::new(program))?;
     let adapter = local()?;
     let admitted = adapter
-        .admit(&local_profile(test.tree, &Needs::default()))
+        .admit(&local_profile(test.tree, &Needs::default(), reason))
         .map_err(|error| anyhow!("confinement none refused {program}: {}", describe(&error)))?;
     let home = crate::validator::FreshHome::new()?;
     let tmp = home.dir().join("tmp");
@@ -639,7 +682,7 @@ pub fn refused(
 /// The adapter of this process, [`Unconfined`] until another is installed.
 fn slot() -> &'static RwLock<Arc<dyn Confinement>> {
     static SLOT: OnceLock<RwLock<Arc<dyn Confinement>>> = OnceLock::new();
-    SLOT.get_or_init(|| RwLock::new(Arc::new(Unconfined)))
+    SLOT.get_or_init(|| RwLock::new(Arc::new(Unconfined::default())))
 }
 
 /// Makes `adapter` the one every child process of this process starts through, and returns
