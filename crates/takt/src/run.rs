@@ -9047,6 +9047,16 @@ pub struct Run<'a> {
     /// The module names no step may put in an import directory, kept with the case when a Python
     /// answered ([`Modules::of_case`]).
     modules: Modules,
+    /// The console the run prints for a person ([`crate::console`]), set by [`Run::console`];
+    /// while none, the run prints every decision's full `frontier:` line and no header.
+    console: Option<crate::console::Console>,
+    /// The dollars the run's steps reported they cost, summed as each step is recorded; none
+    /// while no step reported a cost. Read by [`Run::cost_usd`].
+    cost_usd: std::cell::Cell<Option<f64>>,
+    /// The commits the run's steps made, and the paths they committed. Read by
+    /// [`Run::commits`].
+    commits: u64,
+    committed: BTreeSet<String>,
     /// Whether the run stops [`Stop::Unperformable`]; off until [`Run::stop_when_unperformable`].
     stops_unperformable: bool,
     /// Whether the run stops [`Stop::RedBase`]; on until [`Run::continue_past_red_base`], and off
@@ -9340,6 +9350,10 @@ impl<'a> Run<'a> {
             outside_dirs,
             options,
             modules,
+            console: None,
+            cost_usd: std::cell::Cell::new(None),
+            commits: 0,
+            committed: BTreeSet::new(),
             stops_unperformable: false,
             stops_red_base: true,
             setup: Vec::new(),
@@ -9645,6 +9659,10 @@ impl<'a> Run<'a> {
             outside_dirs,
             options,
             modules,
+            console: None,
+            cost_usd: std::cell::Cell::new(None),
+            commits: 0,
+            committed: BTreeSet::new(),
             stops_unperformable: false,
             stops_red_base,
             setup: Vec::new(),
@@ -10070,6 +10088,35 @@ impl<'a> Run<'a> {
     /// caller opts in here, and without this call a run offers the harness its step as before.
     pub fn stop_when_unperformable(&mut self) {
         self.stops_unperformable = true;
+    }
+
+    /// Prints the run for a person ([`crate::console`]): a header before the `case` line that
+    /// names takt's version, the story and its intent's title and summary, a harness line after
+    /// it, and the frontier as what the run may do, `may:` at the first decision and `may now:`
+    /// whenever the admissible set changes; every decision's full `frontier:` line too only
+    /// when `console` is verbose. The CLI turns it on for every run; without this call a run
+    /// prints as before.
+    pub fn console(&mut self, console: crate::console::Console) {
+        self.console = Some(console);
+    }
+
+    /// The time since the run was made, its wall time when read at its stop.
+    #[must_use]
+    pub fn elapsed(&self) -> Duration {
+        self.started.elapsed()
+    }
+
+    /// The dollars the run's steps reported they cost, the sum of the `cost_usd` of the step
+    /// lines it recorded; none when no step reported one.
+    #[must_use]
+    pub fn cost_usd(&self) -> Option<f64> {
+        self.cost_usd.get()
+    }
+
+    /// The commits the run's steps made, and how many paths they committed, each path once.
+    #[must_use]
+    pub fn commits(&self) -> (u64, usize) {
+        (self.commits, self.committed.len())
     }
 
     /// Goes on past a red base: the case's first `tests.run` failing before any effect is
@@ -10869,6 +10916,7 @@ impl<'a> Run<'a> {
             None => (None, None),
         };
         let call = call.map(|call| *call).unwrap_or_default();
+        let cost = call.cost_usd;
         events.emit(
             self.steps,
             &Event::Step {
@@ -10889,7 +10937,24 @@ impl<'a> Run<'a> {
                 transcript,
                 transcript_refused,
             },
-        )
+        )?;
+        // The run's cost is the sum over the step lines it recorded.
+        if let Some(cost) = cost {
+            self.cost_usd
+                .set(Some(self.cost_usd.get().unwrap_or(0.0) + cost));
+        }
+        Ok(())
+    }
+
+    /// What a harness step's line appends under the console: the duration and cost the harness
+    /// reported of its last call and the step's `tokens`, each when reported
+    /// ([`crate::console::harness_figures`]); nothing without the console.
+    fn call_figures(&self, tokens: Option<u64>) -> String {
+        if self.console.is_none() {
+            return String::new();
+        }
+        let call = self.harness.last_call().unwrap_or_default();
+        crate::console::harness_figures(call.duration_ms, tokens, call.cost_usd)
     }
 
     /// Charges a harness step that failed, proposing nothing, with the tokens its session
@@ -11195,6 +11260,7 @@ impl<'a> Run<'a> {
         let globs = self.judge_list()?.unwrap_or_default();
         let (surface, surface_kept) =
             JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
+        let began = Instant::now();
         let observed = validator
             .observe_within(&self.tree, &revision, seq, self.deadline())
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
@@ -11379,7 +11445,39 @@ impl<'a> Run<'a> {
             validator.action(),
             &observation.summary,
         )?;
-        writeln!(out, "step {}: {} {{}}", self.steps, validator.action())?;
+        // Under the console the line says the observation's result and what failed, and how
+        // long it took: a `tests.run`'s failed tests from its summary, another validator's
+        // failed checks by id.
+        let figures = if self.console.is_some() {
+            let results: Vec<Option<&str>> = observation
+                .records
+                .iter()
+                .map(|record| record.result.as_deref())
+                .collect();
+            let result = if results.contains(&Some("fail")) {
+                Some("fail")
+            } else if results.contains(&Some("pass")) {
+                Some("pass")
+            } else {
+                None
+            };
+            let named: Vec<String> = if validator.action() == crate::validator::TestsRun::ACTION {
+                crate::validator::failures_in(&observation.summary).tests
+            } else {
+                failed.iter().map(|check| check.id.clone()).collect()
+            };
+            let took =
+                u64::try_from(returned.duration_since(began).as_millis()).unwrap_or(u64::MAX);
+            crate::console::validator_figures(result, &named, took)
+        } else {
+            String::new()
+        };
+        writeln!(
+            out,
+            "step {}: {} {{}}{figures}",
+            self.steps,
+            validator.action()
+        )?;
         // A `tests.run` summary keeps its failed tests whole; its printed line is bounded.
         if validator.action() == crate::validator::TestsRun::ACTION {
             let line = crate::validator::tests_line(&observation.summary);
@@ -11629,6 +11727,16 @@ impl<'a> Run<'a> {
             self.llm_digest.as_deref(),
             &commit_record,
         )?;
+        if self.console.is_some() {
+            let story = match &self.unit {
+                Unit::Story(story) => Some(story.id.as_str()),
+                Unit::Intent(_) => None,
+            };
+            for line in crate::console::header(crate::console::VERSION, story, &self.options.intent)
+            {
+                writeln!(out, "{line}")?;
+            }
+        }
         writeln!(
             out,
             "case {} on {} in {}; inputs {}; confinement {confinement}{adapter}",
@@ -11641,6 +11749,17 @@ impl<'a> Run<'a> {
                 shown_inputs.join(" ")
             }
         )?;
+        if self.console.is_some() {
+            // The harness by the name its step lines carry, its version as preflight read it.
+            let version = preflight
+                .as_ref()
+                .and_then(|preflight| preflight.version.as_deref());
+            writeln!(
+                out,
+                "{}",
+                crate::console::harness_line(self.harness.name(), version, &confinement)
+            )?;
+        }
         if let Some(declined) = declined {
             writeln!(
                 out,
@@ -11683,6 +11802,9 @@ impl<'a> Run<'a> {
         // from here on, never one an earlier run wrote.
         let first_decision = seq + 1;
         let mut last_idle: Option<String> = None;
+        // The admissible set the console last said, under [`Run::console`]: `may:` is said once,
+        // then `may now:` only when the set changes.
+        let mut said_may: Option<Vec<String>> = None;
         let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
         let keeps_state = self.harness.keeps_state();
         // The validators that observed without writing a record, each with the revision it
@@ -11740,7 +11862,23 @@ impl<'a> Run<'a> {
             if self.kept_records() == Records::Default {
                 self.case.keep_only_decision(first_decision, seq)?;
             }
-            writeln!(out, "{}", decision.frontier_line())?;
+            match self.console {
+                Some(console) => {
+                    let now = decision.admissible();
+                    let line = match &said_may {
+                        None => Some(crate::console::may(&now)),
+                        Some(before) => crate::console::may_now(before, &now),
+                    };
+                    if let Some(line) = line {
+                        writeln!(out, "{line}")?;
+                    }
+                    said_may = Some(now);
+                    if console.verbose {
+                        writeln!(out, "{}", decision.frontier_line())?;
+                    }
+                }
+                None => writeln!(out, "{}", decision.frontier_line())?,
+            }
             let state = format!(
                 "{:?}{:?}{:?}",
                 decision.claims, decision.obligations, decision.actions
@@ -12254,6 +12392,17 @@ impl<'a> Run<'a> {
         // of a step that is discarded.
         let mut outside_before = Outside::read(&self.tree, &self.outside_dirs)?;
         let outside_dirs = self.outside_dirs.clone();
+        // Under the console the step is said before the call, so a person watching tells a
+        // working step from a hung one; its result line follows once the call returns. Said
+        // before the checkpoint, so a line that cannot be written leaves nothing to put back.
+        if self.console.is_some() {
+            writeln!(
+                out,
+                "{}",
+                crate::console::working(self.steps, self.harness.name(), offered, approvals)
+            )?;
+            out.flush()?;
+        }
         // Every branch and tag is guarded beside `HEAD` and the case's branch: the case's
         // base, and a sibling case's branch, which a step could otherwise move under it; a
         // branch another worktree has checked out is that session's, but never the case's
@@ -12436,10 +12585,11 @@ impl<'a> Run<'a> {
                             self.refused(events, BY_TAKT, &why)?;
                             writeln!(
                                 out,
-                                "step {}: {} ({})",
+                                "step {}: {} ({}){}",
                                 self.steps,
                                 report.action,
-                                self.harness.name()
+                                self.harness.name(),
+                                self.call_figures(report.tokens)
                             )?;
                             writeln!(
                                 out,
@@ -12632,10 +12782,11 @@ impl<'a> Run<'a> {
         // one whose harness failed, and the run ends on the error.
         let told = writeln!(
             out,
-            "step {}: {} ({})",
+            "step {}: {} ({}){}",
             self.steps,
             report.action,
-            self.harness.name()
+            self.harness.name(),
+            self.call_figures(report.tokens)
         )
         .and_then(|()| writeln!(out, "  said: {}", crate::trace::escape(&report.summary)));
         if let Err(error) = told {
@@ -13224,9 +13375,22 @@ impl<'a> Run<'a> {
                 revision: Some(head.clone()),
             },
         )?;
+        self.commits += 1;
+        self.committed.extend(changed.iter().cloned());
+        // Under the console the line names the paths committed, relative to the tree, each
+        // escaped so no name shapes a line of its own.
+        let named = if self.console.is_some() && !changed.is_empty() {
+            let paths: Vec<String> = changed
+                .iter()
+                .map(|path| crate::git::shown(std::ffi::OsStr::new(path)))
+                .collect();
+            format!(": {}", paths.join(", "))
+        } else {
+            String::new()
+        };
         writeln!(
             out,
-            "  effect: committed {} path(s); implementation is now {}",
+            "  effect: committed {} path(s); implementation is now {}{named}",
             changed.len(),
             &head[..8.min(head.len())]
         )?;

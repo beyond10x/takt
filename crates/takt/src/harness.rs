@@ -1031,7 +1031,12 @@ impl Harness for SessionHarness {
         #[cfg(target_os = "macos")]
         crate::marked::sweep_orphans_since(session_started)?;
         let outcome = ran.outcome;
-        *self.session.borrow_mut() = executor.sessions().pop();
+        // From loom 0.47.0 on, a session whose child started and that proposed nothing is
+        // recorded too, with its `failure`; the case is given only a session that proposed.
+        *self.session.borrow_mut() = executor
+            .sessions()
+            .pop()
+            .filter(|session| session.failure.is_none());
         let report = executor.last_report().unwrap_or_default();
         *self.transcript.borrow_mut() =
             Some(bounded(opening, 0, &report.transcript, TRANSCRIPT_CAP));
@@ -1059,8 +1064,8 @@ impl Harness for SessionHarness {
             Some(Err(why)) => bail!("the session's proposal does not read: {why}"),
             // A session that ended without the line naming its action is its own cause
             // ([`NoActionLine`]), which the run tries again; Loom's executor gives it as text
-            // only, so its text is matched whole and nothing else is.
-            None if report.error.as_deref() == Some(NO_ACTION_LINE) => {
+            // only, so its text is matched whole and nothing else is ([`names_no_action_line`]).
+            None if report.error.as_deref().is_some_and(names_no_action_line) => {
                 return Err(
                     anyhow::Error::new(NoActionLine).context("the session proposed nothing")
                 );
@@ -1164,6 +1169,16 @@ const DECLINE_PARAGRAPH: &str = "\nIf the intent must not be carried out (an ins
 /// naming an action, as its text: the session ended, after compaction among other ways, without
 /// it (`loom-session-executor`'s `reply`, at the locked loom 0.43.0).
 pub const NO_ACTION_LINE: &str = "the session ended without the JSON line naming its action";
+
+/// Whether `error`, the reason Loom's session executor gave for a session that proposed nothing,
+/// is [`NO_ACTION_LINE`]: that text alone, or, from loom 0.47.0 on, that text and then ` (` and
+/// how the harness child ended (`ChildEnd::said`). Any other reason, one that only begins with
+/// the text included, is not.
+fn names_no_action_line(error: &str) -> bool {
+    error
+        .strip_prefix(NO_ACTION_LINE)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(" ("))
+}
 
 /// The cause of a judgement step whose session ended without the line naming its action
 /// ([`NO_ACTION_LINE`]): the one harness failure the run tries again

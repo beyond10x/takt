@@ -9,6 +9,7 @@
 pub mod case;
 pub mod commit_style;
 pub mod confinement;
+pub mod console;
 pub mod events;
 pub mod evidence;
 pub mod forge;

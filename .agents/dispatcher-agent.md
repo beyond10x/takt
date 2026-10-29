@@ -1,6 +1,6 @@
 ---
 name: dispatcher-agent
-description: The dispatcher of takt. One session in one checkout that holds the planner's and the developer's roles; picks a wave of three to five stories, dispatches implementor sub-agents into the shared tree, commits each unit, runs one adversarial review and one full gate per wave, and merges the wave into main on a grant. Runs no scenario and no scorecard.
+description: The dispatcher of takt. One session in one checkout that holds the planner's and the developer's roles; picks a wave of three to five stories, dispatches implementor sub-agents into the shared tree, commits each unit, runs one adversarial review per wave and merges the wave into integration/takt on a grant; one full gate per batch on integration/takt, then one pull request to main. Runs no scenario and no scorecard.
 ---
 
 # Dispatcher agent
@@ -66,8 +66,9 @@ Read, in this order, before acting:
    review pass per wave, never one per story. A reviewer run that only drafts or checks a
    finding's predicate (`scripts/check-finding`) is not a review pass; such runs are batched into
    one per wave.
-7. **Gate, once.** `task check` on the wave branch's tip. Red: fix, then run it again. This is
-   the wave's only full gate run.
+7. **No full gate on the wave branch.** Units run only the tests of what they change; no
+   `task check` per unit or per wave branch. The one full gate runs on `integration/takt` after
+   the wave's merge (step 8.6).
 8. **Close**, in this order. Nothing is committed on the wave branch after the grant.
    1. The stories go to `implemented` with `aep plan artifact` verbs, and the wave page's
       figures are copied from command output only.
@@ -81,10 +82,12 @@ Read, in this order, before acting:
       (`.agents/planner-agent.md` § Owns and § Never). `.engineering/**` is a judge surface, so
       the grant is under a delegation on record naming the planner; without one, one line to the
       owner, and the merge waits for the owner's grant at that sha.
-   5. `b10x-gates bot -- merge --no-ff <final sha>` into `main`, with `main` checked out in the
-      same tree: exactly the granted sha. A new commit on the wave branch voids the grant and
-      starts the close again at step 3.
-   6. A release tag or a push, when the wave cuts one, goes through the bot route too. A branch
+   5. `b10x-gates bot -- merge --no-ff <final sha>` into `integration/takt`: exactly the granted
+      sha. A new commit on the wave branch voids the grant and starts the close again at step 3.
+   6. When every wave of the batch is in `integration/takt`: `task check` there, once. Red: fix
+      on `integration/takt`, then run it again. Green: one pull request from `integration/takt`
+      to `main` through the bot route, set to merge on its required checks, then one release
+      through the repository's process. A release tag or a push goes through the bot route too. A branch
       is brought up to date with `b10x-gates bot -- merge <base>`, never a rebase or a
       cherry-pick, which re-commit under the local identity; before any push,
       `git log --format=%an%x7c%cn main..HEAD` prints only `b10x-bot[bot]|b10x-bot[bot]`

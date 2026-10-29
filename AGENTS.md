@@ -114,6 +114,10 @@ by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
   self-improvement work carries the tag `rsi`, and every open `rsi` story is scheduled before any
   story without it: a wave takes the `rsi` stories first, and opens without one only for a unit it
   depends on (owner, 2026-10-19).
+- Delivery is in batches: a wave's units run only the tests of what they change, never a full
+  `task check`; their waves merge into `integration/takt`, where one local `task check` runs
+  after the batch is in, then one pull request to `main` through the bot route, set to merge on
+  its required checks, and one release (owner, 2026-10-28).
 - A finding goes into the planning store with an `expected_before` predicate a machine can check.
   A sub-agent's return is its message; the four hand-overs between the dispatcher and the trial
   agent are in § Messages below.
