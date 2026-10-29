@@ -11,6 +11,8 @@ takt's releases.
 - A failed `tests.run`'s block makes paths under the tree relative and withholds only the lines the secret scan refuses, counted in its heading.
 - The loom pin moves to 0.48.0, which carries metaharness 0.23.0 and Harness 0.22.0; an older b10x-harness reads as an H9 gap in the preflight, advisory.
 - The container image ships b10x-harness 0.22.0.
+- A run started without `--confinement` says it got `none` as the default, on its `case` line and in its `opened` event, instead of naming a flag nobody passed.
+- Library: `confinement::Unconfined` carries its reason (`Unconfined::new(flag_given)`), and `confinement::check_none` takes whether the flag was given and returns the adapter to install.
 
 ## [0.19.0] - 2026-10-29
 

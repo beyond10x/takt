@@ -808,6 +808,8 @@ impl LoopArgs {
         let unset = |id: &str| unset(matches, id);
         let llm = self.llm_section(&file, &unset)?;
         let looping = self;
+        looping.confinement_given =
+            matches.value_source("confinement") != Some(clap::parser::ValueSource::DefaultValue);
         looping.llm = llm;
         looping.llm_digest = file.llm_digest;
         if unset("iterations") && file.iterations.is_some() {
@@ -1170,10 +1172,15 @@ struct LoopArgs {
     /// unconfined. `none`: the test command runs through Substrate's `local` adapter, declared
     /// insecure with the reason the `case` line and the `opened` event state: on the host as
     /// this user, in a cleared environment without credentials, with a scratch home and
-    /// `TMPDIR`; it can read what this user can. The `case` line the run prints and its
-    /// `opened` event name the adapter and the facts it proved.
+    /// `TMPDIR`; it can read what this user can; the reason says whether the run was started
+    /// with --confinement none or got `none` as the default. The `case` line the run prints
+    /// and its `opened` event name the adapter and the facts it proved.
     #[arg(long, default_value = "none", value_parser = ["none", "substrate"])]
     confinement: String,
+    /// Whether --confinement was given on the command line rather than left to its default;
+    /// set by [`LoopArgs::configured`].
+    #[arg(skip)]
+    confinement_given: bool,
     /// A contract family or fact the run's test command needs beyond those every run needs,
     /// by its Substrate name (`limits`, `network_egress`, `private_tmpdir`, …): an adapter that
     /// does not serve or prove it is not chosen, and with none left the run is refused by
@@ -2220,7 +2227,8 @@ impl LoopArgs {
     /// Installs the adapter --confinement names for a run on `repo`, before anything of the
     /// run is done: `substrate` opens the first Substrate adapter whose facts serve the test
     /// command's profile ([`takt::confinement::CANDIDATES`]); `none` checks that Substrate's
-    /// `local` adapter admits it, declared insecure. A refusal names what was missing, and
+    /// `local` adapter admits it, declared insecure with a reason that says whether the flag
+    /// was given or `none` is the default. A refusal names what was missing, and
     /// nothing is started.
     fn confine(&self, repo: &Path) -> Result<()> {
         let options = takt::confinement::Options {
@@ -2244,7 +2252,9 @@ impl LoopArgs {
                 "--confinement-cgroup-root is for --confinement substrate"
             )));
         }
-        takt::confinement::check_none(repo, &options).map_err(refused)?;
+        let none = takt::confinement::check_none(repo, &options, self.confinement_given)
+            .map_err(refused)?;
+        takt::confinement::install(std::sync::Arc::new(none));
         Ok(())
     }
 
