@@ -209,9 +209,10 @@ fn token() -> String {
 }
 
 /// A secret scanner (or any command run with colour forced) prints the match in colour: the SGR
-/// sequence `ESC [ 31 m` ends in the word character `m` right before the token, and
-/// `credential_shape` only matches a token that no word character precedes. The escape
-/// sequence is taken out before the check, so the line is withheld.
+/// sequence `ESC [ 31 m` ends in the letter `m` right before the token, and the line is
+/// withheld. A GitHub token is found after a letter too, so this case holds with or without the
+/// escape sequence taken out; `credential_shape_adv_u3` guards the taking out with a key that is
+/// not found after a letter.
 #[test]
 fn a_token_printed_in_colour_is_withheld() {
     let token = token();

@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- `--forge local`: a local bare repository, the tree's `origin`, is the forge; a run opens a request record there, runs the run file's `local_checks` confined and merges into the target branch.
+
 ### Changed
 
 - A failed `tests.run`'s block makes paths under the tree relative and withholds only the lines the secret scan refuses, counted in its heading.
@@ -13,6 +17,10 @@ takt's releases.
 - The container image ships b10x-harness 0.22.0.
 - A run started without `--confinement` says it got `none` as the default, on its `case` line and in its `opened` event, instead of naming a flag nobody passed.
 - Library: `confinement::Unconfined` carries its reason (`Unconfined::new(flag_given)`), and `confinement::check_none` takes whether the flag was given and returns the adapter to install.
+
+### Fixed
+
+- A credential joined to a word before it (`test_ghp_…`) is withheld. After a letter or digit, `sk-` needs a capital and a digit after it, so `xsk-` and lower-case hex is shown.
 
 ## [0.19.0] - 2026-10-29
 
