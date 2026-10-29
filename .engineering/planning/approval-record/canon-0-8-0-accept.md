@@ -9,7 +9,7 @@ tags:
 - wave-approval
 relations:
 - decides: task:canon-0-8-0
-revision: 2
+revision: 3
 transitions:
 - {from: "draft", to: "accepted", at: "2026-10-29T14:46:23Z", actor: "human:timo", revision: 2}
 ---
@@ -28,3 +28,14 @@ items:
   tests write in the same second admits the edit under story.delivery/2 (ep 0.14.0), with no
   waiting."
 - "do NOT move the ESS pin" (the operator, 2026-10-29).
+
+## The ESS pin (D213)
+
+D213 replaces the "do NOT move the ESS pin" line above. The operator's rule as landed, quoted by the
+orchestrator,
+2026-10-29: "A repository's ESS crates and its ess pin move to the newest ESS release when a
+change touches that repository anyway, in the same wave." The newest ESS release is 0.76.0
+(2026-10-29). takt already pins the `ess` CLI at 0.76.0 in `.github/workflows/check.yml` and
+`darwin.yml`, and it depends on no ESS crate. The pin stays at 0.76.0, and nothing is
+regenerated: takt's ESS documents are validated (`ess specify validate --path ess`, ess 0.76.0,
+exit 0), and none of its files is a projection.
