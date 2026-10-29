@@ -5,6 +5,9 @@ inputs:
   story.delivery/2:
     tests_first: required
     gate_on: after_handover
+  story.delivery/3:
+    tests_first: required
+    gate_on: after_handover
   software.change/1:
     risk: standard
     change_kind: feature

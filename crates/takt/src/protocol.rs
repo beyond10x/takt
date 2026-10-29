@@ -26,10 +26,22 @@ pub struct LoadedProtocol {
     pub actions: Vec<String>,
 }
 
+/// takt's own built-in protocols, `(name, major, document)` each, the name as the registry spells
+/// it: `protocols/<name>/<major>.yaml`, embedded in the binary. `story.delivery/3` is
+/// `story.delivery/2` of the engineering protocols with two changes: `implementation.edit` is
+/// also admissible while the tests pass and the gate is red, so a gate's failure is fixed in the
+/// implementation; and `change.handover` is not admissible while the tests fail at the current
+/// revision. A name and major the registry also ships is refused by a unit test.
+const OWN: [(&str, u32, &str); 1] = [(
+    "story-delivery",
+    3,
+    include_str!("../../../protocols/story-delivery/3.yaml"),
+)];
+
 impl LoadedProtocol {
-    /// A built-in of the engineering protocols, by `name/major`: `software.change/1`,
+    /// A built-in, by `name/major`: one of the engineering protocols (`software.change/1`,
     /// `story.delivery/1`, `self.improvement/1`, `loop.improvement/1` and the rest of the
-    /// registry.
+    /// registry) or one of takt's own ([`OWN`], `story.delivery/3`).
     pub fn builtin(id: &str) -> Result<Self> {
         let (name, major) = split_id(id)?;
         // The registry names a protocol by its directory, `software-change` or
@@ -37,6 +49,12 @@ impl LoadedProtocol {
         // `eval.gated_change`. Both spellings are accepted. A name the registry knows under its
         // own spelling reports that spelling's refusal, so an unknown major is called one.
         let listed = name.replace(['.', '_'], "-");
+        if let Some((_, _, yaml)) = OWN
+            .iter()
+            .find(|(own, own_major, _)| *own == listed && *own_major == major)
+        {
+            return Self::from_yaml(yaml);
+        }
         let builtin = canon_engineering::registry::get(name, major).or_else(|first| {
             if listed == name {
                 Err(first)
@@ -275,13 +293,22 @@ impl LoadedProtocol {
     }
 
     /// The built-in protocols, `(name, major)` each, as the engineering protocols' registry
-    /// names them (`story-delivery`).
+    /// names them (`story-delivery`): the registry's, each of takt's own ([`OWN`]) after the
+    /// last of the registry's with its name.
     #[must_use]
     pub fn builtins() -> Vec<(String, u32)> {
-        canon_engineering::registry::list()
+        let mut listed: Vec<(String, u32)> = canon_engineering::registry::list()
             .into_iter()
             .map(|(name, major)| (name.to_owned(), major))
-            .collect()
+            .collect();
+        for (name, major, _) in OWN {
+            let at = listed
+                .iter()
+                .rposition(|(listed, _)| listed == name)
+                .map_or(listed.len(), |at| at + 1);
+            listed.insert(at, (name.to_owned(), major));
+        }
+        listed
     }
 }
 
@@ -1055,6 +1082,25 @@ mod tests {
         assert_eq!(file.id, builtin.id);
         assert_eq!(file.ir_json, builtin.ir_json);
         assert!(LoadedProtocol::resolve("no.such/1").is_err());
+    }
+
+    /// Each of takt's own built-ins loads under its id, is `story.delivery/2` of the registry
+    /// but its revision and `implementation.edit`, and is a name and major the registry does not
+    /// ship, so a dependency upgrade that ships one is a decision, never a silent swap.
+    #[test]
+    fn takts_own_builtins_are_not_the_registrys() {
+        for (name, major, _) in OWN {
+            assert!(
+                canon_engineering::registry::get(name, major).is_err(),
+                "the registry ships {name}/{major}"
+            );
+        }
+        let own = LoadedProtocol::builtin("story.delivery/3").expect("takt's own");
+        let two = LoadedProtocol::builtin("story.delivery/2").expect("the registry's");
+        assert_eq!(own.id, "story.delivery/3");
+        assert_eq!(own.actions, two.actions);
+        assert_eq!(own.inputs, two.inputs);
+        assert_eq!(own.artifacts, two.artifacts);
     }
 
     #[test]

@@ -174,6 +174,15 @@ pub enum Stop {
         /// The results in a row.
         count: u64,
     },
+    /// [`REPEATED_GATE_FAILURES`] `gate.run` results in a row failed the same set of gates, each
+    /// at a revision the one before was not at: the edits between them moved nothing the gates
+    /// decide. The run stops after the last, before another judgement step; the case stays open.
+    RepeatedGateFailure {
+        /// The gates every one of the results failed, never empty.
+        gates: Vec<String>,
+        /// The results in a row.
+        count: u64,
+    },
     /// The harness binary the run would start does not qualify under the run's hermetic mode:
     /// asked of metaharness before the first session, on open and on every resume, with no model
     /// call ([`Harness::preflight`]). The case stays open, and the next run asks again.
@@ -226,11 +235,14 @@ fn code_changed(tree: &Path, from: &str, to: &str) -> bool {
         Err(_) => true,
     }
 }
+/// How many `gate.run` results in a row, each at a new revision, failing the same set of gates
+/// stop the run ([`Stop::RepeatedGateFailure`]).
+pub const REPEATED_GATE_FAILURES: u64 = 3;
 
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 16] = [
+pub const STOP_KINDS: [&str; 17] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -247,6 +259,7 @@ pub const STOP_KINDS: [&str; 16] = [
     "HarnessUnqualified",
     "SetupFailed",
     "Declined",
+    "RepeatedGateFailure",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -330,6 +343,11 @@ impl std::fmt::Display for Stop {
                 "RepeatedTestFailure ({count} tests.run results in a row, each at a new revision, failed the same tests: {})",
                 tests.join(", ")
             ),
+            Stop::RepeatedGateFailure { gates, count } => write!(
+                f,
+                "RepeatedGateFailure ({count} gate.run results in a row, each at a new revision, failed the same gates: {})",
+                gates.join(", ")
+            ),
             Stop::HarnessUnqualified {
                 kind,
                 version,
@@ -396,6 +414,24 @@ fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
 }
 
+/// The text a step's `summary` is printed with on the console: whole, unless it ends in the
+/// same bracketed `[metaharness …]` verdict the console printed last (`last`), which is then
+/// left off; `last` becomes the verdict it ends in. The record keeps the summary whole.
+fn said_line(summary: &str, last: &mut Option<String>) -> String {
+    let Some(at) = summary
+        .rfind(" [metaharness ")
+        .filter(|_| summary.ends_with(']'))
+    else {
+        return summary.to_owned();
+    };
+    let (said, verdict) = summary.split_at(at);
+    if last.as_deref() == Some(verdict) {
+        return said.to_owned();
+    }
+    *last = Some(verdict.to_owned());
+    summary.to_owned()
+}
+
 /// Who took a step, with what its event records of it: a validator, and the revision it
 /// observed when it observed; or the harness, the tokens it reported, their components and
 /// what it reported about the call besides them, and the path of the transcript takt kept or
@@ -430,10 +466,11 @@ enum Taken {
     },
 }
 
-/// The `tests.run` results in a row that failed the same tests ([`Run::tests_stop`]): the set,
-/// the tests in the order the first result named them, the revision of the last, how many, and
-/// the tests outside the set that a red run after a `tests.write` failed since the row began
-/// ([`Failing::after_written`]).
+/// The `tests.run` results in a row that failed the same tests ([`Run::tests_stop`]), or the
+/// `gate.run` results that failed the same gates ([`gate_stop`]): the set, the tests or gates in
+/// the order the first result named them, the revision of the last, how many, and the tests
+/// outside the set that a red run after a `tests.write` failed since the row began
+/// ([`Failing::after_written`]; none in a row of gates).
 struct Failing {
     set: BTreeSet<String>,
     tests: Vec<String>,
@@ -8690,6 +8727,15 @@ pub const GITLAB_TOKEN_PREFIXES: [&str; 14] = [
     "_gitlab_session=",
 ];
 
+/// The most bytes [`credential_shape`] reads between a private key's `-----BEGIN ` and the
+/// `-----` that closes its label.
+const KEY_LABEL: usize = 40;
+
+/// The most bytes one match of [`credential_shape`] spans: a private key's `-----BEGIN `, up to
+/// [`KEY_LABEL`] bytes, and the `-----` after them. That shape is the one that can cross a line
+/// end; every other is made of characters that hold none, so it lies within one line.
+const SHAPE_SPAN: usize = "-----BEGIN ".len() + KEY_LABEL + "-----".len();
+
 /// The first of [`CREDENTIAL_SHAPES`] `text` holds, by its name; none when it holds none. Read
 /// in process, so it always runs; the matched text is never returned.
 #[must_use]
@@ -8705,7 +8751,7 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
     while let Some(at) = rest.find("-----BEGIN ") {
         let after = &rest[at + "-----BEGIN ".len()..];
         if let Some(end) = after.find("-----")
-            && end <= 40
+            && end <= KEY_LABEL
             && after[..end].contains("PRIVATE KEY")
         {
             return Some("private-key");
@@ -8816,10 +8862,72 @@ fn proposed_path_refusal(proposal: &crate::harness::Proposal) -> Option<String> 
     ))
 }
 
+/// What `content`, proposed for `path`, adds to the file `base` holds there: the lines a line
+/// diff finds in `content` and not in the old file, each run of them with the lines around it,
+/// on either side at least one line and as many more as reach [`SHAPE_SPAN`] bytes, so a match
+/// of [`credential_shape`] that takes a byte of an added line is read whole, wherever it starts
+/// and ends; lines the old file held as they are, and shapes they held farther than that from
+/// every added line, are not read. Runs whose lines meet are read as one. `content`
+/// whole when `base` holds no file at `path` (a new file), or one that cannot be read or is no
+/// UTF-8 text, or `path` is no plain path of the tree: what cannot be compared is read whole.
+fn proposed_addition<'a>(
+    tree: &Path,
+    base: &str,
+    path: &str,
+    content: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    let old = loom_sdk::session::plain_relative(path)
+        .then(|| crate::git::blob(tree, &format!("{base}:{path}")).ok())
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    let Some(old) = old else {
+        return content.into();
+    };
+    let old: Vec<&str> = old.split_inclusive('\n').collect();
+    let new: Vec<&str> = content.split_inclusive('\n').collect();
+    let mut added = vec![false; new.len()];
+    for op in similar::capture_diff_slices(similar::Algorithm::Myers, &old, &new) {
+        let (tag, _, lines) = op.as_tag_tuple();
+        if tag != similar::DiffTag::Equal {
+            added[lines].fill(true);
+        }
+    }
+    let mut read = added.clone();
+    let mut at = 0;
+    while at < new.len() {
+        if !added[at] {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < new.len() && added[at] {
+            at += 1;
+        }
+        let (mut before, mut bytes) = (start, 0);
+        while before > 0 && (before == start || bytes < SHAPE_SPAN) {
+            before -= 1;
+            bytes += new[before].len();
+            read[before] = true;
+        }
+        let (mut after, mut bytes) = (at, 0);
+        while after < new.len() && (after == at || bytes < SHAPE_SPAN) {
+            bytes += new[after].len();
+            read[after] = true;
+            after += 1;
+        }
+    }
+    new.iter()
+        .zip(read)
+        .filter_map(|(line, read)| read.then_some(*line))
+        .collect::<String>()
+        .into()
+}
+
 /// Why the content of `proposal` may not reach the tree or the record, read before the edit
-/// effect writes a byte of it: each proposed file's content and the session's summary, each
-/// apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`, the
-/// scan of the run's adapter `adapter` ([`Scan::change_scan`], [`ChangeScan`]); a scan that
+/// effect writes a byte of it: what each proposed file adds to the file `base` (the revision the
+/// step starts from) holds at its path ([`proposed_addition`]), and the session's summary whole,
+/// each apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`,
+/// the scan of the run's adapter `adapter` ([`Scan::change_scan`], [`ChangeScan`]); a scan that
 /// cannot run (no program, a policy that does not load, any exit but 0) refuses as a match does.
 /// With no scan set, the proposal of a harness whose session may have read outside its copy
 /// (`unscanned_refused`, [`crate::harness::Harness::reads_outside_its_copy`]) is refused, as
@@ -8830,6 +8938,7 @@ fn proposed_path_refusal(proposal: &crate::harness::Proposal) -> Option<String> 
 /// exit, never the text matched. None when it passes.
 fn proposal_scan_refusal(
     tree: &Path,
+    base: &str,
     adapter: &Scan,
     scan: Option<&ChangeScan>,
     unscanned_refused: bool,
@@ -8845,17 +8954,18 @@ fn proposal_scan_refusal(
         .map(|file| file.path.as_str())
         .collect();
     let paths = paths.join("\n");
-    let mut texts: Vec<(&str, &str)> = Vec::new();
+    let mut texts: Vec<(&str, std::borrow::Cow<'_, str>)> = Vec::new();
     if !paths.is_empty() {
-        texts.push(("the paths it names", paths.as_str()));
+        texts.push(("the paths it names", paths.as_str().into()));
     }
-    texts.extend(
-        proposal
-            .files
-            .iter()
-            .filter_map(|file| Some((file.path.as_str(), file.content.as_deref()?))),
-    );
-    texts.push(("the step's summary", proposal.summary.as_str()));
+    texts.extend(proposal.files.iter().filter_map(|file| {
+        let content = file.content.as_deref()?;
+        Some((
+            file.path.as_str(),
+            proposed_addition(tree, base, &file.path, content),
+        ))
+    }));
+    texts.push(("the step's summary", proposal.summary.as_str().into()));
     for (what, text) in &texts {
         if let Some(shape) = credential_shape(text) {
             return Some(format!(
@@ -8979,6 +9089,76 @@ pub fn failed_checks(record: &[serde_json::Value]) -> Vec<crate::validator::Fail
         }
     }
     last.into_iter().flat_map(|(_, failed)| failed).collect()
+}
+
+/// The last `gate.run` result a case's record holds, when it failed: the revision its step
+/// observed and the gates it failed, in the record's order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateFailure {
+    /// The implementation revision the gate ran at.
+    pub revision: String,
+    /// The ids of the gates it failed; empty when its line named none.
+    pub gates: Vec<String>,
+}
+
+/// Each `gate.run` result `record` holds ([`crate::validator::GateRun::KIND`] records of a
+/// validator's `gate.run` step), in the record's order: its step's revision, and the ids of the
+/// gates it failed, none for a result that did not fail.
+fn gate_results(record: &[serde_json::Value]) -> Vec<(&str, Option<Vec<String>>)> {
+    let mut results = Vec::new();
+    // The `gate.run` step the lines that follow belong to: its number and revision.
+    let mut current: Option<(&serde_json::Value, &str)> = None;
+    for line in record {
+        if line["event"] == "step" {
+            current = (line["by"] == "validator"
+                && line["action"] == crate::validator::GateRun::ACTION)
+                .then(|| (&line["step"], line["revision"].as_str().unwrap_or_default()));
+        } else if line["event"] == "evidence"
+            && let Some((step, revision)) = current
+            && line["step"] == *step
+            && line["kind"] == crate::validator::GateRun::KIND
+        {
+            let failed = (line["result"] == "fail").then(|| {
+                line["failed"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|check| check["id"].as_str().map(str::to_owned))
+                    .collect()
+            });
+            results.push((revision, failed));
+        }
+    }
+    results
+}
+
+/// The gate failure `record` ends on ([`GateFailure`]): its last `gate.run` result when that
+/// failed; none when it passed or the record holds none. A run reads it before each judgement
+/// step; a replay reads it the same way for the step it rebuilds.
+#[must_use]
+pub fn last_gate_failure(record: &[serde_json::Value]) -> Option<GateFailure> {
+    let (revision, gates) = gate_results(record).pop()?;
+    Some(GateFailure {
+        revision: revision.to_owned(),
+        gates: gates?,
+    })
+}
+
+/// [`Stop::RepeatedGateFailure`] when the `gate.run` results `record` ends with are a row of
+/// [`REPEATED_GATE_FAILURES`] or more failing the same gates, each at a new revision whatever it
+/// changed ([`Failing::after`]: a pass, and a failure that names no gate, end the row); else
+/// none.
+fn gate_stop(record: &[serde_json::Value]) -> Option<Stop> {
+    let mut failing = None;
+    for (revision, failed) in gate_results(record) {
+        Failing::after(&mut failing, revision, failed, |_| true);
+    }
+    failing
+        .filter(|row| row.count >= REPEATED_GATE_FAILURES)
+        .map(|row| Stop::RepeatedGateFailure {
+            gates: row.tests,
+            count: row.count,
+        })
 }
 
 /// The change the case at `case_dir` has made so far, as a judgement step is shown it
@@ -9124,6 +9304,9 @@ pub struct Run<'a> {
     pub steps: u64,
     /// Tokens the harness reported.
     pub tokens: u64,
+    /// The harness's bracketed verdict the console last printed after a step's summary
+    /// ([`said_line`]).
+    said_verdict: Option<String>,
     /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
     pub poll: Duration,
     /// The revision the running binary was built from, as its `--version` prints it, recorded
@@ -9452,6 +9635,7 @@ impl<'a> Run<'a> {
             validators,
             steps: 0,
             tokens: 0,
+            said_verdict: None,
             poll: Self::POLL,
             binary: None,
             llm_digest: None,
@@ -9761,6 +9945,7 @@ impl<'a> Run<'a> {
             validators,
             steps: 0,
             tokens: 0,
+            said_verdict: None,
             poll: Self::POLL,
             binary: None,
             llm_digest: None,
@@ -11069,7 +11254,8 @@ impl<'a> Run<'a> {
             return String::new();
         }
         let call = self.harness.last_call().unwrap_or_default();
-        crate::console::harness_figures(call.duration_ms, tokens, call.cost_usd)
+        let cached = self.harness.last_usage().map(|usage| usage.cache_read);
+        crate::console::harness_figures(call.duration_ms, tokens, cached, call.cost_usd)
     }
 
     /// Charges a harness step that failed, proposing nothing, with the tokens its session
@@ -12243,6 +12429,17 @@ impl<'a> Run<'a> {
                     {
                         return Ok(stop);
                     }
+                    // A failing `gate.run` that ends a row of failures on the same gates, read
+                    // from the case's record, stops the run before another judgement step.
+                    if validator.action() == crate::validator::GateRun::ACTION
+                        && observation.records.iter().any(|record| {
+                            record.kind == crate::validator::GateRun::KIND
+                                && record.result.as_deref() == Some("fail")
+                        })
+                        && let Some(stop) = gate_stop(&events.read()?)
+                    {
+                        return Ok(stop);
+                    }
                     if observation.records.is_empty() {
                         observed_without_record
                             .insert((validator.name().to_owned(), revision.clone()));
@@ -12403,6 +12600,7 @@ impl<'a> Run<'a> {
         )?;
         let record = events.read()?;
         let failed = failed_checks(&record);
+        let last_gate = last_gate_failure(&record);
         let obligations = crate::obligations::of_run(self, &record)
             .ok()
             .flatten()
@@ -12424,6 +12622,7 @@ impl<'a> Run<'a> {
             time_left: None,
             change: &change,
             failed: &failed,
+            last_gate: last_gate.as_ref(),
             scope_revision: None,
             base_revision: base.as_deref(),
             commit: ask.as_ref(),
@@ -12659,11 +12858,12 @@ impl<'a> Run<'a> {
         // a byte of it reaches the tree; one that passes is written, and judged below as any
         // step's change.
         //
-        // Its content is read before that, whatever the guard says of it: each file and the
-        // summary checked for the shape of a credential and scanned by the run's scan adapter
-        // ([`proposal_scan_refusal`]). One that does not pass is refused, and its summary is
-        // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but
-        // after a path of the shape of a credential ([`proposed_path_refusal`]), since a
+        // Its content is read before that, whatever the guard says of it: what each file adds
+        // to the file `HEAD` held before the step, and the summary, checked for the shape of a
+        // credential and scanned by the run's scan adapter ([`proposal_scan_refusal`]). One
+        // that does not pass is refused, and its summary is not recorded
+        // ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but after a
+        // path of the shape of a credential ([`proposed_path_refusal`]), since a
         // refusal on its face names the path.
         // The reply's own summary, as the proposal carries it: the step's summary may add what
         // the harness said of its session (metaharness's rows), which a decline's reason does
@@ -12676,6 +12876,7 @@ impl<'a> Run<'a> {
                     reply_summary = Some(proposal.summary.clone());
                     let unscanned = proposal_scan_refusal(
                         &self.tree,
+                        &head_before,
                         &self.scan,
                         self.change_scan.as_ref(),
                         self.harness.reads_outside_its_copy() && !self.scan.declared_none(),
@@ -12917,7 +13118,10 @@ impl<'a> Run<'a> {
             self.harness.name(),
             self.call_figures(report.tokens)
         )
-        .and_then(|()| writeln!(out, "  said: {}", crate::trace::escape(&report.summary)));
+        .and_then(|()| {
+            let said = said_line(&report.summary, &mut self.said_verdict);
+            writeln!(out, "  said: {}", crate::trace::escape(&said))
+        });
         if let Err(error) = told {
             let moved = undo()?;
             record_step(self)?;
@@ -13601,6 +13805,28 @@ pub const TESTS_CHANGE_PRODUCER: &str = "takt.tests-write";
 mod tests {
     use super::*;
 
+    /// The console prints a harness's bracketed verdict once, and again only when it changes.
+    #[test]
+    fn a_repeated_verdict_is_printed_once() {
+        let mut last = None;
+        let one = "Edited. [metaharness hermetic on: H1 ok, H2 gap]";
+        assert_eq!(said_line(one, &mut last), one);
+        assert_eq!(
+            said_line(
+                "Handed over. [metaharness hermetic on: H1 ok, H2 gap]",
+                &mut last
+            ),
+            "Handed over."
+        );
+        let other = "Fixed. [metaharness hermetic on: H1 ok, H2 ok]";
+        assert_eq!(said_line(other, &mut last), other);
+        assert_eq!(said_line("No verdict.", &mut last), "No verdict.");
+        assert_eq!(
+            said_line("Again. [metaharness hermetic on: H1 ok, H2 ok]", &mut last),
+            "Again."
+        );
+    }
+
     /// story:a-run-can-decline: a reason past [`REASON_AT_MOST`] bytes is cut on a character
     /// boundary and marked; one within it is kept whole.
     #[test]
@@ -13613,5 +13839,95 @@ mod tests {
         assert!(whole.starts_with(kept) && !kept.is_empty());
         assert_eq!(reason_bounded(&cut), cut, "a cut reason is not cut again");
         assert!(declined_reason(&"\u{1b}".repeat(REASON_AT_MOST)).len() <= REASON_AT_MOST);
+    }
+
+    /// A record's lines for a `gate.run` step `step` at `revision` whose result is `result`,
+    /// failing `gates` when it fails.
+    fn gate_lines(
+        step: u64,
+        revision: &str,
+        result: &str,
+        gates: &[&str],
+    ) -> Vec<serde_json::Value> {
+        let failed: Vec<serde_json::Value> = gates
+            .iter()
+            .map(
+                |id| serde_json::json!({"id": id, "lines": [format!("{id} failed")], "omitted": 0}),
+            )
+            .collect();
+        vec![
+            serde_json::json!({"event": "step", "step": step, "by": "validator",
+                "action": crate::validator::GateRun::ACTION, "revision": revision}),
+            serde_json::json!({"event": "evidence", "step": step,
+                "kind": crate::validator::GateRun::KIND, "result": result, "failed": failed}),
+        ]
+    }
+
+    /// [`REPEATED_GATE_FAILURES`] `gate.run` results in a row failing the same gates, each at a
+    /// new revision, stop the run naming the gates; one fewer, the same revision observed again,
+    /// a pass between them or another set of gates does not.
+    #[test]
+    fn repeated_gate_failures_at_new_revisions_stop_the_run() {
+        assert_eq!(REPEATED_GATE_FAILURES, 3);
+        let row = |results: &[(&str, &str, &[&str])]| -> Vec<serde_json::Value> {
+            results
+                .iter()
+                .enumerate()
+                .flat_map(|(n, (revision, result, gates))| {
+                    gate_lines(n as u64 + 1, revision, result, gates)
+                })
+                .collect()
+        };
+        let both: &[&str] = &["citations", "format"];
+        let three = row(&[
+            ("r1", "fail", both),
+            ("r2", "fail", both),
+            ("r3", "fail", both),
+        ]);
+        let stop = gate_stop(&three).expect("the third stops the run");
+        assert_eq!(
+            stop.to_string(),
+            "RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed \
+             the same gates: citations, format)"
+        );
+        assert!(matches!(stop, Stop::RepeatedGateFailure { count: 3, .. }));
+        assert!(gate_stop(&row(&[("r1", "fail", both), ("r2", "fail", both)])).is_none());
+        let same = row(&[
+            ("r1", "fail", both),
+            ("r2", "fail", both),
+            ("r2", "fail", both),
+        ]);
+        assert!(gate_stop(&same).is_none(), "the same revision counts once");
+        let passed = row(&[
+            ("r1", "fail", both),
+            ("r2", "pass", &[]),
+            ("r3", "fail", both),
+            ("r4", "fail", both),
+        ]);
+        assert!(gate_stop(&passed).is_none(), "a pass ends the row");
+        let other = row(&[
+            ("r1", "fail", both),
+            ("r2", "fail", &["format"]),
+            ("r3", "fail", both),
+        ]);
+        assert!(gate_stop(&other).is_none(), "another set starts a row");
+    }
+
+    /// The gate failure a step is told of is the record's last `gate.run` result when it
+    /// failed, at its step's revision, naming its gates; none after a pass or with no result.
+    #[test]
+    fn the_last_gate_failure_is_read_from_the_record() {
+        let mut record = gate_lines(1, "r1", "fail", &["citations"]);
+        record.extend(gate_lines(2, "r2", "fail", &["citations", "format"]));
+        assert_eq!(
+            last_gate_failure(&record),
+            Some(GateFailure {
+                revision: "r2".to_owned(),
+                gates: vec!["citations".to_owned(), "format".to_owned()],
+            })
+        );
+        record.extend(gate_lines(3, "r3", "pass", &[]));
+        assert_eq!(last_gate_failure(&record), None);
+        assert_eq!(last_gate_failure(&[]), None);
     }
 }

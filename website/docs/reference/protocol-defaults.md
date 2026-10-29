@@ -22,3 +22,5 @@ A `--protocol`, a story tag `protocol:<name>/<major>` or the run file's `protoco
 | `software.change/1` | `affects_security_boundary` | `true`, `false` | `false` |
 | `story.delivery/2` | `tests_first` | `required`, `optional` | `required` |
 | `story.delivery/2` | `gate_on` | `after_handover`, `each_revision` | `after_handover` |
+| `story.delivery/3` | `tests_first` | `required`, `optional` | `required` |
+| `story.delivery/3` | `gate_on` | `after_handover`, `each_revision` | `after_handover` |

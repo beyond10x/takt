@@ -112,6 +112,7 @@ fn step(
         time_left: None,
         change: &ChangeSoFar::NoneYet,
         failed: &[],
+        last_gate: None,
         scope_revision: None,
         base_revision: base,
         commit: None,

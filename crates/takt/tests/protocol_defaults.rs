@@ -239,6 +239,130 @@ fn an_unset_input_is_refused_by_name() {
         text.contains("required") && text.contains("optional"),
         "{text}"
     );
+    assert!(
+        text.contains("give it with `--input tests_first=<value>` or the story tag `input:tests_first=<value>`"),
+        "{text}"
+    );
+}
+
+/// takt's own `story.delivery/3`, embedded in the binary and listed among the built-ins: named
+/// by `--protocol`, a case opens on it with takt's defaults, `tests_first=required` and
+/// `gate_on=after_handover`, each from `default`; and after a red gate with green tests at the
+/// current revision, `implementation.edit` is admissible, so the gate's failure is fixed in the
+/// implementation.
+#[test]
+fn story_delivery_3_opens_with_the_defaults_and_fixes_a_red_gate() {
+    assert!(
+        LoadedProtocol::builtins()
+            .iter()
+            .any(|(name, major)| name == "story-delivery" && *major == 3),
+        "{:?}",
+        LoadedProtocol::builtins()
+    );
+    assert!(takt::protocol::builtin_ids().contains(&"story.delivery/3".to_owned()));
+    assert_eq!(default_protocol(true), "story.delivery/2");
+    let settings = resolve_settings(&SettingsRequest {
+        file: &ProtocolSettings::default(),
+        flag_protocol: Some("story.delivery/3"),
+        flag_inputs: &[],
+        tags: &[],
+        default_protocol: default_protocol(true),
+        file_protocol_applies: true,
+    })
+    .expect("the built-in resolves with its defaults");
+    assert_eq!(settings.protocol.id, "story.delivery/3");
+    assert_eq!(settings.protocol_source, Source::Flag);
+    assert_eq!(
+        settings.line(),
+        "settings: protocol story.delivery/3 (flag); tests_first=required (default); \
+         gate_on=after_handover (default)"
+    );
+    let repo = repository("delivery-3");
+    let mut case = CaseDir::open_as(
+        &repo,
+        settings.protocol.clone(),
+        "delivery-3",
+        "a story",
+        &settings.pairs(),
+        &CommitAs::Takt,
+    )
+    .expect("the case opens on the defaults");
+    let at = "aaaaaaaa11111111111111111111111111111111";
+    case.set_revision("implementation", at)
+        .expect("the revision is set");
+    for (n, (kind, result)) in [
+        ("tests_change", None),
+        ("test_result", Some("pass")),
+        ("handover", None),
+        ("gate_result", Some("fail")),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        case.add_evidence(&takt::evidence::Record::new(
+            format!("e{n}"),
+            kind,
+            result.map(str::to_owned),
+            "implementation",
+            at,
+            "operator-run",
+        ))
+        .expect("the record is written");
+    }
+    let decision = case.evaluate(0).expect("evaluates");
+    assert_eq!(
+        decision
+            .actions
+            .get("implementation.edit")
+            .map(String::as_str),
+        Some("admissible"),
+        "{}",
+        decision.json
+    );
+}
+
+/// Under `story.delivery/3`, after a red `tests.run` at the current revision, `change.handover`
+/// is not admissible, so a step is never offered it; before any test result, and once the tests
+/// pass, it is.
+#[test]
+fn story_delivery_3_offers_no_handover_at_a_red_revision() {
+    let protocol = LoadedProtocol::builtin("story.delivery/3").expect("takt's own");
+    let repo = repository("delivery-3-red");
+    let inputs = [
+        ("tests_first".to_owned(), "required".to_owned()),
+        ("gate_on".to_owned(), "after_handover".to_owned()),
+    ];
+    let mut case =
+        CaseDir::open(&repo, protocol, "delivery-3-red", "a story", &inputs).expect("opens");
+    let handover = |case: &CaseDir, seq: usize| {
+        let decision = case.evaluate(seq).expect("evaluates");
+        decision
+            .actions
+            .get("change.handover")
+            .cloned()
+            .unwrap_or_default()
+    };
+    assert_eq!(handover(&case, 0), "admissible");
+    let add = |case: &mut CaseDir, n: usize, kind: &str, result: Option<&str>, at: &str| {
+        case.set_revision("implementation", at)
+            .expect("the revision is set");
+        case.add_evidence(&takt::evidence::Record::new(
+            format!("e{n}"),
+            kind,
+            result.map(str::to_owned),
+            "implementation",
+            at,
+            "operator-run",
+        ))
+        .expect("the record is written");
+    };
+    let red = "aaaaaaaa11111111111111111111111111111111";
+    add(&mut case, 1, "tests_change", None, red);
+    add(&mut case, 2, "test_result", Some("fail"), red);
+    assert_eq!(handover(&case, 1), "blocked");
+    let green = "bbbbbbbb22222222222222222222222222222222";
+    add(&mut case, 3, "test_result", Some("pass"), green);
+    assert_eq!(handover(&case, 2), "admissible");
 }
 
 /// Acceptance 3. The generated page of the defaults equals the site's copy; `task check` fails

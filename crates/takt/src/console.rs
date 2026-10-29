@@ -249,16 +249,27 @@ pub fn cost(usd: f64) -> String {
 }
 
 /// What a harness step's line appends after `step N: <action> (<harness>)`: ` · <duration> ·
-/// <tokens> · <cost>`, each only when the call reported it; nothing when it reported none.
+/// <tokens> · <cost>`, each only when the call reported it; nothing when it reported none. The
+/// tokens name how many of them were input read from the provider's cache (`cached`), when
+/// any were: a session re-reads its context on every request, so most of a long step's tokens
+/// are cached input, which costs a fraction of the rest.
 #[must_use]
 pub fn harness_figures(
     duration_ms: Option<u64>,
     tokens_used: Option<u64>,
+    cached: Option<u64>,
     cost_usd: Option<f64>,
 ) -> String {
     let parts = [
         duration_ms.map(duration),
-        tokens_used.map(tokens),
+        tokens_used.map(|used| match cached.filter(|cached| *cached > 0) {
+            Some(cached) => format!(
+                "{} ({} cached)",
+                tokens(used),
+                tokens(cached).trim_end_matches(" tok")
+            ),
+            None => tokens(used),
+        }),
         cost_usd.map(cost),
     ];
     parts
@@ -350,11 +361,15 @@ mod tests {
     #[test]
     fn a_harness_step_appends_only_what_its_call_reported() {
         assert_eq!(
-            harness_figures(Some(26_100), Some(65_700), Some(0.16)),
+            harness_figures(Some(26_100), Some(65_700), None, Some(0.16)),
             " · 26.1s · 65.7k tok · $0.16"
         );
-        assert_eq!(harness_figures(None, Some(12), None), " · 12 tok");
-        assert_eq!(harness_figures(None, None, None), "");
+        assert_eq!(harness_figures(None, Some(12), Some(0), None), " · 12 tok");
+        assert_eq!(
+            harness_figures(None, Some(630_200), Some(611_000), None),
+            " · 630.2k tok (611.0k cached)"
+        );
+        assert_eq!(harness_figures(None, None, Some(5), None), "");
     }
 
     #[test]
