@@ -370,7 +370,7 @@ fn source_name(case_dir: &Path, path: &Path) -> String {
 
 /// `text` as a trace carries it and a report prints it, the one escape every text a record
 /// contributes passes: the home directory as `~`, so no local path travels, and each control
-/// character (C0, DEL and C1) and each bidi override or isolate ([`is_bidi_control`]) as
+/// character (C0, DEL and C1) and each bidi control, a mark among them ([`is_bidi_control`]), as
 /// `\u{..}`, so a record a harness shaped cannot drive the terminal a report is read on nor
 /// reorder what it shows of a line. Passing a text through twice changes nothing.
 #[must_use]
@@ -406,10 +406,14 @@ fn escape_with(text: &str, home: Option<&str>) -> String {
     out
 }
 
-/// Whether `c` is a bidi embedding, override or isolate (U+202A-U+202E, U+2066-U+2069): a
-/// character that reorders how a terminal shows the rest of its line.
+/// Whether `c` is a bidi control (Unicode's Bidi_Control: the marks U+061C, U+200E, U+200F,
+/// the embeddings and overrides U+202A-U+202E, the isolates U+2066-U+2069): a character that
+/// reorders how a terminal shows the rest of its line.
 fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+    matches!(
+        c,
+        '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+    )
 }
 
 /// Whether `c` continues a path component's name, so a home directory it follows was not
@@ -1526,5 +1530,16 @@ mod tests {
             "escaping twice changes nothing"
         );
         assert_eq!(escape_with("café ‹ok›", None), "café ‹ok›");
+    }
+
+    /// story:console-shows-reads-and-diffs, Decision (wave 44, review): every Bidi_Control
+    /// character is escaped, the marks U+061C, U+200E and U+200F with the overrides and isolates.
+    #[test]
+    fn every_bidi_control_is_escaped_the_marks_too() {
+        assert_eq!(
+            escape_with("a\u{61c}b\u{200e}c\u{200f}d", None),
+            "a\\u{61c}b\\u{200e}c\\u{200f}d"
+        );
+        assert_eq!(escape_with("a\u{200d}b", None), "a\u{200d}b");
     }
 }

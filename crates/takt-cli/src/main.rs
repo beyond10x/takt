@@ -517,6 +517,42 @@ const PROTOCOL_SHOW_EXIT_CODES: &str = "Exit codes:
   1  refused: the protocol is not one takt knows (the reason names the ones it does), or the run file does not read; the reason on stderr
   2  the arguments do not parse";
 
+/// When the console is in colour (`--color`).
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ColorArg {
+    /// When standard output is a terminal and `NO_COLOR` is unset or empty.
+    Auto,
+    /// Always.
+    Always,
+    /// Never.
+    Never,
+}
+
+impl From<ColorArg> for takt::console::ColorMode {
+    fn from(color: ColorArg) -> Self {
+        match color {
+            ColorArg::Auto => Self::Auto,
+            ColorArg::Always => Self::Always,
+            ColorArg::Never => Self::Never,
+        }
+    }
+}
+
+/// The console a run's `looping` flags ask for, its standard output a terminal or not
+/// (`terminal`) and `NO_COLOR` holding `no_color` ([`takt::console::color_on`]).
+fn console_of(
+    looping: &LoopArgs,
+    terminal: bool,
+    no_color: Option<&std::ffi::OsStr>,
+) -> takt::console::Console {
+    takt::console::Console {
+        verbose: looping.verbose,
+        reads: !looping.quiet_steps,
+        diff: !looping.quiet_steps,
+        color: takt::console::color_on(looping.color.into(), terminal, no_color),
+    }
+}
+
 /// How `takt protocol show` prints.
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum ShowFormat {
@@ -1210,6 +1246,16 @@ struct LoopArgs {
     /// when they change (`may now: +<added> -<removed>`).
     #[arg(long)]
     verbose: bool,
+    /// When the console is in colour: `auto` when standard output is a terminal and `NO_COLOR`
+    /// is unset or empty (<https://no-color.org>), `always` (for output piped through `tee` into
+    /// a terminal), or `never`. Colour is never written to a case's records.
+    #[arg(long, value_enum, value_name = "WHEN", default_value = "auto")]
+    color: ColorArg,
+    /// List neither what each harness step looked at (its transcript's tool calls, under its
+    /// `said:` line) nor the diff it committed (before its `effect:` line); nothing else
+    /// changes.
+    #[arg(long)]
+    quiet_steps: bool,
     /// The `setup` commands `--config` gave, run when the case opens; set from the file, never from
     /// a flag.
     #[arg(skip)]
@@ -3334,9 +3380,11 @@ fn finish(
         run.cap_active_time(seconds);
     }
     run.stop_when_unperformable();
-    run.console(takt::console::Console {
-        verbose: looping.verbose,
-    });
+    run.console(console_of(
+        looping,
+        std::io::IsTerminal::is_terminal(&std::io::stdout()),
+        std::env::var_os("NO_COLOR").as_deref(),
+    ));
     if looping.continue_past_red_base {
         run.continue_past_red_base();
     }
@@ -5369,5 +5417,39 @@ mod tests {
             }
         }
         assert!(!repo.join(".takt/cases").exists());
+    }
+
+    /// The console `takt run <args>` asks for, its standard output a terminal or not
+    /// (`terminal`) and `NO_COLOR` holding `no_color`.
+    fn console(args: &[&str], terminal: bool, no_color: Option<&str>) -> takt::console::Console {
+        let cli = Cli::try_parse_from(
+            ["takt", "run", "--repo", "/nowhere"]
+                .into_iter()
+                .chain(args.iter().copied()),
+        )
+        .expect("the flags parse");
+        let super::Commands::Run(run) = cli.command else {
+            panic!("not a run");
+        };
+        super::console_of(&run.looping, terminal, no_color.map(std::ffi::OsStr::new))
+    }
+
+    /// story:console-shows-reads-and-diffs, acceptance 3: `--color never` and `NO_COLOR=1`
+    /// under the default `auto` are no colour, a terminal under `auto` is, `--color always` is
+    /// even piped; `--quiet-steps` turns both listings off and leaves the rest.
+    #[test]
+    fn color_and_quiet_steps_set_the_console() {
+        let auto = console(&[], true, None);
+        assert!(auto.color && auto.reads && auto.diff && !auto.verbose);
+        assert!(!console(&["--color", "never"], true, None).color);
+        assert!(!console(&[], true, Some("1")).color);
+        assert!(!console(&["--color", "auto"], false, None).color);
+        assert!(console(&["--color", "always"], false, Some("1")).color);
+        let quiet = console(&["--quiet-steps", "--verbose"], false, None);
+        assert!(!quiet.reads && !quiet.diff && quiet.verbose && !quiet.color);
+        assert!(
+            Cli::try_parse_from(["takt", "run", "--repo", "/nowhere", "--color", "sometimes"])
+                .is_err()
+        );
     }
 }

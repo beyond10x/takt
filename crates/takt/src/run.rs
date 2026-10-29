@@ -444,6 +444,10 @@ fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
 }
 
+/// The most bytes of a step's diff the console reads from git ([`Run::committed_diff`]); a
+/// larger diff is one line naming its commit.
+const DIFF_BYTES: usize = 4 << 20;
+
 /// The text a step's `summary` is printed with on the console: whole, unless it ends in the
 /// same bracketed `[metaharness …]` verdict the console printed last (`last`), which is then
 /// left off; `last` becomes the verdict it ends in. The record keeps the summary whole.
@@ -11392,6 +11396,54 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
+    /// The paint the console's lines are written in ([`crate::console::Paint`]): colour only
+    /// under a console in colour, so without the console every line is as it was.
+    fn paint(&self) -> crate::console::Paint {
+        self.console
+            .map(crate::console::Console::paint)
+            .unwrap_or_default()
+    }
+
+    /// A step line's `effect:` label, dim in colour.
+    fn effect_label(&self) -> String {
+        self.paint().dim("effect:")
+    }
+
+    /// The diff of the step's commit `head` as the console prints it before the step's
+    /// `effect:` line ([`crate::console::diff`]): `git diff <head>^ <head>` outside
+    /// `.engineering/` and `.takt/`, with no external diff, text conversion or colour of git's;
+    /// none without the console or when it lists none. A diff git does not give, or one past
+    /// [`DIFF_BYTES`], is one line saying so, and the run goes on.
+    fn committed_diff(&self, head: &str) -> Vec<String> {
+        let Some(console) = self.console.filter(|console| console.diff) else {
+            return Vec::new();
+        };
+        let short = crate::trace::escape(short(head));
+        let parent = format!("{head}^");
+        let args = [
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            parent.as_str(),
+            head,
+            "--",
+            ".",
+            ":(exclude).engineering",
+            ":(exclude).takt",
+        ];
+        match crate::git::run_bounded(&self.tree, &args, DIFF_BYTES) {
+            Ok(Some(text)) => crate::console::diff(&text, &short, console.paint()),
+            Ok(None) => vec![format!(
+                "    … the diff passes {} MiB (git show {short})",
+                DIFF_BYTES >> 20
+            )],
+            Err(_) => vec![format!("    the diff was not read (git show {short})")],
+        }
+    }
+
     /// What a harness step's line appends under the console: the duration and cost the harness
     /// reported of its last call and the step's `tokens`, each when reported
     /// ([`crate::console::harness_figures`]); nothing without the console.
@@ -11915,7 +11967,7 @@ impl<'a> Run<'a> {
             };
             let took =
                 u64::try_from(returned.duration_since(began).as_millis()).unwrap_or(u64::MAX);
-            crate::console::validator_figures(result, &named, took)
+            crate::console::validator_figures_in(result, &named, took, self.paint())
         } else {
             String::new()
         };
@@ -11923,14 +11975,15 @@ impl<'a> Run<'a> {
             out,
             "step {}: {} {{}}{figures}",
             self.steps,
-            validator.action()
+            self.paint().bold(validator.action())
         )?;
         // A `tests.run` summary keeps its failed tests whole; its printed line is bounded.
+        let effect = self.effect_label();
         if validator.action() == crate::validator::TestsRun::ACTION {
             let line = crate::validator::tests_line(&observation.summary);
-            writeln!(out, "  effect: {line}")?;
+            writeln!(out, "  {effect} {line}")?;
         } else {
-            writeln!(out, "  effect: {}", observation.summary)?;
+            writeln!(out, "  {effect} {}", observation.summary)?;
         }
         // What the validator retains lands before the records that refer to it: a
         // retention that fails ends the run with nothing written for the step.
@@ -13064,7 +13117,7 @@ impl<'a> Run<'a> {
                                 out,
                                 "step {}: {} ({}){}",
                                 self.steps,
-                                report.action,
+                                self.paint().bold(&report.action),
                                 self.harness.name(),
                                 self.call_figures(report.tokens)
                             )?;
@@ -13276,19 +13329,35 @@ impl<'a> Run<'a> {
             )
         };
         // A step that cannot be told on `out` is not judged: it is discarded whole, as
-        // one whose harness failed, and the run ends on the error.
+        // one whose harness failed, and the run ends on the error. Under the console the
+        // `said:` line is followed by what the step looked at, its transcript's tool calls
+        // ([`crate::console::reads`]), unless the console lists none.
+        let paint = self.paint();
+        let reads = match self.console {
+            Some(console) if console.reads => harness
+                .last_transcript()
+                .map(|transcript| crate::console::reads(&transcript, paint))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let told = writeln!(
             out,
             "step {}: {} ({}){}",
             self.steps,
-            report.action,
+            paint.bold(&report.action),
             self.harness.name(),
             self.call_figures(report.tokens)
         )
         .and_then(|()| {
             let said = said_line(&report.summary, &mut self.said_verdict);
-            writeln!(out, "  said: {}", crate::trace::escape(&said))
-        });
+            writeln!(
+                out,
+                "  {} {}",
+                paint.dim("said:"),
+                crate::trace::escape(&said)
+            )
+        })
+        .and_then(|()| reads.iter().try_for_each(|line| writeln!(out, "{line}")));
         if let Err(error) = told {
             let moved = undo()?;
             record_step(self)?;
@@ -13579,7 +13648,8 @@ impl<'a> Run<'a> {
             )?;
             writeln!(
                 out,
-                "  effect: none; declined at case revision {case_revision}, the case stays open"
+                "  {} none; declined at case revision {case_revision}, the case stays open",
+                self.effect_label()
             )?;
             return Ok(Judgement::Stop(Stop::Declined(declined_reason(&reason))));
         }
@@ -13599,7 +13669,12 @@ impl<'a> Run<'a> {
                 return Ok(Judgement::Stop(Stop::StepRefused(why)));
             }
             record_step(self)?;
-            writeln!(out, "  effect: none; {} needs an approval", report.action)?;
+            writeln!(
+                out,
+                "  {} none; {} needs an approval",
+                self.effect_label(),
+                report.action
+            )?;
             // The request for the approval is the proposal: the runtime asks the case's
             // authority, and whatever it answers nothing is performed for it.
             return Ok(Judgement::Propose(Box::new(Proposed {
@@ -13726,7 +13801,7 @@ impl<'a> Run<'a> {
                     revision: None,
                 },
             )?;
-            writeln!(out, "  effect: no file changed")?;
+            writeln!(out, "  {} no file changed", self.effect_label())?;
             // The records missing, each about an artifact at its revision: written by the
             // choice effect ([`crate::validator::ChoiceEffect`]), which Commission's runtime
             // handed the request for the action the harness chose, through the case's
@@ -13824,7 +13899,7 @@ impl<'a> Run<'a> {
                     revision: None,
                 },
             )?;
-            writeln!(out, "  effect: no file changed")?;
+            writeln!(out, "  {} no file changed", self.effect_label())?;
             return Ok((false, None));
         }
         // The message is the harness's `commit` when it passes its check, else the fallback,
@@ -13888,9 +13963,13 @@ impl<'a> Run<'a> {
         } else {
             String::new()
         };
+        for line in self.committed_diff(&head) {
+            writeln!(out, "{line}")?;
+        }
         writeln!(
             out,
-            "  effect: committed {} path(s); implementation is now {}{named}",
+            "  {} committed {} path(s); implementation is now {}{named}",
+            self.effect_label(),
             changed.len(),
             &head[..8.min(head.len())]
         )?;
