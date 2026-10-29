@@ -62,7 +62,8 @@ small = "lab/small"
 /// boolean, `"gates"`, a value `scan` takes (story:scan-and-forge-are-adapters), or `"default"`,
 /// a value `records` takes (story:a-run-keeps-every-decision-only-on-a-trial), or none
 /// when it takes the key with none of them. `llm` takes `{path = <file>}` naming the probe
-/// beside it (story:llm-section-is-an-llm-routes-document).
+/// beside it (story:llm-section-is-an-llm-routes-document). `local_checks` takes an argument
+/// list (story:local-forge-merges-into-a-target-branch).
 fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
     fs::write(dir.join("llm-probe.toml"), PROBE_LLM).expect("a probe document beside the probe");
     [
@@ -80,6 +81,7 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "\"api\"",
         "{ env = \"X\" }",
         "[{ name = \"a\", argv = [\"true\"] }]",
+        "[\"true\"]",
     ]
     .into_iter()
     .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())

@@ -12,6 +12,7 @@ use takt::Frontier as _;
 use takt::forge::command::CommandForge;
 use takt::forge::connectors::ConnectorsForge;
 use takt::forge::gitlab::Glab;
+use takt::forge::local::Local;
 use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness, Kind, SessionHarness};
@@ -1119,7 +1120,15 @@ struct LoopArgs {
     /// refused for a scenario run), `connectors` (`connectors operations invoke` on the instance the
     /// run file's `forge_instance` names, its preflight listing change request create, read and
     /// merge and pipeline read before any case opens; the push stays takt's scanned push; never a
-    /// default, and refused for a scenario run) or `none` (no pull
+    /// default, and refused for a scenario run), `local` (the bare repository on this machine the
+    /// tree's `origin` names by its path, outside the tree, the tree cloned with `--no-local`: git
+    /// pushes the case's branch to it, a request record under its `takt/requests` opens the pull
+    /// request, the run file's `local_checks` argument list runs as its checks, as the test
+    /// command is, in a fresh repository at the head; the merge is made in the hub under the
+    /// run's commit identity, moves the base only from the tip it was judged at, and moves
+    /// nothing when that tip holds the head; nothing is scanned, nothing leaves the machine;
+    /// refused before any case opens without `local_checks`, with checks the confinement cannot
+    /// run, or without such an `origin`; never a default, refused for a scenario run) or `none` (no pull
     /// request is opened; when `pr.open`,
     /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
     /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
@@ -1736,6 +1745,19 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 } else {
                     None
                 };
+            // The identity a local forge's merge commits carry: the one the case commits with, as
+            // the scan at open reads it.
+            let local_identity = if looping.forge.as_deref() == Some("local") {
+                identity_at_open(
+                    &repo,
+                    looping.commit_identity.as_ref(),
+                    case.as_deref()
+                        .or(resuming.as_ref().map(|resuming| resuming.id.as_str())),
+                )?
+                .map(|(identity, _)| identity)
+            } else {
+                None
+            };
             // The forge, read before the turn, whose mainline it reads: the forge's `main`, or the
             // local `main` with none.
             let forge = forge_with(
@@ -1748,6 +1770,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     .map_or(&opens_on, |resuming| &resuming.protocol)
                     .actions,
                 looping.state_dir.as_deref(),
+                local_identity,
+                looping.min_free_gib.saturating_mul(1 << 30),
             )?;
             // A resumed turn reads the mainline through the forge it recorded when it opened,
             // from the repository it recorded, as `takt approve` does: a run through another,
@@ -2961,8 +2985,13 @@ impl Forged {
 /// commands of its `forge_commands` section, an entry the protocol's `actions` need that is
 /// missing refused here, before any case opens; `state_dir` (else a directory of this run under the
 /// state home) holds the command forge's standard error files; the body file is the case's own,
-/// in its artifacts. Settings that do not fit the forge are
-/// refused, naming their keys.
+/// in its artifacts. `forge: local` runs the run file's `local_checks` as its checks, refused
+/// here without them, or when `origin` is no bare repository on this machine outside the tree,
+/// or when `identity`, the run's commit identity its merge commits carry, is none; its checks'
+/// clones go under `state_dir` as the command forge's files do, and run only with `min_free`
+/// bytes free (the run's `--min-free-gib`). Settings that do not fit the forge are refused,
+/// naming their keys.
+#[allow(clippy::too_many_arguments)]
 fn forge_with(
     repo: &Path,
     forge: Option<&str>,
@@ -2970,8 +2999,15 @@ fn forge_with(
     settings: &takt::run_config::ForgeSettings,
     actions: &[String],
     state_dir: Option<&Path>,
+    identity: Option<takt::git::CommitIdentity>,
+    min_free: u64,
 ) -> Result<Forged> {
     settings.check_for(forge)?;
+    match forge.unwrap_or_default() {
+        "local" => return local_forge(repo, settings, state_dir, identity, min_free),
+        "command" => return command_forge(repo, scan, settings, actions, state_dir),
+        _ => {}
+    }
     if let Some(connectors) = ConnectorsForge::select(
         repo,
         forge,
@@ -2986,32 +3022,6 @@ fn forge_with(
         return Ok(Forged {
             forge: Some(Rc::new(connectors)),
             line: Some(line),
-            trials: None,
-            repository: None,
-        });
-    }
-    if forge == Some("command") {
-        let commands = settings.commands.clone().unwrap_or_default();
-        let state = match state_dir {
-            Some(dir) => state_under(dir, "forge-command"),
-            None => takt::promotion::store()?
-                .with_file_name("forge-command")
-                .join(run_directory()),
-        };
-        let command = CommandForge::for_tree(
-            repo,
-            commands,
-            actions,
-            state,
-            scan.clone(),
-            Box::new(Process::default()),
-        )?;
-        return Ok(Forged {
-            forge: Some(Rc::new(command)),
-            line: Some(
-                "forge: command; pr.open, ci.read and repository.merge run the commands of the run file's forge_commands"
-                    .to_owned(),
-            ),
             trials: None,
             repository: None,
         });
@@ -3033,6 +3043,91 @@ fn forge_with(
         });
     }
     forge_of(repo, forge, scan)
+}
+
+/// `forge: command` of [`forge_with`]: the commands of `settings`' `forge_commands`, checked
+/// against the protocol's `actions`, their standard error under `state_dir`.
+fn command_forge(
+    repo: &Path,
+    scan: &Scan,
+    settings: &takt::run_config::ForgeSettings,
+    actions: &[String],
+    state_dir: Option<&Path>,
+) -> Result<Forged> {
+    let commands = settings.commands.clone().unwrap_or_default();
+    let state = match state_dir {
+        Some(dir) => state_under(dir, "forge-command"),
+        None => takt::promotion::store()?
+            .with_file_name("forge-command")
+            .join(run_directory()),
+    };
+    let command = CommandForge::for_tree(
+        repo,
+        commands,
+        actions,
+        state,
+        scan.clone(),
+        Box::new(Process::default()),
+    )?;
+    Ok(Forged {
+        forge: Some(Rc::new(command)),
+        line: Some(
+            "forge: command; pr.open, ci.read and repository.merge run the commands of the run file's forge_commands"
+                .to_owned(),
+        ),
+        trials: None,
+        repository: None,
+    })
+}
+
+/// `forge: local` of [`forge_with`]: the hub `origin` names ([`Local::hub_of`]), the checks
+/// `settings`' `local_checks` run as the test command is, held to [`Local::CHECKS_LIMITS`], their
+/// repositories under `state_dir`, not run under `min_free` bytes free, the merge commits under
+/// `identity`; refused, before any case opens, without an identity, or with checks whose
+/// program the run's confinement cannot run as a test command (under `substrate`, anything but
+/// `cargo`).
+fn local_forge(
+    repo: &Path,
+    settings: &takt::run_config::ForgeSettings,
+    state_dir: Option<&Path>,
+    identity: Option<takt::git::CommitIdentity>,
+    min_free: u64,
+) -> Result<Forged> {
+    let checks = settings.local_checks.clone().unwrap_or_default();
+    if let Some(program) = checks.first() {
+        let confinement = takt::confinement::current();
+        confinement.admit_test(program).map_err(|error| {
+            anyhow!(
+                "--forge local runs `local_checks` as the test command is, and confinement {} cannot run its program `{program}`: {error:#}; nothing was opened",
+                confinement.name()
+            )
+        })?;
+    }
+    let hub = Local::hub_of(repo)?;
+    let identity = identity.ok_or_else(|| {
+        anyhow!(
+            "--forge local makes each merge commit in the hub {} under the run's commit identity, and there is none: give --commit-identity '<name> <email>', or `identity.name` and `identity.email` in {}; nothing was opened",
+            hub.display(),
+            takt::git::COMMIT_IDENTITY_FILE
+        )
+    })?;
+    let state = match state_dir {
+        Some(dir) => state_under(dir, "forge-local"),
+        None => takt::promotion::store()?
+            .with_file_name("forge-local")
+            .join(run_directory()),
+    };
+    let local = Local::for_tree(repo, checks, state, identity)?.with_min_free(min_free);
+    let line = format!(
+        "forge: local ({}); pr.open, ci.read and repository.merge go through the hub on this machine, the checks are the run file's local_checks, run as the test command is",
+        local.hub().display()
+    );
+    Ok(Forged {
+        forge: Some(Rc::new(local)),
+        line: Some(line),
+        trials: None,
+        repository: None,
+    })
 }
 
 /// The forge: the bot route when asked for, or by default when `origin` is a repository on
@@ -3110,7 +3205,7 @@ fn forge_through(
         },
         Some(other) => {
             return Err(anyhow!(
-                "no forge `{other}`: bot, gitlab, command, connectors or none"
+                "no forge `{other}`: bot, gitlab, command, connectors, local or none"
             ));
         }
     })
@@ -3118,8 +3213,9 @@ fn forge_through(
 
 /// The forge of a scenario run: [`forge_of`], but never `glab`. A scenario's trial base
 /// `trial/<n>` is created on the remote only through the bot route ([`TrialRoute`]), so
-/// `--forge gitlab` is refused before anything is fetched, cut or opened, and by default an
-/// `origin` on a host other than github.com gets no forge, said in one line, `glab` never asked.
+/// `--forge gitlab`, `command`, `connectors` and `local` are refused before anything is fetched,
+/// cut or opened, and by default an `origin` on a host other than github.com gets no forge, said
+/// in one line, `glab` never asked.
 fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Forged> {
     match forge {
         Some("gitlab") => Err(anyhow!(
@@ -3130,6 +3226,9 @@ fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Fo
         )),
         Some("connectors") => Err(anyhow!(
             "--forge connectors is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, which `connectors operations invoke` cannot do; give --forge bot or --forge none; nothing was changed"
+        )),
+        Some("local") => Err(anyhow!(
+            "--forge local is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, and a hub on this machine is no such remote; give --forge bot or --forge none; nothing was changed"
         )),
         None => match takt::git::remote_url(repo, "origin")
             .ok()
@@ -4213,8 +4312,9 @@ fn scan_identity_at_open(
     })?;
     if let takt::forge::IdentityScan::NotScanned(why) = scanned {
         // Under a declared `none` a forge that scans through the run's adapter scans nothing
-        // before the push either; the bot route scans whatever is declared.
-        let after = if scan.not_scanned().as_ref() == Some(&why) {
+        // before the push either, nor does the local forge, whose pushes stay on the machine;
+        // the bot route scans whatever is declared.
+        let after = if forge.name() == "local" || scan.not_scanned().as_ref() == Some(&why) {
             "nothing is scanned before the push either"
         } else {
             "the scan before the push still applies"
@@ -4869,7 +4969,7 @@ mod tests {
         ));
         assert_eq!(
             error,
-            "no forge `hub`: bot, gitlab, command, connectors or none"
+            "no forge `hub`: bot, gitlab, command, connectors, local or none"
         );
         assert!(!repo.join(".takt/cases").exists());
     }
@@ -4914,6 +5014,8 @@ mod tests {
             &settings,
             &actions,
             Some(&state),
+            None,
+            0,
         )
         .err()
         .expect("refused");
@@ -4926,6 +5028,18 @@ mod tests {
             format!("{error:#}").contains("--forge command"),
             "{error:#}"
         );
+    }
+
+    /// story:local-forge-merges-into-a-target-branch: a scenario run refuses `--forge local`
+    /// before anything is fetched, cut or opened: its trial base is created only through the bot
+    /// route.
+    #[test]
+    fn the_local_forge_is_refused_for_a_scenario_run() {
+        let repo = gated_repository("forge-local-scenario", None);
+        let error = super::scenario_forge_of(&repo, Some("local"), &takt::scan::Scan::from_env())
+            .err()
+            .expect("refused");
+        assert!(format!("{error:#}").contains("--forge local"), "{error:#}");
     }
 
     /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is

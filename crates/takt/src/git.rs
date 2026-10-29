@@ -1225,6 +1225,34 @@ pub fn commit_paths(
     head(tree)
 }
 
+/// Writes the commit of the tree object `tree` over `parents`, in that order, saying `message`,
+/// under `identity` as author and committer, as [`commit_paths`] sets them, into the repository
+/// at `repository` (a bare one among them); the new commit's id. No ref moves: the caller moves
+/// the one it means to.
+pub fn commit_tree(
+    repository: &Path,
+    tree: &str,
+    parents: &[&str],
+    message: &str,
+    identity: &CommitIdentity,
+) -> Result<String> {
+    let env = [
+        ("GIT_AUTHOR_NAME", identity.name.as_str()),
+        ("GIT_AUTHOR_EMAIL", identity.email.as_str()),
+        ("GIT_COMMITTER_NAME", identity.name.as_str()),
+        ("GIT_COMMITTER_EMAIL", identity.email.as_str()),
+    ];
+    let file = MessageFile::write(repository, message)?;
+    let named = file.path.to_string_lossy().into_owned();
+    let mut args = vec!["commit-tree", tree];
+    for parent in parents {
+        args.extend(["-p", parent]);
+    }
+    args.extend(["-F", &named]);
+    let stdout = raw_with(repository, &args, None, &env)?;
+    Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+}
+
 /// A commit message in a file of the repository's own git directory, which `git commit -F` reads:
 /// the message never rides on a command line, whatever its length, and the file is removed when
 /// this is dropped.

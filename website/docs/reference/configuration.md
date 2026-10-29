@@ -25,8 +25,8 @@ generated [CLI reference](./cli.md); a walk-through is in
 | `.yaml`, `.yml` | YAML: the fields at the top level, or in the `takt` member of a `loom.agent/1` document |
 | anything else | refused |
 
-Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `setup`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
-for `_`; those six have no flag.
+Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `local_checks`, `setup`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
+for `_`; those seven have no flag.
 
 | field | meaning |
 |---|---|
@@ -46,6 +46,7 @@ for `_`; those six have no flag.
 | `scan` | string: `gates` (the default) or `none`; the adapter that scans what a harness proposes ([The scan](#the-scan)); `none` is accepted only here, never as a flag |
 | `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
 | `forge_instance` | string: the instance `forge: connectors` invokes `connectors operations` on, one word of letters, digits, `.`, `_` and `-`; checked when the file is read, needed by `forge: connectors` and refused under any other forge ([The connectors forge](#the-connectors-forge)); no flag |
+| `local_checks` | argument list: the checks `forge: local` runs on a request's head, without a shell, as the test command is run (its confinement, environment and timeout), in a fresh repository under the state directory that fetched the head from the hub by its id and names no remote; exit 0 passes, any other exit or the timeout fails; a pass is kept for that head and that argument list, so changed `local_checks` run again, and a fail is run again on the next read; not run while less than `--min-free-gib` is free; under `--confinement none` they share the run's `CARGO_TARGET_DIR`, under `substrate` they build in the fresh repository's own `target/`, and a program the adapter cannot run (anything but `cargo`) is refused before any case opens; required by `forge: local` and refused under any other forge, before any case opens; no flag |
 | `setup` | a list of `{name, argv}` commands, run once in the tree when the case opens, before the red-base check and any model call, under the test command's environment and confinement; `argv` is a program and its arguments, run without a shell; each duration is recorded on a `setup` line of the run record and the output kept under the state directory; a command that does not end 0 stops the run `SetupFailed`, exit 1; a resumed case runs them again only when its base moved; no flag |
 | `transport` | `glab`, the default, or `api`: how `forge: gitlab` reaches the host ([The GitLab API transport](#the-gitlab-api-transport)); no flag |
 | `credential` | `{env: NAME}` or `{file: PATH}`, where the `api` transport's token comes from, by reference only; no flag |
@@ -137,7 +138,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -326,7 +327,7 @@ Without `--forge`, takt follows `origin`:
 | any other host, with `glab auth status --hostname <host>` exiting 0 | `gitlab` |
 | anything else | `none`, with the reason in one line |
 
-Each forge is an adapter, and the five are peers:
+Each forge is an adapter, and the six are peers:
 
 | forge | what it pushes and opens through | what scans what it publishes |
 |---|---|---|
@@ -334,6 +335,7 @@ Each forge is an adapter, and the five are peers:
 | `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the case's branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its state and checks | `b10x-gates scan-text`, always: it is the `gates` adapter's own forge |
 | `command` | the commands of the run file's `forge_commands`, each an argument list run without a shell; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
 | `connectors` | `connectors operations invoke` on the instance the run file's `forge_instance` names, once per action; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
+| `local` | a bare repository on this machine, the hub the tree's `origin` names by its path, outside the tree; the tree is cloned from it with `git clone --no-local`, and a tree that shares object files with it is refused: `git push` to it, a request record under its `takt/requests`, the run file's `local_checks` as the checks, the merge made in the hub under the run's commit identity and refused when the base moved, and no merge at all when the base already holds the head, the request then recorded merged by the commit that holds it; never a default, refused for a scenario run | nothing: nothing leaves the machine |
 | `none` | nothing | nothing leaves the machine |
 
 `--forge gitlab` without `glab` or its login is refused before the case opens. Under `scan:
