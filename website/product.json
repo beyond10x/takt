@@ -3,25 +3,51 @@
   "product": {
     "name": "takt",
     "mark": "Tk",
-    "eyebrow": "Agentic coding under a protocol\u00a0·\u00a0early",
+    "eyebrow": "Agentic coding under a protocol · early",
     "promise": [
       "The model does the work.",
       "A validator decides whether it counts."
     ],
-    "lede": "Point takt at a repository and say \"work on this\". It takes an intent, or the next ready story from the planning store, opens a case on a protocol, and lets a harness such as Claude Code take one admissible step at a time. Each step's result is checked by a program, not by the model that made it. Canon decides what is permitted, what is owed and whether completion was earned.",
+    "lede": "takt lets a coding agent such as Claude Code change your git repository one step at a time. After each change takt runs your tests itself and records what they said about that exact commit. A merge waits for your grant, and every run ends on a named stop with its own exit code. For developers who want an agent's \"done\" to mean the tests passed and a person said yes.",
     "actions": [
       {"label": "Get started", "href": "/docs/getting-started", "kind": "primary"},
-      {"label": "Read the documentation", "href": "/docs/"},
-      {"label": "Measured results", "href": "/docs/self-improvement/runs"},
-      {"label": "What exists today", "href": "/docs/status"}
+      {"label": "Install", "href": "/docs/guides/install"},
+      {"label": "What does not work yet", "href": "/docs/known-limitations"},
+      {"label": "Measured results", "href": "/docs/self-improvement/runs"}
     ],
-    "meta": "One Rust binary\u00a0·\u00a0on loom-sdk\u00a0·\u00a0Claude Code, Codex or b10x-harness\u00a0·\u00a0Apache-2.0",
+    "meta": "One Rust binary · Linux and macOS · Claude Code, Codex or b10x-harness · Apache-2.0",
     "kpis": [
       {"count": "shipped", "label": "stories implemented"},
       {"count": "decided", "label": "stories in an open wave"}
     ]
   },
   "sections": [
+    {
+      "kind": "features",
+      "eyebrow": "Who it is for",
+      "title": "For a developer who lets an agent change a repository.",
+      "lede": "You keep your agent and your tests. takt decides, from what your tests and checks record, whether the agent's work counts.",
+      "items": [
+        {
+          "title": "You use a coding agent",
+          "description": "Claude Code is the default harness; Codex and b10x-harness run too. takt offers it one admissible step at a time and commits what it proposes.",
+          "icon": "action",
+          "href": "/docs/concepts/glossary#harness"
+        },
+        {
+          "title": "Your repository has a test command",
+          "description": "cargo test --quiet by default, any other with --test-cmd. takt runs it itself before and after each change; the model's word is not evidence.",
+          "icon": "evidence",
+          "href": "/docs/concepts/glossary#validator"
+        },
+        {
+          "title": "What it needs",
+          "description": "Linux (x86_64, aarch64) or macOS on Apple silicon, git, your test command, and Claude Code 2.1.304, 2.1.305 or 2.1.309, logged in. Stories from a plan also need AEP.",
+          "icon": "obligation",
+          "href": "/docs/getting-started#what-it-needs"
+        }
+      ]
+    },
     {
       "kind": "features",
       "eyebrow": "What you get",
@@ -37,10 +63,10 @@
         },
         {
           "title": "Merges only under a grant",
-          "description": "A merge waits for a grant recorded for the exact revision (takt approve); without one it is refused.",
+          "description": "A merge waits for a grant recorded for the exact revision (takt approve); without one it is refused. Tested end to end on the local forge with no model. No merge through a hosted forge is on record yet, and none with a model at work on any forge.",
           "status": "shipped",
           "icon": "action",
-          "href": "/docs/guides/run-a-story#approve-and-resume"
+          "href": "/docs/known-limitations"
         },
         {
           "title": "A replayable case record",
@@ -64,18 +90,18 @@
           "href": "/docs/self-improvement/the-loop"
         },
         {
-          "title": "Runs where you deploy it",
-          "description": "A release binary on Linux or macOS, a container image, or a Loom LoomAgent that runs once as a Kubernetes Job and reports its exit code. What a cluster run still lacks is on the known-limitations page.",
+          "title": "Runs as a container",
+          "description": "A release binary on Linux or macOS, or a container image you build from the repository's Dockerfile, with the workspace and the configuration mounted. No image is published.",
           "status": "shipped",
           "icon": "action",
-          "href": "/docs/guides/deploy-on-kubernetes"
+          "href": "/docs/guides/run-in-a-container"
         },
         {
-          "title": "Tests confined",
-          "description": "The test command runs in a user and mount namespace of its own on Linux and under Seatbelt on macOS, or, with the substrate confinement, on read-only toolchain roots with no network. The harness and the forge still run as plain child processes.",
+          "title": "Tests confined, if you ask",
+          "description": "By default the test command runs on the host as you, unconfined, and the run says so. With --confinement substrate it runs with no network and read-only toolchains, or is refused by name. No operating-system sandbox holds the harness session yet.",
           "status": "shipped",
           "icon": "evidence",
-          "href": "/docs/reference/configuration"
+          "href": "/docs/guides/install#confinement"
         }
       ]
     },
@@ -87,7 +113,7 @@
       "steps": [
         {"label": "takt", "title": "Open", "description": "An intent or the next ready story opens a case on a protocol."},
         {"label": "Canon", "title": "Evaluate", "description": "Claims, obligations and the admissible actions, over the evidence."},
-        {"label": "Harness", "title": "Step", "description": "One admissible action in the worktree; what it says is a trace."},
+        {"label": "Harness", "title": "Step", "description": "One admissible action in a scratch copy of the tree; what it says is a trace."},
         {"label": "Validator", "title": "Observe", "description": "Tests, gate, pull request, CI: a record bound to the revision."},
         {"label": "Person", "title": "Grant", "description": "takt approve records the merge grant; the next run resumes."},
         {"label": "takt", "title": "Stop", "description": "A named stop with its own exit code, recorded in events.jsonl."}
@@ -97,7 +123,7 @@
       "kind": "status",
       "eyebrow": "Status",
       "title": "Early. What exists today.",
-      "lede": "Shipped means the story is implemented in the planning store. Decided means it is in an open wave. Generated from .engineering/planning at build time.",
+      "lede": "Shipped means the story is implemented and merged into main, which can be ahead of the latest release. Decided means it is in an open wave. Generated from .engineering/planning at build time.",
       "items": "data/status.json"
     },
     {

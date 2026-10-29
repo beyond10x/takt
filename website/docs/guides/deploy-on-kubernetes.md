@@ -2,25 +2,26 @@
 title: Deploy on Kubernetes
 sidebar_position: 7
 description: Run takt as a Loom 0.45.0 Command LoomAgent on a kind cluster with its configuration, key, policy and workspace, watch the Job, and know what still stops it.
-lede: Loom 0.45.0 runs takt once as a Job with its configuration files, key and workspace, but its fixed seccomp profile still refuses the namespace takt's test command needs.
+lede: Loom 0.45.0 runs takt once as a Job with its configuration files, key and workspace. The recipe has not been run on a cluster, and Loom's fixed seccomp profile refused takt 0.14.0's test command in the docker runs it rests on.
 source: examples/loom-agent/ (checked by crates/takt/tests/examples_config.rs; takt-agent.yaml rendered by b10x-loom-operator 0.44.0 and the chart's values by helm template); Loom 0.44.0 CHANGELOG, README, charts/loom-agents, deploy/crd, crates/loom-operator/src/render.rs and admission.rs; the docker runs of Run in a container. Not run on a cluster.
 ---
 
 # Deploy on Kubernetes
 
+:::caution[Status: not run on a cluster]
+
+This recipe was put together from [Loom](/docs/concepts/glossary#loom) 0.44.0's chart, CRD and operator, and from the manifests
+in `examples/loom-agent/`. The operator rendered the `LoomAgent` and helm rendered the chart.
+Neither was applied to a cluster for this page. With takt 0.14.0 the run was expected to end at
+its first test run ([What still stops it](#what-still-stops-it)); that was not checked again at
+0.21.0.
+
+:::
+
 [Loom](https://beyond10x.github.io/loom/) ([GitHub](https://github.com/beyond10x/loom)) runs
 agents on Kubernetes. Its operator turns a `LoomAgent` resource into a pod, a network policy and
 the rest. takt is a `LoomAgent` of the `Command` variant: the pod runs the takt image's own
 program once, as a Job. Loom deploys and confines it. takt decides each step inside it.
-
-:::caution[Not run on a cluster]
-
-This recipe was put together from Loom 0.44.0's chart, CRD and operator, and from the manifests
-in `examples/loom-agent/`. The operator rendered the `LoomAgent` and helm rendered the chart.
-Neither was applied to a cluster for this page. Under Loom 0.45.0 the run ends at its first test
-run, as [What still stops it](#what-still-stops-it) explains.
-
-:::
 
 ## What you need
 
@@ -221,7 +222,7 @@ codes are in [How a run ends](../concepts/how-a-run-ends.md). A finished Job is 
 To run once more, change the resource (a new `args`, for instance): the new generation deletes the
 old Job and creates a new one.
 
-The case is on the claim, under `/workspace/.takt/cases/`. `HOME` is `/var/lib/agent`, an
+The [case](/docs/concepts/glossary#case) is on the claim, under `/workspace/.takt/cases/`. `HOME` is `/var/lib/agent`, an
 emptyDir of mode 0700, as is `/tmp`, and the root file system is read-only. Transcripts and what a
 discarded step sets aside, which go under `HOME` by default, go with the pod. To keep them, name a
 directory on a kept volume as the state directory: `state_dir` in the run configuration or
@@ -232,18 +233,21 @@ default (`--state-dir` wins over both). The run then writes both under it, nothi
 ## What still stops it
 
 Loom renders every agent pod with `seccompProfile: RuntimeDefault`. The CRD has no field to change
-that, and a Job's pod template cannot be patched once the Job exists. Under the default
-`--confinement none` of takt 0.14.0, takt's test command ran in a user and mount namespace of its
-own (`--confinement substrate` was not tried there), and a container runtime's default
-profile refuses that. Since then `none` starts it through Substrate's `local` adapter, in no
-namespace of takt's own, which has not been tried under Loom. With `docker run` both the default
-seccomp and the default AppArmor profile
-refused it ([Run in a container](./run-in-a-container.md#4-run-it)). So under Loom 0.45.0 the
-first `tests.run` ends the run on an error, exit 5, before any model call. That is inferred from
-the rendered pod and the docker runs, not observed on a cluster.
+that, and a Job's pod template cannot be patched once the Job exists.
 
-There is no supported way around this at Loom 0.45.0. The tests can run only where the container
-runtime's own default profile admits unprivileged user namespaces.
+Under the default `--confinement none` of takt 0.14.0, the test command ran in a user and mount
+namespace of its own (`--confinement substrate` was not tried there). With `docker run`, both
+the default seccomp and the default AppArmor profile refused that
+([Run in a container](./run-in-a-container.md#4-run-it)). So with takt 0.14.0 under Loom 0.45.0
+the first `tests.run` would end the run on an error, exit 5, before any model call. That is
+inferred from the rendered pod and the docker runs, not observed on a cluster.
+
+From takt 0.15.0, `none` starts the test command through [Substrate](/docs/concepts/glossary#substrate)'s `local` adapter, in no
+namespace of takt's own. That has not been tried under Loom or in a container, so whether 0.21.0
+gets past its first test run here is not known.
+
+For takt 0.14.0 there is no supported way around this at Loom 0.45.0. Its tests can run only
+where the container runtime's own default profile admits unprivileged user namespaces.
 [Known limitations](../known-limitations.md#running-under-loom) tracks it.
 
 ## Workarounds from earlier cluster trials
@@ -256,7 +260,7 @@ runtime's own default profile admits unprivileged user namespaces.
 | apply the resource twice | gone (Loom 0.44.0) |
 | write the endpoint file into the workspace | gone: `spec.configFiles` (Loom 0.44.0) |
 | stage the key as a file by hand | gone: `--endpoint-token-env` or `env` in the endpoint file (takt 0.13.0) |
-| move the story to active by hand | gone: `--story` (takt 0.13.0) |
+| move the [story](/docs/concepts/glossary#story) to active by hand | gone: `--story` (takt 0.13.0) |
 | add packages, toolchain links, b10x-harness 0.20.0 and `b10x-gates` to the image | gone: the image ships them (takt 0.13.0) |
 | `mkdir -p "$HOME/.cargo/bin"` before takt | still needed at 0.14.0, in `command.entrypoint`; not after it: the first test run in a fresh `HOME` is no longer refused |
 | patch the pod to seccomp and AppArmor `Unconfined` | not possible at Loom 0.45.0 |

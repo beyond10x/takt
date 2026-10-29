@@ -1,19 +1,63 @@
 ---
 title: What takt is built on
 sidebar_position: 1
-description: The layers inside the takt binary, from the command line down to the model endpoint, what each one decides, and what happens in one run.
+description: What takt is not, where it sits among the tools it uses, the layers inside the binary and what each decides, and what happens in one run.
 lede: takt is an application on Loom's loom-sdk; Loom's runtime steps the case and its governor decides with Canon, a harness session only proposes, and takt keeps the validators, the evidence, git, the forge and the case record.
-source: Cargo.toml and Cargo.lock at 0.14.0 and at 0.21.0 (loom 0.49.1); CHANGELOG.md 0.21.0; crates/takt/src/lib.rs, run.rs, harness.rs, frontier.rs, validator.rs, case.rs, evidence.rs, run_config.rs; crates/takt/tests/no_own_evaluation.rs; docs/design/takt.md § 2, § 3 and § 5; CHANGELOG.md 0.12.0 to 0.14.0; ADR 0099; Loom 0.44.0 website/docs/index.md; metaharness website/docs/index.md
+source: Cargo.toml and Cargo.lock at 0.14.0 and at 0.21.0 (loom 0.49.1); the versions table from Cargo.toml and Cargo.lock at the tags 0.13.0 and 0.20.0 and the 0.21.0 release commit, checked against 0.21.0 source; website/docs/index.md (What takt is not, Where it sits) before it moved here; CHANGELOG.md 0.21.0; crates/takt/src/lib.rs, run.rs, harness.rs, frontier.rs, validator.rs, case.rs, evidence.rs, run_config.rs; crates/takt/tests/no_own_evaluation.rs; docs/design/takt.md § 2, § 3 and § 5; CHANGELOG.md 0.12.0 to 0.14.0; ADR 0099; Loom 0.44.0 website/docs/index.md; metaharness website/docs/index.md
 ---
 
 # What takt is built on
 
 takt is an application on [Loom](https://beyond10x.github.io/loom/)
-([GitHub](https://github.com/beyond10x/loom)). Loom's runtime drives each step of a case, Loom's
-governor decides what the case allows, and a harness only proposes a change. What takt adds is
-its own: the validators and the evidence they write, git and the forge, the planning-store seam,
+([GitHub](https://github.com/beyond10x/loom)). Loom's runtime drives each step of a [case](/docs/concepts/glossary#case), Loom's
+governor decides what the case allows, and a [harness](/docs/concepts/glossary#harness) only proposes a change. What takt adds is
+its own: the [validators](/docs/concepts/glossary#validator) and the [evidence](/docs/concepts/glossary#evidence) they write, git and the [forge](/docs/concepts/glossary#forge), the planning-store seam,
 the case record, and the self-improvement tools (`scorecard`, `trace`, `report`, `view`,
 `promote`, `replay`, `scenario`).
+
+## What takt is not
+
+| takt is not | who does that instead |
+|---|---|
+| A coding harness | Claude Code, Codex or b10x-harness make the edits. takt reaches them through [metaharness](https://beyond10x.github.io/metaharness/) ([GitHub](https://github.com/beyond10x/metaharness)). |
+| A model router | [llm](https://beyond10x.github.io/llm/) ([GitHub](https://github.com/beyond10x/llm)) and the endpoint you configure. takt names the endpoint; the harness calls the model. |
+| A planner | [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) holds the plan. takt reads its ready [stories](/docs/concepts/glossary#story) and records results on them. |
+| An orchestrator of agents | One case per run. [Loom](https://beyond10x.github.io/loom/) ([GitHub](https://github.com/beyond10x/loom)) runs agents, and runs a takt container once as a `LoomAgent`. |
+| A CI system | Your forge's CI runs the checks. takt reads their result through the forge as evidence. Under `--forge local` takt runs the commands its run file names as the checks, on this machine. |
+
+## Where it sits
+
+```text
+AEP                 the plan: ready stories
+ │
+takt                one case: steps, evidence, grants, stops
+ ├─ Loom            Commission runtime steps it; the governor decides
+ │   └─ Canon       evaluates the engineering protocol
+ └─ metaharness     one hermetic session per judgement step
+     └─ Claude Code | Codex | b10x-harness
+                                  └─ llm → your endpoint
+```
+
+- [Canon](https://beyond10x.github.io/canon/) ([GitHub](https://github.com/beyond10x/canon))
+  evaluates every case takt holds: claims, obligations, admissible actions, legitimate outcomes.
+- [Engineering protocols](https://beyond10x.github.io/engineering-protocols/)
+  ([GitHub](https://github.com/beyond10x/engineering-protocols)) supply the [protocols](/docs/concepts/glossary#protocol) takt runs
+  as built-ins, the default `story.delivery/2` among them.
+- [Loom](https://beyond10x.github.io/loom/) ([GitHub](https://github.com/beyond10x/loom)) is
+  the runtime takt is built on: its Commission runtime drives each step and its governor decides.
+- [metaharness](https://beyond10x.github.io/metaharness/)
+  ([GitHub](https://github.com/beyond10x/metaharness)) runs each judgement step as one hermetic
+  harness session.
+- [Harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness))
+  is b10x-harness, one of the three agent loops takt can drive (`--harness harness`).
+- [llm](https://beyond10x.github.io/llm/) ([GitHub](https://github.com/beyond10x/llm)) carries
+  b10x-harness's model calls to the endpoint you name.
+- [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
+  is the planning store takt takes stories from and records them in.
+- [ESS](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) holds
+  takt's own specification, `ess/` in the repository, validated on every check.
+
+The rest of this page goes through these layers as the binary links them.
 
 ## The layer stack
 
@@ -52,7 +96,7 @@ seam (`harness`), the planning-store seam (`frontier`), git (`git`), the forge (
 readers of a run record (`scorecard`, `trace`, `report`, `view`).
 
 - Decides: what a step may touch (the step guard), which validator is due, the two pre-checks
-  before each step (`ApprovalRequired` when only a grant is left, `Unperformable` when nothing in
+  before each step (`ApprovalRequired` when only a [grant](/docs/concepts/glossary#grant) is left, `Unperformable` when nothing in
   the run can perform what is left), the two test stops (`RedBase`, `RepeatedTestFailure`) and
   the gate stop (`RepeatedGateFailure`),
   budgets and the free-disk check.
@@ -67,7 +111,7 @@ takt uses three of its parts:
 
 | part | crate | what it does for takt |
 |---|---|---|
-| Commission's runtime | `b10x-loom-commission` | Runs one step per call of `run_until_blocked`: asks the executor for a proposal, rechecks it against the frontier, the case revision and the authority, then hands it to the effect. |
+| Commission's runtime | `b10x-loom-commission` | Runs one step per call of `run_until_blocked`: asks the executor for a proposal, rechecks it against the [frontier](/docs/concepts/glossary#frontier), the case revision and the authority, then hands it to the effect. |
 | The governor | `b10x-loom-governor` | `CanonGovernor` evaluates the case's protocol with Canon over the case's files and returns the frontier. It decides and never acts. |
 | The session executor | `b10x-loom-session-executor` | Starts one metaharness session per judgement step (`loom_sdk::session`). |
 
@@ -141,13 +185,25 @@ takt itself is specified in [ESS](https://beyond10x.github.io/ess/)
 ([GitHub](https://github.com/beyond10x/ess)): `ess/system.yaml` and `ess/domains/` in the
 repository, validated by `ess specify validate --path ess` in `task check`.
 
-## Versions that changed in 0.13.0
+## Versions by release
 
-The 0.13.0 changelog marks it breaking: `b10x-loom-sdk` moves from loom 0.41.0 to 0.43.0 with
-metaharness 0.19.0, so from then on `--harness harness` needed b10x-harness 0.20.0 on the `PATH`.
-The loom 0.48.0 pin of 0.20.0 brings metaharness 0.23.0 and raises that to b10x-harness 0.22.0;
-the loom 0.49.1 pin of 0.21.0 keeps both.
-The preflight reports an older harness as an advisory gap, and the container image ships 0.22.0.
+What each takt release pins, from `Cargo.toml` and `Cargo.lock` at its tag:
+
+| takt | loom | metaharness | b10x-harness needed for `--harness harness` | Canon | engineering protocols |
+|---|---|---|---|---|---|
+| 0.13.0 | 0.43.0 | 0.19.0 | 0.20.0 | 0.6.0 | 0.10.0 |
+| 0.20.0 | 0.48.0 | 0.23.0 | 0.22.0 | 0.6.0 | 0.12.2 |
+| 0.21.0 | 0.49.1 | 0.23.0 | 0.22.0 | 0.7.0 | 0.13.0 |
+
+- **0.13.0** is marked breaking in the changelog: loom moved from 0.41.0 to 0.43.0, and
+  `--harness harness` needed b10x-harness 0.20.0 on the `PATH` from then on.
+- **0.21.0** takes Canon 0.7.0 and engineering protocols 0.13.0 with the loom 0.49.1 pin. The
+  built-in `story.delivery/2` changes with it
+  ([When an edit is admitted](./protocol-and-case.md#when-an-edit-is-admitted)), and Canon 0.7.0
+  orders evidence in whole seconds ([Evidence and the judge](./evidence-and-the-judge.md)).
+
+The preflight reports an older harness as an advisory gap, and the container image ships
+b10x-harness 0.22.0.
 
 ## takt as a Loom agent
 
@@ -173,7 +229,7 @@ the `Command` variant, which Loom 0.45.0 runs once as a Kubernetes Job and whose
    `.takt/cases/<case>/`. The run holds the case (`run.lock`) and appends an `opened` line
    to `events.jsonl`. See [Protocol and case](./protocol-and-case.md).
 2. **Evaluate.** Loom's governor evaluates the case with Canon over its files. takt writes the
-   result as `decisions/NNNN.json` and prints its frontier line. See
+   result as `decisions/NNNN.json` and prints what the run may do (`may:`). See
    [The step loop and the frontier](./one-step-at-a-time.md).
 3. **Pick the step.** A validator whose action is admissible and due goes first (the tests,
    the gate, a pull request, CI, the merge). Otherwise takt checks whether only a grant is left

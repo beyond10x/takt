@@ -1,9 +1,9 @@
 ---
 title: Install
 sidebar_position: 1
-description: Install takt 0.21.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build, and the tools each kind of run needs beside it.
-lede: takt is one binary; what else you install depends on the harness, the forge and whether you deliver stories.
-source: the release assets of 0.14.0 (checksum commands run); cargo install --git at the tag 0.14.0 (run, 3 min 27 s); docker build of the Dockerfile at 0.14.0 (run); takt run --help at 0.14.0; Dockerfile
+description: Install takt 0.21.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build; the tools each kind of run needs beside it; and how the test command is confined.
+lede: takt is one binary. What else you install depends on the harness, the forge and whether you deliver stories.
+source: the release asset and checksum commands (run against 0.14.0's assets); install and command -v run on a build of 0.21.0's source; cargo install --git and docker build of the Dockerfile (run at 0.14.0); takt run --help of 0.21.0; the Dockerfile; metaharness 0.23.0 (PINNED_VERSIONS of metaharness-claude); runs of a build of 0.21.0's source with Claude Code 2.1.312 and 2.1.309, 2026-10-29
 ---
 
 # Install
@@ -25,19 +25,31 @@ curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
 tar -xzf "takt-$version-$target.tar.gz"
+mkdir -p ~/.local/bin
+install -m 755 "takt-$version-$target/takt" ~/.local/bin/takt
+command -v takt
+takt --version
 ```
 
 The targets are `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` and
-`aarch64-apple-darwin`. Releases 0.7.0 to 0.9.0 have no macOS binary, and 0.13.0 has no release
-at all: its macOS build failed, and 0.13.1 ships its changes. On macOS, where `sha256sum` may be
-missing:
+`aarch64-apple-darwin`. If `command -v takt` prints nothing, `~/.local/bin` is not on your `PATH`;
+add it in your shell's profile. `takt --version` prints the version and the commit it was built
+from:
+
+```console
+$ takt --version
+takt 0.21.0 (<the commit the 0.21.0 tag names>)
+```
+
+On macOS, where `sha256sum` may be missing, check the archive with:
 
 ```sh
 grep " takt-$version-$target.tar.gz\$" SHA256SUMS | shasum -a 256 --check
 ```
 
 The archive holds `takt`, `README.md`, `CHANGELOG.md` and `LICENSE` in the directory
-`takt-<version>-<target>/`. Move `takt` onto your `PATH`.
+`takt-<version>-<target>/`. Which release added what is in the
+[changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md).
 
 ## With cargo
 
@@ -47,17 +59,11 @@ From the tag, without a checkout:
 cargo install --locked --git https://github.com/beyond10x/takt --tag 0.21.0 b10x-takt-cli
 ```
 
-The package is `b10x-takt-cli`, and the binary it installs is `takt`. A build took 3 minutes 27
-seconds here. cargo warns about a yanked `tokio` in the lock file; the build is `--locked` and
-goes on. From a checkout of the repository:
+The package is `b10x-takt-cli`; the binary it installs is `takt`, in `~/.cargo/bin`. From a
+checkout of the repository:
 
 ```sh
 cargo install --locked --path crates/takt-cli
-```
-
-```console
-$ takt --version
-takt 0.21.0 (<the commit the 0.21.0 tag names>)
 ```
 
 ## As a container image
@@ -70,48 +76,97 @@ cd takt
 docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.21.0 .
 ```
 
-The image is about 1.3 GB. It holds takt, `aep`, `b10x-harness`, `ess`, `b10x-gates` and a Rust
-toolchain, and runs as uid 10001. Without `REVISION`, the image's label names an `unknown`
-revision. What is in it and how it is mounted is in
-[Container image](../reference/container-image.md), and running it in
+The image holds takt, `aep`, `b10x-harness`, `ess`, `b10x-gates` and a Rust toolchain, and runs
+as uid 10001. It holds no Claude Code. Without `REVISION`, the image's label names an `unknown`
+revision. What is in it: [Container image](../reference/container-image.md). How to run it:
 [Run in a container](./run-in-a-container.md).
 
 ## The tools beside takt
 
-takt starts other programs and finds them on the `PATH`. Which ones depends on the run:
+takt starts other programs and finds them on the `PATH`. Which ones depends on the run: the
+[harness](../concepts/glossary.md#harness) that takes the model steps, the
+[forge](../concepts/glossary.md#forge) a change leaves through, and whether you deliver a
+[story](../concepts/glossary.md#story).
 
 | run | tools |
 |---|---|
-| every run | `git`, and the test command's toolchain (`cargo` by default) |
-| `--harness claude`, the default | `claude` (Claude Code), logged in |
-| `--harness codex` | `codex`, and a [scan adapter](../reference/configuration.md#the-scan): `b10x-gates` with `B10X_GATES_POLICY` set for the default `gates`, or `scan: none` declared in the run's file |
-| `--harness harness` | `b10x-harness` 0.22.0, an LLM endpoint, and a scan adapter, as for `codex` |
-| a story | `aep` and a planning store; a gates document for the gate |
-| `--forge bot` (beyond10x's route, github.com only) | `b10x-gates` acting as the bot's GitHub App, and `gh` |
-| `--forge gitlab` | `glab`, with `glab auth status --hostname <host>` exiting 0 |
+| every run | [`git`](https://git-scm.com/downloads), and the test command's toolchain: `cargo test --quiet` by default ([rustup](https://rustup.rs)), any other with `--test-cmd` |
+| `--harness claude`, the default | [Claude Code](https://github.com/anthropics/claude-code) (`claude`), logged in, at a [qualified version](#claude-codes-version) |
+| `--harness codex` | [Codex](https://github.com/openai/codex) (`codex`), and a scan adapter: [`b10x-gates`](https://github.com/beyond10x/gates) with `B10X_GATES_POLICY` set, or `scan = "none"` in the run file ([Configure a run](./configure-a-run.md)) |
+| `--harness harness` | [`b10x-harness`](https://github.com/beyond10x/harness) 0.22.0, an LLM endpoint, and a scan adapter, as for `codex` |
+| a story | [`aep`](https://github.com/beyond10x/aep) and a planning store; a gates document for the gate ([Run a story](./run-a-story.md)) |
 | `--forge local` | nothing beyond `git`: a bare repository on this machine as the tree's `origin`, and the programs its `local_checks` name |
-| `takt promote` | `bwrap` on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
+| `--forge gitlab` | [`glab`](https://gitlab.com/gitlab-org/cli), with `glab auth status --hostname <host>` exiting 0 |
+| `--forge bot` (beyond10x's route, github.com only) | [`b10x-gates`](https://github.com/beyond10x/gates) acting as the bot's GitHub App, and [`gh`](https://cli.github.com) |
+| reading a case | [`jq`](https://jqlang.github.io/jq/), as [Read a case](./read-a-case.md) uses it |
+| `takt promote` | [`bwrap`](https://github.com/containers/bubblewrap) on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
 
 A gate's commands are the exception: they find a program by name on `/usr/local/bin:/usr/bin:/bin`,
-or on the `PATH` their `env` sets, as the [run-a-story guide](./run-a-story.md) states.
+or on the `PATH` their `env` sets, as [Run a story](./run-a-story.md) says.
 
-The neighbours, each with its own docs:
-[AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
-keeps the planning store,
-[b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness))
-is the agent that talks to an LLM endpoint, and
-[metaharness](https://beyond10x.github.io/metaharness/) ([GitHub](https://github.com/beyond10x/metaharness))
-is the layer every harness runs through. metaharness is a library inside takt, not a program to
+metaharness, the layer every harness runs through, is a library inside takt, not a program to
 install.
 
-On Linux and macOS the test command runs through Substrate's confinement contract. Under the
-default `--confinement none` it starts through Substrate's `local` adapter, declared insecure: on
-the host as this user, in no namespace of takt's own. `--confinement substrate` runs it through the
-first of Substrate's `systemd` around `linux`, `linux` and `macos` adapters that serves it, and
-refuses it by name where none does ([Getting started](../getting-started.md)). Up to 0.14.0, `none`
-ran it in a user and mount namespace of its own, which a host or container that refuses
-unprivileged user namespaces ended on an error, exit 5; in a container that meant running it with
-seccomp and AppArmor unconfined ([Run in a container](./run-in-a-container.md)), which has not been
-measured again since. On macOS, up to 0.14.0, `none` also ran it under takt's Seatbelt profile,
-which limited its writes, the programs it started, launchd and the keychain; Substrate's `local`
-adapter limits none of them.
+## Claude Code's version
+
+Before the first Claude Code session, takt asks metaharness whether the `claude` it would start
+qualifies. takt 0.21.0 builds on metaharness 0.23.0, which qualifies Claude Code **2.1.304,
+2.1.305 and 2.1.309**. Any other version stops the run before any model call, exit 1. With
+Claude Code 2.1.312 on the `PATH` (the first three lines of output left out, the path written as
+`~/takt-demo`):
+
+```console
+$ takt run --repo . --forge none --hours 1 --intent "add a function sub(left, right) that subtracts right from left, with a test"
+  harness claude-code 2.1.312 · confinement none
+stopped: HarnessUnqualified (claude 2.1.312: H11 unk: the launch imposes it over a scratch working directory; but there is no memory canary recorded for 2.1.312, so nobody measured whether this binary honours the control; qualified versions: 2.1.304, 2.1.305, 2.1.309; select another binary with --harness-program); steps 0, tokens 0, wall 4.0s, commits 0, case ~/takt-demo/.takt/cases/takt-20261029T110600Z
+```
+
+The case stays open; the next run resumes it. Name a qualified binary by its absolute path with
+`--harness-program`, on every run (it is a flag only, with no key in the run file). The `opened`
+event records its path, its sha256 and its `--version` line.
+
+Claude Code's updater keeps its versions under `~/.local/share/claude/versions/` and removes old
+ones. Copy a qualified version to a path of your own once:
+
+```sh
+mkdir -p ~/.local/opt/claude-2.1.309
+install -m 755 ~/.local/share/claude/versions/2.1.309 ~/.local/opt/claude-2.1.309/claude
+~/.local/opt/claude-2.1.309/claude --version
+takt run --repo . --forge none --harness-program ~/.local/opt/claude-2.1.309/claude \
+  --intent "add a function sub"
+```
+
+## Confinement
+
+takt has no sandbox of its own. It starts the test command through
+[Substrate](../concepts/glossary.md#substrate)'s confinement contract, on Linux and macOS
+alike, and `--confinement` picks how:
+
+| `--confinement` | the test command runs |
+|---|---|
+| `none`, the default | through Substrate's `local` adapter, declared insecure: on the host as you, with an environment cleared of logins, a scratch home and `TMPDIR`, a timeout and bounded output. It can read whatever you can. The run's first lines say so. |
+| `substrate` | through the first adapter of the host that serves it: `systemd` around `linux`, then `linux` (bubblewrap), then `macos` (Seatbelt). The tree is the workspace, its `target/` written, the toolchain and cargo caches read-only, no network. What no adapter serves is refused by name, never run unconfined. |
+
+The run's `case` line and its `opened` event name the adapter and the facts it proved. Under
+`none`, a run's `case` line and the line after it read (the path shortened):
+
+```console
+case takt-20261029T110550Z on software.change/1 in ~/takt-demo; inputs risk=standard(default) change_kind=feature(default) affects_security_boundary=false(default); confinement none: Substrate local, declared insecure: the run was started with the default confinement none: its test command runs on the host as this user, unconfined; proved: declared_insecure, paths_are_host_paths, local_permitted, host_network
+  harness none · confinement none
+```
+
+**The harness session is not confined by the operating system**, under either setting. Its
+limits are metaharness's: it works in a scratch copy of the tree, with an environment built from
+an allowlist, and Claude Code is offered only the file tools `Read,Edit,Write,Glob,Grep`
+([A judgement step](../concepts/one-step-at-a-time.md#a-judgement-step)).
+
+Under `substrate` on Linux, `target/` is the only path of the tree the test command writes; `.git`
+and the rest are read-only, and a host whose probe did not prove `exec.workspace-scoped-write` is
+refused by that name. A test run that would write `Cargo.lock` then fails, so commit it. On
+`macos` the tree stays writable and its `.git` is sealed. `--confinement-cgroup-root <dir>` bounds
+the `linux` adapter in a cgroup delegated to you, without `systemd`.
+
+`takt promote` builds a candidate through the same selection. On macOS its build installs into
+the workspace and takt copies the binary out. A `.cargo/config.toml` in a directory above the
+build directory, `~/.cargo/config.toml` included, fails that build: the adapter lets cargo see the
+file but not read it.

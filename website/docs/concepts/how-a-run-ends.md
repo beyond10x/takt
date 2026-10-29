@@ -1,14 +1,14 @@
 ---
 title: How a run ends
 sidebar_position: 6
-description: Every stop a takt run can end on, grouped, with its exit code and what the next run does; the two test stops added in 0.14.0 and the gate stop added in 0.19.0.
+description: Every takt run ends on one named stop with its own exit code. This page lists each stop, what caused it and what the next run on the case does.
 lede: Every run ends on one named stop, printed as one stopped line and recorded in the case, with an exit code a script or a Loom Job can read; every stop but Completed leaves the case open, and the next run resumes it.
-source: takt run --help (Exit codes) at 0.14.0; crates/takt/src/run.rs (Stop, STOP_KINDS, REPEATED_FAILURES, REPEATED_GATE_FAILURES, is_documentation_path, code_changed, names_doc_path, Run::tests_stop, Run::before_any_effect), crates/takt/src/console.rs (stop_figures), crates/takt-cli/src/main.rs (EXIT_*); crates/takt-cli/tests/test_failure_stops_cli.rs; crates/takt/tests/w42_adv_repeat_count.rs, w44_adv_docs_named.rs, w44_adv_docs_named_b.rs; CHANGELOG.md 0.14.0; Loom 0.44.0 CHANGELOG (status.run); scratch runs of takt 0.14.0; one case record of a cluster run of takt 0.13.1
+source: takt run --help (Exit codes) at 0.14.0; crates/takt/src/run.rs (Stop, STOP_KINDS, REPEATED_FAILURES, REPEATED_GATE_FAILURES, is_documentation_path, code_changed, names_doc_path, Run::tests_stop, Run::before_any_effect), crates/takt/src/console.rs (stop_figures), crates/takt-cli/src/main.rs (EXIT_*); crates/takt-cli/tests/test_failure_stops_cli.rs; crates/takt/tests/w42_adv_repeat_count.rs, w44_adv_docs_named.rs, w44_adv_docs_named_b.rs; CHANGELOG.md 0.14.0; Loom 0.44.0 CHANGELOG (status.run); scratch runs of takt 0.14.0; one case record of a cluster run of takt 0.13.1; the test stops checked against 0.21.0 source (run.rs code_changed, names_doc_path, Failing; CHANGELOG.md 0.21.0)
 ---
 
 # How a run ends
 
-A run ends on exactly one stop. takt prints it as the last line, records it in the case's
+A run ends on exactly one stop. takt prints it as the last line, records it in the [case](/docs/concepts/glossary#case)'s
 `events.jsonl` as a `stop` line, and exits with the stop's code:
 
 ```text
@@ -16,11 +16,15 @@ stopped: <stop>; steps <n>, tokens <n>, wall <duration>[, cost $<dollars>], comm
 ```
 
 From 0.19.0 the line names the run's wall time, its cost when a step reported one, and the
-commits its steps made with how many paths they committed. The examples on this page are from
-takt 0.14.0 and end at `tokens`. An error's `stopped: error:` line carries the same figures.
+commits its steps made with how many paths they committed. An error's `stopped: error:` line
+carries the same figures.
+
+The examples on this page are from takt 0.14.0. Their stopped lines end at `tokens`, and they
+print a `frontier:` line at each decision. A 0.21.0 run prints `may:` once and then `may now:`
+only when the set of admissible actions changes; `--verbose` adds the `frontier:` lines back.
 
 Every stop but `Completed` leaves the case open. The next `takt run` on the repository resumes
-it: a story's open case is found on its own, and an intent's case is resumed with
+it: a [story](/docs/concepts/glossary#story)'s open case is found on its own, and an intent's case is resumed with
 `--case <case>`. The generated table of codes is [Exit codes](/docs/reference/exit-codes).
 
 ## Every stop, grouped
@@ -31,7 +35,7 @@ it: a story's open case is found on its own, and an intent's case is resumed wit
 | 1 | refused before the run | nothing was opened; fix what stderr names |
 | 2 | the arguments do not parse | nothing was opened |
 | 3 | a budget, a loop stop, a test stop or the gate stop (below) | resumes the case |
-| 4 | `ApprovalRequired` | resumes once `takt approve` granted it |
+| 4 | `ApprovalRequired` | resumes once `takt approve` [granted](/docs/concepts/glossary#grant) it |
 | 5 | `stopped: error: …` | resumes the case |
 | 6 | `Waiting` | resumes and observes again |
 | 7 | `Unperformable` | resumes, with the performer it lacked |
@@ -40,7 +44,7 @@ it: a story's open case is found on its own, and an intent's case is resumed wit
 
 ### Completed: exit 0
 
-`Completed (<outcome>)`: an outcome of the protocol is legitimate, such as `accepted` for a
+`Completed (<outcome>)`: an outcome of the [protocol](/docs/concepts/glossary#protocol) is legitimate, such as `accepted` for a
 story whose pull request merged. A story's case that ends `accepted` records its test result on
 the story and moves it to `implemented`. `frontier: nothing ready` also exits 0: no story of the
 planning store was ready, and no case was opened.
@@ -56,8 +60,8 @@ The reason is on stderr and no step was taken. Exit 2 is a command line that doe
 |---|---|
 | `Iterations (<n>)` | `--iterations`: steps taken |
 | `Hours (<h>)` | `--hours`: wall time |
-| `Tokens (<n>)` | `--tokens`: tokens the harness reported |
-| `ActiveTime (…)` | `--active-seconds`: wall time less the time spent waiting on the forge |
+| `Tokens (<n>)` | `--tokens`: tokens the [harness](/docs/concepts/glossary#harness) reported |
+| `ActiveTime (…)` | `--active-seconds`: wall time less the time spent waiting on the [forge](/docs/concepts/glossary#forge) |
 
 A budget is read before each step, so a step under way runs to its end. The next run starts with
 a fresh budget.
@@ -68,14 +72,14 @@ a fresh budget.
 |---|---|
 | `NoProgress` | a pass changed no file and left the decision as it was; another would not either |
 | `NothingAdmissible` | no action is left to take and none needs an approval |
-| `StepRefused (<why>)` | a step did what the frontier did not admit; its change was discarded |
+| `StepRefused (<why>)` | a step did what the [frontier](/docs/concepts/glossary#frontier) did not admit; its change was discarded |
 
 A refused step is described in [Capabilities and approvals](./capabilities-and-approvals.md#a-step-that-does-more-is-refused).
 
 ### The two test stops
 
 0.14.0 adds two stops on `tests.run` results, both exit 3. They stop a run whose tests are red
-before it spends model calls on them.
+(the last test run failed) before it spends model calls on them.
 
 - **`RedBase`**: the case's first `tests.run` fails before any step changed its base. The run
   stops at once, before any model call, naming the failed tests and the runner's rerun hint.
@@ -83,23 +87,44 @@ before it spends model calls on them.
   (or `continue_past_red_base: true` in a run's configuration) goes on past it, for a base whose
   tests fail on purpose; a scenario declares that with `red-base = expected` in its section of
   `.engineering/scenarios.conf` ([Scenario run](../guides/scenario-run.md)).
-- **`RepeatedTestFailure`**: two `tests.run` results in a row, each at a new revision, fail the
-  same tests. The edits between them moved nothing the tests decide; the run stops before
-  another judgement step, naming the tests. A failing set that changes, or a failure whose output
-  names no test, does not stop the run. From 0.19.0 two results do not count: the red run at the
-  revision a `tests.write` step committed, which shows the story's new tests failing as the
-  protocol asks, and a result at a revision that changed only documentation (`docs/`,
-  `README.md`, `CHANGELOG.md`) since the last one. A first edit that leaves the new tests red no
-  longer ends the run. From 0.21.0 a documentation path counts as code when a test file names
-  it. A test file is one a `tests.write` commit of the case changed; it names the path when it
-  holds the path, or a parent directory of it below `docs/` (`docs/runs` for
-  `docs/runs/a.md`) with or without its trailing `/`, followed by the end of the text or a
-  character that cannot go on with a path: anything but a letter, a digit, a non-ASCII
-  character, `_`, `-`, `.`, `/` or `~`. So an edit to a fixture under `docs/` that the story's
-  tests read is an attempt like any other. A change under `.engineering/` never counts.
+- **`RepeatedTestFailure`**: two test runs in a row fail the same tests, each at a new revision.
+  The edits between them changed nothing the tests decide. The run stops before another
+  judgement step and names the tests. A set of failing tests that changes does not stop the
+  run, and neither does a failure whose output names no test. Not every test run counts toward
+  the two: [What counts as an attempt](#what-counts-as-an-attempt).
 
 A resume after either stop runs the tests again before any model call, and stops again while
 they fail the same way. Once they pass, or fail differently, the run goes on.
+
+#### What counts as an attempt
+
+A failing test run counts toward `RepeatedTestFailure` only when its revision is a new attempt:
+since the last run that counted, the case changed something the tests decide. Two kinds of run
+never count (from 0.19.0):
+
+- The red run at the revision a `tests.write` step committed. The protocol asks for the story's
+  new tests to fail there, so a first edit that leaves them red does not end the run.
+- A run at a revision that changed only documentation. Documentation is everything under
+  `docs/`, plus `README.md` and `CHANGELOG.md`.
+
+From 0.21.0 a documentation file counts as code when a test file names it. A test file is any
+file that a `tests.write` commit of the case changed.
+
+| the revision changed | is it an attempt? |
+|---|---|
+| a code file, such as `src/lib.rs` | yes |
+| `docs/fixtures/case.txt`, and a test file holds `docs/fixtures/case.txt` or `docs/fixtures` | yes, from 0.21.0 |
+| `README.md`, and a test file holds `README.md` | yes, from 0.21.0 |
+| `docs/guide.md`, and no test file names it | no |
+| anything under `.engineering/` | never: those paths are left out before the check |
+
+A test file names a path when it holds the path, or one of its parent directories with or
+without a trailing `/`, and the character right after it cannot go on with a path. For example,
+`docs/runs-old/a.md` does not name `docs/runs/a.md`, because `-` goes on with a path. The
+characters that go on with a path are letters, digits, non-ASCII characters and `_ - . / ~`.
+The top directory alone names nothing: a test file that holds only `docs` names no file under
+it, while `docs/runs` names `docs/runs/a.md`. The test file is read at the revision of the run.
+When git cannot compare the two revisions, the run counts.
 
 ### The gate stop
 
@@ -159,7 +184,7 @@ for the approval gate. `takt approve` records the grant, and the next run resume
 ### Error: exit 5
 
 `stopped: error: <what>`: the run ended on an error once its case was open, such as a forge that
-refused, a validator or a harness that failed. Whatever the failed step changed is discarded, the
+refused, a [validator](/docs/concepts/glossary#validator) or a harness that failed. Whatever the failed step changed is discarded, the
 error is recorded as an `error` line, and the case stays open. A judgement step whose session
 ends without the line naming its action is tried again first, 3 tries at most, each try a step
 that `--iterations` counts; a try that spent the budget stops the run on the budget, exit 3. With `--harness none`, a run past
@@ -200,7 +225,7 @@ trial runner discards it rather than resume it.
 
 `Declined (<reason>)`: a judgement step named `decline` instead of an action, changed no file,
 and gave its reason, for a story the rules it was given forbid. takt writes a `decline` line
-with the reason and the case revision to `events.jsonl`; it is a record, not evidence, and the
+with the reason and the case revision to `events.jsonl`; it is a record, not [evidence](/docs/concepts/glossary#evidence), and the
 protocol's outcome stays open. A step that names `decline` and changed a file is refused instead
 (`StepRefused`, exit 3). A run on the case at the same case revision stops `Declined` again
 before any model call, and an argument-less `takt run` passes the case over, until a commit
@@ -209,7 +234,7 @@ moves its revision. A stuck run still ends `NoProgress`, exit 3.
 ## Reading the code from outside
 
 A run's outcome lives in its files and its exit code, never only in a process, so a script, a CI
-job or an orchestrator can drive takt without parsing its output. Under Loom, a takt container
+job or an orchestrator can drive takt without parsing its output. Under [Loom](/docs/concepts/glossary#loom), a takt container
 deployed as a `LoomAgent` of the `Command` variant runs once as a Job, and Loom 0.45.0 writes the
 program's exit code, end time and reason into the resource's `status.run` and its `Completed`
 condition. A delivery run is built to end on 0 (accepted, or nothing ready), 3 (a budget, or

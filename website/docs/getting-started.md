@@ -1,22 +1,27 @@
 ---
 title: Getting started
 sidebar_position: 2
-description: Install takt 0.21.0, run it once with no model and no credentials, then once with a model, and pick the guide for what comes next.
-lede: One run needs nothing but git and cargo; the second adds a model, and both leave a case directory you can read.
-source: takt run --help and takt approve --help at 0.14.0; runs of takt 0.14.0 on fresh cargo crates, 2026-10-26; the install commands run against the 0.14.0 release assets
+description: Install takt 0.21.0, run it on a repository with no model, then with Claude Code, grant the merge and take the change.
+lede: Two runs on your repository, the first with no model and no account, the second with Claude Code; then the grant and the change.
+source: runs of a build of takt 0.21.0's source on a fresh cargo crate with Claude Code 2.1.312 and 2.1.309, takt approve and git merge --ff-only, 2026-10-29; takt run --help and takt approve --help of 0.21.0; the install commands as on the Install page
 ---
 
 # Getting started
 
-This page takes you from a download to two finished runs on a scratch crate. The first run needs
-no model and no credentials. The second lets a model make one change.
+This page takes you from a download to a change made by Claude Code, checked by takt and taken
+into your branch.
 
-## Install a release
+## What it needs
 
-Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-linux-gnu`,
-`aarch64-unknown-linux-gnu` and `aarch64-apple-darwin`, with a `SHA256SUMS` file, at
-[github.com/beyond10x/takt/releases](https://github.com/beyond10x/takt/releases). The binary
-needs no Rust toolchain to start, though a repository whose tests are cargo's needs one to test.
+| for | you need |
+|---|---|
+| any run | Linux (x86_64 or aarch64) or macOS on Apple silicon; `git`; a repository with a test command, committed and clean |
+| the tests | the test command's toolchain. The default command is `cargo test --quiet`; give another with `--test-cmd` |
+| the model | [Claude Code](https://github.com/anthropics/claude-code), logged in, at 2.1.304, 2.1.305 or 2.1.309 ([why](./guides/install.md#claude-codes-version)) |
+
+Codex, b10x-harness, a forge or a planning store need more: [the tools beside takt](./guides/install.md#the-tools-beside-takt).
+
+## Install
 
 ```sh
 version=0.21.0 target=x86_64-unknown-linux-gnu
@@ -25,100 +30,26 @@ curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
 sha256sum --check --ignore-missing SHA256SUMS
 tar -xzf "takt-$version-$target.tar.gz"
-"takt-$version-$target/takt" --version
+mkdir -p ~/.local/bin
+install -m 755 "takt-$version-$target/takt" ~/.local/bin/takt
+takt --version
 ```
 
-Put `takt` on your `PATH`. `takt --version` prints the version and the commit it was built from:
+On Linux aarch64 the target is `aarch64-unknown-linux-gnu`; on macOS, `aarch64-apple-darwin`
+and `shasum` instead of `sha256sum`. Both, and `cargo install`: [Install](./guides/install.md).
 
-```console
-$ takt --version
-takt 0.21.0 (<the commit the 0.21.0 tag names>)
-```
+:::caution[What runs unconfined]
 
-macOS, `cargo install` from the tag, and the container image are in [Install](./guides/install.md).
-
-## What it needs
-
-| for | you need |
-|---|---|
-| any run | `git`; on Linux, unprivileged user namespaces (the test command runs in a user and mount namespace of its own); on macOS, `/usr/bin/sandbox-exec` (the test command runs under a Seatbelt profile) |
-| the tests | the test command's toolchain; the default is `cargo test --quiet` |
-| no model | `--harness none`: only the validators run |
-| Claude Code | `claude` on the `PATH`, logged in (the default harness) |
-| Codex or b10x-harness | `codex` or `b10x-harness` on the `PATH`, and a scan adapter for what they propose (below) |
-| a story | `aep`, a planning store with a ready story, and a gates document ([Run a story](./guides/run-a-story.md)) |
-| a pull request or merge request | a forge adapter: `gitlab` (`glab` logged in to the host), `bot` (github.com through the beyond10x bot App) or `local` (a bare repository on this machine, with `local_checks` in the run file); `--forge none` runs without one |
-| `takt promote` | on Linux bubblewrap (`bwrap`), on macOS `/usr/bin/sandbox-exec`; and rustup's default toolchain |
-
-### The scan before a proposal is accepted
-
-Codex and b10x-harness sessions may read outside the copy they work in, so takt accepts what they
-propose only after a scan passed it, or after the run declared that nothing scans it. The scan is
-an adapter, named by `scan` in the [run configuration file](./reference/configuration.md#the-scan):
-
-| `scan` | what scans a proposal |
-|---|---|
-| `gates`, the default | [b10x-gates](https://github.com/beyond10x/gates), beyond10x's scanner, under the policy file `B10X_GATES_POLICY` names |
-| `none` | nothing; declared only in the file `--config` gives, never by a flag |
-
-A Codex or b10x-harness run with neither a policy nor `scan: none` is refused before its case
-opens, exit 1. Under `scan: none` the run says so before its first step. Every proposal, from any
-harness and under either adapter, is checked for the shape of a credential. Claude Code's file
-tools stay inside the copy, so a Claude Code run needs neither.
-
-### The forge
-
-The forge is the adapter a change leaves the machine through. `gitlab` pushes over HTTPS under
-`glab`'s login and opens the merge request through `glab api`. `bot` is beyond10x's route for
-github.com: `b10x-gates bot` pushes and opens the pull request as a GitHub App, and `gh` reads it.
-`local` keeps the change on this machine: a bare repository the tree was cloned from with
-`--no-local` holds the request, runs the checks the run file names and takes the merge
-([Run a story](./guides/run-a-story.md#on-this-machine-the-local-forge)). `none` opens nothing
-and leaves the delivery as a candidate commit. Without `--forge`, takt picks one from `origin`,
-never `local` ([Configuration](./reference/configuration.md#the-forge)).
-
-:::note[Confinement]
-
-takt confines through Substrate's confinement contract on Linux and macOS alike, and has no
-sandbox of its own:
-
-- `--confinement substrate` runs the test command through the first Substrate adapter of the host
-  that serves its profile: `systemd` around `linux` (a scope from the user's systemd manager, which
-  bounds processes, memory and CPU), then `linux` (bubblewrap through Substrate's host driver,
-  bounded only in a cgroup root given with `--confinement-cgroup-root`), then `macos` (a Seatbelt
-  profile Substrate renders). The profile: the tree as the workspace, its `target/` written, the
-  toolchain and the cargo caches read-only, no network. Under `linux` and `systemd` around it
-  `target/` is the only path of the tree the test command writes: the rest, `.git` with it, is
-  read-only in the run, and a host whose Substrate probe did not prove
-  `exec.workspace-scoped-write` is refused by that name. On `macos` the tree stays writable and
-  its `.git` is sealed. What no adapter serves, a family or fact
-  `--confinement-needs` names among them, is refused by name and never run unconfined. The `case`
-  line and the `opened` event name the adapter and the facts it proved.
-- `--confinement none`, the default, starts the test command through Substrate's `local` adapter,
-  declared insecure with its reason, which the `case` line and the `opened` event carry. From
-  0.20.0 a run started without `--confinement` says it got `none` as the default (`the run was
-  started with the default confinement none: …`), and one given `--confinement none` names the
-  flag. It runs on
-  the host as this user, with an environment cleared of logins, a scratch home and `TMPDIR`, the
-  timeout and a bounded output, and can read whatever this user can. On macOS it no longer runs
-  under takt's Seatbelt profile, so its writes, the programs it starts, launchd and the keychain
-  are not limited.
-- `takt promote` builds a candidate through the same selection: the fresh install root beside the
-  real one is the one host root declared writable to the adapter.
-
-On macOS, whose adapter serves no writable root, a promotion's build installs into the workspace
-and takt copies the binary into the fresh install root. Its `PATH` names the selected developer
-tools' own programs before `/usr/bin`, whose shims cannot run under `macos`, so the build's `git`
-reads the revision. A `.cargo/config.toml` in a directory above the build directory,
-`~/.cargo/config.toml` included, fails the build: the adapter lets cargo see the file but not read
-it.
+By default the test command runs on your host as you, unconfined, and takt says so on the run's
+first lines. The Claude Code session is held by no operating-system sandbox: it works in a scratch
+copy of your tree and is offered only file tools. `--confinement substrate` confines the test
+command: [Confinement](./guides/install.md#confinement).
 
 :::
 
-## A run with no model
+## 1. A run with no model
 
-Make a crate with one passing test and commit it, `Cargo.lock` included. A test run that writes a
-lock file the commit lacks is refused as a change the validator may not make; the refusal names the three ways out: commit `Cargo.lock`, ignore it in `.gitignore`, or give `--test-cmd` a command that does not write it. Under `--confinement substrate` on Linux the second does not work: the test command cannot write the tree outside `target`, so a lock it would write fails the run with a read-only `Cargo.lock`, and a dependency change needs its `Cargo.lock` committed with it.
+Run it in your repository; the tree must be committed and clean. Here it is a fresh crate:
 
 ```sh
 cargo new --lib takt-demo
@@ -129,106 +60,157 @@ git commit -m "start"
 takt run --repo . --intent "keep the tests green" --harness none --forge none
 ```
 
-Output, run in `~/takt-demo` (only that path was shortened):
+`--harness none` takes no model step. `--forge none` opens no pull request; without it, takt
+picks a forge from `origin`: `bot` for github.com, `gitlab` for a host `glab` is logged in to
+([forge](./concepts/glossary.md#forge)). In a Rust repository, commit `Cargo.lock`: a test run
+that writes a lock file the commit lacks is refused, and the refusal names the ways out.
+
+Output (the path written as `~/takt-demo`):
 
 ```console
-case takt-20261026T234353Z on software.change/1 in ~/takt-demo; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
-frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-step 1: tests.run {}
+settings: protocol software.change/1 (default); risk=standard (default); change_kind=feature (default); affects_security_boundary=false (default)
+takt 0.21.0 · keep the tests green
+case takt-20261029T110550Z on software.change/1 in ~/takt-demo; inputs risk=standard(default) change_kind=feature(default) affects_security_boundary=false(default); confinement none: Substrate local, declared insecure: the run was started with the default confinement none: its test command runs on the host as this user, unconfined; proved: declared_insecure, paths_are_host_paths, local_permitted, host_network
+  harness none · confinement none
+  may: implementation.edit repository.inspect tests.run tests.write
+step 1: tests.run {} · pass · 0.8s
   effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
-frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
+step 2: none working (may: implementation.edit tests.write; may ask: repository.merge)
 step 2: repository.merge (none)
   said: no harness: nothing but the approval is left; requesting it
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-demo/.takt/cases/takt-20261026T234353Z
+stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, wall 2.6s, commits 0, case ~/takt-demo/.takt/cases/takt-20261029T110550Z
 ```
 
 What happened:
 
-1. takt opened a case on the protocol `software.change/1` and put the tree on the branch
-   `takt/takt-20261026T234353Z`.
-2. Each `frontier:` line is the governor's verdict on every action before a step. Only an
-   admissible action may be taken.
-3. Step 1 ran the test command as a validator and recorded its result as evidence.
-4. With the tests green, the merge became `approval-required`. No harness was there to do more,
-   so the run stopped for a grant, exit 4.
+1. takt opened a [case](./concepts/glossary.md#case) on the
+   [protocol](./concepts/glossary.md#protocol) `software.change/1` and switched the tree to the
+   branch `takt/<case>`.
+2. `may:` lists the actions the run may take now, the
+   [frontier](./concepts/glossary.md#frontier) said briefly. `--verbose` prints the whole
+   frontier at every step.
+3. Step 1 ran your test command as a [validator](./concepts/glossary.md#validator) and recorded
+   its result as [evidence](./concepts/glossary.md#evidence) about this commit.
+4. With the tests green, the merge could be asked for. It needs a
+   [grant](./concepts/glossary.md#grant), so the run stopped, exit 4.
 
-The case is a directory in the repository, `.takt/cases/<case>/`. takt wrote `.takt/.gitignore` holding `*`, so `git status` shows none of
-it.
-[Read a case](./guides/read-a-case.md) walks through it. `takt approve` grants the merge, as
-[Approve a capability](./guides/approve-a-capability.md) shows. Merging is a judgement step, so
-it needs a harness.
+The case is the directory `.takt/cases/<case>/`. takt wrote `.takt/.gitignore` holding `*`, so
+`git status` shows none of it. [Read a case](./guides/read-a-case.md) walks through it.
 
-## A run with a model
+## 2. A run with Claude Code
 
-The same crate, a fresh copy, and a real change. This run used Codex:
+Start from a clean tree on your base branch again (`git switch main`, or a fresh copy). The
+default [harness](./concepts/glossary.md#harness) is Claude Code. If the `claude` on your `PATH` is not a qualified version, name
+one with `--harness-program` ([Install](./guides/install.md#claude-codes-version)):
 
 ```sh
-B10X_GATES_POLICY=<policy file> takt run --repo . --harness codex --forge none \
+takt run --repo . --forge none --hours 1 \
+  --harness-program ~/.local/opt/claude-2.1.309/claude \
   --intent "add a function sub(left, right) that subtracts right from left, with a test"
 ```
 
+`--hours 1` stops the run after an hour at most. Output, the first three lines left out and the
+path written as `~/takt-demo`:
+
 ```console
-case takt-20261026T233005Z on software.change/1 in ~/takt-demo2; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
-frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-step 1: tests.run {}
+  harness claude-code 2.1.309 · confinement none
+  may: implementation.edit repository.inspect tests.run tests.write
+step 1: tests.run {} · pass · 0.3s
   effect: the test command exited 0: pass; 1 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
-frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
-step 2: implementation.edit (codex)
-  said: Added sub(left, right) for u64 subtraction and a unit test; tests left for takt to run. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
-  effect: committed 1 path(s); implementation is now aa38e5c5
-frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-step 3: tests.run {}
+step 2: claude-code working (may: implementation.edit tests.write; may ask: repository.merge)
+step 2: implementation.edit (claude-code) · 22.0s · 37.9k tok (27.7k cached) · $0.11
+  said: Added sub(left, right) to src/lib.rs returning the exact difference as i128, with a unit test covering positive, negative and extreme cases
+  Glob **/*
+  Read src/lib.rs
+  Read Cargo.toml
+  Read .takt/cases/takt-20261029T110612Z/decisions/0002.json
+  Edit src/lib.rs
+  Edit src/lib.rs
+    diff --git a/src/lib.rs b/src/lib.rs
+    index b93cf3f..a86171d 100644
+    --- a/src/lib.rs
+    +++ b/src/lib.rs
+    @@ -2,6 +2,10 @@ pub fn add(left: u64, right: u64) -> u64 {
+         left + right
+     }
+     
+    +pub fn sub(left: u64, right: u64) -> i128 {
+    +    left as i128 - right as i128
+    +}
+    +
+     #[cfg(test)]
+     mod tests {
+         use super::*;
+    @@ -11,4 +15,12 @@ mod tests {
+             let result = add(2, 2);
+             assert_eq!(result, 4);
+         }
+    +
+    +    #[test]
+    +    fn sub_works() {
+    +        assert_eq!(sub(5, 3), 2);
+    +        assert_eq!(sub(3, 5), -2);
+    +        assert_eq!(sub(0, u64::MAX), -(u64::MAX as i128));
+    +        assert_eq!(sub(u64::MAX, 0), u64::MAX as i128);
+    +    }
+     }
+  effect: committed 1 path(s); implementation is now c3cda2f5: src/lib.rs
+step 3: tests.run {} · pass · 0.6s
   effect: the test command exited 0: pass; 2 passed, 0 failed, 0 ignored over 2 result lines
   evidence: test_result pass
-frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (approval-required), tests.run (admissible), tests.write (admissible)
-step 4: repository.merge (codex)
-  said: Reviewed the diff: sub(left, right) subtracts right from left, with a test confirming sub(5, 2) equals 3. No further edits needed; requesting merge approval. [metaharness hermetic on: H1a unk, H1b ok, H2 ok, H3 ok, H4 unk, H5 unk, H6 ok, H7 ok, H8 ok, H9 ok, H10 ok, H11 ok]
+step 4: claude-code working (may: implementation.edit tests.write; may ask: repository.merge)
+step 4: repository.merge (claude-code) · 11.7s · 14.5k tok (11.4k cached) · $0.04
+  said: sub(left, right) returns left - right as i128, correct for all u64 inputs including negative results; tests cover both signs and the u64 extremes
+  Glob *.md
   effect: none; repository.merge needs an approval
-stopped: ApprovalRequired (repository.merge); steps 4, tokens 75709, case ~/takt-demo2/.takt/cases/takt-20261026T233005Z
+stopped: ApprovalRequired (repository.merge); steps 4, tokens 52345, wall 41.7s, cost $0.15, commits 1 (1 path), case ~/takt-demo/.takt/cases/takt-20261029T110612Z
 ```
 
-The model took two steps: the edit and the request for the merge. takt committed the edit, then
-its own validator ran the tests again on the new revision. The model never ran the tests itself,
-and its word is not evidence. Without `--harness codex`, the same command runs Claude Code and
-needs no `B10X_GATES_POLICY`. To use an LLM endpoint of your own through b10x-harness, see
-[Configure a run](./guides/configure-a-run.md).
+The model took two steps: the edit and the request for the merge. Under each `said:` line are
+the tools it called, then the diff takt committed for it. takt then ran the tests again itself
+on the new commit. The model never ran the tests, and its word is not evidence.
+`--quiet-steps` leaves the tool calls and the diff out.
 
-The same command with no policy and no `scan: none` is refused before anything is opened:
+## 3. Grant the merge and take the change
+
+Grant the merge for the case the run printed:
 
 ```console
-$ takt run --repo . --harness codex --forge none --intent "add a function sub"
-takt: --harness codex runs a session that may read outside its copy, and the scan adapter `gates` has no policy (B10X_GATES_POLICY is not set): what it proposes would not be scanned, and not scanned is never passed; set B10X_GATES_POLICY to a gates policy file, or declare `scan: none` in the run configuration file given with --config (`takt run --config <file>`) to accept what it proposes unscanned, checked only for the shape of a credential; nothing was opened
+$ takt approve --repo . --by human:me takt-20261029T110612Z repository.merge
+approved: repository.merge for case takt-20261029T110612Z by human:me, written to takt-20261029T110612Z/authority.yaml
+recorded: nothing in the planning store; the case delivers no story (it was opened on an intent, or is an improvement turn)
 ```
 
-Without b10x-gates, declare in a file that nothing scans, and give it with `--config` (output run
-beside `~/takt-demo`; only that path was shortened):
+The merge is a validator step, not a model step: takt performs it through a forge, under the
+grant. With `--forge none` there is no forge to merge into, so a resumed run merges nothing (it
+stops `NoProgress`, exit 3). The change is the commit on the branch `takt/<case>`; take it with
+git:
 
-```toml
-scan = "none"
-harness = "codex"
-forge = "none"
+```sh
+git switch main
+git merge --ff-only takt/takt-20261029T110612Z
 ```
 
-```console
-$ takt run --repo takt-demo --config run.toml --iterations 0 --intent "add a function sub"
-scan: none (declared in run.toml); what --harness codex proposes is accepted unscanned, checked only for the shape of a credential
-case takt-20261027T014116Z on software.change/1 in ~/takt-demo; inputs risk=standard change_kind=feature affects_security_boundary=false; confinement none
-frontier: implementation.edit (admissible), release.rollback (approval-required), repository.inspect (admissible), repository.merge (blocked), tests.run (admissible), tests.write (admissible)
-stopped: Iterations (0); steps 0, tokens 0, case ~/takt-demo/.takt/cases/takt-20261027T014116Z
-```
+To have takt merge, run with a forge. `--forge local` needs no account: a bare repository on
+this machine is the forge ([Run a story](./guides/run-a-story.md#on-this-machine-the-local-forge)).
+To resume an intent's case, name it: `takt run --repo . --case <case>`.
 
-The case's `opened` event records `"scan":"none"`.
+## Other harnesses and settings
+
+Codex and b10x-harness need a scan of what they propose, a gates policy or `scan = "none"` in a
+run file: [Configure a run](./guides/configure-a-run.md).
 
 ## Next
 
 | to | read |
 |---|---|
-| set the harness, endpoint, forge and budgets in one file | [Configure a run](./guides/configure-a-run.md) |
-| deliver a story from the planning store | [Run a story](./guides/run-a-story.md) |
-| grant the merge and resume | [Approve a capability](./guides/approve-a-capability.md) |
+| look up a word | [Glossary](./concepts/glossary.md) |
+| set the harness, forge, test command and budgets in one file | [Configure a run](./guides/configure-a-run.md) |
+| deliver a story from an AEP planning store | [Run a story](./guides/run-a-story.md) |
+| grant a capability and resume | [Approve a capability](./guides/approve-a-capability.md) |
 | see why a run stopped | [How a run ends](./concepts/how-a-run-ends.md) |
-| run it in a container or on Kubernetes | [Run in a container](./guides/run-in-a-container.md), [Deploy on Kubernetes](./guides/deploy-on-kubernetes.md) |
+| run it in a container | [Run in a container](./guides/run-in-a-container.md) |
 | know what does not work yet | [Known limitations](./known-limitations.md) |

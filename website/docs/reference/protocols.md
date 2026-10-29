@@ -6,8 +6,8 @@ description: The protocols takt runs and the ones it holds for its own improveme
 
 # Protocols
 
-The [protocol viewer](pathname:///takt/protocols/) shows eight of the ten protocols `takt
-protocols` lists, `software.change/1` first: their actions, evidence kinds, claims, obligations
+The [protocol viewer](pathname:///takt/protocols/) shows eight of the ten [protocols](/docs/concepts/glossary#protocol) `takt
+protocols` lists, `software.change/1` first: their actions, [evidence](/docs/concepts/glossary#evidence) kinds, claims, obligations
 and outcomes as tables, and as one graph of how they connect. It is built on every site build
 from the documents of the `b10x-canon-engineering` release takt pins. It does not draw
 `story.delivery/2` or takt's own `story.delivery/3`.
@@ -16,10 +16,10 @@ from the documents of the `b10x-canon-engineering` release takt pins. It does no
 
 `takt protocols` lists the ids `--protocol` accepts without a file:
 
-| id | from | a case is |
+| id | from | a [case](/docs/concepts/glossary#case) is |
 |---|---|---|
-| `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store story, the default; its inputs and [their defaults](protocol-defaults.md) |
-| `story.delivery/3` (listed as `story-delivery/3`) | takt, `protocols/story-delivery/3.yaml`, from 0.19.0 | one planning-store story, as `/2` of engineering protocols 0.12.2 but `change.handover` is not admissible while the tests fail; from 0.21.0 the built-in `/2` (0.13.0) also differs in when a red gate admits `implementation.edit`; the same inputs and defaults ([Protocol and case](../concepts/protocol-and-case.md#the-protocols-takt-runs)) |
+| `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store [story](/docs/concepts/glossary#story), the default; its inputs and [their defaults](protocol-defaults.md) |
+| `story.delivery/3` (listed as `story-delivery/3`) | takt, `protocols/story-delivery/3.yaml`, from 0.19.0 | one planning-store story, with the inputs of `/2` and two rules of its own ([how it differs](../concepts/protocol-and-case.md#takts-own-story-protocol)) |
 | `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story, no case input |
 | `self.improvement/1` (listed as `self-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |
@@ -38,7 +38,7 @@ refuses that.
 
 | file | id | a case is |
 |---|---|---|
-| `protocols/bench-task/1.yaml` | `bench.task/1`, from 0.19.0 | one benchmark task: no forge, no pull request, no merge; `completed` once the task's visible tests pass at the revision the harness handed over, `abandoned` on an explicit decision |
+| `protocols/bench-task/1.yaml` | `bench.task/1`, from 0.19.0 | one benchmark task: no [forge](/docs/concepts/glossary#forge), no pull request, no merge; `completed` once the task's visible tests pass at the revision the [harness](/docs/concepts/glossary#harness) handed over, `abandoned` on an explicit decision |
 
 Give it by path, read against the directory `takt` runs in:
 `takt run --protocol protocols/bench-task/1.yaml --test-cmd "<visible test command>" --forge none`.
@@ -76,7 +76,7 @@ sets the values. Without `--config` every input lists `run file: unset`.
 loop_baseline=<full commit id>` opens a `loop.improvement/1` case, and validators drive it (`loop.measure`,
 `loop.definition.check`, `loop.compare`).
 
-Validators drive a `self.improvement/1` turn too (`story:self-improvement-protocol`). From 0.2.0:
+[Validators](/docs/concepts/glossary#validator) drive a `self.improvement/1` turn too (`story:self-improvement-protocol`). From 0.2.0:
 `finding.file`, `scenario.reproduce`, `scenario.verify` and `scorecard.compare`, so a turn can
 end `unreproducible` or `declined`. From 0.2.2 there are also `candidate.merge`,
 `candidate.merge_judge_surface` and `binary.promote`, so a turn can reach `accepted`. How an

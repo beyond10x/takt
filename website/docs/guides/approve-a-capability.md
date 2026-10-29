@@ -79,6 +79,9 @@ The case stays open, exit 3. Resumed with a forge, the merge is performed by the
 validator, the case completes, and the run exits 0. Without a grant, `--harness none` requests the
 approval as before and does not merge.
 
+To grant and merge on one machine, with no account on a hosted forge, use
+[the local forge](./run-a-story.md#on-this-machine-the-local-forge).
+
 ## A commit after the grant needs a new one
 
 The grant holds for the revision it names. When a step commits after it, the merge needs a grant

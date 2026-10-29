@@ -16,7 +16,7 @@ loads your build.
 $ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.21.0 .
 ```
 
-Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a Loom agent:
+Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a [Loom](/docs/concepts/glossary#loom) agent:
 [Deploy on Kubernetes](../guides/deploy-on-kubernetes.md).
 
 ## What is in it
@@ -26,7 +26,7 @@ Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes
 | base | Debian trixie slim (`docker.io/library/debian:trixie-slim`) |
 | packages | `ca-certificates`, `git`, `gcc`, `libc6-dev`, `pkg-config`, `libssl-dev`, `python3`, `tini` |
 | takt | `/usr/local/bin/takt`, built `--release --locked` from the tree |
-| tools | `aep`, `b10x-harness`, `ess`, `b10x-gates` (the `gates` scan adapter's program and the `bot` forge's) in `/usr/local/bin` |
+| tools | `aep`, `b10x-harness`, `ess`, `b10x-gates` (the `gates` scan adapter's program and the `bot` [forge](/docs/concepts/glossary#forge)'s) in `/usr/local/bin` |
 | Rust | the toolchain of `rust:1.99-slim-trixie` with `clippy` and `rustfmt`, in `/opt/rust`, linked into `/usr/local/bin` |
 
 The tools are downloaded by release URL and checked against a SHA256 in the Dockerfile:
@@ -38,7 +38,7 @@ The tools are downloaded by release URL and checked against a SHA256 in the Dock
 | [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.76.0 |
 | b10x-gates | 0.1.23 |
 
-`b10x-harness` 0.22.0 is the harness that Loom 0.48.0 and metaharness 0.23.0 need. The transcript
+`b10x-harness` 0.22.0 is the [harness](/docs/concepts/glossary#harness) that Loom 0.48.0 and metaharness 0.23.0 need. The transcript
 below was recorded from a local build of this Dockerfile at takt 0.13.1, when it pinned
 `b10x-harness` 0.20.0 and ess 0.69.2. The harness and ess pins have changed since then, and the
 image has not been rebuilt with them, so the versions printed below are the ones from that build:
@@ -62,7 +62,7 @@ gate's system path finds them, and no `CARGO_HOME` is set: cargo keeps its cache
 
 `pkg-config` and the OpenSSL headers are there so a repository that builds against OpenSSL is
 tested. Python 3 is there for repositories whose tests are Python; takt records its module names
-at case open ([case files](./case-files.md)).
+at [case](/docs/concepts/glossary#case) open ([case files](./case-files.md)).
 
 ## User, home and entrypoint
 
@@ -125,11 +125,13 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
   `harness: harness` (or `none`). The default, `claude`, is not there.
 - **No forge client.** No `gh` and no `glab`. Set `forge: none`. The default follows `origin`, and
   `bot` and `gitlab` need those programs. The delivery stays a branch in `/workspace`.
-- **Unconfined seccomp and AppArmor.** Under the default `--confinement none` of 0.13.1 the test
-  command ran in a user and mount namespace of its own, which a container runtime's default seccomp
-  and AppArmor profiles refuse. Under the default profile the first test run failed with a
-  refusal, exit 5. Since then `none` starts it through Substrate's `local` adapter, in no
-  namespace of takt's own, which has not been run in a container yet. The one that ran:
+- **Unconfined seccomp and AppArmor (unverified at 0.21.0).** This need was observed on takt
+  0.13.1 and 0.14.0 and has not been measured again. Under the default `--confinement none` of
+  0.13.1 the test command ran in a user and mount namespace of its own, which a container
+  runtime's default seccomp and AppArmor profiles refuse. Under the default profile the first
+  test run failed with a refusal, exit 5. From 0.15.0 `none` starts it through [Substrate](/docs/concepts/glossary#substrate)'s
+  `local` adapter, in no namespace of takt's own, which has not been run in a container yet. The
+  one that ran:
 
   ```console
   $ docker run --rm --user 1000:1000 -e HOME=/tmp -v ~/demo:/workspace -v ./agent.yaml:/config/agent.yaml:ro takt:0.13.1 --intent "add a README line"

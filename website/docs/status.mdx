@@ -1,6 +1,6 @@
 ---
 title: Status
-description: What takt holds, what is open, and every implemented story, generated from the planning store.
+description: The latest release, what shipped means, what is open, what 0.21.0 changes for you, and every implemented story, generated from the planning store.
 ---
 
 import status from '@site/data/status.json';
@@ -8,13 +8,43 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-0.21.0 is the latest release. It holds `takt run`, `approve`, `protocols`, `scenario run`,
-`scorecard`, `trace`, `report`, `view`, `promote` and `replay`, with `story.delivery/1` and
-`self.improvement/1` embedded, and prebuilt binaries for Linux (x86_64, aarch64) and macOS
-(aarch64). Its harnesses are Claude Code (`--harness claude`), Codex (`codex`) and b10x-harness
-(`harness`), each through a metaharness session, or `none` to run validators only.
+- **Latest release:** 0.21.0, 2026-10-29 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
+- **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
-How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md)):
+## What 0.21.0 changes for you
+
+| change | what you see | read |
+|---|---|---|
+| The console lists each harness step's tool calls and the diff it committed | under `said:`, the tools the model called; before `effect:`, the commit's diff. `--color auto\|always\|never` colours it; `--quiet-steps` turns both lists off | [What a step lists](./guides/run-a-story.md#what-a-step-lists) |
+| A documentation edit can count as an attempt | an edit to a file a test file of the case names counts toward `RepeatedTestFailure` | [What counts as an attempt](./concepts/how-a-run-ends.md#what-counts-as-an-attempt) |
+| More duplicate keys are named at their line | a run file holding a key twice after an alias, a tagged or a colon-ended key is refused at the duplicate's line, naming the key | [A key written twice](./guides/configure-a-run.md#a-key-written-twice) |
+| A stricter `story.delivery/2` | under `tests_first=required`, a red gate or CI admits the edit only after a test failed since the tests were first written | [After a red gate](./guides/run-a-story.md#after-a-red-gate) |
+
+## What 0.21.0 holds
+
+The commands `run`, `approve`, `protocols`, `protocol`, `scenario`, `scorecard`, `trace`,
+`report`, `view`, `promote` and `replay`, and prebuilt binaries for Linux (x86_64, aarch64) and
+macOS (aarch64). Its built-in protocols are engineering-protocols 0.13.0's, `story.delivery/1`,
+`story.delivery/2`, `software.change/1` and `self.improvement/1` among them, and takt's own
+`story.delivery/3`; `takt protocols` lists them all
+([Protocol and case](./concepts/protocol-and-case.md#the-protocols-takt-runs)). Its
+[harnesses](./concepts/glossary.md#harness) are Claude Code (`--harness claude`, the default),
+Codex (`codex`) and b10x-harness (`harness`), each through a metaharness session, or `none` to
+run validators only.
+
+| milestone | state |
+|---|---|
+| M1 one step validated | done 2026-10-18 |
+| M2 a story end to end | built; not yet proven with the grant as the only manual step |
+| unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week |
+| self-improvement | phase R0. Turns 1 to 3 were accepted from records written by hand (2026-10-18 and 2026-10-19). On 2026-10-19 takt drove three turns to `accepted` and promoted their candidates, every claim recorded by a validator, in scratch state under `--forge none` ([Turns](./self-improvement/turns.md)). Next: a turn promoted in the installed takt's own store |
+| M3 to M5 | a second harness: released in 0.7.0 (`--harness codex`, `--harness harness`), built in [wave 24](https://github.com/beyond10x/takt/blob/main/docs/waves/wave-24.md). Workflows as `workflow/1` files, the confinement seam and a week of daily runs: not built |
+| continuous runs | a run that plans its next stories and works a wave with parallel workers: designed, not built. The shipped story under Continuous orchestration below is how takt's own waves are delivered today, by one dispatcher session; it is not a takt run |
+
+## How it got there
+
+Each release in one line, from the changelog:
 
 | release | what it added |
 |---|---|
@@ -47,23 +77,13 @@ How it got there ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGE
 | 0.20.0 | `--forge local`: a bare repository on this machine, the tree's `origin`, is the forge; a run opens a request record there, runs the run file's `local_checks` as the test command is, and on a grant merges into the target branch; a Codex step is given each file once (no `AGENTS.md` Codex loads itself, no `CLAUDE.md` that adds nothing to it, no file the change so far shows whole); a credential joined to the word before it is withheld; a failed `tests.run`'s block makes paths relative and withholds only the lines the secret scan refuses; a run without `--confinement` says it got `none` as the default; loom 0.48.0 with metaharness 0.23.0, b10x-harness 0.22.0 in the image; ESS 0.76.0 for the specification, CI and the image |
 | 0.21.0 | under its `said:` line a harness step lists its tool calls, and before its `effect:` line a step that committed prints the commit's diff, escaped and bounded, coloured under `--color auto\|always\|never`, both off with `--quiet-steps`; a documentation edit a test file of the case names counts as an attempt toward `RepeatedTestFailure`; a key held twice after an alias, a tagged or a colon-ended key is refused at the duplicate's line; a record is stamped when submitted, never before the case's latest; loom 0.49.1 with Canon 0.7.0 and engineering-protocols 0.13.0, whose `story.delivery/2` admits the edit after a red gate only once a test failed since the tests were written |
 
-| milestone | state |
-|---|---|
-| M1 one step validated | done 2026-10-18 |
-| M2 a story end to end | built; not yet proven with the grant as the only manual step |
-| unattended scenario 1 | next: accepted with one invocation plus one grant, daily for a week |
-| self-improvement | phase R0. Turns 1 to 3 were accepted from records written by hand (2026-10-18 and 2026-10-19). On 2026-10-19 takt drove three turns to `accepted` and promoted their candidates, every claim recorded by a validator, in scratch state under `--forge none` ([Turns](./self-improvement/turns.md)). Next: a turn promoted in the installed takt's own store |
-| M3 to M5 | a second harness: released in 0.7.0 (`--harness codex`, `--harness harness`), built in [wave 24](https://github.com/beyond10x/takt/blob/main/docs/waves/wave-24.md). Workflows as `workflow/1` files, the confinement seam and a week of daily runs: not built |
-| continuous runs | a run that plans its next stories and works a wave with parallel workers: designed, not built. The shipped story under Continuous orchestration below is how takt's own waves are delivered today, by one dispatcher session; it is not a takt run |
-
 ## Every story
 
 The planning store at {counts.revision} holds {counts.total} stories that are not archived:
 {counts.counts.implemented ?? 0} implemented, {counts.counts.active ?? 0} in an open wave,
 {counts.counts.proposed ?? 0} proposed and {counts.counts.draft ?? 0} drafts. The table lists the
-first two groups: **Shipped** is `implemented`, merged into `main`, which can be ahead of the latest
-release; **Decided** is `active`. Proposed stories and
-drafts are in
+first two groups: **Shipped** is `implemented`, merged into `main`; **Decided** is `active`.
+Proposed stories and drafts are in
 [`.engineering/planning/story/`](https://github.com/beyond10x/takt/tree/main/.engineering/planning/story).
 
 <StatusTable data={status} label="Every implemented story and every story in an open wave" />

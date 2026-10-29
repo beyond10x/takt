@@ -3,79 +3,65 @@ title: What takt is
 slug: /
 sidebar_label: Overview
 sidebar_position: 1
-description: takt drives a case of an engineering protocol over a repository to a computed outcome, each step checked, each grant recorded, each run ending on a named stop.
+description: takt lets a coding agent such as Claude Code change your repository one checked step at a time. A program runs your tests after each step, a merge waits for your grant, and every run leaves a record.
 ---
 
 # What takt is
 
-takt is one open-source binary, Apache-2.0, that drives a repository's work through engineering
-protocols. You give it an intent, a story id, or nothing, in which case it takes the next ready
-story from the repository's planning store. It opens a case on a protocol and lets a coding agent
-such as Claude Code take one admissible step at a time. After each step a program, not the model,
-checks the result and records evidence about the exact commit it checked.
+takt lets a coding agent change your git repository one step at a time, and checks each step
+with a program, not with the model. You give it an intent, such as "add a function sub", or a
+story from your plan. Claude Code makes the change. takt commits it, runs your tests itself and
+records what they said about that exact commit as [evidence](./concepts/glossary.md#evidence). A
+merge waits for your [grant](./concepts/glossary.md#grant). Every run ends on a
+named stop with its own exit code, so a script can drive it.
 
-Whether the work is done is computed from those records. The rules come from a protocol, a data
-file that says which claims must hold, which evidence makes them hold, which actions need a
-person's grant and which outcomes the case can end in. [Canon](https://beyond10x.github.io/canon/)
-([GitHub](https://github.com/beyond10x/canon)) evaluates the protocol; the model never decides it.
+**Who it is for:** a developer who already lets a coding agent work on a repository, has a test
+command, and wants "done" to mean that the tests passed at that commit and that a person granted
+the merge.
+
+**What it needs:** Linux, or macOS on Apple silicon; `git`; your test command (`cargo test
+--quiet` by default); and Claude Code at a qualified version
+([what it needs](./getting-started.md#what-it-needs)). It is one open-source binary, Apache-2.0.
+
+## One command
+
+In a clean, committed repository:
 
 ```sh
-takt run --repo ~/demo --intent "make the failing test pass" --iterations 1
+takt run --repo . --forge none --intent "add a function sub(left, right) that subtracts right from left, with a test"
 ```
 
-## What takt is responsible for
+Some lines of what it printed in [Getting started](./getting-started.md#2-a-run-with-claude-code):
 
-| takt owns | what that means |
-|---|---|
-| One case, driven to a computed outcome | A run opens or resumes one case on one protocol and steps it until an outcome is legitimate or a stop is reached. |
-| Evidence bound to a revision | Its validators run the tests, the gates, open the pull request, read CI and merge; each writes a `canon-evidence/1` record naming the commit it observed. |
-| Grants | An action that requires a capability, such as `repository.merge`, waits for a grant `takt approve` records for that revision. |
-| The case record | Every decision, evidence record and event is a file under `.takt/cases/<case>/` in the repository; a later run resumes from it. |
-| Named stops | Every run ends on a named stop with its own exit code, so a script or an orchestrator can drive it. |
+```console
+step 1: tests.run {} · pass · 0.3s
+step 2: implementation.edit (claude-code) · 22.0s · 37.9k tok (27.7k cached) · $0.11
+  effect: committed 1 path(s); implementation is now c3cda2f5: src/lib.rs
+step 3: tests.run {} · pass · 0.6s
+step 4: repository.merge (claude-code) · 11.7s · 14.5k tok (11.4k cached) · $0.04
+  effect: none; repository.merge needs an approval
+stopped: ApprovalRequired (repository.merge); steps 4, tokens 52345, wall 41.7s, cost $0.15, commits 1 (1 path), case ~/takt-demo/.takt/cases/takt-20261029T110612Z
+```
 
-## What takt is not
+Claude Code edited; takt ran the tests before and after; the merge waits for `takt approve`.
+`--forge none` names no [forge](./concepts/glossary.md#forge): the change stays on your machine, as a
+commit on the branch `takt/<case>`.
 
-| takt is not | who does that instead |
-|---|---|
-| A coding harness | Claude Code, Codex or b10x-harness make the edits. takt reaches them through [metaharness](https://beyond10x.github.io/metaharness/) ([GitHub](https://github.com/beyond10x/metaharness)). |
-| A model router | [llm](https://beyond10x.github.io/llm/) ([GitHub](https://github.com/beyond10x/llm)) and the endpoint you configure. takt names the endpoint; the harness calls the model. |
-| A planner | [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) holds the plan. takt reads its ready stories and records results on them. |
-| An orchestrator of agents | One case per run. [Loom](https://beyond10x.github.io/loom/) ([GitHub](https://github.com/beyond10x/loom)) runs agents, and runs a takt container once as a `LoomAgent`. |
-| A CI system | Your forge's CI runs the checks. takt reads their result through the forge as evidence. Under `--forge local` takt runs the commands its run file names as the checks, on this machine. |
+Two words carry the rest of these pages:
+
+- A **[case](./concepts/glossary.md#case)** is one piece of work, kept as files in
+  `.takt/cases/<case>/`: every decision, every test result and every event. A later run resumes
+  it.
+- A **[story](./concepts/glossary.md#story)** is a planned piece of work with its acceptance,
+  kept in an AEP planning store. With no intent, takt takes the next ready one.
+
+The rest are in the [Glossary](./concepts/glossary.md).
 
 ## Where it sits
 
-```text
-AEP                 the plan: ready stories
- │
-takt                one case: steps, evidence, grants, stops
- ├─ Loom            Commission runtime steps it; the governor decides
- │   └─ Canon       evaluates the engineering protocol
- └─ metaharness     one hermetic session per judgement step
-     └─ Claude Code | Codex | b10x-harness
-                                  └─ llm → your endpoint
-```
-
-- [Canon](https://beyond10x.github.io/canon/) ([GitHub](https://github.com/beyond10x/canon))
-  evaluates every case takt holds: claims, obligations, admissible actions, legitimate outcomes.
-- [Engineering protocols](https://beyond10x.github.io/engineering-protocols/)
-  ([GitHub](https://github.com/beyond10x/engineering-protocols)) supply the protocols takt runs,
-  `story.delivery/1` among them, as built-ins.
-- [Loom](https://beyond10x.github.io/loom/) ([GitHub](https://github.com/beyond10x/loom)) is
-  the runtime takt is built on: its Commission runtime drives each step and its governor decides.
-- [metaharness](https://beyond10x.github.io/metaharness/)
-  ([GitHub](https://github.com/beyond10x/metaharness)) runs each judgement step as one hermetic
-  harness session.
-- [Harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness))
-  is b10x-harness, one of the three agent loops takt can drive (`--harness harness`).
-- [llm](https://beyond10x.github.io/llm/) ([GitHub](https://github.com/beyond10x/llm)) carries
-  b10x-harness's model calls to the endpoint you name.
-- [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
-  is the planning store takt takes stories from and records them in.
-- [ESS](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) holds
-  takt's own specification, `ess/` in the repository, validated on every check.
-
-How these layers fit inside the binary: [What takt is built on](./concepts/architecture.md).
+takt is not the coding agent, the planner or your CI: Claude Code, Codex or b10x-harness make the
+edits, AEP holds the plan, and your forge runs the checks. How it fits with Canon, Loom and the
+rest: [What takt is built on](/docs/concepts/architecture).
 
 ## What it costs
 
@@ -85,12 +71,9 @@ a shell: about 1.8x the cost and 2.4x the wall time ([Runs](/docs/self-improveme
 return it records evidence, grants, a case record and named stops. One toy scenario and small
 samples: these are first results, not a benchmark.
 
-## Where to go next
+## Next
 
-- [Getting started](./getting-started.md): install the 0.14.0 binary and run one validated step.
-- [What takt is built on](./concepts/architecture.md): the layers, and what happens in one run.
-- [Protocol and case](./concepts/protocol-and-case.md): the two nouns everything else rests on.
-- [How a run ends](./concepts/how-a-run-ends.md): every stop, its exit code, and what the next run does.
-- [Run a story](./guides/run-a-story.md) and [Configure a run](./guides/configure-a-run.md).
-- [Deploy on Kubernetes](./guides/deploy-on-kubernetes.md): takt as a Loom agent.
-- [Status](/docs/status): every implemented story, and what is in the open wave.
+- [Getting started](./getting-started.md): install takt 0.21.0, run it with no model, then with
+  Claude Code, and take the change.
+- [Run a story](./guides/run-a-story.md): deliver a story from a planning store.
+- [Known limitations](./known-limitations.md): what does not work yet.
