@@ -160,9 +160,9 @@ pub const FAILED_LINES_TOTAL: usize = 8 << 10;
 /// The most bytes of one kept line: a longer one is cut there and ends in `…`.
 const FAILED_LINE_BYTES: usize = 512;
 
-/// What a check that failed printed that names what failed: the check's id (a gate's), the
-/// lines kept of its output ([`failing_lines`]), and how many of its non-blank lines were left
-/// out.
+/// What a check that failed printed that names what failed: the check's id (a gate's, or
+/// `tests.run` for the test command's, [`TestsRun`]), the lines kept of its output
+/// ([`failing_lines`]), and how many of its non-blank lines were left out.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FailedCheck {
     pub id: String,
@@ -1785,6 +1785,10 @@ pub struct TestsRun {
     pub command: Vec<String>,
     /// What the command is held to.
     pub limits: Limits,
+    /// What the last observation that failed printed that names each failing test, as one
+    /// check whose id is the action ([`TestsRun::ACTION`]), taken once
+    /// ([`Validator::take_failed`]).
+    failed: RefCell<Vec<FailedCheck>>,
 }
 
 impl TestsRun {
@@ -1802,6 +1806,7 @@ impl TestsRun {
         Ok(Self {
             command,
             limits: Self::LIMITS,
+            failed: RefCell::new(Vec::new()),
         })
     }
 
@@ -2074,6 +2079,10 @@ impl Validator for TestsRun {
         let observed = self.observe_by(tree, revision, seq, deadline);
         Ok((ended_by(deadline, self.action(), observed)?, false))
     }
+
+    fn take_failed(&self) -> Vec<FailedCheck> {
+        self.failed.take()
+    }
 }
 
 /// What an observation held to `deadline` answers: an error once it returned at or after it,
@@ -2105,6 +2114,8 @@ impl TestsRun {
         deadline: Option<std::time::Instant>,
     ) -> Result<Observation> {
         let shown = self.command.join(" ");
+        // Nothing is kept of an earlier observation: only this one's failure is shown next.
+        self.failed.take();
         // A tree on no case's branch is no case's observation and has no base to compare with.
         if crate::git::current_branch(tree)?
             .is_some_and(|branch| branch.starts_with(crate::case::BRANCH_PREFIX))
@@ -2170,6 +2181,17 @@ impl TestsRun {
             if !failed.is_empty() {
                 summary.push_str(FAILED_MARK);
                 summary.push_str(&failed_list(&failed));
+            }
+            // What names each failing test and its last error line, kept as a gate's failed
+            // check is ([`failing_lines`]): the next judgement step leads with it
+            // ([`crate::harness::red_tests_block`]).
+            let (lines, omitted) = failing_lines(&printed, FAILED_LINES_PER_CHECK);
+            if !lines.is_empty() || omitted > 0 {
+                *self.failed.borrow_mut() = vec![FailedCheck {
+                    id: Self::ACTION.to_owned(),
+                    lines,
+                    omitted,
+                }];
             }
         }
         Ok(Observation {
