@@ -76,8 +76,43 @@ pub(crate) fn instant_micros(micros: i128) -> String {
         .unwrap_or_else(|| "1970-01-01T00:00:00.000000Z".to_owned())
 }
 
+/// `instant` in whole seconds, its fraction dropped: `YYYY-MM-DDTHH:MM:SS.fffZ` becomes
+/// `YYYY-MM-DDTHH:MM:SSZ`, for a reader that takes no fraction (aep 0.78.0's `--at`). Any other
+/// text is answered unchanged.
+pub(crate) fn whole_second(instant: &str) -> String {
+    match (instant.get(..19), instant.get(19..)) {
+        (Some(second), Some(rest))
+            if rest.len() > 2
+                && rest.starts_with('.')
+                && rest.ends_with('Z')
+                && rest[1..rest.len() - 1].bytes().all(|b| b.is_ascii_digit()) =>
+        {
+            format!("{second}Z")
+        }
+        _ => instant.to_owned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    /// A fraction is dropped; whole seconds and other text are kept.
+    #[test]
+    fn whole_second_drops_the_fraction_only() {
+        assert_eq!(
+            super::whole_second("2026-10-29T15:03:25.565621Z"),
+            "2026-10-29T15:03:25Z"
+        );
+        assert_eq!(
+            super::whole_second("2026-10-29T15:03:25Z"),
+            "2026-10-29T15:03:25Z"
+        );
+        assert_eq!(
+            super::whole_second("2026-10-29T15:03:25.Z"),
+            "2026-10-29T15:03:25.Z"
+        );
+        assert_eq!(super::whole_second("not an instant"), "not an instant");
+    }
+
     /// An instant is written with six fraction digits, leading zeros kept.
     #[test]
     fn an_instant_is_written_to_the_microsecond() {
