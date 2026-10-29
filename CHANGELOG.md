@@ -12,6 +12,7 @@ takt's releases.
 
 ### Changed
 
+- The specification, CI and the container image use ESS 0.76.0 (was 0.75.0).
 - A failed `tests.run`'s block makes paths under the tree relative and withholds only the lines the secret scan refuses, counted in its heading.
 - The loom pin moves to 0.48.0, which carries metaharness 0.23.0 and Harness 0.22.0; an older b10x-harness reads as an H9 gap in the preflight, advisory.
 - The container image ships b10x-harness 0.22.0.
