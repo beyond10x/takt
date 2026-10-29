@@ -878,6 +878,28 @@ fn w40_adv2_a_non_judge_surface_grant_is_not_replaced() {
 /// `granted_at` is not after the moment the tip was asked for.
 #[test]
 fn w40_adv2_a_replacing_grant_takes_its_time_before_the_tip() {
+    /// Seconds since the epoch of a time as takt writes it, `YYYY-MM-DDTHH:MM:SSZ`, read here
+    /// rather than by `date -d`, which macOS's `date` does not take.
+    fn epoch_of(at: &str) -> u64 {
+        let field = |range: std::ops::Range<usize>| -> i64 {
+            at.get(range)
+                .and_then(|text| text.parse().ok())
+                .unwrap_or_else(|| panic!("a time as takt writes it: {at}"))
+        };
+        assert!(at.len() == 20 && at.ends_with('Z'), "a UTC time: {at}");
+        let (year, month, day) = (field(0..4), field(5..7), field(8..10));
+        let y = if month <= 2 { year - 1 } else { year };
+        let era = y.div_euclid(400);
+        let of_era = y - era * 400;
+        let of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
+        let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
+        let days = era * 146_097 + of_cycle - 719_468;
+        u64::try_from(days * 86_400 + field(11..13) * 3_600 + field(14..16) * 60 + field(17..19))
+            .expect("after the epoch")
+    }
+    assert_eq!(epoch_of("1970-01-01T00:00:00Z"), 0);
+    assert_eq!(epoch_of("2000-03-01T01:02:03Z"), 951_872_523);
+
     let (world, path) = bot_turn_at_the_gate("adv2-time");
     let (code, out, err) = bot_approve(&world, &path);
     assert_eq!(code, 0, "{out}\n{err}");
@@ -901,14 +923,7 @@ fn w40_adv2_a_replacing_grant_takes_its_time_before_the_tip() {
         .trim()
         .trim_matches(['\'', '"'])
         .to_owned();
-    let output = Command::new("date")
-        .args(["-u", "-d", &granted_at, "+%s"])
-        .output()
-        .expect("date runs");
-    let granted: u64 = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .expect("an epoch");
+    let granted = epoch_of(&granted_at);
     let read_at: u64 = fs::read_to_string(bin.join("read-at"))
         .expect("the tip was read")
         .lines()
