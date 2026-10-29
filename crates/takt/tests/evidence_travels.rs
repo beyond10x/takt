@@ -524,7 +524,16 @@ impl Runner for Lend {
                 .position(|a| a == "--output")
                 .map(|i| &argv[i + 1])
                 .expect("--output");
-            fs::write(output, r#"{"number": 7, "state": "open"}"#)?;
+            // The read of the open pull requests for a head before an open finds none.
+            let listing = argv.iter().any(|word| word.contains("/pulls?"));
+            fs::write(
+                output,
+                if listing {
+                    "[]"
+                } else {
+                    r#"{"number": 7, "state": "open"}"#
+                },
+            )?;
         }
         Ok(Exit {
             code: Some(0),

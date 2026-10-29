@@ -205,7 +205,16 @@ impl Runner for Gates {
                     .position(|a| a == "--output")
                     .map(|i| &argv[i + 1])
                     .expect("--output");
-                fs::write(output, r#"{"number": 7, "state": "open"}"#)?;
+                // The read of the open pull requests for a head before an open finds none.
+                let listing = option(argv, "--path").is_some_and(|path| path.contains("/pulls?"));
+                fs::write(
+                    output,
+                    if listing {
+                        "[]"
+                    } else {
+                        r#"{"number": 7, "state": "open"}"#
+                    },
+                )?;
             }
             _ => {}
         }
@@ -383,7 +392,7 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
     assert!(text.contains("opened pull request #7"), "{text}");
     assert!(text.contains("evidence: pull_request open"), "{text}");
     let lines = gates.lines();
-    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert_eq!(lines.len(), 5, "{lines:?}");
     let artifacts = tree.join(".takt/cases/opens/artifacts");
     assert_eq!(
         lines[0],
@@ -404,8 +413,18 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
         ),
         "{lines:?}"
     );
+    assert!(
+        lines[2].starts_with(
+            "b10x-gates api --method GET --path /repos/owner/repo/pulls?state=open&head=owner:takt%2Fopens&base=main&"
+        ),
+        "{lines:?}"
+    );
+    assert!(
+        lines[2].ends_with(&format!(" --repository owner/repo --policy {POLICY}")),
+        "{lines:?}"
+    );
     assert_eq!(
-        lines[2],
+        lines[3],
         format!(
             "b10x-gates scan-text --repository owner/repo --policy {POLICY} {} {}",
             artifacts.join("pull-request.request.json").display(),
@@ -414,7 +433,7 @@ fn with_a_policy_given_to_the_forge_pr_open_opens_the_pull_request() {
         "{lines:?}"
     );
     assert!(
-        lines[3].starts_with("b10x-gates api --method POST "),
+        lines[4].starts_with("b10x-gates api --method POST "),
         "{lines:?}"
     );
     let scanned = gates.scanned();
@@ -502,8 +521,10 @@ fn a_scan_refusal_after_the_push_names_the_pushed_branch() {
     );
     assert!(error.contains("not opened"), "{error}");
     assert!(error.contains(PUBLISHED), "{error}");
+    // The scan, the push, the read of the open pull requests for the branch before the open,
+    // the refused scan and, the open having failed, the same read again: no `POST`.
     let lines = gates.lines();
-    assert_eq!(lines.len(), 3, "{lines:?}\n{text}");
+    assert_eq!(lines.len(), 5, "{lines:?}\n{text}");
     assert!(lines[0].starts_with("b10x-gates scan-text "), "{lines:?}");
     assert_eq!(
         lines[1],
@@ -513,5 +534,15 @@ fn a_scan_refusal_after_the_push_names_the_pushed_branch() {
         ),
         "{lines:?}"
     );
-    assert!(lines[2].starts_with("b10x-gates scan-text "), "{lines:?}");
+    for at in [2, 4] {
+        assert!(
+            lines[at].starts_with("b10x-gates api --method GET --path /repos/owner/repo/pulls?"),
+            "{lines:?}"
+        );
+    }
+    assert!(lines[3].starts_with("b10x-gates scan-text "), "{lines:?}");
+    assert!(
+        !lines.iter().any(|line| line.contains("--method POST")),
+        "{lines:?}"
+    );
 }

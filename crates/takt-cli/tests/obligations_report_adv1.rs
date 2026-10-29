@@ -114,11 +114,11 @@ fn executable(bin: &Path, name: &str, text: &str) {
     }
 }
 
-/// A double of the bot route's two programs in `<dir>/stub-bin`, its state in `<dir>/forge`:
+/// A double of the bot route's program in `<dir>/stub-bin`, its state in `<dir>/forge`:
 /// `b10x-gates bot -- push` keeps the branch and the commit pushed, `bot -- fetch` reports the
 /// local branch as the repository's, `scan-text` passes, `api --method POST` opens pull request
-/// #7 and `api --method PUT` merges it; `gh pr view` reports the pull request with the pushed
-/// head, and `gh pr checks` one check, pending while `<dir>/forge/pending` exists and passing
+/// #7 and `api --method PUT` merges it; `api --method GET` reports the pull request with the
+/// pushed head, and one check run, in progress while `<dir>/forge/pending` exists and passing
 /// otherwise. Nothing reaches a network.
 fn forge_double(dir: &Path) -> (PathBuf, PathBuf) {
     let bin = dir.join("stub-bin");
@@ -145,10 +145,11 @@ case "$1" in
     exit 0 ;;
   scan-text) exit 0 ;;
   api)
-    method=''; output=''
+    method=''; path=''; output=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --method) method="$2"; shift ;;
+        --path) path="$2"; shift ;;
         --output) output="$2"; shift ;;
       esac
       shift
@@ -156,6 +157,16 @@ case "$1" in
     case "$method" in
       POST) printf 'OPEN' > "$state/state"; printf '{{"number": 7}}' > "$output"; exit 0 ;;
       PUT) printf 'MERGED' > "$state/state"; printf '{{"merged": true}}' > "$output"; exit 0 ;;
+      GET)
+        case "$path" in
+          */pulls\?*) printf '[]' > "$output" ;;
+          */check-runs*) if [ -e "$state/pending" ]; then printf '{{"total_count":1,"check_runs":[{{"status":"in_progress","conclusion":null}}]}}' > "$output"; else printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output"; fi ;;
+          */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
+          *) s=$(cat "$state/state"); st=open; merged=false
+             case "$s" in MERGED) st=closed; merged=true ;; CLOSED) st=closed ;; esac
+             printf '{{"state":"%s","merged":%s,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$st" "$merged" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")" > "$output" ;;
+        esac
+        exit 0 ;;
     esac ;;
 esac
 echo "b10x-gates double: $*" >&2
@@ -163,30 +174,21 @@ exit 2
 "#
         ),
     );
-    executable(
-        &bin,
-        "gh",
-        &format!(
-            r#"#!/bin/sh
-state='{state_text}'
-case "$2" in
-  view) printf '{{"state":"%s","mergedAt":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}}' "$(cat "$state/state")" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")"; exit 0 ;;
-  checks) if [ -e "$state/pending" ]; then printf '[{{"bucket":"pending"}}]'; else printf '[{{"bucket":"pass"}}]'; fi; exit 0 ;;
-esac
-echo "gh double: $*" >&2
-exit 2
-"#
-        ),
-    );
     (bin, state)
 }
 
-/// Runs the built `takt` binary with `args`, `bin` first on the program path and no
-/// `b10x-gates` policy: the exit code, stdout and stderr.
+/// Runs the built `takt` binary with `args`, `bin` first on the program path and a
+/// `b10x-gates` policy file the double never reads: the exit code, stdout and stderr.
 fn takt_through(bin: &Path, args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env_remove("B10X_GATES_POLICY")
+        .env(
+            "B10X_GATES_POLICY",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../takt/tests/fixtures/gates-policy-stand-in.json"
+            ),
+        )
         .env(
             "PATH",
             format!(

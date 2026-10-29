@@ -16,6 +16,13 @@ use std::time::{Duration, Instant};
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
 
+/// A `b10x-gates` policy file the doubles never read: the bot route needs one named
+/// (story:forge-preflight).
+const GATES_POLICY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../takt/tests/fixtures/gates-policy-stand-in.json"
+);
+
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
                      text: The repository has its manifest.\n    assertions:\n      \
@@ -138,7 +145,7 @@ fn world(name: &str) -> World {
 /// `https://github.com/` URL, fetches the refspec from the bare `remote` (standing in for the
 /// HTTPS server, so without the HTTPS-only transport takt sets); for an SSH URL it runs
 /// that git's real fetch, which starts the `ssh` double; anything else it refuses. `ssh`
-/// appends its arguments to `state/ssh-calls` and refuses. `push`, `scan-text`, `api`, `gh` and
+/// appends its arguments to `state/ssh-calls` and refuses. `push`, `scan-text`, `api` and
 /// `claude` answer as in the scenario tests.
 fn doubles(bin: &Path, state: &Path, remote: &Path) {
     fs::create_dir_all(bin).expect("a stub directory");
@@ -200,10 +207,11 @@ case "$1" in
     esac ;;
   scan-text) exit 0 ;;
   api)
-    method=''; input=''; output=''
+    method=''; path=''; input=''; output=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --method) method="$2"; shift ;;
+        --path) path="$2"; shift ;;
         --input) input="$2"; shift ;;
         --output) output="$2"; shift ;;
       esac
@@ -214,6 +222,18 @@ case "$1" in
       cp "$input" "$state/pr-$k.json"
       sed -n 's/.*"head": "\(.*\)".*/\1/p' "$input" > "$state/pr-$k.head"
       printf '{{"number": %s}}' "$k" > "$output"
+      exit 0
+    fi
+    if [ "$method" = GET ]; then
+      case "$path" in
+        */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
+        */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
+        *)
+          k="${{path##*/}}"
+          head=$(cat "$state/pr-$k.head")
+          oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
+          printf '{{"state":"open","merged":false,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$head" "$oid" > "$output" ;;
+      esac
       exit 0
     fi ;;
 esac
@@ -230,25 +250,6 @@ exit 2
 printf '%s\n' "$*" >> '{state}/ssh-calls'
 echo "git@github.com: Permission denied (publickey)." >&2
 exit 255
-"#
-        ),
-    );
-    executable(
-        bin,
-        "gh",
-        &format!(
-            r#"#!/bin/sh
-state='{state}'
-case "$2" in
-  view)
-    head=$(cat "$state/pr-$3.head")
-    oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
-    printf '{{"state":"OPEN","mergedAt":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}}' "$head" "$oid"
-    exit 0 ;;
-  checks) printf '[{{"bucket":"pass"}}]'; exit 0 ;;
-esac
-echo "gh double: $*" >&2
-exit 2
 "#
         ),
     );
@@ -274,7 +275,7 @@ impl World {
             .args(args)
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
             .envs(env.iter().copied())
-            .env_remove("B10X_GATES_POLICY")
+            .env("B10X_GATES_POLICY", GATES_POLICY)
             .env(
                 "PATH",
                 format!(

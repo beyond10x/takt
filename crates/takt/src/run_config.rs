@@ -189,9 +189,9 @@ fn strict(path: &Path, value: &serde_yaml_ng::Value) -> Result<RunConfig> {
 }
 
 /// The fields a run configuration file may set, each one a `takt run` flag's: `story`,
-/// `iterations`, `hours`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`,
-/// `test_cmd`, `state_dir`, `continue_past_red_base` and `records`; and `scan` and `llm`, which
-/// no flag gives. None is required.
+/// `iterations`, `hours`, `tokens`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`,
+/// `forge`, `test_cmd`, `state_dir`, `continue_past_red_base` and `records`; and `scan` and
+/// `llm`, which no flag gives. None is required.
 #[derive(Debug, Default, Clone, PartialEq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunConfig {
@@ -201,6 +201,14 @@ pub struct RunConfig {
     pub iterations: Option<u64>,
     /// `--hours`.
     pub hours: Option<f64>,
+    /// `--tokens`, a whole number above zero. Set by [`RunConfig::read`] from the member, never
+    /// read from the file.
+    #[serde(skip)]
+    pub tokens: Option<u64>,
+    /// The `tokens` member as written, which [`RunConfig::read`] checks into
+    /// [`RunConfig::tokens`] or refuses at its line ([`TokensRefused`]).
+    #[serde(rename = "tokens")]
+    tokens_member: Option<serde_yaml_ng::Value>,
     /// `--harness`, or the `harness` mapping: metaharness's session request. Set by
     /// [`RunConfig::read`] from the member, never read from the file.
     #[serde(skip)]
@@ -785,7 +793,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -846,6 +854,30 @@ fn refused(path: &Path, line: Option<usize>) -> anyhow::Error {
         ),
     }
 }
+
+/// The refusal of a run file whose `tokens` is no whole number above zero, at the line it is
+/// written on, repeating nothing written there. A budget that does not read is an argument that
+/// does not parse, as `--tokens x` is: `takt run` exits 2 on it, before any case opens.
+#[derive(Debug)]
+pub struct TokensRefused {
+    /// The run file.
+    pub path: PathBuf,
+    /// The line `tokens` is written on, from 1.
+    pub line: usize,
+}
+
+impl std::fmt::Display for TokensRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the run configuration file {} is refused at line {}: `tokens` is a whole number above zero, the tokens the run stops at",
+            self.path.display(),
+            self.line
+        )
+    }
+}
+
+impl std::error::Error for TokensRefused {}
 
 /// Whether `key` is a name takt or Loom declares: one the shape text quotes, a member of a
 /// `loom.agent/1` document, or `takt`. Only such a key is named in a refusal; the comparison is
@@ -1361,6 +1393,17 @@ impl RunConfig {
         } else {
             from_yaml(path, text)?
         };
+        if let Some(member) = config.tokens_member.take() {
+            match member.as_u64().filter(|tokens| *tokens > 0) {
+                Some(tokens) => config.tokens = Some(tokens),
+                None => {
+                    return Err(anyhow::Error::new(TokensRefused {
+                        path: path.to_owned(),
+                        line: locate(text, extension == Some("toml"), &["tokens"]).unwrap_or(1),
+                    }));
+                }
+            }
+        }
         if let Some(records) = &config.records
             && crate::case::Records::named(records).is_none()
         {

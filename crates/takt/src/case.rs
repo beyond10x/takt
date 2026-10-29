@@ -1200,6 +1200,47 @@ pub fn prepare_grant(
     // A run holds its case while it runs: a grant given meanwhile is refused, not written into
     // a case a judgement step is in flight on; and the grant holds the case until it is written.
     let held = Held::take(&dir, id)?;
+    let (authority, approval) = checked_grant(tree, &dir, id, capability, approver)?;
+    Ok(PendingGrant {
+        dir,
+        authority,
+        approval,
+        _held: held,
+    })
+}
+
+impl CaseDir {
+    /// Grants `capability` to this case as `approver` from inside the run that holds it, with
+    /// every check [`prepare_grant`] makes but the hold, which the run already has: written
+    /// into `authority.yaml` at the revision the case reached the gate at, exactly as `takt
+    /// approve` writes it, and answered. Refused, with nothing written, when the case is not
+    /// held. The run's grant as a delegated role ([`crate::run::DELIVERY_ROLE`]) and nothing
+    /// else writes through it; it records nothing in the planning store.
+    pub(crate) fn grant_while_held(&self, capability: &str, approver: &str) -> Result<Approval> {
+        if held_since(&self.dir)?.is_none() {
+            bail!(
+                "the case {} is not held by a run; a grant from inside one is refused, nothing written",
+                self.id
+            );
+        }
+        let (authority, approval) =
+            checked_grant(&self.tree, &self.dir, &self.id, capability, approver)?;
+        authority.write(&self.dir)?;
+        Ok(approval)
+    }
+}
+
+/// The checks of a grant of `capability` to the case `id` at `dir` under `tree` by `approver`
+/// ([`prepare_grant`]), the case held by the caller: the case's authority with the grant in
+/// it, not yet written, and what it grants.
+fn checked_grant(
+    tree: &Path,
+    dir: &Path,
+    id: &str,
+    capability: &str,
+    approver: &str,
+) -> Result<(Authority, Approval)> {
+    let dir = dir.to_path_buf();
     if capability.is_empty()
         || capability
             .chars()
@@ -1348,12 +1389,7 @@ pub fn prepare_grant(
         granted_at,
         revision,
     };
-    Ok(PendingGrant {
-        dir,
-        authority,
-        approval,
-        _held: held,
-    })
+    Ok((authority, approval))
 }
 
 /// Whether `decided` is a grant whose mainline tip records no repository it was read from

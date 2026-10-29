@@ -11,6 +11,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// A `b10x-gates` policy file the double never reads: the bot route needs one named
+/// (story:forge-preflight).
+const GATES_POLICY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../takt/tests/fixtures/gates-policy-stand-in.json"
+);
+
 /// A scratch directory under this crate's build directory, removed on drop.
 struct Scratch(PathBuf);
 
@@ -285,7 +292,7 @@ fn a_state_directory_holds_the_identity_scan_without_a_home() {
     .collect();
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(&args)
-        .env_remove("B10X_GATES_POLICY")
+        .env("B10X_GATES_POLICY", GATES_POLICY)
         .env_remove("HOME")
         .env_remove("XDG_STATE_HOME")
         .env("PATH", &path)

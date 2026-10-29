@@ -13,6 +13,13 @@ use std::process::Command;
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
 
+/// A `b10x-gates` policy file the doubles never read: the bot route needs one named
+/// (story:forge-preflight).
+const GATES_POLICY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../takt/tests/fixtures/gates-policy-stand-in.json"
+);
+
 /// A gates document whose one assertion is true in a repository with a manifest.
 const GATES: &str = "format: engineering-gates/1\nlanguage: canon-expr/1\ngates:\n  - id: manifest\n    \
                      text: The repository has its manifest.\n    assertions:\n      \
@@ -174,10 +181,11 @@ case "$1" in
     esac ;;
   scan-text) exit 0 ;;
   api)
-    method=''; input=''; output=''
+    method=''; path=''; input=''; output=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --method) method="$2"; shift ;;
+        --path) path="$2"; shift ;;
         --input) input="$2"; shift ;;
         --output) output="$2"; shift ;;
       esac
@@ -195,7 +203,6 @@ exit 2
 "#
         ),
     );
-    executable(bin, "gh", "#!/bin/sh\necho \"gh double: $*\" >&2\nexit 2\n");
     executable(
         bin,
         "claude",
@@ -223,7 +230,7 @@ impl World {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
-            .env_remove("B10X_GATES_POLICY")
+            .env("B10X_GATES_POLICY", GATES_POLICY)
             .env(
                 "PATH",
                 format!(

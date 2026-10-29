@@ -113,6 +113,13 @@ pub trait Harness {
     fn last_usage(&self) -> Option<crate::events::TokenUsage> {
         None
     }
+    /// Whether the last step's session started a model's program and reported no tokens: what
+    /// it spent is unknown, never 0, and a step of it that failed is recorded with no count,
+    /// which leaves the run's tokens unknown to the scorecard. False by default, for a harness
+    /// whose step reports its tokens or starts no session.
+    fn last_tokens_unknown(&self) -> bool {
+        false
+    }
     /// Whether the harness keeps what it learned in one step for the next. A harness that does
     /// not is never offered an action whose effect is `read` (`repository.inspect`) unless the
     /// action records a choice (`change.handover`): what it read would be gone at the next
@@ -312,6 +319,9 @@ pub struct SessionHarness {
     pub runner: Option<Box<RunnerFactory>>,
     /// The tokens by component the last step reported, set by each step.
     pub reported: std::cell::Cell<Option<crate::events::TokenUsage>>,
+    /// Whether the last step's session started and reported no tokens
+    /// ([`Harness::last_tokens_unknown`]), set by each step.
+    pub unreported: std::cell::Cell<bool>,
     /// What the last step reported about its call besides its tokens, set by each step.
     pub call: std::cell::RefCell<Option<CallReport>>,
     /// The last step's transcript: the prompt line, then each event metaharness delivered.
@@ -385,6 +395,7 @@ impl SessionHarness {
             strict_version: false,
             runner: None,
             reported: std::cell::Cell::new(None),
+            unreported: std::cell::Cell::new(false),
             call: std::cell::RefCell::new(None),
             transcript: std::cell::RefCell::new(None),
             proposal: std::cell::RefCell::new(None),
@@ -706,6 +717,10 @@ impl Harness for SessionHarness {
         self.reported.get()
     }
 
+    fn last_tokens_unknown(&self) -> bool {
+        self.unreported.get()
+    }
+
     fn last_call(&self) -> Option<CallReport> {
         self.call.borrow().clone()
     }
@@ -859,6 +874,7 @@ impl Harness for SessionHarness {
     fn step(&self, context: &StepContext<'_>) -> Result<StepReport> {
         use loom_sdk::commission::ports::executor::AgentExecutor as _;
         self.reported.set(None);
+        self.unreported.set(false);
         *self.call.borrow_mut() = None;
         *self.proposal.borrow_mut() = None;
         *self.commit.borrow_mut() = None;
@@ -1075,10 +1091,29 @@ impl Harness for SessionHarness {
             cache_read: report.cache_read.unwrap_or(0),
             cache_creation: report.cache_creation.unwrap_or(0),
         };
-        let usage = (usage.total() > 0).then_some(usage);
+        let stated = [
+            report.input_tokens,
+            report.output_tokens,
+            report.cache_read,
+            report.cache_creation,
+        ]
+        .iter()
+        .any(Option::is_some);
+        // A Claude Code session killed by the step's time or ended in an error leaves no
+        // terminal record, so Loom states no total; what its messages reported up to the end
+        // is what it spent ([`claude_usage_so_far`]).
+        let usage = if stated {
+            (usage.total() > 0).then_some(usage)
+        } else if self.kind == Kind::Claude {
+            claude_usage_so_far(&report.transcript)
+        } else {
+            None
+        };
         // What the session reported is kept whether or not it proposed: a session the floor held
-        // back spent its tokens all the same, and the run charges them.
+        // back spent its tokens all the same, and the run charges them. A session that started
+        // and reported none spent what nobody knows, never 0.
         self.reported.set(usage);
+        self.unreported.set(report.started && usage.is_none());
         *self.call.borrow_mut() = Some(CallReport {
             model: report.model.clone(),
             version: report.version.clone(),
@@ -1144,6 +1179,68 @@ impl Harness for SessionHarness {
         *self.proposal.borrow_mut() = Some(proposal);
         Ok(step)
     }
+}
+
+/// The tokens a Claude Code session's messages reported, read from its `transcript` when it
+/// left no terminal record to state a total (killed by the step's time, or ended in an error):
+/// each assistant message's `usage` (Claude Code's own stream, `message.usage`), or each `usage`
+/// event (metaharness's events, when it kept no record of the vendor's), counted once per
+/// message: a message written over several records repeats its usage on each, so the last
+/// record of a message id (a request id) is the one counted. A record without an id counts on
+/// its own. None when no message reported a token.
+#[must_use]
+pub fn claude_usage_so_far(transcript: &[u8]) -> Option<crate::events::TokenUsage> {
+    let mut by_message: Vec<(Option<String>, &serde_json::Map<String, serde_json::Value>)> =
+        Vec::new();
+    let lines: Vec<serde_json::Value> = transcript
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
+        .collect();
+    for line in &lines {
+        let (id, usage) = if line["type"] == "assistant" {
+            (&line["message"]["id"], &line["message"]["usage"])
+        } else if line["event"] == "usage" {
+            (&line["request_id"], &line["usage"])
+        } else {
+            continue;
+        };
+        let Some(usage) = usage.as_object() else {
+            continue;
+        };
+        let id = id.as_str().map(str::to_owned);
+        match by_message
+            .iter_mut()
+            .find(|(seen, _)| id.is_some() && *seen == id)
+        {
+            Some(entry) => entry.1 = usage,
+            None => by_message.push((id, usage)),
+        }
+    }
+    let component = |usage: &serde_json::Map<String, serde_json::Value>, key: &str| {
+        usage
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0)
+    };
+    let none = crate::events::TokenUsage {
+        input: 0,
+        output: 0,
+        cache_read: 0,
+        cache_creation: 0,
+    };
+    let usage = by_message
+        .iter()
+        .fold(none, |sum, (_, usage)| crate::events::TokenUsage {
+            input: sum.input.saturating_add(component(usage, "input_tokens")),
+            output: sum.output.saturating_add(component(usage, "output_tokens")),
+            cache_read: sum
+                .cache_read
+                .saturating_add(component(usage, "cache_read_input_tokens")),
+            cache_creation: sum
+                .cache_creation
+                .saturating_add(component(usage, "cache_creation_input_tokens")),
+        });
+    (usage.total() > 0).then_some(usage)
 }
 
 /// The `commit` member of the reply a session ended with, read from its `transcript` (one JSON
@@ -5000,6 +5097,50 @@ fn loopback(host: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// story:a-killed-step-records-its-tokens: a session's usage up to its end counts each
+    /// message once, in Claude Code's own stream and in metaharness's events alike, a record
+    /// without an id on its own; a transcript that reports no token gives none, never 0.
+    #[test]
+    fn claude_usage_so_far_counts_each_message_once_in_either_record() {
+        let stream = concat!(
+            r#"{"type":"system","subtype":"init"}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":1}}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":10,"output_tokens":2}}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":7}}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":5,"cache_creation_input_tokens":3}}}"#,
+            "\n",
+            "not a line\n",
+        );
+        assert_eq!(
+            claude_usage_so_far(stream.as_bytes()),
+            Some(crate::events::TokenUsage {
+                input: 20,
+                output: 2,
+                cache_read: 7,
+                cache_creation: 3,
+            })
+        );
+        let events = concat!(
+            r#"{"format":"metaharness.event/1","seq":1,"event":"usage","request_id":"r1","usage":{"input_tokens":4,"output_tokens":1}}"#,
+            "\n",
+            r#"{"format":"metaharness.event/1","seq":2,"event":"usage","request_id":"r1","usage":{"input_tokens":4,"output_tokens":1}}"#,
+            "\n",
+            r#"{"format":"metaharness.event/1","seq":3,"event":"usage","usage":{"output_tokens":6}}"#,
+            "\n",
+        );
+        assert_eq!(
+            claude_usage_so_far(events.as_bytes()).map(|usage| usage.total()),
+            Some(11)
+        );
+        let none = r#"{"type":"assistant","message":{"id":"m1","usage":{"input_tokens":0}}}"#;
+        assert_eq!(claude_usage_so_far(none.as_bytes()), None);
+        assert_eq!(claude_usage_so_far(b""), None);
+    }
 
     #[test]
     fn test_paths_follow_the_patterns() {

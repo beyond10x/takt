@@ -84,6 +84,7 @@ for `_`; those seven have no flag.
 | `story` | string: the story to deliver, by id; taken only when none of `--story`, `--intent` and `--case` is given; refused by `takt scenario run`, whose scenario names the story |
 | `iterations` | integer: stop after this many steps |
 | `hours` | number: stop after this many hours |
+| `tokens` | whole number above zero: stop once the harness reported this many tokens, as `--tokens`; with neither, 3000000 |
 | `harness` | string: `claude`, `codex`, `harness` or `none`; default `claude` |
 | `model` | string: the harness's model, when it takes one; with an `llm` section under `--harness harness`, the route or alias of that section it names, whose endpoint, wire and upstream model the session uses |
 | `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
@@ -108,7 +109,7 @@ for `_`; those seven have no flag.
 `takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
-`--tokens`, `--active-seconds`, `--min-free-gib`, `--verbose`, `--color`, `--quiet-steps`, `--gate`, `--gates`, `--project`,
+`--active-seconds`, `--min-free-gib`, `--verbose`, `--color`, `--quiet-steps`, `--gate`, `--gates`, `--project`,
 `--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
 `--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
 `--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
@@ -122,6 +123,7 @@ and never a value written in it:
 |---|---|
 | a key takt does not know | `refused at line 3`, then the shape below |
 | a value of another type (`iterations: 1.5`, a number for a string) | `refused at line 1`, then the shape |
+| `tokens` that is no whole number above zero (`tokens: 0`, `tokens: x`) | `refused at line 2`, exit 2, as `--tokens x` does not parse |
 | a key written twice, TOML or YAML | `refused at line 4`, the duplicate's own line, saying it holds the key twice in one mapping (a table in TOML) and naming the key when takt or Loom declares it ([an example](../guides/configure-a-run.md#a-key-written-twice)); three rare YAML shapes keep the line where the mapping starts, without the key ([Known limitations](../known-limitations.md)) |
 | a member of a `loom.agent/1` document that is neither Loom's nor `takt` | `refused`, listing Loom's members |
 | a `format` other than `loom.agent/1` | `refused`, saying so |
@@ -139,7 +141,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -333,7 +335,7 @@ Each forge is an adapter, and the six are peers:
 | forge | what it pushes and opens through | what scans what it publishes |
 |---|---|---|
 | `gitlab` | `git push` over HTTPS with `glab auth git-credential` as its one credential helper; the merge request opened, read and merged through `glab api`, or through the API itself under `transport: api` | the run's scan adapter ([The scan](#the-scan)) |
-| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the case's branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its state and checks | `b10x-gates scan-text`, always: it is the `gates` adapter's own forge |
+| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the case's branch under a GitHub App and `b10x-gates api` opens, reads (`GET` of the pull request, the check runs on its head and its status) and merges the pull request under the same App, no `gh`; a run is refused before its case opens unless `b10x-gates` is on `PATH` and `B10X_GATES_POLICY` names a file | `b10x-gates scan-text`, always: it is the `gates` adapter's own forge |
 | `command` | the commands of the run file's `forge_commands`, each an argument list run without a shell; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
 | `connectors` | `connectors operations invoke` on the instance the run file's `forge_instance` names, once per action; the push stays takt's scanned push over HTTPS to the project `origin` names | the run's scan adapter ([The scan](#the-scan)) |
 | `local` | a bare repository on this machine, the hub the tree's `origin` names by its path, outside the tree; the tree is cloned from it with `git clone --no-local`, and a tree that shares object files with it is refused: `git push` to it, a request record under its `takt/requests`, the run file's `local_checks` as the checks, the merge made in the hub under the run's commit identity and refused when the base moved, and no merge at all when the base already holds the head, the request then recorded merged by the commit that holds it; never a default, refused for a scenario run | nothing: nothing leaves the machine |
@@ -604,7 +606,7 @@ full text of each, and the [exit codes](./exit-codes.md) are generated from the 
 |---|---|
 | `--iterations <N>` | stop after this many steps |
 | `--hours <H>` | stop after this many hours |
-| `--tokens <N>` | stop once the harness reported this many tokens |
+| `--tokens <N>` | stop once the harness reported this many tokens; default 3000000, or the run file's `tokens` |
 | `--active-seconds <S>` | stop once active time (wall time less waits on the forge) reaches this |
 | `--min-free-gib <GIB>` | stop `DiskLow` under this much free disk; default 10; `0` turns the check off |
 

@@ -1,8 +1,10 @@
 //! The `bot` forge adapter, the organization's bot route through `b10x-gates`: the bot credential
 //! never enters takt. `b10x-gates bot` pushes under the bot the commit scanned, by its id, to the
 //! repository's HTTPS URL and over HTTPS only, and fetches through the same route;
-//! `b10x-gates api` writes through JSON files and never a token in argv; the reads go through
-//! `gh`; and before any of it leaves the machine `b10x-gates scan-text` reads what a push would
+//! `b10x-gates api` writes through JSON files and never a token in argv, and reads (`GET`, its
+//! response written to a file in a directory of takt's own, `0700`) the pull request and the
+//! checks on its head under the same App, so no `gh` and no login of the user's is needed; and
+//! before any of it leaves the machine `b10x-gates scan-text` reads what a push would
 //! publish and a pull request's title and body, as [`super`] says of every adapter that
 //! publishes. It scans with `b10x-gates` whatever the run's scan adapter is
 //! ([`crate::scan::Scan`]), since it is the gates adapter's own forge.
@@ -17,10 +19,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail};
 
+use super::gitlab::encoded;
 use super::{
     Checks, Exit, Failed, Forge, Head, IdentityScan, MergeMessage, Outgoing, Process, PullRequest,
     PullRequestState, PullRequestView, Runner, Scanner, exact_ref, fresh, head_is_a_commit,
-    held_by, is_object_id, push_over_https, reading_of, repository_of, succeed, without_userinfo,
+    held_by, is_object_id, push_over_https, repository_of, succeed, without_userinfo,
     write_request,
 };
 
@@ -34,8 +37,8 @@ pub(super) const API_REFUSAL_PREFIX: &str = "b10x-gates: GitHub operation failed
 /// The adapter over the organization's bot route: `b10x-gates scan-text` checks what a push and
 /// a pull request would publish before any of it leaves the machine, `b10x-gates bot -- push`
 /// pushes the branch over HTTPS only, `b10x-gates api` opens the pull request and merges it with
-/// JSON files, and read-only `gh pr view` and `gh pr checks` report its state and checks. The
-/// scan and every API write name the repository and, when one is known, the policy file as
+/// JSON files, and `b10x-gates api --method GET` reads its state and the checks on its head. The
+/// scan and every API line name the repository and, when one is known, the policy file as
 /// `--policy`; `b10x-gates` reads its own environment otherwise.
 pub struct BotRoute {
     /// `<owner>/<repo>`, from the `origin` URL.
@@ -110,13 +113,21 @@ impl BotRoute {
         }
     }
 
-    /// The host the bot route serves: it pushes under a GitHub App and reads through `gh`.
+    /// The host the bot route serves: it pushes, writes and reads under a GitHub App.
     pub const HOST: &str = "github.com";
 
-    /// What `gh pr checks` says on stderr, exiting 1 with nothing on stdout, for a head no
-    /// check has been reported for yet: `gh` 2.100.0's message as read from its binary, not
-    /// verified against a live pull request.
-    pub const NO_CHECKS_REPORTED: &str = "no checks reported";
+    /// The most check runs, and the most statuses, one read of a head's checks lists
+    /// (`per_page`, GitHub's own most); a head that has more is an error, never a reading of
+    /// the first page.
+    pub const CHECKS_PAGE: usize = 100;
+
+    /// The most pull requests one read of the open pull requests for a head lists
+    /// (`per_page`); a full page is an error, never a reading of the first page. GitHub holds
+    /// one open pull request for a head and a base.
+    pub const PULLS_PAGE: usize = 100;
+
+    /// The file a read's response is written to, in a directory of the read's own.
+    pub const READ_RESPONSE: &str = "response.json";
 
     /// Whether the bot route serves `host`; host names are case-insensitive.
     #[must_use]
@@ -138,7 +149,7 @@ impl BotRoute {
         })?;
         if !Self::serves(&origin.host) {
             bail!(
-                "the origin remote {shown} is on {}, not {}: the bot route pushes under a GitHub App and reads through gh; give --forge none",
+                "the origin remote {shown} is on {}, not {}: the bot route pushes and reads under a GitHub App; give --forge none",
                 origin.host,
                 Self::HOST
             );
@@ -149,6 +160,53 @@ impl BotRoute {
             policy,
             Box::new(Process::default()),
         ))
+    }
+
+    /// Whether a run can reach the bot route at all, checked before its case opens, so a run
+    /// that cannot is refused before any step instead of at `pr.open`: `b10x-gates` must be an
+    /// executable file on takt's `PATH`, and the policy ([`crate::scan::gates::POLICY_VAR`])
+    /// must be given and name a file that can be read. `gh` is not looked for: the route runs
+    /// none.
+    ///
+    /// # Errors
+    /// Naming `b10x-gates` when it is on no directory of `PATH`, or naming
+    /// [`crate::scan::gates::POLICY_VAR`] when no policy is given or it names no readable file.
+    pub fn preflight(&self) -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let runnable = std::env::var_os("PATH")
+            .iter()
+            .flat_map(std::env::split_paths)
+            .filter(|dir| dir.is_absolute())
+            .map(|dir| dir.join(PROGRAM))
+            .any(|path| {
+                std::fs::metadata(path)
+                    .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+            });
+        if !runnable {
+            bail!(
+                "the forge `bot` needs {PROGRAM} on PATH, and no directory of PATH holds it; install it, or give --forge none; no case was opened"
+            );
+        }
+        let var = crate::scan::gates::POLICY_VAR;
+        let Some(policy) = self.policy.as_deref() else {
+            bail!(
+                "the forge `bot` needs {var} naming the {PROGRAM} policy file, and it is not set; set it, or give --forge none; no case was opened"
+            );
+        };
+        let shown = crate::git::shown(policy.as_os_str());
+        let readable = std::fs::File::open(policy).and_then(|file| {
+            if file.metadata()?.is_file() {
+                Ok(())
+            } else {
+                Err(std::io::Error::other("not a regular file"))
+            }
+        });
+        if let Err(error) = readable {
+            bail!(
+                "the forge `bot` needs {var} naming the {PROGRAM} policy file, and `{shown}` is no file that can be read ({error}); set it, or give --forge none; no case was opened"
+            );
+        }
+        Ok(())
     }
 
     /// The URL every push goes to: the repository's on [`Self::HOST`], over HTTPS. A URL, not
@@ -387,49 +445,158 @@ impl BotRoute {
         )
     }
 
-    /// The line that reads the state of pull request `number` of the repository: named, never
-    /// taken from the tree's remotes, which a step may have changed.
+    /// The line of an API read: `GET` on `path`, no input, the response written to `output`,
+    /// under the same repository and policy as the writes.
     #[must_use]
-    pub fn view_argv(&self, number: u64) -> Vec<String> {
-        vec![
-            "gh".to_owned(),
-            "pr".to_owned(),
-            "view".to_owned(),
-            number.to_string(),
-            "--json".to_owned(),
-            "state,mergedAt,headRefName,headRefOid,baseRefName".to_owned(),
-            "--repo".to_owned(),
-            self.repository.clone(),
-        ]
+    pub fn read_argv(&self, path: &str, output: &Path) -> Vec<String> {
+        let mut argv = vec![
+            PROGRAM.to_owned(),
+            "api".to_owned(),
+            "--method".to_owned(),
+            "GET".to_owned(),
+            "--path".to_owned(),
+            path.to_owned(),
+            "--output".to_owned(),
+            output.display().to_string(),
+        ];
+        argv.extend(self.scope());
+        argv
     }
 
-    /// The line that reads the checks on the head of pull request `number` of the repository:
-    /// named, never taken from the tree's remotes.
+    /// The line that reads pull request `number` of the repository
+    /// (`GET /repos/<owner>/<repo>/pulls/<number>`): named, never taken from the tree's
+    /// remotes, which a step may have changed.
     #[must_use]
-    pub fn checks_argv(&self, number: u64) -> Vec<String> {
-        vec![
-            "gh".to_owned(),
-            "pr".to_owned(),
-            "checks".to_owned(),
-            number.to_string(),
-            "--json".to_owned(),
-            "bucket".to_owned(),
-            "--repo".to_owned(),
-            self.repository.clone(),
-        ]
+    pub fn view_argv(&self, number: u64, output: &Path) -> Vec<String> {
+        self.read_argv(
+            &format!("/repos/{}/pulls/{number}", self.repository),
+            output,
+        )
+    }
+
+    /// The line that lists the open pull requests of the repository whose head is `branch` of
+    /// the repository's owner and whose base is `base`
+    /// (`GET /repos/<owner>/<repo>/pulls?state=open&head=<owner>:<branch>&base=<base>`),
+    /// [`Self::PULLS_PAGE`] of them; the owner, the branch and the base percent-encoded.
+    #[must_use]
+    pub fn open_pulls_argv(&self, branch: &str, base: &str, output: &Path) -> Vec<String> {
+        let owner = self.repository.split('/').next().unwrap_or_default();
+        self.read_argv(
+            &format!(
+                "/repos/{}/pulls?state=open&head={}:{}&base={}&per_page={}",
+                self.repository,
+                encoded(owner),
+                encoded(branch),
+                encoded(base),
+                Self::PULLS_PAGE
+            ),
+            output,
+        )
+    }
+
+    /// The line that reads the check runs on the commit `head` of the repository
+    /// (`GET /repos/<owner>/<repo>/commits/<head>/check-runs`), [`Self::CHECKS_PAGE`] of them.
+    #[must_use]
+    pub fn check_runs_argv(&self, head: &str, output: &Path) -> Vec<String> {
+        self.read_argv(
+            &format!(
+                "/repos/{}/commits/{head}/check-runs?per_page={}",
+                self.repository,
+                Self::CHECKS_PAGE
+            ),
+            output,
+        )
+    }
+
+    /// The line that reads the combined status of the commit `head` of the repository
+    /// (`GET /repos/<owner>/<repo>/commits/<head>/status`), [`Self::CHECKS_PAGE`] statuses.
+    #[must_use]
+    pub fn status_argv(&self, head: &str, output: &Path) -> Vec<String> {
+        self.read_argv(
+            &format!(
+                "/repos/{}/commits/{head}/status?per_page={}",
+                self.repository,
+                Self::CHECKS_PAGE
+            ),
+            output,
+        )
+    }
+
+    /// Runs the read `argv_of(output)` in `tree`, `output` [`Self::READ_RESPONSE`] in a new
+    /// directory of its own under the temporary directory, readable by its owner alone
+    /// (`b10x-gates` refuses to write into a directory another user can write) and removed
+    /// after; the response read as JSON. A read that does not exit 0, or writes no JSON, is an
+    /// error naming the line, never a reading.
+    fn read(
+        &self,
+        tree: &Path,
+        argv_of: impl FnOnce(&Path) -> Vec<String>,
+    ) -> Result<(Vec<String>, serde_json::Value)> {
+        let dir = ReadDir::new()?;
+        let output = dir.0.join(Self::READ_RESPONSE);
+        let argv = argv_of(&output);
+        self.succeed(tree, &argv)?;
+        let text = std::fs::read_to_string(&output)
+            .with_context(|| format!("{} wrote no response", argv.join(" ")))?;
+        let document = serde_json::from_str(&text)
+            .with_context(|| format!("{} wrote no JSON", argv.join(" ")))?;
+        Ok((argv, document))
+    }
+
+    /// What each check run the check runs `document` lists says, read as [`Checks`].
+    fn check_runs(argv: &[String], document: &serde_json::Value) -> Result<Vec<Checks>> {
+        let runs = listed(argv, document, "check_runs")?;
+        runs.iter()
+            .map(|run| {
+                let status = run["status"].as_str();
+                Ok(match status {
+                    Some("completed") => match run["conclusion"].as_str() {
+                        Some("success" | "neutral" | "skipped") => Checks::Pass,
+                        Some(
+                            "failure" | "cancelled" | "timed_out" | "action_required"
+                            | "startup_failure" | "stale",
+                        ) => Checks::Fail,
+                        other => bail!(
+                            "{} reported a completed check run concluding {other:?}",
+                            argv.join(" ")
+                        ),
+                    },
+                    Some("queued" | "in_progress" | "waiting" | "requested" | "pending") => {
+                        Checks::Pending
+                    }
+                    other => bail!(
+                        "{} reported a check run in the status {other:?}",
+                        argv.join(" ")
+                    ),
+                })
+            })
+            .collect()
+    }
+
+    /// What the statuses of the combined status `document` say, read as [`Checks`]; its
+    /// overall `state` is not read, since it is `pending` for a head with no status at all.
+    fn statuses(argv: &[String], document: &serde_json::Value) -> Result<Vec<Checks>> {
+        let statuses = listed(argv, document, "statuses")?;
+        statuses
+            .iter()
+            .map(|status| {
+                Ok(match status["state"].as_str() {
+                    Some("success") => Checks::Pass,
+                    Some("failure" | "error") => Checks::Fail,
+                    Some("pending") => Checks::Pending,
+                    other => bail!(
+                        "{} reported a status in the state {other:?}",
+                        argv.join(" ")
+                    ),
+                })
+            })
+            .collect()
     }
 
     /// Runs `argv` in `tree`; a program that did not exit 0 is an error naming the line and
     /// what it said.
     fn succeed(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
         succeed(&*self.runner, tree, argv)
-    }
-
-    /// Runs `argv` in `tree` and reads what it printed as JSON; anything else is an error
-    /// naming the line and what the program said, never a reading.
-    fn read_json(&self, tree: &Path, argv: &[String]) -> Result<serde_json::Value> {
-        let exit = self.runner.run(tree, argv)?;
-        reading_of(argv, &exit)
     }
 
     /// Merges pull request `number` at `head` through the API ([`Self::merge_argv`]), the
@@ -563,66 +730,111 @@ impl Forge for BotRoute {
             .ok_or_else(|| anyhow!("the response {} has no number", output.display()))
     }
 
+    /// `GET /repos/<owner>/<repo>/pulls` for the open pull requests of `branch` into `base`
+    /// ([`Self::open_pulls_argv`]). Only an entry the answer itself reports open, with the head
+    /// `branch` and the base `base`, and of this repository when it names the head's repository,
+    /// is taken: the query is the forge's to honour, and its answer is checked. An answer that is
+    /// not a list, a full page, an entry taken with no number, or two different numbers taken,
+    /// is an error, never none.
+    fn find_open_pull_request(&self, tree: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
+        let (argv, document) =
+            self.read(tree, |output| self.open_pulls_argv(branch, base, output))?;
+        let listed = document
+            .as_array()
+            .ok_or_else(|| anyhow!("{} wrote no list of pull requests", argv.join(" ")))?;
+        if listed.len() >= Self::PULLS_PAGE {
+            bail!(
+                "{} lists {} pull requests, a full page: the rest are not read, so whether {branch} has one open is not known",
+                argv.join(" "),
+                listed.len()
+            );
+        }
+        let text = |pull: &serde_json::Value, pointer: &str| {
+            pull.pointer(pointer)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        let mut found = None;
+        for pull in listed {
+            let ours = text(pull, "/state").as_deref() == Some("open")
+                && text(pull, "/head/ref").as_deref() == Some(branch)
+                && text(pull, "/base/ref").as_deref() == Some(base)
+                && text(pull, "/head/repo/full_name")
+                    .is_none_or(|full| full.eq_ignore_ascii_case(&self.repository));
+            if !ours {
+                continue;
+            }
+            let number = pull["number"].as_u64().ok_or_else(|| {
+                anyhow!(
+                    "{} lists an open pull request of {branch} with no number",
+                    argv.join(" ")
+                )
+            })?;
+            if let Some(other) = found.replace(number)
+                && other != number
+            {
+                bail!(
+                    "{} lists two open pull requests of {branch} into {base}, #{other} and #{number}",
+                    argv.join(" ")
+                );
+            }
+        }
+        Ok(found)
+    }
+
+    /// `GET /repos/<owner>/<repo>/pulls/<number>` ([`Self::view_argv`]): `open` is open, `closed`
+    /// is merged when `merged` is true and closed otherwise; the head's branch and commit and
+    /// the base's branch must all be there.
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {
-        let argv = self.view_argv(number);
-        let document = self.read_json(tree, &argv)?;
-        let state = match document["state"].as_str() {
-            Some("OPEN") => PullRequestState::Open,
-            Some("MERGED") => PullRequestState::Merged,
-            Some("CLOSED") => PullRequestState::Closed,
-            other => bail!(
-                "{} reported the state {other:?}, not OPEN, MERGED or CLOSED",
+        let (argv, document) = self.read(tree, |output| self.view_argv(number, output))?;
+        let merged = document["merged"].as_bool();
+        let state = match (document["state"].as_str(), merged) {
+            (Some("open"), _) => PullRequestState::Open,
+            (Some("closed"), Some(true)) => PullRequestState::Merged,
+            (Some("closed"), Some(false)) => PullRequestState::Closed,
+            (state, merged) => bail!(
+                "{} reported the state {state:?} with merged {merged:?}, not open, or closed and merged or not",
                 argv.join(" ")
             ),
         };
-        let field = |name: &str| -> Result<String> {
-            document[name]
-                .as_str()
+        let field = |pointer: &str| -> Result<String> {
+            document
+                .pointer(pointer)
+                .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
-                .ok_or_else(|| anyhow!("{} reported no {name}", argv.join(" ")))
+                .ok_or_else(|| anyhow!("{} reported no {pointer}", argv.join(" ")))
         };
         Ok(PullRequestView {
             state,
             head: Head {
-                branch: field("headRefName")?,
-                sha: field("headRefOid")?,
+                branch: field("/head/ref")?,
+                sha: field("/head/sha")?,
             },
-            base: field("baseRefName")?,
+            base: field("/base/ref")?,
         })
     }
 
+    /// The checks on the head of pull request `number`, as the pull request reports it
+    /// ([`Self::pull_request`]): its check runs ([`Self::check_runs_argv`]) and its statuses
+    /// ([`Self::status_argv`]). One failed, cancelled or timed-out run, or one failing status,
+    /// fails; else one queued or running run, or one pending status, or none of either, is
+    /// pending; else every one passed. A head that is no object id is not read.
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks> {
-        let argv = self.checks_argv(number);
-        let exit = self.runner.run(tree, &argv)?;
-        // A head no check has been reported for yet, the state of every pull request in the
-        // seconds after its push: pending, not an error that ends the run. Anything else that
-        // is not a reading stays an error.
-        if !exit.success()
-            && exit.stdout.trim().is_empty()
-            && exit.stderr.contains(Self::NO_CHECKS_REPORTED)
-        {
-            return Ok(Checks::Pending);
+        let head = self.pull_request(tree, number)?.head.sha;
+        if !is_object_id(&head) {
+            bail!(
+                "pull request #{number} of {} reports its head at `{}`, which is no object id; its checks were not read",
+                self.repository,
+                head.escape_debug()
+            );
         }
-        let document = reading_of(&argv, &exit)?;
-        let checks = document
-            .as_array()
-            .ok_or_else(|| anyhow!("{} printed no list of checks", argv.join(" ")))?;
-        let mut pending = checks.is_empty();
-        let mut failed = false;
-        for check in checks {
-            match check["bucket"].as_str() {
-                Some("pass" | "skipping") => {}
-                Some("fail" | "cancel") => failed = true,
-                Some("pending") => pending = true,
-                other => bail!(
-                    "{} reported a check in the bucket {other:?}",
-                    argv.join(" ")
-                ),
-            }
-        }
-        Ok(if failed {
+        let (argv, runs) = self.read(tree, |output| self.check_runs_argv(&head, output))?;
+        let mut checks = Self::check_runs(&argv, &runs)?;
+        let (argv, status) = self.read(tree, |output| self.status_argv(&head, output))?;
+        checks.extend(Self::statuses(&argv, &status)?);
+        Ok(if checks.contains(&Checks::Fail) {
             Checks::Fail
-        } else if pending {
+        } else if checks.is_empty() || checks.contains(&Checks::Pending) {
             Checks::Pending
         } else {
             Checks::Pass
@@ -678,6 +890,62 @@ impl Forge for BotRoute {
             .into());
         }
         Ok(tip)
+    }
+}
+
+/// The list `key` of the response `document` the read `argv` wrote, every entry of it: a
+/// `total_count` above the entries listed (a head with more than one page) is an error, never
+/// a reading of part of them.
+fn listed<'a>(
+    argv: &[String],
+    document: &'a serde_json::Value,
+    key: &str,
+) -> Result<&'a [serde_json::Value]> {
+    let entries = document[key]
+        .as_array()
+        .ok_or_else(|| anyhow!("{} wrote no list {key}", argv.join(" ")))?;
+    let total = document["total_count"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("{} wrote no total_count", argv.join(" ")))?;
+    if usize::try_from(total).map_or(true, |total| total > entries.len()) {
+        bail!(
+            "{} counts {total} {key} and lists {}: the rest are not read, so the checks are not known",
+            argv.join(" "),
+            entries.len()
+        );
+    }
+    Ok(entries)
+}
+
+/// A directory one read's response is written into: new, under the temporary directory,
+/// `0700`; removed on drop.
+struct ReadDir(PathBuf);
+
+impl ReadDir {
+    fn new() -> Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static MADE: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos());
+        let dir = std::env::temp_dir().join(format!(
+            "takt-bot-read-{}-{}-{nanos}",
+            std::process::id(),
+            MADE.fetch_add(1, Ordering::Relaxed)
+        ));
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+        builder
+            .create(&dir)
+            .with_context(|| format!("create a directory for a read at {}", dir.display()))?;
+        Ok(Self(dir))
+    }
+}
+
+impl Drop for ReadDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -801,6 +1069,70 @@ mod tests {
         ] {
             assert!(error.contains(named), "{named}: {error}");
         }
+    }
+
+    /// Answers a read with `{"state":"open",…}`, recording the mode of the directory `--output`
+    /// is in and that directory.
+    struct Reads {
+        seen: Rc<RefCell<Vec<(String, u32, PathBuf)>>>,
+    }
+
+    impl Runner for Reads {
+        fn run(&self, _: &Path, argv: &[String]) -> Result<Exit> {
+            use std::os::unix::fs::PermissionsExt as _;
+            let at = argv.iter().position(|a| a == "--output").expect("--output");
+            let output = PathBuf::from(&argv[at + 1]);
+            let dir = output.parent().expect("a directory").to_path_buf();
+            let mode = std::fs::metadata(&dir)
+                .expect("the directory")
+                .permissions()
+                .mode();
+            self.seen
+                .borrow_mut()
+                .push((argv.join(" "), mode & 0o7777, dir));
+            std::fs::write(
+                &output,
+                r#"{"state":"open","merged":false,"head":{"ref":"b","sha":"c"},"base":{"ref":"main"}}"#,
+            )?;
+            Ok(Exit {
+                code: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+
+        fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> Result<Exit> {
+            self.run(tree, argv)
+        }
+    }
+
+    /// A read's response is written into a new directory of its own, `0700`, which
+    /// `b10x-gates` requires, and the directory is gone once the response is read.
+    #[test]
+    fn a_read_writes_into_a_private_directory_removed_after() {
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        let route = BotRoute::new(
+            "owner/repo",
+            None,
+            Box::new(Reads {
+                seen: Rc::clone(&seen),
+            }),
+        );
+        let view = route.pull_request(Path::new("."), 7).expect("reads");
+        assert_eq!(view.base, "main");
+        let seen = seen.borrow();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        let (line, mode, dir) = &seen[0];
+        assert!(
+            line.starts_with(
+                "b10x-gates api --method GET --path /repos/owner/repo/pulls/7 --output "
+            ),
+            "{line}"
+        );
+        assert!(line.ends_with(" --repository owner/repo"), "{line}");
+        assert_eq!(*mode, 0o700, "{}", dir.display());
+        assert!(dir.starts_with(std::env::temp_dir()), "{}", dir.display());
+        assert!(!dir.exists(), "{} is removed after the read", dir.display());
     }
 
     /// No policy file, or no `b10x-gates` to run, scanned nothing: not scanned, never passed.

@@ -367,6 +367,16 @@ pub trait Forge {
     /// scans it, [`Self::scan_outgoing`], and pushes it first); `dir` is where the adapter keeps
     /// what it sent and what came back, when it keeps anything. The pull request's number.
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64>;
+    /// The number of the open pull request whose head is `branch` and whose base is `base`, as
+    /// the forge reports it now; none when there is none. `pr.open` reads it before it opens a
+    /// pull request and after an open that failed, so a run resumed after a lost answer takes
+    /// the pull request the forge already holds instead of opening a second one. An answer the
+    /// adapter cannot read is an error, never none. By default an adapter has no such read and
+    /// answers none, and `pr.open` opens as it would without it.
+    fn find_open_pull_request(&self, tree: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
+        let _ = (tree, branch, base);
+        Ok(None)
+    }
     /// The state and the head of pull request `number`.
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView>;
     /// The checks on the head of pull request `number`.

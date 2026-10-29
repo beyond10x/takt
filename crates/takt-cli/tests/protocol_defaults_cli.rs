@@ -16,6 +16,13 @@ use takt::CaseDir;
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
 
+/// A `b10x-gates` policy file the doubles never read: the bot route needs one named
+/// (story:forge-preflight).
+const GATES_POLICY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../takt/tests/fixtures/gates-policy-stand-in.json"
+);
+
 /// The story-delivery protocol, the engineering protocols' built-in.
 const DELIVERY_PROTOCOL: &str = "story.delivery/1";
 
@@ -102,13 +109,14 @@ fn repository(fixture: Option<&str>, name: &str) -> (Scratch, PathBuf) {
     (Scratch(outer), repo)
 }
 
-/// Runs the built `takt` binary with `args`, `path` first on the program path when given: the
-/// exit code, stdout and stderr.
+/// Runs the built `takt` binary with `args`, `path` first on the program path when given, with a
+/// `b10x-gates` policy file the doubles never read ([`GATES_POLICY`]) then and with no policy
+/// otherwise: the exit code, stdout and stderr.
 fn takt_with_path(path: Option<&Path>, args: &[&str]) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
     command.args(args).env_remove("B10X_GATES_POLICY");
     if let Some(path) = path {
-        command.env(
+        command.env("B10X_GATES_POLICY", GATES_POLICY).env(
             "PATH",
             format!(
                 "{}:{}",
@@ -481,6 +489,11 @@ printf '%s\n' "$*" >> "$(dirname "$0")/calls"
 case "$1" in
   bot|scan-text) exit 0 ;;
   api)
+    case "$*" in
+      *"--method GET "*)
+        while [ $# -gt 0 ]; do [ "$1" = --output ] && printf '[]' > "$2"; shift; done
+        exit 0 ;;
+    esac
     printf '%s\n' 'b10x-gates: GitHub operation failed (422 Unprocessable Entity): Validation Failed' >&2
     exit 1
     ;;

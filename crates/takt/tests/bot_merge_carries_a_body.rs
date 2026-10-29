@@ -84,8 +84,8 @@ impl Harness for NoHarness {
     }
 }
 
-/// The stand-in for `gh` and `b10x-gates` under the bot route: `gh pr view` reports pull request
-/// [`NUMBER`] open (merged once the merge was asked for) with the head `branch` at `head`
+/// The stand-in for `b10x-gates` under the bot route: its `GET` of pull request [`NUMBER`]
+/// reports it open (merged once the merge was asked for) with the head `branch` at `head`
 /// against `main`; the dry-run fetch reports `main` at `tip` and the object fetch succeeds; the
 /// merge API call answers `merged: true`. Any other line fails.
 struct Stand {
@@ -107,16 +107,23 @@ impl Runner for Stand {
             stdout,
             stderr: String::new(),
         };
-        if line.starts_with(&format!("gh pr view {NUMBER} ")) {
-            let state = if self.merged.get() { "MERGED" } else { "OPEN" };
+        if line.starts_with(&format!(
+            "b10x-gates api --method GET --path /repos/owner/repo/pulls/{NUMBER} "
+        )) {
+            let merged = self.merged.get();
             let view = serde_json::json!({
-                "state": state,
-                "mergedAt": null,
-                "headRefName": self.branch,
-                "headRefOid": self.head,
-                "baseRefName": "main",
+                "state": if merged { "closed" } else { "open" },
+                "merged": merged,
+                "head": { "ref": self.branch, "sha": self.head },
+                "base": { "ref": "main" },
             });
-            return Ok(ok(view.to_string()));
+            let output = argv
+                .iter()
+                .position(|a| a == "--output")
+                .map(|i| &argv[i + 1])
+                .expect("--output");
+            fs::write(output, view.to_string())?;
+            return Ok(ok(String::new()));
         }
         if line.contains("--dry-run") {
             return Ok(ok(format!(

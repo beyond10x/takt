@@ -211,10 +211,11 @@ fn events(tree: &Path, id: &str) -> String {
 }
 
 /// A try whose session reported no tokens, then a try that names its action: the run recovers,
-/// and its tokens are those its sessions reported, as a run whose failed session reported none
-/// had before the retry. They are unknown instead: the try's line carries no count.
+/// and its tokens are unknown, never a sum that counts the try 0: the try's line carries no
+/// count (story:a-killed-step-records-its-tokens, which replaces the earlier reading that such a
+/// try leaves the run's tokens known).
 #[test]
-fn a_try_that_reported_no_tokens_leaves_the_run_tokens_known() {
+fn a_try_that_reported_no_tokens_leaves_the_run_tokens_unknown() {
     let scratch = repository("no-usage");
     let tree = scratch.tree();
     let id = "no-action-adv1-no-usage";
@@ -228,9 +229,10 @@ fn a_try_that_reported_no_tokens_leaves_the_run_tokens_known() {
         .find(|row| row.case == id)
         .expect("the case's row");
     assert!(
-        row.tokens.is_some(),
-        "a try that reported no tokens leaves the run's tokens unknown (unknown steps: {:?}), \
-         so `takt scorecard --against` and `takt promote` refuse the case\n{}",
+        row.tokens.is_none() && !row.unknown_steps().is_empty(),
+        "a try that reported no tokens leaves the run's tokens unknown, so `takt scorecard \
+         --against` and `takt promote` refuse the case (tokens {:?}, unknown steps {:?})\n{}",
+        row.tokens,
         row.unknown_steps(),
         events(&tree, id)
     );

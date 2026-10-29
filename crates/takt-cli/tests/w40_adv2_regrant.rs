@@ -15,6 +15,13 @@ use std::process::Command;
 /// The self-improvement protocol, the engineering protocols' built-in.
 const PROTOCOL: &str = "self.improvement/1";
 
+/// A `b10x-gates` policy file the stand-in never reads: the bot route needs one named
+/// (story:forge-preflight).
+const GATES_POLICY: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../takt/tests/fixtures/gates-policy-stand-in.json"
+);
+
 /// The finding scripts of this repository, committed into the scratch repository's base.
 const SCRIPTS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts");
 
@@ -541,7 +548,8 @@ fn takt_in(world: &World, args: &[&str]) -> (i32, String, String) {
 }
 
 /// `takt` run in `world` with `args` alone, the run's state and cache given, and `PATH` set to
-/// `path` when some.
+/// `path` when some, with a `b10x-gates` policy file the stand-in never reads
+/// ([`GATES_POLICY`]); no policy otherwise.
 fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
     command
@@ -551,7 +559,9 @@ fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, Stri
         .env("CARGO_INSTALL_ROOT", decoy(world))
         .env_remove("B10X_GATES_POLICY");
     if let Some(path) = path {
-        command.env("PATH", path);
+        command
+            .env("PATH", path)
+            .env("B10X_GATES_POLICY", GATES_POLICY);
     }
     let output = command.output().expect("takt runs");
     (
@@ -564,17 +574,12 @@ fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, Stri
 /// A stand-in for the bot route, `b10x-gates` on `PATH`: its dry-run fetch of `main` answers,
 /// per repository (`acme/one`, `acme/two`), the commit named by `tip-<repo>` beside it, and every
 /// other line (the object fetch, the identity's scan) succeeds, the commits being already local.
-/// A `gh` that refuses beside it, so no line reaches a real forge. The `PATH` that finds them
-/// first.
+/// The `PATH` that finds it first.
 fn bot_stand_in(world: &World) -> PathBuf {
     let bin = world.repo.parent().expect("a parent").join("bot-bin");
     executable(
         &bin.join("b10x-gates"),
         "#!/bin/sh\nu=$(printf '%s\\n' \"$@\" | grep '^https://' | head -n 1)\ncase \"$*\" in *--dry-run*) printf '* %s %s refs/remotes/origin/main\\n' 0000000000000000000000000000000000000000 \"$(cat \"$(dirname \"$0\")/tip-$(basename \"$u\" .git)\")\";; esac\nexit 0\n",
-    );
-    executable(
-        &bin.join("gh"),
-        "#!/bin/sh\necho \"no gh in this test\" >&2\nexit 1\n",
     );
     write(&bin.join("tip-one"), &format!("{}\n", world.baseline));
     PathBuf::from(format!(

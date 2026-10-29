@@ -5,7 +5,7 @@
 //! reports about the checks, and nothing while they are pending. Every record is about
 //! `implementation` at the pushed revision and names its validator; the model never produces
 //! evidence. The bot-route adapter is tested for the argument lines it would run only: a
-//! recording runner stands in for `b10x-gates` and `gh`, and nothing leaves the machine.
+//! recording runner stands in for `b10x-gates`, and nothing leaves the machine.
 
 #[path = "support/own_home.rs"]
 mod own_home;
@@ -571,13 +571,19 @@ fn a_discarded_case_leaves_no_directory_and_no_branch() {
     assert!(!tree.join(".takt/cases").exists());
 }
 
+/// The head an empty `view` of [`Recording`] reports the pull request at.
+const RECORDED_HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
+
 /// A runner that records every argument line it is given instead of running it, and answers
-/// what the real programs would: a response file with the pull request's number for the API
-/// call, the pull request's state for `gh pr view`, and the checks for `gh pr checks`.
+/// what the real programs would: a response file with the pull request's number for an API
+/// write, and for an API read (`GET`) the pull request (`view`, or an open one at
+/// [`RECORDED_HEAD`] when it is empty), the check runs on its head (`checks`) or its combined
+/// status (`status`).
 struct Recording {
     lines: RefCell<Vec<String>>,
     view: &'static str,
     checks: &'static str,
+    status: &'static str,
 }
 
 impl Recording {
@@ -586,8 +592,21 @@ impl Recording {
             lines: RefCell::new(Vec::new()),
             view,
             checks,
+            status: r#"{"state":"pending","total_count":0,"statuses":[]}"#,
         }
     }
+
+    fn with_status(mut self, status: &'static str) -> Self {
+        self.status = status;
+        self
+    }
+}
+
+/// An open pull request's response, at `head`, from `takt/c1` into `main`.
+fn open_at(head: &str) -> String {
+    format!(
+        r#"{{"state":"open","merged":false,"head":{{"ref":"takt/c1","sha":"{head}"}},"base":{{"ref":"main"}}}}"#
+    )
 }
 
 impl Runner for Recording {
@@ -604,25 +623,34 @@ impl Runner for Recording {
 
     fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
         self.lines.borrow_mut().push(argv.join(" "));
-        let stdout = match argv.get(1).map(String::as_str) {
-            Some("api") => {
-                let output = argv
-                    .iter()
-                    .position(|a| a == "--output")
-                    .map(|i| &argv[i + 1])
-                    .expect("--output");
-                fs::write(output, r#"{"number": 7, "state": "open"}"#)?;
-                String::new()
-            }
-            Some("pr") if argv.get(2).map(String::as_str) == Some("view") => self.view.to_owned(),
-            Some("pr") if argv.get(2).map(String::as_str) == Some("checks") => {
-                self.checks.to_owned()
-            }
-            _ => String::new(),
+        let option = |name: &str| {
+            argv.iter()
+                .position(|a| a == name)
+                .map(|i| argv[i + 1].clone())
         };
+        if argv.get(1).map(String::as_str) == Some("api") {
+            let output = option("--output").expect("--output");
+            let path = option("--path").expect("--path");
+            let response = if option("--method").as_deref() != Some("GET") {
+                r#"{"number": 7, "state": "open"}"#.to_owned()
+            } else if path.contains("/pulls/") {
+                if self.view.is_empty() {
+                    open_at(RECORDED_HEAD)
+                } else {
+                    self.view.to_owned()
+                }
+            } else if path.contains("/check-runs") {
+                self.checks.to_owned()
+            } else if path.contains("/status") {
+                self.status.to_owned()
+            } else {
+                anyhow::bail!("no response for {path}");
+            };
+            fs::write(output, response)?;
+        }
         Ok(Exit {
             code: Some(0),
-            stdout,
+            stdout: String::new(),
             stderr: String::new(),
         })
     }
@@ -630,8 +658,9 @@ impl Runner for Recording {
 
 /// The bot-route adapter runs exactly these argument lines, in this order, and nothing else:
 /// the push and the API write through `b10x-gates`, the pull-request body through `scan-text`
-/// before it leaves the machine, and the read-only reads through `gh`. No token appears in
-/// any of them.
+/// before it leaves the machine, and the reads through `b10x-gates api --method GET`, each
+/// response written to a file of its own (`OUT` below). No token appears in any of them, and
+/// no `gh`.
 #[test]
 fn the_bot_route_adapter_runs_these_argument_lines() {
     let tree = scratch("argv");
@@ -639,8 +668,8 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     git(&tree, &["branch", "takt/c1"]);
     let c1 = git(&tree, &["rev-parse", "takt/c1"]);
     let recording = Rc::new(Recording::new(
-        r#"{"mergedAt":null,"state":"OPEN","headRefName":"takt/c1","headRefOid":"abc123","baseRefName":"trunk"}"#,
-        r#"[{"bucket":"pass"},{"bucket":"skipping"}]"#,
+        r#"{"state":"open","merged":false,"head":{"ref":"takt/c1","sha":"0123456789abcdef0123456789abcdef01234567"},"base":{"ref":"trunk"}}"#,
+        r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"skipped"}]}"#,
     ));
     struct Shared(Rc<Recording>);
     impl Runner for Shared {
@@ -681,7 +710,7 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
             state: PullRequestState::Open,
             head: Head {
                 branch: "takt/c1".to_owned(),
-                sha: "abc123".to_owned(),
+                sha: RECORDED_HEAD.to_owned(),
             },
             base: "trunk".to_owned(),
         }
@@ -689,8 +718,30 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     assert_eq!(forge.checks(&tree, number).expect("reads"), Checks::Pass);
     let input = dir.join("pull-request.request.json");
     let output = dir.join("pull-request.response.json");
+    let lines: Vec<String> = recording
+        .lines
+        .borrow()
+        .iter()
+        .map(|line| {
+            if !line.contains(" --method GET ") {
+                return line.clone();
+            }
+            let mut words: Vec<&str> = line.split(' ').collect();
+            let at = words
+                .iter()
+                .position(|w| *w == "--output")
+                .expect("--output");
+            words[at + 1] = "OUT";
+            words.join(" ")
+        })
+        .collect();
+    let read = |path: &str| {
+        format!(
+            "b10x-gates api --method GET --path {path} --output OUT --repository owner/repo --policy policy.yaml"
+        )
+    };
     assert_eq!(
-        recording.lines.borrow().as_slice(),
+        lines.as_slice(),
         [
             format!(
                 "b10x-gates bot -- push https://github.com/owner/repo.git {c1}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
@@ -705,9 +756,14 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
                 input.display(),
                 output.display()
             ),
-            "gh pr view 7 --json state,mergedAt,headRefName,headRefOid,baseRefName --repo owner/repo"
-                .to_owned(),
-            "gh pr checks 7 --json bucket --repo owner/repo".to_owned(),
+            read("/repos/owner/repo/pulls/7"),
+            read("/repos/owner/repo/pulls/7"),
+            read(&format!(
+                "/repos/owner/repo/commits/{RECORDED_HEAD}/check-runs?per_page=100"
+            )),
+            read(&format!(
+                "/repos/owner/repo/commits/{RECORDED_HEAD}/status?per_page=100"
+            )),
         ]
     );
     let sent: serde_json::Value =
@@ -718,40 +774,74 @@ fn the_bot_route_adapter_runs_these_argument_lines() {
     assert_eq!(sent["body"], "the body", "{sent}");
 }
 
-/// What `gh` reports maps onto the three states and the three check results; a reply the
+/// What the API reports maps onto the three states and the three check results; a reply the
 /// adapter cannot read is an error, never a record.
 #[test]
-fn the_bot_route_adapter_reads_states_and_checks_from_gh() {
-    let tree = scratch("gh");
+fn the_bot_route_adapter_reads_states_and_checks_from_the_api() {
+    let tree = scratch("api-reads");
     let read = |view: &'static str, checks: &'static str| {
         let forge = BotRoute::new("owner/repo", None, Box::new(Recording::new(view, checks)));
         (forge.pull_request(&tree, 3), forge.checks(&tree, 3))
     };
     let (state, checks) = read(
-        r#"{"mergedAt":"2026-01-01T00:00:00Z","state":"MERGED","headRefName":"takt/c3","headRefOid":"def","baseRefName":"main"}"#,
-        r#"[{"bucket":"pass"},{"bucket":"pending"}]"#,
+        r#"{"state":"closed","merged":true,"head":{"ref":"takt/c3","sha":"89abcdef0123456789abcdef0123456789abcdef"},"base":{"ref":"main"}}"#,
+        r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"in_progress","conclusion":null}]}"#,
     );
     let view = state.expect("reads");
     assert_eq!(view.state, PullRequestState::Merged);
     assert_eq!(view.head.branch, "takt/c3");
-    assert_eq!(view.head.sha, "def");
+    assert_eq!(view.head.sha, "89abcdef0123456789abcdef0123456789abcdef");
     assert_eq!(checks.expect("reads"), Checks::Pending);
     let (state, checks) = read(
-        r#"{"mergedAt":null,"state":"CLOSED","headRefName":"takt/c3","headRefOid":"def","baseRefName":"main"}"#,
-        r#"[{"bucket":"pass"},{"bucket":"fail"},{"bucket":"pending"}]"#,
+        r#"{"state":"closed","merged":false,"head":{"ref":"takt/c3","sha":"89abcdef0123456789abcdef0123456789abcdef"},"base":{"ref":"main"}}"#,
+        r#"{"total_count":3,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"failure"},{"status":"queued","conclusion":null}]}"#,
     );
     assert_eq!(state.expect("reads").state, PullRequestState::Closed);
     assert_eq!(checks.expect("reads"), Checks::Fail);
-    let (_, checks) = read(r#"{"state":"OPEN"}"#, "[]");
+    let (_, checks) = read("", r#"{"total_count":0,"check_runs":[]}"#);
     assert_eq!(checks.expect("reads"), Checks::Pending);
     // A reply without the head is no reading: the validators check the head before they trust
     // a number.
-    let (state, _) = read(r#"{"mergedAt":null,"state":"OPEN"}"#, "[]");
+    let (state, checks) = read(
+        r#"{"state":"open","merged":false,"base":{"ref":"main"}}"#,
+        r#"{"total_count":0,"check_runs":[]}"#,
+    );
     let error = format!("{:#}", state.expect_err("no head"));
-    assert!(error.contains("headRefName"), "{error}");
+    assert!(error.contains("/head/ref"), "{error}");
+    assert!(checks.is_err(), "no head, no checks read");
+    // A head that is no object id is not put into a path.
+    let (_, checks) = read(
+        r#"{"state":"open","merged":false,"head":{"ref":"takt/c3","sha":"../../x"},"base":{"ref":"main"}}"#,
+        r#"{"total_count":0,"check_runs":[]}"#,
+    );
+    let error = format!("{:#}", checks.expect_err("no object id"));
+    assert!(error.contains("no object id"), "{error}");
     let (state, checks) = read("not json", "not json");
     assert!(state.is_err());
     assert!(checks.is_err());
+    // More check runs than one page lists is no reading of the first page.
+    let (_, checks) = read(
+        "",
+        r#"{"total_count":101,"check_runs":[{"status":"completed","conclusion":"success"}]}"#,
+    );
+    let error = format!("{:#}", checks.expect_err("a second page"));
+    assert!(
+        error.contains("counts 101 check_runs and lists 1"),
+        "{error}"
+    );
+    // A failing status fails whatever the check runs say.
+    let forge = BotRoute::new(
+        "owner/repo",
+        None,
+        Box::new(
+            Recording::new(
+                "",
+                r#"{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}"#,
+            )
+            .with_status(r#"{"state":"failure","total_count":1,"statuses":[{"state":"failure"}]}"#),
+        ),
+    );
+    assert_eq!(forge.checks(&tree, 3).expect("reads"), Checks::Fail);
 }
 
 /// Without a policy file the adapter omits `--policy`; `b10x-gates` reads its own environment.
@@ -1406,23 +1496,31 @@ fn adv_an_api_reply_without_a_number_is_an_error_not_a_pull_request() {
     assert!(error.contains("number"), "{error}");
 }
 
-/// The two `gh` buckets the unit's cases do not reach: `cancel` is a failure, and a bucket the
-/// adapter does not know is an error, never a reading.
+/// The conclusions the unit's cases do not reach: `cancelled` is a failure, and a conclusion
+/// or a status the adapter does not know is an error, never a reading.
 #[test]
-fn adv_a_cancelled_check_fails_and_an_unknown_bucket_is_an_error() {
+fn adv_a_cancelled_check_fails_and_an_unknown_conclusion_is_an_error() {
     let tree = scratch("adv-buckets");
     let read = |checks: &'static str| {
         BotRoute::new("owner/repo", None, Box::new(Recording::new("", checks))).checks(&tree, 3)
     };
     assert_eq!(
-        read(r#"[{"bucket":"pass"},{"bucket":"cancel"}]"#).expect("reads"),
+        read(r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"cancelled"}]}"#)
+            .expect("reads"),
         Checks::Fail
     );
     let error = format!(
         "{:#}",
-        read(r#"[{"bucket":"pass"},{"bucket":"neutral"}]"#).expect_err("unknown bucket")
+        read(r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"mystery"}]}"#)
+            .expect_err("unknown conclusion")
     );
-    assert!(error.contains("neutral"), "{error}");
+    assert!(error.contains("mystery"), "{error}");
+    let error = format!(
+        "{:#}",
+        read(r#"{"total_count":1,"check_runs":[{"status":"sleeping","conclusion":null}]}"#)
+            .expect_err("unknown status")
+    );
+    assert!(error.contains("sleeping"), "{error}");
 }
 
 // Correction round 1 over story:forge-pull-request-evidence: the branch forks from its base,
@@ -1967,39 +2065,18 @@ fn adv2_a_dirty_tree_over_another_cases_branch_is_refused_before_the_case_is_wri
     assert!(first.dir.join("case.yaml").is_file());
 }
 
-/// A runner standing in for `gh pr checks` on a pull request whose head has no check run yet:
-/// exit 1, nothing on stdout, the message on stderr.
-struct NoChecksYet;
-
-impl Runner for NoChecksYet {
-    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-    /// dropped.
-    fn run_env(
-        &self,
-        tree: &std::path::Path,
-        argv: &[String],
-        _: &[(&str, &str)],
-    ) -> anyhow::Result<takt::forge::Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        assert_eq!(argv.get(2).map(String::as_str), Some("checks"), "{argv:?}");
-        Ok(Exit {
-            code: Some(1),
-            stdout: String::new(),
-            stderr: "no checks reported on the 'takt/c1' branch".to_owned(),
-        })
-    }
-}
-
-/// `gh pr checks` on a head no check has been reported for exits 1 with a message and no
-/// JSON; that is the state of every pull request in the seconds after its push, which is when
-/// `ci.read` first runs. The adapter reads it as pending, not as an error that ends the run.
+/// A head no check has been reported for lists no check run and no status, and its combined
+/// state is `pending`; that is the state of every pull request in the seconds after its push,
+/// which is when `ci.read` first runs. The adapter reads it as pending, not as an error that
+/// ends the run.
 #[test]
 fn adv2_no_checks_reported_yet_is_pending_not_an_error() {
     let tree = scratch("adv2-no-checks");
-    let forge = BotRoute::new("owner/repo", None, Box::new(NoChecksYet));
+    let forge = BotRoute::new(
+        "owner/repo",
+        None,
+        Box::new(Recording::new("", r#"{"total_count":0,"check_runs":[]}"#)),
+    );
     let checks = forge.checks(&tree, 7).unwrap_or_else(|error| {
         panic!("no checks reported yet is pending, not an error: {error:#}")
     });

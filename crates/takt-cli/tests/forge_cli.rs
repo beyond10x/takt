@@ -137,7 +137,7 @@ fn takt_without_glab_login(outer: &Path, args: &[&str]) -> (i32, String, String)
     )
 }
 
-/// The bot route pushes under a GitHub App and reads through `gh`: it is a GitHub forge. An
+/// The bot route pushes and reads under a GitHub App: it is a GitHub forge. An
 /// `origin` on another host, or a `file://` URL, must not make it the default; `--forge none`
 /// by default or a refusal in one line are both acceptable, a run that would push and open
 /// there is not. Another host is the forge `gitlab`'s only while `glab` is logged in to it:
@@ -203,8 +203,39 @@ fn adv2_the_forge_bot_refusal_does_not_print_the_origin_credential() {
 /// the bot route by default, as `github.com` does.
 #[test]
 fn adv2_an_origin_host_written_in_upper_case_gets_the_bot_route_by_default() {
-    let (_outer, repo) = repository("upper", "https://GitHub.com/owner/repo.git");
-    let (code, out, err) = takt(&run_args(repo.to_str().expect("utf-8"), "upper"));
+    let (outer, repo) = repository("upper", "https://GitHub.com/owner/repo.git");
+    // The bot route is reachable (story:forge-preflight): a `b10x-gates` double that passes
+    // the commit identity's scan and answers nothing else, and a policy file.
+    let bin = outer.join("stub-bin");
+    fs::create_dir_all(&bin).expect("a stub directory");
+    let gates = bin.join("b10x-gates");
+    fs::write(
+        &gates,
+        "#!/bin/sh\n[ \"$1\" = scan-text ] && exit 0\necho \"b10x-gates double: $*\" >&2\nexit 2\n",
+    )
+    .expect("the double is written");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&gates, fs::Permissions::from_mode(0o755)).expect("executable");
+    }
+    let policy = outer.join("policy.json");
+    fs::write(&policy, "{}\n").expect("a policy file");
+    let mut path = vec![bin];
+    path.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(run_args(repo.to_str().expect("utf-8"), "upper"))
+        .env("PATH", std::env::join_paths(path).expect("a program path"))
+        .env("B10X_GATES_POLICY", &policy)
+        .output()
+        .expect("takt runs");
+    let (code, out, err) = (
+        output.status.code().expect("an exit code"),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    );
     assert!(
         out.contains("forge: bot (owner/repo)"),
         "GitHub.com is github.com: exit {code} stdout {out} stderr {err}"
