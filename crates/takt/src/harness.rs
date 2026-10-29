@@ -293,7 +293,9 @@ pub struct SessionHarness {
     pub api_key_secret: Option<String>,
     /// The repository's instruction files every step is given, as metaharness's `context` names
     /// them: relative paths, each read at the case's base commit and given only when the base
-    /// tracks it ([`instruction_files`]). [`DEFAULT_INSTRUCTION_FILES`] unless configured.
+    /// tracks it ([`instruction_files`]). Empty, the default, gives
+    /// [`DEFAULT_INSTRUCTION_FILES`]; a list here is configured, and a Codex step is given a
+    /// `CLAUDE.md` it names beside any `AGENTS.md` ([`codex_instruction_files`]).
     pub context: Vec<String>,
     /// For `Kind::B10x` on an environment variable's key, the file its value is staged in,
     /// which the endpoint's `token_file` names ([`Self::hold_staged`]); held as long as the
@@ -376,10 +378,7 @@ impl SessionHarness {
             .to_owned(),
             endpoint: None,
             api_key_secret: None,
-            context: DEFAULT_INSTRUCTION_FILES
-                .iter()
-                .map(|path| (*path).to_owned())
-                .collect(),
+            context: Vec::new(),
             staged: None,
             credential: None,
             home: None,
@@ -728,7 +727,14 @@ impl Harness for SessionHarness {
     }
 
     fn instruction_paths(&self) -> Vec<String> {
-        self.context.clone()
+        if self.context.is_empty() {
+            DEFAULT_INSTRUCTION_FILES
+                .iter()
+                .map(|path| (*path).to_owned())
+                .collect()
+        } else {
+            self.context.clone()
+        }
     }
 
     /// b10x-harness's endpoint as its sessions are pointed at it, `--model` over the
@@ -862,7 +868,9 @@ impl Harness for SessionHarness {
         // step's copy of the tree says now: given to every kind. One that cannot be given is
         // named and the step is refused, never run without it.
         let instructions = match context.base_revision {
-            Some(at) => instruction_files(context.tree, at, &self.context, scan.as_ref()),
+            Some(at) => {
+                instruction_files(context.tree, at, &self.instruction_paths(), scan.as_ref())
+            }
             None => InstructionFiles::default(),
         };
         if !instructions.left_out.is_empty() {
@@ -882,22 +890,37 @@ impl Harness for SessionHarness {
         let mut executor =
             loom_sdk::session::SessionExecutor::new(context.tree, Vec::new(), String::new())
                 .of_kind(self.kind);
+        // The files the session's copy is made of, read before the step decides what it is
+        // given, so what Codex loads from the copy is judged on the files the copy holds.
+        let copied = Self::copied(context.tree)?;
         // Codex reads no `@<path>` as a file, so its session is given the instruction files and
         // the scope files as context files ([`context_files_after`]), the scope files as many as
         // fit beside its prompt in the one argument metaharness starts its child with, the
         // prompt composed afresh for each list tried; Claude Code has its mention line for the
         // scope files, and b10x-harness none, and both are given the instruction files alone.
+        // Of the instruction files, a Codex step is given no `AGENTS.md` that Codex loads itself
+        // from the copy at the base's bytes ([`codex_loads_agents_md`]), and, unless the files
+        // are configured, no `CLAUDE.md` beside an `AGENTS.md` that says nothing the `AGENTS.md`
+        // does not ([`codex_instruction_files`]); every one stays in the opening record's
+        // `instructions`.
+        let mut agents_left_to_codex = None;
         let given = if self.kind == Kind::Codex {
+            let (codex_instructions, left) = codex_instruction_files(
+                context.tree,
+                &copied,
+                &instructions.given,
+                !self.context.is_empty(),
+            );
+            agents_left_to_codex = left;
             let fit =
                 |files: &[DeclaredContextFile]| codex_prompt_argument(&prompt_for(files), files);
-            if !instructions.given.is_empty()
+            if !codex_instructions.is_empty()
                 && !loom_sdk::session::metaharness::protocol::argument_fits(&fit(
-                    &instructions.given
+                    &codex_instructions,
                 ))
             {
                 return Err(anyhow::Error::new(InstructionFilesRefused(
-                    instructions
-                        .given
+                    codex_instructions
                         .iter()
                         .map(|file| {
                             format!(
@@ -908,13 +931,14 @@ impl Harness for SessionHarness {
                         .collect(),
                 )));
             }
-            context_files_after(
+            let withheld: Vec<&str> = instructions.given.iter().map(|file| file.path()).collect();
+            scope_context_files(
                 context.tree,
                 context.intent,
                 context.change,
                 scan.as_ref(),
                 &fit,
-                &instructions.given,
+                (&codex_instructions, &withheld),
             )
         } else {
             instructions.given.clone()
@@ -961,7 +985,7 @@ impl Harness for SessionHarness {
         let mut opening = opening.to_string().into_bytes();
         opening.push(b'\n');
         *self.transcript.borrow_mut() = Some(opening.clone());
-        executor.files = Self::copied(context.tree)?;
+        executor.files = copied;
         executor.model.clone_from(&self.model);
         executor.max_turns = (self.kind != Kind::Codex).then_some(self.max_turns);
         executor.endpoint.clone_from(&self.endpoint);
@@ -1064,6 +1088,13 @@ impl Harness for SessionHarness {
             turns: report.turns,
             started_at: Some(started_at),
         });
+        // An `AGENTS.md` left out for Codex to load itself, which its rollout shows it did not
+        // load: the step is refused, whatever it proposed.
+        if let Some(base) = &agents_left_to_codex
+            && codex_loaded_agents_md(&report.transcript, base) == Some(false)
+        {
+            return Err(anyhow::Error::new(InstructionsNotLoaded));
+        }
         let proposal = match loom_sdk::session::Proposal::from_outcome(&outcome) {
             Some(Ok(proposal)) => proposal,
             Some(Err(why)) => bail!("the session's proposal does not read: {why}"),
@@ -1691,9 +1722,18 @@ pub const CHANGE_SHOWN_BYTES: usize = 8 << 10;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChangeSoFar {
     /// The diff from the case's `base_commit` to `HEAD` over the paths its accepted judgement
-    /// steps committed, every control but a line end and a tab replaced ([`Self::shown`]); and
-    /// whether each file that is not a test path is shown whole (every test file, and every
-    /// file when not, as its changed lines with 3 around each).
+    /// steps committed, every control but a line end and a tab replaced ([`Self::shown`]), with
+    /// every file shown whole, test files too: the diff the prompt shows while it is within
+    /// [`CHANGE_SHOWN_BYTES`].
+    ShownWhole { diff: String },
+    /// The same diff with every file shown whole but the test files `hunks` names, which lie
+    /// outside the intent's scope and show their changed lines with 3 around each: the diff the
+    /// prompt shows while it is within [`CHANGE_SHOWN_BYTES`] when the step's scope leaves a
+    /// changed test file out.
+    ShownWholeBut { diff: String, hunks: Vec<String> },
+    /// The same diff past the bound whole ([`Self::ShownWhole`]); and whether each file that is
+    /// not a test path is shown whole (every test file, and every file when not, as its changed
+    /// lines with 3 around each).
     Shown { diff: String, whole: bool },
     /// No accepted step has committed a path, or the paths are as they were at the base.
     NoneYet,
@@ -1714,7 +1754,39 @@ impl ChangeSoFar {
     /// model.
     #[must_use]
     pub fn shown(bytes: &[u8], whole: bool) -> Self {
-        let diff: String = String::from_utf8_lossy(bytes)
+        Self::Shown {
+            diff: Self::readable(bytes),
+            whole,
+        }
+    }
+
+    /// The diff `bytes` with every file shown whole ([`Self::ShownWhole`]), made readable as
+    /// [`Self::shown`] makes it.
+    #[must_use]
+    pub fn shown_whole(bytes: &[u8]) -> Self {
+        Self::ShownWhole {
+            diff: Self::readable(bytes),
+        }
+    }
+
+    /// The diff `bytes` with every file shown whole but the test files `hunks` names
+    /// ([`Self::ShownWholeBut`]), made readable as [`Self::shown`] makes it; with none named,
+    /// [`Self::shown_whole`].
+    #[must_use]
+    pub fn shown_whole_but(bytes: &[u8], hunks: Vec<String>) -> Self {
+        if hunks.is_empty() {
+            return Self::shown_whole(bytes);
+        }
+        Self::ShownWholeBut {
+            diff: Self::readable(bytes),
+            hunks,
+        }
+    }
+
+    /// `bytes` as text: invalid UTF-8 replaced, and every control character but `\n` and `\t`
+    /// replaced by U+FFFD.
+    fn readable(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes)
             .chars()
             .map(|c| {
                 if c.is_control() && c != '\n' && c != '\t' {
@@ -1723,8 +1795,7 @@ impl ChangeSoFar {
                     c
                 }
             })
-            .collect();
-        Self::Shown { diff, whole }
+            .collect()
     }
 
     /// The block the prompt holds for it. A diff is labelled as the complete change and as
@@ -1734,18 +1805,34 @@ impl ChangeSoFar {
         let limit = CHANGE_SHOWN_BYTES;
         const LABEL: &str = "The change this case has made so far";
         match self {
-            Self::Shown { diff, whole } => {
+            Self::ShownWhole { diff }
+            | Self::ShownWholeBut { diff, .. }
+            | Self::Shown { diff, .. } => {
                 let longest = diff.split(|c| c != '`').map(str::len).max().unwrap_or(0);
                 let fence = "`".repeat(longest.max(2) + 1);
                 let end = if diff.ends_with('\n') { "" } else { "\n" };
-                let shows = if *whole {
-                    "Each file that is not a test is shown whole, as it is now; each test file \
-                     shows its changed lines with 3 around each; every line and file not shown \
-                     is as at the commit it forked from, so no file needs reading to know the \
-                     change."
-                } else {
-                    "Each file shows its changed lines with 3 around each; every line and file \
-                     not shown is as at the commit it forked from."
+                let shows = match self {
+                    Self::ShownWhole { .. } => {
+                        "Each file is shown whole, as it is now, test files too; every file not \
+                         shown is as at the commit it forked from, so no file needs reading to \
+                         know the change."
+                    }
+                    Self::ShownWholeBut { .. } => {
+                        "Each file is shown whole, as it is now, but each test file outside the \
+                         intent's scope, which shows its changed lines with 3 around each; every \
+                         line and file not shown is as at the commit it forked from, so no file in \
+                         scope needs reading to know the change."
+                    }
+                    Self::Shown { whole: true, .. } => {
+                        "Each file that is not a test is shown whole, as it is now; each test file \
+                         shows its changed lines with 3 around each; every line and file not \
+                         shown is as at the commit it forked from, so no file needs reading to \
+                         know the change."
+                    }
+                    _ => {
+                        "Each file shows its changed lines with 3 around each; every line and file \
+                         not shown is as at the commit it forked from."
+                    }
                 };
                 format!(
                     "\n{LABEL}: the complete diff from the commit it forked from to now, over the \
@@ -1883,9 +1970,25 @@ pub fn context_files_after(
     argument: &dyn Fn(&[DeclaredContextFile]) -> String,
     instructions: &[DeclaredContextFile],
 ) -> Vec<DeclaredContextFile> {
+    scope_context_files(tree, intent, change, scan, argument, (instructions, &[]))
+}
+
+/// [`context_files_after`], given `instructions` and, of the scope files, none that
+/// `instructions` or `withheld` names: the repository's instruction files a Codex step is not
+/// given ([`codex_instruction_files`]), which no scope line gives it either.
+fn scope_context_files(
+    tree: &Path,
+    intent: &str,
+    change: &ChangeSoFar,
+    scan: Option<&crate::scan::gates::ChangeScan>,
+    argument: &dyn Fn(&[DeclaredContextFile]) -> String,
+    (instructions, withheld): (&[DeclaredContextFile], &[&str]),
+) -> Vec<DeclaredContextFile> {
     let named: Vec<&str> = scope_paths(intent)
         .into_iter()
-        .filter(|path| !instructions.iter().any(|file| file.path() == *path))
+        .filter(|path| {
+            !instructions.iter().any(|file| file.path() == *path) && !withheld.contains(path)
+        })
         .collect();
     let spent = (
         instructions.len(),
@@ -1920,6 +2023,175 @@ pub fn context_files_after(
 /// The instruction files a step is given when none is configured: the repository's `AGENTS.md`
 /// and `CLAUDE.md`, each only when the case's base tracks it.
 pub const DEFAULT_INSTRUCTION_FILES: [&str; 2] = ["AGENTS.md", "CLAUDE.md"];
+
+/// The instruction file Codex loads itself from its working directory, the session's copy.
+const AGENTS_MD: &str = "AGENTS.md";
+
+/// The file that, in a directory, Codex loads in place of [`AGENTS_MD`].
+const AGENTS_OVERRIDE_MD: &str = "AGENTS.override.md";
+
+/// Claude Code's instruction file, which Codex does not read.
+const CLAUDE_MD: &str = "CLAUDE.md";
+
+/// The most bytes of project instructions Codex loads (its `project_doc_max_bytes`, 32 KiB by
+/// default); past it, it loads them cut.
+pub const CODEX_PROJECT_DOC_BYTES: u64 = 32 << 10;
+
+/// The instruction files `given` (read at the case's base, [`instruction_files`]) a Codex step
+/// in `tree`, whose session's copy is made of the files `copied` lists, is given as context
+/// files, and the base's text of the `AGENTS.md` left for Codex to load, if one is. Left out:
+/// an `AGENTS.md` Codex loads whole from the copy at the base's bytes
+/// ([`codex_loads_agents_md`]), since Codex puts it ahead of the session's input itself; and,
+/// unless the instruction files are `configured` by name, a `CLAUDE.md` beside an `AGENTS.md`,
+/// given or loaded, that says nothing the `AGENTS.md` does not ([`claude_md_adds_nothing`]),
+/// which Codex does not read and which would give it the same instructions twice. Every other
+/// `CLAUDE.md` is given: one with a rule of its own, one that is the only instruction file, and
+/// one the run's configuration names.
+fn codex_instruction_files(
+    tree: &Path,
+    copied: &[String],
+    given: &[DeclaredContextFile],
+    configured: bool,
+) -> (Vec<DeclaredContextFile>, Option<String>) {
+    let agents = given.iter().find(|file| file.path() == AGENTS_MD);
+    let left = agents
+        .filter(|file| codex_loads_agents_md(tree, copied, file.text()))
+        .map(|file| file.text().to_owned());
+    let kept = given
+        .iter()
+        .filter(|file| match file.path() {
+            AGENTS_MD => left.is_none(),
+            CLAUDE_MD => {
+                configured
+                    || !agents
+                        .is_some_and(|agents| claude_md_adds_nothing(file.text(), agents.text()))
+            }
+            _ => true,
+        })
+        .cloned()
+        .collect();
+    (kept, left)
+}
+
+/// The most bytes a `CLAUDE.md` holds that is only a pointer to `AGENTS.md`.
+const CLAUDE_MD_POINTER_BYTES: usize = 200;
+
+/// The words a line of a `CLAUDE.md` that only points at `AGENTS.md` may hold beside it
+/// ([`pointer_line`]).
+const CLAUDE_MD_POINTER_WORDS: [&str; 12] = [
+    "read",
+    "see",
+    "follow",
+    "refer",
+    "to",
+    "the",
+    "in",
+    "and",
+    "its",
+    "instructions",
+    "file",
+    "rules",
+];
+
+/// Whether a `CLAUDE.md` whose text is `claude` says nothing the `AGENTS.md` whose text is
+/// `agents` does not: its text, white space at its ends aside, is in `agents` whole; or it is
+/// only a pointer to `AGENTS.md`, under [`CLAUDE_MD_POINTER_BYTES`], with a line that is not
+/// blank and every such line a pointer line ([`pointer_line`]). In doubt it is given: a
+/// duplicate costs a few bytes, a rule left out is lost to the step.
+fn claude_md_adds_nothing(claude: &str, agents: &str) -> bool {
+    let trimmed = claude.trim();
+    let pointer = claude.len() < CLAUDE_MD_POINTER_BYTES
+        && !trimmed.is_empty()
+        && claude
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .all(pointer_line);
+    pointer || (!trimmed.is_empty() && agents.contains(trimmed))
+}
+
+/// Whether `line` only points at `AGENTS.md`: it names it, and what is left once every
+/// `AGENTS.md` is taken out, split at each character that is not a letter or a digit (a
+/// backtick, an `@`, punctuation), is words of [`CLAUDE_MD_POINTER_WORDS`] alone, in any case.
+/// `Read `AGENTS.md`.` is one; `Follow AGENTS.md. Never edit the vendored directory.` is not.
+fn pointer_line(line: &str) -> bool {
+    line.contains(AGENTS_MD)
+        && line
+            .replace(AGENTS_MD, " ")
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|word| !word.is_empty())
+            .all(|word| {
+                CLAUDE_MD_POINTER_WORDS
+                    .iter()
+                    .any(|kept| kept.eq_ignore_ascii_case(word))
+            })
+}
+
+/// Whether Codex, started in the session's copy of `tree` made of the files `copied` lists
+/// ([`SessionHarness::copied`]), loads [`AGENTS_MD`] from it whole at the bytes `base` holds:
+/// the copy holds it, as the regular file the copy is made from, with exactly `base`'s bytes,
+/// at most [`CODEX_PROJECT_DOC_BYTES`] of them and not all white space, and holds no
+/// [`AGENTS_OVERRIDE_MD`], which Codex would load in its place.
+fn codex_loads_agents_md(tree: &Path, copied: &[String], base: &str) -> bool {
+    copied.iter().any(|path| path == AGENTS_MD)
+        && !copied.iter().any(|path| path == AGENTS_OVERRIDE_MD)
+        && !base.trim().is_empty()
+        && read_plain(&tree.join(AGENTS_MD), CODEX_PROJECT_DOC_BYTES)
+            .is_some_and(|bytes| bytes == base.as_bytes())
+}
+
+/// Whether a Codex session's rollout (its `transcript`, one JSON line an event) shows it loaded
+/// the `AGENTS.md` whose text is `base`: true when a user message it records holds a text that
+/// opens with Codex's `# AGENTS.md instructions` block and holds `base` (white space at its
+/// ends aside); false when it records a user message and none does; none when it records no
+/// user message, so what the session was given cannot be read from it (the events metaharness
+/// writes when it kept no rollout carry the input as an opaque digest).
+#[must_use]
+pub fn codex_loaded_agents_md(transcript: &[u8], base: &str) -> Option<bool> {
+    let base = base.trim();
+    let mut seen = false;
+    for line in String::from_utf8_lossy(transcript).lines() {
+        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let payload = &event["payload"];
+        if event["type"] != "response_item"
+            || payload["type"] != "message"
+            || payload["role"] != "user"
+        {
+            continue;
+        }
+        seen = true;
+        if payload["content"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|item| item["text"].as_str())
+            .any(|text| text.starts_with("# AGENTS.md instructions") && text.contains(base))
+        {
+            return Some(true);
+        }
+    }
+    seen.then_some(false)
+}
+
+/// The cause of a Codex step refused after its session: takt left `AGENTS.md` out of its
+/// context files for Codex to load from the session's copy ([`codex_loads_agents_md`]), and the
+/// session's rollout shows it did not ([`codex_loaded_agents_md`]). The run stops with it
+/// ([`crate::run::Stop::StepRefused`]), the session's change discarded and its tokens charged.
+#[derive(Debug)]
+pub struct InstructionsNotLoaded;
+
+impl std::fmt::Display for InstructionsNotLoaded {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "the Codex session did not load AGENTS.md: takt left it out of the step's context \
+             files for Codex to load from the session's copy, and the session's rollout records \
+             its input without the file in a `# AGENTS.md instructions` block",
+        )
+    }
+}
+
+impl std::error::Error for InstructionsNotLoaded {}
 
 /// The instruction files read at a revision ([`instruction_files`]).
 #[derive(Debug, Clone, Default)]
@@ -2146,7 +2418,7 @@ const _: () = assert!(
 
 /// The spans the intent's `## Scope` section holds in backticks, in order: the lines after a
 /// line `## Scope` up to the next heading of level 1 or 2.
-fn scope_paths(intent: &str) -> Vec<&str> {
+pub(crate) fn scope_paths(intent: &str) -> Vec<&str> {
     let mut inside = false;
     let mut spans = Vec::new();
     for line in intent.lines() {
@@ -2240,17 +2512,53 @@ fn indexed(tree: &Path, paths: &[&str]) -> Result<Vec<String>> {
         .collect())
 }
 
-/// The paths the change so far shows whole ([`ChangeSoFar::Shown`] with `whole`): each file of
-/// its diff that is not a test path, read from its `diff --git a/<path> b/<path>` lines.
+/// The paths the change so far shows whole, read from its diff's sections, each opened by a
+/// `diff --git ` line, and counted only when that names an unquoted `a/<path> b/<path>` pair
+/// of one path: each file of it under [`ChangeSoFar::ShownWhole`], test
+/// files too; each but the test files it names under [`ChangeSoFar::ShownWholeBut`]; each that
+/// is not a test path under [`ChangeSoFar::Shown`] with `whole`. A file counts only when its
+/// section shows its text, a `@@` hunk (a binary file shown as differing, or one whose mode
+/// alone changed, shows none), and shows it as it is, with no U+FFFD (a carriage return, any
+/// other control and invalid UTF-8 are replaced by one, [`ChangeSoFar::shown`]): such a file is
+/// given as a mention or a context file as it would be with no change shown.
 fn shown_whole(change: &ChangeSoFar) -> Vec<&str> {
-    let ChangeSoFar::Shown { diff, whole: true } = change else {
-        return Vec::new();
+    let (diff, counts): (&str, &dyn Fn(&str) -> bool) = match change {
+        ChangeSoFar::ShownWhole { diff } => (diff, &|_| true),
+        ChangeSoFar::ShownWholeBut { diff, hunks } => {
+            (diff, &|path| !hunks.iter().any(|kept| kept == path))
+        }
+        ChangeSoFar::Shown { diff, whole: true } => (diff, &|path| !is_test_path(path)),
+        _ => return Vec::new(),
     };
-    diff.lines()
-        .filter_map(|line| {
-            let (a, b) = line.strip_prefix("diff --git a/")?.split_once(" b/")?;
-            (a == b && !is_test_path(b)).then_some(b)
-        })
+    // Each section: its path, and whether a hunk was seen; none once a line of it holds U+FFFD,
+    // and none from its header on when that is not an unquoted `a/<path> b/<path>` pair (git
+    // quotes a path with a byte past ASCII, a quote or a control).
+    let mut sections: Vec<Option<(&str, bool)>> = Vec::new();
+    for line in diff.lines() {
+        if let Some(header) = line.strip_prefix("diff --git ") {
+            sections.push(
+                header
+                    .strip_prefix("a/")
+                    .filter(|header| !header.contains('"'))
+                    .and_then(|header| header.split_once(" b/"))
+                    .filter(|(a, b)| a == b)
+                    .map(|(_, b)| (b, false)),
+            );
+        } else if let Some(section) = sections.last_mut() {
+            if line.contains(char::REPLACEMENT_CHARACTER) {
+                *section = None;
+            } else if let Some((_, hunk)) = section
+                && line.starts_with("@@")
+            {
+                *hunk = true;
+            }
+        }
+    }
+    sections
+        .into_iter()
+        .flatten()
+        .filter(|(path, hunk)| *hunk && counts(path))
+        .map(|(path, _)| path)
         .collect()
 }
 
@@ -5191,6 +5499,57 @@ mod tests {
             ),
             ["todo.py", "tests/test_todo.py"]
         );
+        assert_eq!(
+            scope_files(
+                &dir.0,
+                None,
+                &intent,
+                &ChangeSoFar::shown_whole_but(
+                    diff.as_bytes(),
+                    vec!["tests/test_todo.py".to_owned()]
+                ),
+                None
+            ),
+            ["tests/test_todo.py"]
+        );
+        assert_eq!(
+            scope_files(
+                &dir.0,
+                None,
+                &intent,
+                &ChangeSoFar::shown_whole(diff.as_bytes()),
+                None
+            ),
+            Vec::<String>::new()
+        );
+    }
+
+    /// Of a change so far shown whole, a file counts as shown only when its section shows a
+    /// hunk with no U+FFFD in it: a binary file shown as differing, a change of mode alone and a
+    /// file whose text holds a carriage return are attached as with no change shown, and so is a
+    /// file before a section git opened with a quoted path, whose hunk is not that file's.
+    #[test]
+    fn a_file_the_change_so_far_does_not_show_as_it_is_is_attached() {
+        let dir = scratch("not-as-it-is");
+        committed(&dir.0, &[TODO, TESTS]);
+        let diff = "diff --git a/tests/test_todo.py b/tests/test_todo.py\n\
+                    Binary files a/tests/test_todo.py and b/tests/test_todo.py differ\n\
+                    diff --git a/todo.py b/todo.py\nold mode 100644\nnew mode 100755\n";
+        let intent = scoped(&["todo.py", "tests/test_todo.py"]);
+        let attached =
+            |diff: &[u8]| scope_files(&dir.0, None, &intent, &ChangeSoFar::shown_whole(diff), None);
+        assert_eq!(attached(diff.as_bytes()), ["todo.py", "tests/test_todo.py"]);
+        let crlf = b"diff --git a/todo.py b/todo.py\n--- a/todo.py\n+++ b/todo.py\n\
+                     @@ -1 +1 @@\n-def add(): pass\r\n+def add(): return 1\r\n";
+        assert_eq!(attached(crlf), ["todo.py", "tests/test_todo.py"]);
+        let lf = b"diff --git a/todo.py b/todo.py\n--- a/todo.py\n+++ b/todo.py\n\
+                   @@ -1 +1 @@\n-def add(): pass\n+def add(): return 1\n";
+        assert_eq!(attached(lf), ["tests/test_todo.py"]);
+        let quoted = b"diff --git a/todo.py b/todo.py\n\
+                       Binary files a/todo.py and b/todo.py differ\n\
+                       diff --git \"a/tests/\\303\\274.py\" \"b/tests/\\303\\274.py\"\n\
+                       @@ -1 +1 @@\n-one\n+two\n";
+        assert_eq!(attached(quoted), ["todo.py", "tests/test_todo.py"]);
     }
 
     /// The prompt names each attached file as an unquoted, relative mention after white space,
@@ -6070,9 +6429,24 @@ mod tests {
         let harness = harness.with_runner(move || {
             Box::new(ScriptedRunner::of_lines(Vec::<String>::new(), kept.clone()))
         });
+        // A Codex step is not given an `AGENTS.md` its copy holds at the base's bytes, since
+        // Codex loads it itself (`tests/step_context.rs`); these tests measure the files given
+        // with it among them, so the copy's differs from the base's by one byte, not in size,
+        // while the step runs.
+        let agents = tree.join(AGENTS.0);
+        let diverged =
+            kind == Kind::Codex && std::fs::read(&agents).is_ok_and(|bytes| bytes == AGENTS.1);
+        if diverged {
+            let mut edited = AGENTS.1.to_vec();
+            edited[0] = b'%';
+            std::fs::write(&agents, edited).expect("an edit");
+        }
         in_context(tree, intent, |context| {
             let _ = harness.step(context);
         });
+        if diverged {
+            std::fs::write(&agents, AGENTS.1).expect("put back");
+        }
         let transcript = harness.last_transcript().expect("the step kept its prompt");
         let first = transcript
             .split(|byte| *byte == b'\n')
@@ -6484,7 +6858,9 @@ mod tests {
             "todo.py",
         ]);
         let shown = ChangeSoFar::Shown {
-            diff: "diff --git a/shown.rs b/shown.rs\n+fn s() {}\n".to_owned(),
+            diff: "diff --git a/shown.rs b/shown.rs\n--- a/shown.rs\n+++ b/shown.rs\n\
+                   @@ -0,0 +1 @@\n+fn s() {}\n"
+                .to_owned(),
             whole: true,
         };
         assert_eq!(

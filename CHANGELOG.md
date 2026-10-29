@@ -17,6 +17,12 @@ takt's releases.
 - The container image ships b10x-harness 0.22.0.
 - A run started without `--confinement` says it got `none` as the default, on its `case` line and in its `opened` event, instead of naming a flag nobody passed.
 - Library: `confinement::Unconfined` carries its reason (`Unconfined::new(flag_given)`), and `confinement::check_none` takes whether the flag was given and returns the adapter to install.
+- A Codex step is not given an `AGENTS.md` Codex loads itself from the session's copy at the base's bytes.
+- Beside an `AGENTS.md`, a Codex step is not given a `CLAUDE.md` that only points at it or whose text it holds; any other `CLAUDE.md` is still given.
+- A Codex step whose rollout shows Codex did not load that `AGENTS.md` stops `StepRefused`.
+- The change so far shows every file whole within its 8 KiB bound, test files in the intent's scope too, so such a test file is no longer given again as a context file.
+- A test file outside the scope keeps its changed lines; past the bound the change falls back as before.
+- A file the change so far shows without its text as it is (binary, mode only, a carriage return) is still given as a context file or a mention.
 
 ### Fixed
 

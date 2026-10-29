@@ -464,7 +464,8 @@ pub fn rebuilt_prompt_line(
 }
 
 /// The change so far the step `start` describes was shown, read by the code a run reads it with
-/// ([`crate::run::change_so_far`]): the `base_commit` of the case's `branch.yaml` in `case_dir`,
+/// ([`crate::run::change_so_far_for`], under the case's intent): the `base_commit` of the case's
+/// `branch.yaml` in `case_dir`,
 /// the paths the `effect` lines of its record up to the step name, the diff to `revision`, the
 /// revision the step started at, in the repository of `tree`, under the scan the environment
 /// names ([`ChangeScan::from_env`]), as a run under the same environment scans it. What a run
@@ -477,11 +478,11 @@ fn change_of(start: &Start, case_dir: &Path, tree: &Path, revision: &str) -> Res
             .filter_map(|line| serde_json::from_slice(line).ok())
             .collect())
     };
-    crate::run::change_so_far(
+    crate::run::change_so_far_for(
         tree,
         case_dir,
         record,
-        Some(revision),
+        (Some(revision), Some(&start.intent)),
         ChangeScan::from_env().as_ref(),
         &mut std::io::sink(),
     )

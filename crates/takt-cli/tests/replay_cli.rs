@@ -462,8 +462,9 @@ fn a_case_copied_out_of_its_repository_replays_with_repo_as_recorded() {
 
 /// story:step-spends-a-request-reading-its-scope-files: a replay of a step whose intent names
 /// scope files is given the files its recorded step was given, read in the tree as it was at
-/// the revision the step started at. Step 2 was given `notes.py`, step 4 `notes.py` and the
-/// `tests/work.txt` step 2 committed; `later.py` came after the run. A commit after the run
+/// the revision the step started at. Steps 2 and 4 were given `notes.py`; step 4 is shown the
+/// `tests/work.txt` step 2 committed whole in the change so far, so it is not given it again;
+/// `later.py` came after the run. A commit after the run
 /// removes `notes.py` and adds `later.py`, and a replay of each step is `as recorded`, exit 0,
 /// its record saying so.
 #[test]
@@ -471,21 +472,25 @@ fn a_replay_after_a_commit_attaches_the_scope_files_as_recorded() {
     let scratch = Scratch::new("scope-files");
     let intent = "probe the replay\n\n## Scope\n\n- `notes.py` (the notes)\n- `tests/work.txt`\n- `later.py`\n";
     let rec = recorded_with(&scratch.0, intent, &[("notes.py", "notes\n")]);
-    for (step, attached) in [
-        (2, "\n\nFiles in scope, attached: @notes.py\n\n"),
-        (
-            4,
-            "\n\nFiles in scope, attached: @notes.py @tests/work.txt\n\n",
-        ),
-    ] {
+    for step in [2, 4] {
         let first = recorded_first_line(&rec, step);
         let line: serde_json::Value = serde_json::from_str(&first).expect("the prompt line reads");
         let recorded_prompt = line["prompt"].as_str().expect("a prompt");
         assert!(
-            recorded_prompt.contains(attached),
+            recorded_prompt.contains("\n\nFiles in scope, attached: @notes.py\n\n"),
             "step {step} was given its scope files: {recorded_prompt}"
         );
     }
+    // story:codex-step-gets-each-file-once: step 4 is shown `tests/work.txt` whole in the
+    // change so far, so it is not attached again.
+    let first = recorded_first_line(&rec, 4);
+    let line: serde_json::Value = serde_json::from_str(&first).expect("the prompt line reads");
+    let recorded_prompt = line["prompt"].as_str().expect("a prompt");
+    assert!(
+        recorded_prompt.contains("\ndiff --git a/tests/work.txt b/tests/work.txt\n")
+            && recorded_prompt.contains("test files too"),
+        "step 4 was shown tests/work.txt whole: {recorded_prompt}"
+    );
     git(&rec.repo, &["rm", "-q", "notes.py"]);
     fs::write(rec.repo.join("later.py"), "later\n").expect("a file");
     git(&rec.repo, &["add", "later.py"]);
