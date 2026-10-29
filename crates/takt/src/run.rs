@@ -243,21 +243,8 @@ fn code_changed(tree: &Path, from: &str, to: &str, written: &BTreeSet<String>) -
             );
         }
         for path in test_paths {
-            let out = std::process::Command::new("git")
-                .args(["show", &format!("{to}:{path}")])
-                .current_dir(tree)
-                .output()
-                .ok()?;
-            if !out.status.success() {
-                continue;
-            }
-            if paths.iter().any(|path| {
-                // A directory named in a test also names the files underneath it.
-                // Match against the revision's test content, not the working tree.
-                // A path continuation is not a boundary after a name.
-                // Relative prefixes may precede the repository-relative path.
-                names_doc_path(&out.stdout, path)
-            }) {
+            let content = crate::git::blob(tree, &format!("{to}:{path}")).ok()?;
+            if paths.iter().any(|path| names_doc_path(&content, path)) {
                 return Some(true);
             }
         }

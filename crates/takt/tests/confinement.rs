@@ -6,7 +6,8 @@
 //!
 //! - No source under any crate's `src/` but the seam starts a process, or imports or reaches a
 //!   way to (`std::process::Command`, `CommandExt`, `libc` and `nix` spawns, process crates);
-//!   the CLI's one test module excepted, the rest of it read.
+//!   the CLI's one test module excepted, the rest of it read, and a `#[cfg(test)]` module read
+//!   from a crate's `tests/support/` read as a source itself.
 //! - An adapter that refuses every program: the run starts no process, writes no evidence
 //!   record and stops with the refusal named; the harness's program is refused at its own spawn.
 //! - Under Substrate the test command of a scratch crate writes the record it writes under
@@ -480,6 +481,15 @@ fn run(tree: &Scratch, command: &str, harness: &dyn Harness) -> Ran {
 //
 // In an excepted file it skips exactly its one `#[cfg(test)] mod tests { … }`, brace-balanced,
 // and reads the rest.
+//
+// One `#[path = "P"] mod name;` it reads instead of flagging, a support module: outside any
+// block, parenthesis or bracket (so no macro's input), `P` a plain string literal, gated
+// `#[cfg(test)]` right before or right after the `#[path]`, and `P`, relative to the declaring
+// file's directory as `rustc` reads it there, a file under some crate's `tests/support/` among
+// the workspace's crates, reached through no link. The scan then reads that file as a source
+// with no exception, at its real path. In it, the gate it was reached through holds: a support
+// module it declares needs no gate of its own but must be one, and every other `mod <token>;`
+// (a name, `r#name`, a macro's `$name`) is flagged, since the scan would not read that file.
 
 /// The paths that start a process or a child, or modules of nothing else.
 const WATCHED: &[&str] = &[
@@ -662,12 +672,20 @@ fn code(text: &str) -> String {
 /// `text` with its white space dropped where a token does not need it, and the line each byte
 /// came from.
 fn squeezed(text: &str) -> (String, Vec<usize>) {
+    let (flat, lines, _) = squeezed_at(text);
+    (flat, lines)
+}
+
+/// `squeezed`, and the index among `text`'s characters of the one each byte came from; `code`
+/// keeps every character where it was, so that is its index in the source too.
+fn squeezed_at(text: &str) -> (String, Vec<usize>, Vec<usize>) {
     let punct = |c: char| ":{},;()<>[]*&=".contains(c);
     let mut flat = String::new();
     let mut lines = Vec::new();
+    let mut chars = Vec::new();
     let mut line = 1;
     let mut space = false;
-    for c in text.chars() {
+    for (k, c) in text.chars().enumerate() {
         if c.is_whitespace() {
             if c == '\n' {
                 line += 1;
@@ -678,12 +696,14 @@ fn squeezed(text: &str) -> (String, Vec<usize>) {
         if space && !flat.is_empty() && !punct(c) && !flat.ends_with(punct) {
             flat.push(' ');
             lines.push(line);
+            chars.push(k);
         }
         space = false;
         flat.push(c);
         lines.extend(std::iter::repeat_n(line, c.len_utf8()));
+        chars.extend(std::iter::repeat_n(k, c.len_utf8()));
     }
-    (flat, lines)
+    (flat, lines, chars)
 }
 
 /// The tokens of a squeezed `use` tree: words, `::` and single marks.
@@ -789,6 +809,12 @@ fn span(flat: &str, open: usize, marks: (char, char)) -> Option<std::ops::Range<
 
 /// The lines of the squeezed code `flat` that start a process, or import or reach a way to.
 fn flagged(flat: &str, lines: &[usize]) -> Vec<usize> {
+    flagged_but(flat, lines, &[])
+}
+
+/// `flagged`, but for the `#[path = …]` attributes whose `#` is at a byte of `followed`: the
+/// support modules the scan reads in their place.
+fn flagged_but(flat: &str, lines: &[usize], followed: &[usize]) -> Vec<usize> {
     let watched = watched();
     let mut found = Vec::new();
     // `use` items, whatever names they bind.
@@ -881,6 +907,9 @@ fn flagged(flat: &str, lines: &[usize]) -> Vec<usize> {
     }
     // A module read from a path of its own.
     for (at, _) in flat.match_indices('#') {
+        if followed.contains(&at) {
+            continue;
+        }
         let rest = &flat[at + 1..];
         let open = at + 1 + usize::from(rest.starts_with('!'));
         if !flat[open..].starts_with('[') {
@@ -902,9 +931,13 @@ fn flagged(flat: &str, lines: &[usize]) -> Vec<usize> {
     found
 }
 
-/// Takes out of `flat` and `lines` its one `#[cfg(test)] mod tests { … }`, brace-balanced; an
+/// Takes out of `flat` and `lines` its one `#[cfg(test)] mod tests { … }`, brace-balanced, put
+/// in its place one space on the line it started on, and returns the range it took out; an
 /// error when there is not exactly one `mod tests`, or it is not that.
-fn without_the_test_module(flat: &mut String, lines: &mut Vec<usize>) -> Result<(), String> {
+fn without_the_test_module(
+    flat: &mut String,
+    lines: &mut Vec<usize>,
+) -> Result<std::ops::Range<usize>, String> {
     let modules: Vec<usize> = flat
         .match_indices("mod tests{")
         .map(|(at, _)| at)
@@ -926,7 +959,7 @@ fn without_the_test_module(flat: &mut String, lines: &mut Vec<usize>) -> Result<
     let line = lines[start];
     flat.replace_range(start..range.end, " ");
     lines.splice(start..range.end, [line]);
-    Ok(())
+    Ok(start..range.end)
 }
 
 /// The lines of `text`, a source, that start a process, or import or reach a way to.
@@ -943,6 +976,217 @@ fn scanned(text: &str, excepted: bool) -> Result<Vec<usize>, String> {
         without_the_test_module(&mut flat, &mut lines)?;
     }
     Ok(flagged(&flat, &lines))
+}
+
+/// What the scan flags in the source `file`, each as `path:line`, or the reason it cannot read
+/// it, `crates` being the workspace's crates directory. A support module it declares is not
+/// flagged but read in its place, and what that file flags is named at its own real path.
+fn scan(file: &Path, crates: &Path, excepted: bool) -> Vec<String> {
+    let mut named = Vec::new();
+    scan_into(
+        Source {
+            file,
+            shown: &file.display().to_string(),
+            excepted,
+            support: false,
+        },
+        crates,
+        &mut Vec::new(),
+        &mut named,
+    );
+    named
+}
+
+/// A file the scan reads.
+struct Source<'a> {
+    /// Its path as `rustc` reaches it, which a `#[path]` in it is relative to.
+    file: &'a Path,
+    /// Its path as the scan names it.
+    shown: &'a str,
+    /// Whether its one test module is skipped.
+    excepted: bool,
+    /// Whether it is a support module, reached through a `#[cfg(test)]` gate.
+    support: bool,
+}
+
+/// `scan` of `source` into `named`, each support module followed once: `seen` holds the real
+/// paths of those already read.
+fn scan_into(source: Source<'_>, crates: &Path, seen: &mut Vec<PathBuf>, named: &mut Vec<String>) {
+    let shown = source.shown;
+    let text = match fs::read_to_string(source.file) {
+        Ok(text) => text,
+        Err(error) => {
+            named.push(format!("{shown}: {error}"));
+            return;
+        }
+    };
+    let (mut flat, mut lines, mut chars) = squeezed_at(&code(&text));
+    if source.excepted {
+        match without_the_test_module(&mut flat, &mut lines) {
+            Ok(range) => {
+                let first = chars[range.start];
+                chars.splice(range, [first]);
+            }
+            Err(why) => {
+                named.push(format!("{shown}: {why}"));
+                return;
+            }
+        }
+    }
+    let text: Vec<char> = text.chars().collect();
+    let dir = source.file.parent().unwrap_or(Path::new(""));
+    let mut followed = Vec::new();
+    // The `mod` of each followed declaration.
+    let mut declarations = Vec::new();
+    for (attribute, declaration, path) in gated_modules(&flat, &chars, &text, source.support) {
+        let Some(real) = unlinked(dir, Path::new(&path))
+            .and_then(|resolved| in_tests_support(crates, &resolved))
+        else {
+            continue;
+        };
+        followed.push(attribute);
+        declarations.push(declaration);
+        if !seen.contains(&real) {
+            seen.push(real.clone());
+            let shown = real.display().to_string();
+            let module = Source {
+                file: &real,
+                shown: &shown,
+                excepted: false,
+                support: true,
+            };
+            scan_into(module, crates, seen, named);
+        }
+    }
+    let mut found = flagged_but(&flat, &lines, &followed);
+    if source.support {
+        found.extend(
+            outline_modules(&flat)
+                .into_iter()
+                .filter(|at| !declarations.contains(at))
+                .map(|at| lines[at]),
+        );
+        found.sort_unstable();
+        found.dedup();
+    }
+    named.extend(found.into_iter().map(|line| format!("{shown}:{line}")));
+}
+
+/// The gate a support module's declaration carries in a crate's source.
+const TEST_GATE: &str = "#[cfg(test)]";
+
+/// Every `#[path = "P"] mod name;` at the top level of the squeezed code `flat`, outside any
+/// block, whose `P` is a plain string literal: the byte of its attribute's `#`, the byte of its
+/// `mod` and `P`, read from `text`, the source's characters, through `chars`. It is gated
+/// `#[cfg(test)]`, the attribute right before or right after the `#[path]`, unless `inherited`:
+/// it is in a support module, which only such a gate reaches.
+fn gated_modules(
+    flat: &str,
+    chars: &[usize],
+    text: &[char],
+    inherited: bool,
+) -> Vec<(usize, usize, String)> {
+    let opening = "#[path=\"";
+    let mut found = Vec::new();
+    for (at, _) in flat.match_indices(opening) {
+        let ahead = &flat[..at];
+        if [('{', '}'), ('(', ')'), ('[', ']')]
+            .iter()
+            .any(|(open, close)| ahead.matches(*open).count() != ahead.matches(*close).count())
+        {
+            continue;
+        }
+        let quote = at + opening.len() - 1;
+        let Some(close) = flat[quote + 1..].find('"').map(|i| quote + 1 + i) else {
+            continue;
+        };
+        let Some(rest) = flat[close + 1..].strip_prefix(']') else {
+            continue;
+        };
+        let gated_after = rest.strip_prefix(TEST_GATE);
+        let gated = flat[..at].ends_with(TEST_GATE) || gated_after.is_some();
+        let rest = gated_after.unwrap_or(rest);
+        let declaration = flat.len() - rest.len();
+        let Some(name) = rest.strip_prefix("mod ") else {
+            continue;
+        };
+        let end = name.find(|c: char| !ident(c)).unwrap_or(name.len());
+        if end == 0 || !name[end..].starts_with(';') || !(gated || inherited) {
+            continue;
+        }
+        let start = chars[quote];
+        if text.get(start) != Some(&'"') {
+            continue;
+        }
+        let path: String = text[start + 1..]
+            .iter()
+            .take_while(|c| **c != '"')
+            .collect();
+        if path.contains('\\') || text.get(start + 1 + path.chars().count()) != Some(&'"') {
+            continue;
+        }
+        found.push((at, declaration, path));
+    }
+    found
+}
+
+/// The byte of each `mod` in the squeezed code `flat` that declares a module read from a file:
+/// `mod`, then any token, a raw name (`r#name`) or a macro's fragment (`$name`) as well as a
+/// name, then `;`.
+fn outline_modules(flat: &str) -> Vec<usize> {
+    flat.match_indices("mod ")
+        .map(|(at, _)| at)
+        .filter(|&at| !before(flat, at).is_some_and(|c| ident(c) || c == '$' || c == '#'))
+        .filter(|&at| {
+            let name = &flat[at + "mod ".len()..];
+            let end = name.find([';', '{', '}']).unwrap_or(name.len());
+            end > 0 && name[end..].starts_with(';')
+        })
+        .collect()
+}
+
+/// `path` resolved from `dir`, as the OS resolves `dir/path`, when no component it names is a
+/// link: from `dir`'s real path, each `..` its parent, each name looked up and refused when it
+/// is a link. A support module reached through a link would be one file read from two
+/// directories, each resolving its own `#[path]`s.
+fn unlinked(dir: &Path, path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut at = fs::canonicalize(dir).ok()?;
+    for component in path.components() {
+        match component {
+            Component::Prefix(_) | Component::RootDir => at = PathBuf::from(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                at.pop();
+            }
+            Component::Normal(name) => {
+                at.push(name);
+                if fs::symlink_metadata(&at).ok()?.file_type().is_symlink() {
+                    return None;
+                }
+            }
+        }
+    }
+    Some(at)
+}
+
+/// The real path of `file` when it is a file under some crate's `tests/support/` among
+/// `crates`, the workspace's crates directory, once every link and `..` is resolved.
+fn in_tests_support(crates: &Path, file: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let real = fs::canonicalize(file).ok()?;
+    let crates = fs::canonicalize(crates).ok()?;
+    let parts: Vec<Component<'_>> = real.strip_prefix(&crates).ok()?.components().collect();
+    match parts[..] {
+        [
+            Component::Normal(_),
+            Component::Normal(tests),
+            Component::Normal(support),
+            Component::Normal(_),
+            ..,
+        ] if tests == "tests" && support == "support" && real.is_file() => Some(real),
+        _ => None,
+    }
 }
 
 /// Whether `file` is one whose test module the scan does not read. The CLI's fixtures start
@@ -1188,6 +1432,346 @@ fn the_scan_reads_an_excepted_file_past_its_test_module() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
+/// The declaring source of the support cases, under a workspace's crates directory.
+const DECLARING: &str = "a/src/lib.rs";
+
+/// A workspace's crates directory of `name`'s own under the build directory, holding `files`,
+/// each a path under it and its text.
+fn workspace(name: &str, files: &[(&str, &str)]) -> PathBuf {
+    let crates = directory(name).join("crates");
+    for (path, text) in files {
+        let path = crates.join(path);
+        fs::create_dir_all(path.parent().expect("a parent")).expect("a directory");
+        fs::write(&path, text).expect("a source");
+    }
+    crates
+}
+
+/// A line a case expects the scan to flag: a path under the workspace's crates, and the line.
+type Flag = (&'static str, usize);
+
+/// A case of a support module followed: its name, its files, whether the declaring source is
+/// excepted and what the scan flags.
+type Followed = (
+    &'static str,
+    Vec<(&'static str, &'static str)>,
+    bool,
+    Vec<Flag>,
+);
+
+/// A case of a module read from a path flagged: its name, its files and what the scan flags.
+type Flagged = (&'static str, Vec<(&'static str, String)>, Vec<Flag>);
+
+/// `path:line` as the scan names it: the declaring source as given, any other by its real path.
+fn at(crates: &Path, path: &str, line: usize) -> String {
+    let file = crates.join(path);
+    let shown = if path == DECLARING {
+        file
+    } else {
+        fs::canonicalize(&file).expect("a followed file")
+    };
+    format!("{}:{line}", shown.display())
+}
+
+/// A support module of `lib.rs`, declared `#[cfg(test)]` and `#[path]` in this order.
+const GATED: &str = "pub fn f() {}
+
+#[cfg(test)]
+#[path = \"../../b/tests/support/home.rs\"]
+mod home;
+";
+
+/// The support module `home.rs`, which names no way of starting a process.
+const HOME: &str = "//! A test binary's own home.\npub fn helper() {}\n";
+
+#[test]
+fn the_scan_follows_a_test_module_into_a_crates_tests_support_and_reads_it() {
+    let support = "b/tests/support/home.rs";
+    let state = "b/tests/support/state.rs";
+    let spawns = "pub fn helper() {}\n\npub fn spawn() {\n    let _ = std::process::Command::new(\"true\");\n}\n";
+    let swapped = "#[path = \"../../b/tests/support/home.rs\"]\n#[cfg(test)]\nmod home;\n";
+    let excepted_source = "#[cfg(test)]\nmod tests {\n    use std::process::Command;\n}\n\n#[cfg(test)]\n#[path = \"../../b/tests/support/home.rs\"]\nmod home;\n";
+    let cases: Vec<Followed> = vec![
+        (
+            "(1) #[cfg(test)] then #[path] into tests/support",
+            vec![(DECLARING, GATED), (support, HOME)],
+            false,
+            vec![],
+        ),
+        (
+            "(1) #[path] then #[cfg(test)] into tests/support",
+            vec![(DECLARING, swapped), (support, HOME)],
+            false,
+            vec![],
+        ),
+        (
+            "(1) the declaration beside an excepted file's test module",
+            vec![(DECLARING, excepted_source), (support, HOME)],
+            true,
+            vec![],
+        ),
+        (
+            "(1) a support file's own support module, inside the gate it was reached through",
+            vec![
+                (DECLARING, GATED),
+                (
+                    support,
+                    "#[path = \"state.rs\"]\nmod state;\npub fn helper() {}\n",
+                ),
+                (state, HOME),
+            ],
+            false,
+            vec![],
+        ),
+        (
+            "(1) a support module that declares itself is read once",
+            vec![
+                (DECLARING, GATED),
+                (support, "#[path = \"home.rs\"]\nmod home;\n"),
+            ],
+            false,
+            vec![],
+        ),
+        (
+            "(2) a support file that names the process command, at its own line",
+            vec![(DECLARING, GATED), (support, spawns)],
+            false,
+            vec![(support, 4)],
+        ),
+        (
+            "(2) the same, reached past an excepted file's test module",
+            vec![(DECLARING, excepted_source), (support, spawns)],
+            true,
+            vec![(support, 4)],
+        ),
+        (
+            "(2) a nested support file's foreign block, at its own line",
+            vec![
+                (DECLARING, GATED),
+                (support, "#[path = \"state.rs\"]\nmod state;\n"),
+                (
+                    state,
+                    "pub fn helper() {}\nunsafe extern \"C\" { fn fork() -> i32; }\n",
+                ),
+            ],
+            false,
+            vec![(state, 2)],
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (n, (case, files, excepted, expected)) in cases.into_iter().enumerate() {
+        let crates = workspace(&format!("support-followed-{n}"), &files);
+        let expected: Vec<String> = expected
+            .iter()
+            .map(|(path, line)| at(&crates, path, *line))
+            .collect();
+        let got = scan(&crates.join(DECLARING), &crates, excepted);
+        let _ = fs::remove_dir_all(crates.parent().expect("its directory"));
+        if got != expected {
+            wrong.push(format!("{case}: expected {expected:?}, got {got:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+#[test]
+fn the_scan_flags_every_other_module_read_from_a_path() {
+    let support = "b/tests/support/home.rs";
+    let declared = |attributes: &str| format!("pub fn f() {{}}\n{attributes}\nmod home;\n");
+    let cases: Vec<Flagged> = vec![
+        (
+            "(3) #[path] into tests/support without #[cfg(test)]",
+            vec![
+                (DECLARING, declared("#[path = \"../../b/tests/support/home.rs\"]")),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 2)],
+        ),
+        (
+            "(3) #[cfg(test)] not next to the #[path]",
+            vec![
+                (
+                    DECLARING,
+                    "#[cfg(test)]\nfn f() {}\n#[path = \"../../b/tests/support/home.rs\"]\nmod home;\n"
+                        .to_owned(),
+                ),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(3) #[cfg(not(test))]",
+            vec![
+                (
+                    DECLARING,
+                    declared("#[cfg(not(test))]\n#[path = \"../../b/tests/support/home.rs\"]"),
+                ),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(3) a path set by #[cfg_attr(test, …)]",
+            vec![
+                (
+                    DECLARING,
+                    declared("#[cfg_attr(test, path = \"../../b/tests/support/home.rs\")]"),
+                ),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 2)],
+        ),
+        (
+            "(3) gated, inside an inline module, where rustc reads another path",
+            vec![
+                (
+                    DECLARING,
+                    "mod inner {\n    #[cfg(test)]\n    #[path = \"../../b/tests/support/home.rs\"]\n    mod home;\n}\n"
+                        .to_owned(),
+                ),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(3) gated, its path an escaped literal",
+            vec![
+                (
+                    DECLARING,
+                    declared("#[cfg(test)]\n#[path = \"../../b/tests/support/h\\x6fme.rs\"]"),
+                ),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(3) gated, its path a raw literal",
+            vec![
+                (
+                    DECLARING,
+                    declared("#[cfg(test)]\n#[path = r\"../../b/tests/support/home.rs\"]"),
+                ),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(4) gated, to a file of tests/ outside tests/support",
+            vec![
+                (DECLARING, declared("#[cfg(test)]\n#[path = \"../../b/tests/home.rs\"]")),
+                ("b/tests/home.rs", HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(4) gated, to a crate's src/",
+            vec![
+                (DECLARING, declared("#[cfg(test)]\n#[path = \"../../b/src/home.rs\"]")),
+                ("b/src/home.rs", HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(4) gated, to a directory whose name starts with support",
+            vec![
+                (
+                    DECLARING,
+                    declared("#[cfg(test)]\n#[path = \"../../b/tests/supportive/home.rs\"]"),
+                ),
+                ("b/tests/supportive/home.rs", HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(4) gated, to a tests/support outside the workspace's crates",
+            vec![
+                (
+                    DECLARING,
+                    declared("#[cfg(test)]\n#[path = \"../../../b/tests/support/home.rs\"]"),
+                ),
+                ("../b/tests/support/home.rs", HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(4) gated, to a file that does not exist",
+            vec![(
+                DECLARING,
+                declared("#[cfg(test)]\n#[path = \"../../b/tests/support/home.rs\"]"),
+            )],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(4) gated, to tests/support itself",
+            vec![
+                (DECLARING, declared("#[cfg(test)]\n#[path = \"../../b/tests/support\"]")),
+                (support, HOME.to_owned()),
+            ],
+            vec![(DECLARING, 3)],
+        ),
+        (
+            "(5) a support file's #[path] outside tests/support, not followed",
+            vec![
+                (DECLARING, GATED.to_owned()),
+                (support, "pub fn helper() {}\n#[path = \"../outside.rs\"]\nmod outside;\n".to_owned()),
+                (
+                    "b/tests/outside.rs",
+                    "pub fn f() { let _ = std::process::Command::new(\"true\"); }\n".to_owned(),
+                ),
+            ],
+            vec![(support, 2), (support, 3)],
+        ),
+        (
+            "(5) a support file's module read from no #[path], which the scan does not follow",
+            vec![
+                (DECLARING, GATED.to_owned()),
+                (support, "pub fn helper() {}\nmod plain;\n".to_owned()),
+                ("b/tests/support/plain.rs", HOME.to_owned()),
+            ],
+            vec![(support, 2)],
+        ),
+        (
+            "(6) #[path = \"../../elsewhere.rs\"]",
+            vec![
+                (DECLARING, "#[path = \"../../elsewhere.rs\"]\nmod elsewhere;\n".to_owned()),
+                ("elsewhere.rs", HOME.to_owned()),
+            ],
+            vec![(DECLARING, 1)],
+        ),
+    ];
+    let mut wrong = Vec::new();
+    for (n, (case, files, expected)) in cases.into_iter().enumerate() {
+        let files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (*p, t.as_str())).collect();
+        let crates = workspace(&format!("support-flagged-{n}"), &files);
+        let expected: Vec<String> = expected
+            .iter()
+            .map(|(path, line)| at(&crates, path, *line))
+            .collect();
+        let got = scan(&crates.join(DECLARING), &crates, false);
+        let _ = fs::remove_dir_all(crates.parent().expect("its directory"));
+        if got != expected {
+            wrong.push(format!("{case}: expected {expected:?}, got {got:?}"));
+        }
+    }
+    // A link in tests/support to a file outside it is the file it links to.
+    let crates = workspace(
+        "support-link",
+        &[(DECLARING, GATED), ("b/src/home.rs", HOME)],
+    );
+    fs::create_dir_all(crates.join("b/tests/support")).expect("a directory");
+    std::os::unix::fs::symlink("../../src/home.rs", crates.join("b/tests/support/home.rs"))
+        .expect("a link");
+    let got = scan(&crates.join(DECLARING), &crates, false);
+    let _ = fs::remove_dir_all(crates.parent().expect("its directory"));
+    let expected = vec![at(&crates, DECLARING, 4)];
+    if got != expected {
+        wrong.push(format!(
+            "(4) gated, to a link in tests/support to a crate's src/: expected {expected:?}, got {got:?}"
+        ));
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn the_scan_reads_every_crate_of_the_workspace() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1229,15 +1813,7 @@ fn no_module_but_the_seam_names_the_process_command() {
     );
     let mut named = Vec::new();
     for file in files.iter().filter(|f| **f != seam) {
-        let text = fs::read_to_string(file).expect("a source");
-        match scanned(&text, excepted(file)) {
-            Ok(lines) => named.extend(
-                lines
-                    .into_iter()
-                    .map(|line| format!("{}:{line}", file.display())),
-            ),
-            Err(why) => named.push(format!("{}: {why}", file.display())),
-        }
+        named.extend(scan(file, crates, excepted(file)));
     }
     assert!(
         named.is_empty(),
@@ -1863,4 +2439,154 @@ fn under_substrate_a_python_test_command_is_refused_by_its_toolchain() {
             );
         },
     );
+}
+
+// --- Wave 44 adversarial pass on following support modules (cases only; the scan's functions are
+// private to this test binary, so they live here and not in a file of their own). Each source
+// below was compiled with `rustc` 1.99.1 and its dep-info read: every file named as reached is
+// one rustc compiles. ---
+
+/// The process start each reached-but-unread file holds.
+const W44_SPAWNS: &str =
+    "pub fn marker() {\n    let _ = std::process::Command::new(\"true\").status();\n}\n";
+
+/// `scan` of `DECLARING` in a workspace of `files`, the workspace removed after.
+fn w44_scan(name: &str, files: &[(&str, &str)], links: &[(&str, &str)]) -> Vec<String> {
+    let crates = workspace(name, files);
+    for (link, target) in links {
+        let link = crates.join(link);
+        fs::create_dir_all(link.parent().expect("a parent")).expect("a directory");
+        std::os::unix::fs::symlink(target, &link).expect("a link");
+    }
+    let got = scan(&crates.join(DECLARING), &crates, false);
+    let _ = fs::remove_dir_all(crates.parent().expect("its directory"));
+    got
+}
+
+#[test]
+fn w44_adv_a_support_files_raw_named_module_is_flagged() {
+    // rustc loads `b/tests/support/plain.rs` for `mod r#plain;`, as for `mod plain;`.
+    let got = w44_scan(
+        "w44-raw-mod",
+        &[
+            (DECLARING, GATED),
+            (
+                "b/tests/support/home.rs",
+                "pub fn helper() {}\npub mod r#plain;\n",
+            ),
+            ("b/tests/support/plain.rs", W44_SPAWNS),
+        ],
+        &[],
+    );
+    assert!(
+        !got.is_empty(),
+        "a support file's `mod r#plain;` compiles plain.rs, which the scan never reads: got {got:?}"
+    );
+}
+
+#[test]
+fn w44_adv_a_support_files_macro_made_module_is_flagged() {
+    // rustc loads `b/tests/support/plain.rs` for the `pub mod $n;` that `m!(plain)` expands to.
+    let got = w44_scan(
+        "w44-macro-mod",
+        &[
+            (DECLARING, GATED),
+            (
+                "b/tests/support/home.rs",
+                "macro_rules! m {\n    ($n:ident) => {\n        pub mod $n;\n    };\n}\nm!(plain);\n",
+            ),
+            ("b/tests/support/plain.rs", W44_SPAWNS),
+        ],
+        &[],
+    );
+    assert!(
+        !got.is_empty(),
+        "a support file's macro-made `mod $n;` compiles plain.rs, which the scan never reads: got {got:?}"
+    );
+}
+
+#[test]
+fn w44_adv_a_support_file_reached_through_a_link_is_read_from_each_directory() {
+    // rustc resolves `home.rs`'s `#[path = "state.rs"]` from the directory each declaration
+    // names: `b/tests/support/state.rs` through `home`, `c/tests/support/state.rs` through the
+    // link `c/tests/support/home.rs` -> `b/tests/support/home.rs`. The scan reads `home.rs`
+    // once, at its real path, and so never reads c's `state.rs`.
+    let declaring = "#[cfg(test)]\n#[path = \"../../b/tests/support/home.rs\"]\nmod home;\n\n#[cfg(test)]\n#[path = \"../../c/tests/support/home.rs\"]\nmod home2;\n";
+    let got = w44_scan(
+        "w44-linked-support",
+        &[
+            (DECLARING, declaring),
+            (
+                "b/tests/support/home.rs",
+                "#[path = \"state.rs\"]\nmod state;\n",
+            ),
+            ("b/tests/support/state.rs", "pub fn marker() {}\n"),
+            ("c/tests/support/state.rs", W44_SPAWNS),
+        ],
+        &[(
+            "c/tests/support/home.rs",
+            "../../../b/tests/support/home.rs",
+        )],
+    );
+    assert!(
+        !got.is_empty(),
+        "c/tests/support/state.rs is compiled through home2 and never read: got {got:?}"
+    );
+}
+
+#[test]
+fn w44_adv_a_gate_a_macro_strips_is_not_followed() {
+    // The `#[cfg(test)]` is a macro's input, which the macro drops: rustc compiles `home.rs`
+    // into a build without `test`.
+    let declaring = "macro_rules! strip {\n    (#[cfg(test)] $($t:tt)*) => { $($t)* };\n}\nstrip!(#[cfg(test)] #[path = \"../../b/tests/support/home.rs\"] mod home;);\n\npub fn f() {\n    home::helper();\n}\n";
+    let got = w44_scan(
+        "w44-stripped-gate",
+        &[(DECLARING, declaring), ("b/tests/support/home.rs", HOME)],
+        &[],
+    );
+    assert!(
+        !got.is_empty(),
+        "a support module whose gate a macro strips compiles into a non-test build: got {got:?}"
+    );
+}
+
+#[test]
+#[ignore = "story:the-scan-misses-renamed-and-macro-made-includes"]
+fn w44_adv_a_renamed_include_is_flagged() {
+    // rustc compiles `elsewhere.rs` into a non-test build through `inc!`.
+    let got = w44_scan(
+        "w44-renamed-include",
+        &[
+            (
+                DECLARING,
+                "use std::include as inc;\ninc!(\"../../elsewhere.rs\");\n",
+            ),
+            ("elsewhere.rs", W44_SPAWNS),
+        ],
+        &[],
+    );
+    assert!(
+        !got.is_empty(),
+        "`include!` renamed by `use` reads a file the scan never reads: got {got:?}"
+    );
+}
+
+#[test]
+#[ignore = "story:the-scan-misses-renamed-and-macro-made-includes"]
+fn w44_adv_a_path_attribute_a_macro_makes_is_flagged() {
+    // rustc compiles both `elsewhere.rs` files into a non-test build.
+    let ident = "macro_rules! attr {\n    ($a:ident) => {\n        #[$a = \"../../elsewhere.rs\"]\n        pub mod elsewhere;\n    };\n}\nattr!(path);\n";
+    let meta = "macro_rules! meta {\n    ($m:meta) => {\n        #[$m]\n        pub mod elsewhere;\n    };\n}\nmeta!(path = \"../../elsewhere.rs\");\n";
+    let mut wrong = Vec::new();
+    for (case, declaring) in [("an ident", ident), ("a meta", meta)] {
+        let got = w44_scan(
+            &format!("w44-macro-path-{}", case.len()),
+            &[(DECLARING, declaring), ("elsewhere.rs", W44_SPAWNS)],
+            &[],
+        );
+        if got.is_empty() {
+            wrong.push(format!("#[path] given as {case} fragment: not flagged"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

@@ -38,11 +38,6 @@ const MARK: &str = "TAKT_TEST_OWN_HOME";
 #[cfg_attr(target_os = "macos", unsafe(link_section = "__DATA,__mod_init_func"))]
 static BEFORE_MAIN: extern "C" fn() = before_main;
 
-unsafe extern "C" {
-    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
-    fn access(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> std::ffi::c_int;
-}
-
 /// `access(2)`'s `W_OK`, the same on Linux and macOS.
 const W_OK: std::ffi::c_int = 2;
 
@@ -69,7 +64,7 @@ fn writable(dir: &Path) -> bool {
         return false;
     };
     // SAFETY: `path` is a valid NUL-terminated string that outlives the call.
-    unsafe { access(path.as_ptr(), W_OK) == 0 }
+    unsafe { libc::access(path.as_ptr(), W_OK) == 0 }
 }
 
 /// Whether the entry at `path` is one a lookup by name may find, as the step guard lists a
@@ -108,7 +103,7 @@ fn isolate() -> std::io::Result<()> {
     let _ = ROOT.set(root.clone());
     // SAFETY: `atexit` takes a function that lives for the whole process.
     unsafe {
-        atexit(at_exit);
+        libc::atexit(at_exit);
     }
     // Each real program directory, at its real path, to its private copy.
     let mut copies: Vec<(PathBuf, PathBuf)> = Vec::new();

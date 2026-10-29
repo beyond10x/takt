@@ -698,6 +698,7 @@ dependencies = [
  "b10x-canon-engineering-assertions",
  "b10x-takt",
  "clap",
+ "libc",
  "serde_json",
  "serde_yaml_ng",
 ]
