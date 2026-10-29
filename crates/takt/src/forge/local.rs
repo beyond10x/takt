@@ -569,10 +569,14 @@ impl Forge for Local {
     }
 
     /// `git push` of the commit `revision` to the hub as `branch`, no tag and no submodule with
-    /// it; a push the hub does not take (not a fast-forward) is the error.
+    /// it; a push the hub does not take (not a fast-forward) is the error. A git that writes the
+    /// tracking ref of a remote whose URL is the hub's on such a push (2.56 does, 2.55 does not)
+    /// has it put back, so the push moves no ref of the tree, which the step guard would charge
+    /// to `pr.open`.
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
         let hub = self.hub.to_string_lossy().into_owned();
-        crate::git::run(
+        let before = tracking_refs(tree)?;
+        let pushed = crate::git::run(
             tree,
             &[
                 "push",
@@ -584,7 +588,9 @@ impl Forge for Local {
             ],
         )
         .map(drop)
-        .with_context(|| format!("push {branch} to the hub {hub}"))
+        .with_context(|| format!("push {branch} to the hub {hub}"));
+        put_back_tracking(tree, &before)?;
+        pushed
     }
 
     /// Writes the request's record under the lowest number no record holds, taken with an
@@ -833,9 +839,71 @@ impl Forge for Local {
     }
 }
 
+/// The tree's tracking refs, `refs/remotes/`, each with the object it names.
+fn tracking_refs(tree: &Path) -> Result<BTreeMap<String, String>> {
+    let listed = crate::git::run(
+        tree,
+        &[
+            "for-each-ref",
+            "--format=%(objectname) %(refname)",
+            "refs/remotes",
+        ],
+    )?;
+    Ok(listed
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(object, name)| (name.to_owned(), object.to_owned()))
+        .collect())
+}
+
+/// Puts the tree's tracking refs back as `before` held them: one made since is deleted, one
+/// moved since is moved back, each only from the object it names now.
+fn put_back_tracking(tree: &Path, before: &BTreeMap<String, String>) -> Result<()> {
+    for (name, object) in tracking_refs(tree)? {
+        match before.get(&name) {
+            Some(old) if *old == object => {}
+            Some(old) => drop(crate::git::run(tree, &["update-ref", &name, old, &object])?),
+            None => drop(crate::git::run(
+                tree,
+                &["update-ref", "-d", &name, &object],
+            )?),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tracking ref the push made is deleted and one it moved is moved back; the others stay.
+    #[test]
+    fn tracking_refs_a_push_wrote_are_put_back() {
+        let dir = std::env::temp_dir().join(format!("takt-local-tracking-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let git = |args: &[&str]| crate::git::run(&dir, args).expect("git runs");
+        let commit = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+        ];
+        git(&["init", "--quiet", "--template=", "-b", "main"]);
+        git(&[&commit[..], &["--quiet", "--allow-empty", "-m", "one"]].concat());
+        let one = git(&["rev-parse", "HEAD"]);
+        git(&[&commit[..], &["--quiet", "--allow-empty", "-m", "two"]].concat());
+        let two = git(&["rev-parse", "HEAD"]);
+        git(&["update-ref", "refs/remotes/origin/main", &one]);
+        git(&["update-ref", "refs/remotes/origin/kept", &one]);
+        let before = tracking_refs(&dir).expect("the refs are read");
+        git(&["update-ref", "refs/remotes/origin/main", &two]);
+        git(&["update-ref", "refs/remotes/origin/takt/case", &two]);
+        put_back_tracking(&dir, &before).expect("put back");
+        assert_eq!(tracking_refs(&dir).expect("the refs are read"), before);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_local_path_is_a_path_or_a_file_url_without_a_host() {
