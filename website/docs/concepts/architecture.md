@@ -3,7 +3,7 @@ title: What takt is built on
 sidebar_position: 1
 description: What takt is not, where it sits among the tools it uses, the layers inside the binary and what each decides, and what happens in one run.
 lede: takt is an application on Loom's loom-sdk; Loom's runtime steps the case and its governor decides with Canon, a harness session only proposes, and takt keeps the validators, the evidence, git, the forge and the case record.
-source: Cargo.toml and Cargo.lock at 0.14.0 and at 0.21.0 (loom 0.49.1); the versions table from Cargo.toml and Cargo.lock at the tags 0.13.0 and 0.20.0 and the 0.21.0 release commit, checked against 0.21.0 source; website/docs/index.md (What takt is not, Where it sits) before it moved here; CHANGELOG.md 0.21.0; crates/takt/src/lib.rs, run.rs, harness.rs, frontier.rs, validator.rs, case.rs, evidence.rs, run_config.rs; crates/takt/tests/no_own_evaluation.rs; docs/design/takt.md § 2, § 3 and § 5; CHANGELOG.md 0.12.0 to 0.14.0; ADR 0099; Loom 0.44.0 website/docs/index.md; metaharness website/docs/index.md
+source: Cargo.toml and Cargo.lock at 0.14.0 and at 0.22.0 (loom 0.50.0); the versions table from Cargo.toml and Cargo.lock at the tags 0.13.0 and 0.20.0 and the 0.21.0 and 0.22.0 release commits, checked against 0.22.0 source; website/docs/index.md (What takt is not, Where it sits) before it moved here; CHANGELOG.md 0.21.0; crates/takt/src/lib.rs, run.rs, harness.rs, frontier.rs, validator.rs, case.rs, evidence.rs, run_config.rs; crates/takt/tests/no_own_evaluation.rs; docs/design/takt.md § 2, § 3 and § 5; CHANGELOG.md 0.12.0 to 0.14.0; ADR 0099; Loom 0.44.0 website/docs/index.md; metaharness website/docs/index.md
 ---
 
 # What takt is built on
@@ -61,21 +61,21 @@ The rest of this page goes through these layers as the binary links them.
 
 ## The layer stack
 
-Top to bottom, as the binary is linked (versions from `Cargo.lock` at 0.21.0, with the loom 0.49.1 pin):
+Top to bottom, as the binary is linked (versions from `Cargo.lock` at 0.22.0, with the loom 0.50.0 pin):
 
 | layer | crate | version | sits under |
 |---|---|---|---|
-| takt, the binary | `b10x-takt-cli` | 0.21.0 | |
-| the takt library | `b10x-takt` | 0.21.0 | the binary |
-| loom-sdk | `b10x-loom-sdk` | 0.49.1 | the library |
-| Commission, the runtime (`run_until_blocked`) | `b10x-loom-commission` | 0.49.1 | loom-sdk |
-| the governor (`CanonGovernor`) | `b10x-loom-governor` | 0.49.1 | loom-sdk |
-| the session executor | `b10x-loom-session-executor` | 0.49.1 | loom-sdk |
+| takt, the binary | `b10x-takt-cli` | 0.22.0 | |
+| the takt library | `b10x-takt` | 0.22.0 | the binary |
+| loom-sdk | `b10x-loom-sdk` | 0.50.0 | the library |
+| Commission, the runtime (`run_until_blocked`) | `b10x-loom-commission` | 0.50.0 | loom-sdk |
+| the governor (`CanonGovernor`) | `b10x-loom-governor` | 0.50.0 | loom-sdk |
+| the session executor | `b10x-loom-session-executor` | 0.50.0 | loom-sdk |
 | metaharness | `metaharness` | 0.23.0 | the session executor |
 | harness adapters: Claude Code, Codex, b10x-harness | `b10x-harness-*` | 0.22.0 | metaharness |
 | llm: model routes and credentials | `b10x-llm-*` | 0.8.1 | loom-sdk |
-| Canon | `b10x-canon` | 0.7.0 | the library |
-| the protocols | `b10x-canon-engineering` | 0.13.0 | the library |
+| Canon | `b10x-canon` | 0.8.0 | the library |
+| the protocols | `b10x-canon-engineering` | 0.14.0 | the library |
 | the planning store | the `aep` command line (AEP) | | the library, as a program it runs |
 
 ### takt-cli: the binary
@@ -163,11 +163,11 @@ credential's value in the case record.
 ### Canon and the engineering protocols
 
 [Canon](https://beyond10x.github.io/canon/) ([GitHub](https://github.com/beyond10x/canon))
-`b10x-canon` 0.7.0 is the calculus: from a protocol, a case, its evidence records, its authority
+`b10x-canon` 0.8.0 is the calculus: from a protocol, a case, its evidence records, its authority
 and an instant it computes each claim (true, false, unknown), the open obligations, the
 admissible actions and the legitimate outcomes.
 [Engineering protocols](https://beyond10x.github.io/engineering-protocols/)
-([GitHub](https://github.com/beyond10x/engineering-protocols)) `b10x-canon-engineering` 0.13.0
+([GitHub](https://github.com/beyond10x/engineering-protocols)) `b10x-canon-engineering` 0.14.0
 holds the protocols takt runs as built-ins, and the assertion library takt's gate validator runs
 a repository's gates through.
 
@@ -194,6 +194,7 @@ What each takt release pins, from `Cargo.toml` and `Cargo.lock` at its tag:
 | 0.13.0 | 0.43.0 | 0.19.0 | 0.20.0 | 0.6.0 | 0.10.0 |
 | 0.20.0 | 0.48.0 | 0.23.0 | 0.22.0 | 0.6.0 | 0.12.2 |
 | 0.21.0 | 0.49.1 | 0.23.0 | 0.22.0 | 0.7.0 | 0.13.0 |
+| 0.22.0 | 0.50.0 | 0.23.0 | 0.22.0 | 0.8.0 | 0.14.0 |
 
 - **0.13.0** is marked breaking in the changelog: loom moved from 0.41.0 to 0.43.0, and
   `--harness harness` needed b10x-harness 0.20.0 on the `PATH` from then on.
@@ -201,6 +202,9 @@ What each takt release pins, from `Cargo.toml` and `Cargo.lock` at its tag:
   built-in `story.delivery/2` changes with it
   ([When an edit is admitted](./protocol-and-case.md#when-an-edit-is-admitted)), and Canon 0.7.0
   orders evidence in whole seconds ([Evidence and the judge](./evidence-and-the-judge.md)).
+- **0.22.0** takes Canon 0.8.0 and engineering protocols 0.14.0 with the loom 0.50.0 pin. takt
+  writes every evidence record to the microsecond, and Canon 0.8.0 orders records within one
+  second ([Evidence and the judge](./evidence-and-the-judge.md)).
 
 The preflight reports an older harness as an advisory gap, and the container image ships
 b10x-harness 0.22.0.

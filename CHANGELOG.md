@@ -6,6 +6,21 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-29
+
+Evidence records are stamped to the microsecond and nothing waits for the next second; loom 0.50.0
+with Canon 0.8.0 and engineering-protocols 0.14.0.
+
+### Changed
+
+- The loom pin moves to 0.50.0, which carries Canon 0.8.0 and engineering-protocols 0.14.0; takt pins both with it, one copy of each in the lock.
+- `story.delivery/2` is engineering-protocols 0.14.0's: under `tests_first=required` a red gate or CI admits the edit only after a test failed since the latest `tests_change`, at its revision.
+- An evidence record's `observed_at` is written to the microsecond (`YYYY-MM-DDTHH:MM:SS.ffffffZ`), and Canon 0.8.0 orders two such records within one second.
+- The evidence port no longer waits up to 1.1 s for the next second: an ordered record in the latest record's tick takes the next tick at once.
+- The `test_result` evidence a story run records in the planning store through `aep` carries the record's instant in whole seconds: aep 0.78.0 reads no fraction.
+- A protocol that reads a choice kind in an outcome or obligation through `after` or `since` is refused at open, as one through `first` or `before` is.
+- Library: `CaseDir::latest_second` is replaced by `CaseDir::latest_stamp`, which answers a `case::LatestStamp`.
+
 ## [0.21.0] - 2026-10-29
 
 The console lists a harness step's tool calls and its commit's diff, in colour; a documentation edit a
@@ -837,7 +852,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.21.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.22.0...HEAD
+[0.22.0]: https://github.com/beyond10x/takt/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/beyond10x/takt/compare/0.20.0...0.21.0
 [0.20.0]: https://github.com/beyond10x/takt/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/beyond10x/takt/compare/0.18.1...0.19.0

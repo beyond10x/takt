@@ -32,8 +32,10 @@ the record the tests of a one-test repository left, `evidence/0001-test-result-1
 only, so after a new commit every claim about the implementation is unknown again: the tests,
 the gate and CI are observed anew, and the merge waits for them.
 
-Canon 0.7.0 orders records in whole seconds, so from takt 0.21.0 a record the [protocol](/docs/concepts/glossary#protocol) must
-order after another one recorded in the same second waits up to 1.1 s for the next second.
+From takt 0.22.0 every record's `observed_at` is written to the microsecond, and Canon 0.8.0 compares the records
+of one evaluation at that precision, so a record the [protocol](/docs/concepts/glossary#protocol) orders after another one in the same
+second is ordered after it without waiting. A case holding a record in whole seconds is compared in
+whole seconds, and takt stamps an ordered record in the next second at once.
 
 The model never produces an observation. A step that records a choice (`change.handover`: the
 [harness](/docs/concepts/glossary#harness) hands the change over, changing no file) gets a record from the producer `takt.choice`.

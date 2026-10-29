@@ -724,8 +724,9 @@ impl Frontier for Aep {
     }
 
     /// `evidence <story> --kind test_result --source takt --ref <reference> --at <at>`, as
-    /// [`ACTOR`]: the reference the record in the case, the instant the record's own, never one
-    /// chosen here; the repository's own store only, like `list`.
+    /// [`ACTOR`]: the reference the record in the case, the instant the record's own in whole
+    /// seconds, never one chosen here (aep 0.78.0 reads no fraction of a second, and the record
+    /// is written to the microsecond); the repository's own store only, like `list`.
     fn record_test_result(
         &self,
         repo: &Path,
@@ -734,6 +735,8 @@ impl Frontier for Aep {
         at: &str,
     ) -> Result<Written> {
         Self::store(repo)?;
+        let at = crate::whole_second(at);
+        let at = at.as_str();
         Ok(
             match self.plan_as(
                 repo,

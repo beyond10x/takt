@@ -472,8 +472,8 @@ fn the_opened_line_records_the_binary_revision_the_caller_gives() {
 }
 
 /// The first check: the store's history holds one `test_result` record on the story whose
-/// instant is the case's record's `observed_at`, whose source names takt and whose reference
-/// is the record's path, sha256 and fields.
+/// instant is the case's record's `observed_at` in whole seconds, whose source names takt and
+/// whose reference is the record's path, sha256 and fields.
 #[test]
 fn the_story_holds_one_test_result_at_the_records_own_instant_from_takt() {
     let repo = repository("check-one");
@@ -501,7 +501,13 @@ fn the_story_holds_one_test_result_at_the_records_own_instant_from_takt() {
 
     let recorded = store_evidence(&repo, STORY, "test_result");
     assert_eq!(recorded.len(), 1, "{recorded:#?}\n{text}");
-    assert_eq!(recorded[0]["at"], observed_at, "{}", recorded[0]);
+    let whole_second = format!("{}Z", &observed_at[..19]);
+    assert_eq!(
+        recorded[0]["at"],
+        whole_second.as_str(),
+        "task:canon-0-8-0: the store holds the record's instant in whole seconds, as aep reads it\n{}",
+        recorded[0]
+    );
     assert!(
         recorded[0]["change"]["source"]
             .as_str()

@@ -1,6 +1,6 @@
 ---
 title: Status
-description: The latest release, what shipped means, what is open, what 0.21.0 changes for you, and every implemented story, generated from the planning store.
+description: The latest release, what shipped means, what is open, what 0.22.0 changes for you, and every implemented story, generated from the planning store.
 ---
 
 import status from '@site/data/status.json';
@@ -8,24 +8,23 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.21.0, 2026-10-29 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.22.0, 2026-10-29 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
-## What 0.21.0 changes for you
+## What 0.22.0 changes for you
 
 | change | what you see | read |
 |---|---|---|
-| The console lists each harness step's tool calls and the diff it committed | under `said:`, the tools the model called; before `effect:`, the commit's diff. `--color auto\|always\|never` colours it; `--quiet-steps` turns both lists off | [What a step lists](./guides/run-a-story.md#what-a-step-lists) |
-| A documentation edit can count as an attempt | an edit to a file a test file of the case names counts toward `RepeatedTestFailure` | [What counts as an attempt](./concepts/how-a-run-ends.md#what-counts-as-an-attempt) |
-| More duplicate keys are named at their line | a run file holding a key twice after an alias, a tagged or a colon-ended key is refused at the duplicate's line, naming the key | [A key written twice](./guides/configure-a-run.md#a-key-written-twice) |
-| A stricter `story.delivery/2` | under `tests_first=required`, a red gate or CI admits the edit only after a test failed since the tests were first written | [After a red gate](./guides/run-a-story.md#after-a-red-gate) |
+| No wait for the next second | every evidence record's `observed_at` is written to the microsecond, and a record ordered after another one in the same second is stamped after it at once, where 0.21.0 waited up to 1.1 s | [Evidence and the judge](./concepts/evidence-and-the-judge.md) |
+| `story.delivery/2` of engineering-protocols 0.14.0 | under `tests_first=required`, a red gate or CI admits the edit only after a test failed since the latest tests write, at its revision | [After a red gate](./guides/run-a-story.md#after-a-red-gate) |
+| loom 0.50.0 with Canon 0.8.0 | Canon compares a case's records at the coarsest precision written among them; a case holding whole-second records is still compared in whole seconds | [Versions by release](./concepts/architecture.md#versions-by-release) |
 
-## What 0.21.0 holds
+## What 0.22.0 holds
 
 The commands `run`, `approve`, `protocols`, `protocol`, `scenario`, `scorecard`, `trace`,
 `report`, `view`, `promote` and `replay`, and prebuilt binaries for Linux (x86_64, aarch64) and
-macOS (aarch64). Its built-in protocols are engineering-protocols 0.13.0's, `story.delivery/1`,
+macOS (aarch64). Its built-in protocols are engineering-protocols 0.14.0's, `story.delivery/1`,
 `story.delivery/2`, `software.change/1` and `self.improvement/1` among them, and takt's own
 `story.delivery/3`; `takt protocols` lists them all
 ([Protocol and case](./concepts/protocol-and-case.md#the-protocols-takt-runs)). Its
@@ -76,6 +75,7 @@ Each release in one line, from the changelog:
 | 0.19.0 | takt's own `story.delivery/3`, where a red gate admits the edit and the handover reruns the gate; a run stops `RepeatedGateFailure` after three `gate.run` results in a row fail the same gates at new revisions; a failed gate's block makes paths relative and withholds only the lines the secret scan refuses; a failed `tests.run` opens the next prompt with each failing test and its assertion's location; the obligations block names each gate's command when it passes the scan; the console opens with the story and prints one line per step with its duration, tokens and cost; engineering-protocols 0.12.2, loom 0.47.0 |
 | 0.20.0 | `--forge local`: a bare repository on this machine, the tree's `origin`, is the forge; a run opens a request record there, runs the run file's `local_checks` as the test command is, and on a grant merges into the target branch; a Codex step is given each file once (no `AGENTS.md` Codex loads itself, no `CLAUDE.md` that adds nothing to it, no file the change so far shows whole); a credential joined to the word before it is withheld; a failed `tests.run`'s block makes paths relative and withholds only the lines the secret scan refuses; a run without `--confinement` says it got `none` as the default; loom 0.48.0 with metaharness 0.23.0, b10x-harness 0.22.0 in the image; ESS 0.76.0 for the specification, CI and the image |
 | 0.21.0 | under its `said:` line a harness step lists its tool calls, and before its `effect:` line a step that committed prints the commit's diff, escaped and bounded, coloured under `--color auto\|always\|never`, both off with `--quiet-steps`; a documentation edit a test file of the case names counts as an attempt toward `RepeatedTestFailure`; a key held twice after an alias, a tagged or a colon-ended key is refused at the duplicate's line; a record is stamped when submitted, never before the case's latest; loom 0.49.1 with Canon 0.7.0 and engineering-protocols 0.13.0, whose `story.delivery/2` admits the edit after a red gate only once a test failed since the tests were written |
+| 0.22.0 | every evidence record's `observed_at` is written to the microsecond, and a record ordered after another one in the same second is stamped after it at once, with no wait; the planning store's `test_result` keeps whole seconds; loom 0.50.0 with Canon 0.8.0 and engineering-protocols 0.14.0, whose `story.delivery/2` admits the edit after a red gate only once a test failed since the latest tests write |
 
 ## Every story
 

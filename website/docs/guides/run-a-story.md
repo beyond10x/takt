@@ -262,13 +262,13 @@ stopped: Unperformable (pr.opened; nothing performs it without the forge); steps
 
 A story opens on `story.delivery/2` with `tests_first=required` and `gate_on=after_handover`
 unless you set them ([Protocol defaults](../reference/protocol-defaults.md)). From 0.21.0 takt
-runs that protocol as engineering-protocols 0.13.0 writes it. Under `tests_first=required` the
+runs that protocol as engineering-protocols 0.14.0 writes it. Under `tests_first=required` the
 model may edit the implementation (`implementation.edit`) in two cases only:
 
 1. **The tests are red.** The story's tests were written, and they fail at the current revision.
 2. **The tests are green and the gate or CI is red.** At the current revision the tests pass and
-   the gate or continuous integration failed, and the tests were seen failing in a run after they
-   were first written. This is how a failure no test reads, such as formatting, lint or another
+   the gate or continuous integration failed, and the tests were seen failing in a run after their
+   latest write at that revision. This is how a failure no test reads, such as formatting, lint or another
    platform, gets fixed.
 
 In any other state `implementation.edit` is not among what the step may do. Under

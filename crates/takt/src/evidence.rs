@@ -18,7 +18,7 @@ use loom_sdk::governor::{CanonGovernor, FallibleCaseStore as _};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::case::{CaseDir, CaseFiles};
+use crate::case::{CaseDir, CaseFiles, LatestStamp};
 
 /// One evidence record, as Canon reads it.
 #[derive(Debug, Clone, Serialize)]
@@ -58,7 +58,8 @@ struct Read {
 }
 
 impl Record {
-    /// A record of `kind` with `result` about `subject` at `revision`, produced by `producer` now.
+    /// A record of `kind` with `result` about `subject` at `revision`, produced by `producer` now,
+    /// stamped to the microsecond.
     #[must_use]
     pub fn new(
         id: impl Into<String>,
@@ -68,7 +69,7 @@ impl Record {
         revision: impl Into<String>,
         producer: impl Into<String>,
     ) -> Self {
-        let observed_at = crate::now();
+        let observed_at = crate::instant_micros(crate::clock_micros());
         Self {
             format: FORMAT,
             id: id.into(),
@@ -181,44 +182,31 @@ impl<'c> CaseEvidence<'c> {
         })
     }
 
-    /// The second a record of `kind` whose stamp is the clock's is stamped with when it is
-    /// submitted, `latest` the case's latest second and the kinds observed in it
-    /// ([`CaseDir::latest_second`]). The clock's second now, but never earlier than `latest`, so
-    /// a case's stamps only grow. Canon compares two records' instants in whole seconds within one
-    /// order form, and reads two records in one second as of unknown order; so where the stamp
-    /// would fall in `latest` and an order form of the protocol reads both `kind` and another kind
-    /// observed then, the record waits until the clock leaves that second
-    /// ([`crate::now_after`], at most about a second). Without such a form there is no wait.
-    fn second_for(&self, kind: &str, latest: Option<(i64, BTreeSet<String>)>) -> i64 {
-        let clock = crate::clock_second();
-        let Some((last, kinds)) = latest else {
-            return clock;
-        };
-        if clock > last {
-            return clock;
-        }
-        let ordered = kinds.iter().any(|other| {
-            other != kind
-                && self
-                    .orders
-                    .iter()
-                    .any(|form| form.contains(other) && form.contains(kind))
+    /// The instant, in microseconds since the epoch, a record of `kind` whose stamp is the clock's
+    /// is stamped with when it is submitted, `latest` the case's latest stamp
+    /// ([`CaseDir::latest_stamp`]): [`stamp_after`] the clock now, ordered when an order form of
+    /// the protocol reads both `kind` and another kind observed in the latest tick.
+    fn stamp_for(&self, kind: &str, latest: Option<&LatestStamp>) -> i128 {
+        let ordered = latest.is_some_and(|latest| {
+            latest.kinds.iter().any(|other| {
+                other != kind
+                    && self
+                        .orders
+                        .iter()
+                        .any(|form| form.contains(other) && form.contains(kind))
+            })
         });
-        if ordered {
-            crate::now_after(last)
-        } else {
-            last
-        }
+        stamp_after(crate::clock_micros(), latest, ordered)
     }
 
     /// Submits `record` as `producer`'s, for the action request `request` when an effect
     /// performing one wrote it: the producer's observation of it first, then the record citing
     /// that observation. Answers the file it was written to.
     ///
-    /// A record whose stamp is the clock's ([`Record::clock_stamped`]) is stamped again now, as
-    /// [`CaseEvidence::second_for`] says: never before the case's latest record, and out of that
-    /// record's second where an order form reads both kinds. A stamp a caller set is kept, and the
-    /// port does not wait on it.
+    /// A record whose stamp is the clock's ([`Record::clock_stamped`]) is stamped again now, to the
+    /// microsecond, as [`CaseEvidence::stamp_for`] says: never before the case's latest record,
+    /// and in a later tick than it where an order form reads both kinds. Nothing waits for the
+    /// clock. A stamp a caller set is kept.
     ///
     /// # Errors
     /// The port's refusal, naming the producer and why.
@@ -229,9 +217,10 @@ impl<'c> CaseEvidence<'c> {
         request: Option<&str>,
     ) -> Result<PathBuf> {
         let restamped = if record.clock_stamped() {
-            let latest = self.case.borrow().latest_second()?;
+            let latest = self.case.borrow().latest_stamp()?;
             let mut again = record.clone();
-            again.observed_at = crate::instant_at(self.second_for(&record.kind, latest));
+            again.observed_at =
+                crate::instant_micros(self.stamp_for(&record.kind, latest.as_ref()));
             Some(again)
         } else {
             None
@@ -345,5 +334,112 @@ impl EvidencePort for CaseEvidence<'_> {
             }
             Err(error) => Err(self.refuse(format!("{error:#}"))),
         }
+    }
+}
+
+/// The stamp, in microseconds since the epoch, of a record whose stamp is the clock's, `clock`
+/// the clock now and `latest` the case's latest stamp: `clock`, but never before the latest
+/// record, so a case's stamps only grow; and when `ordered` (an order form of the protocol reads
+/// the record's kind and a kind in the latest tick), in a later tick at the resolution Canon
+/// compares the case in, the start of the next tick when the clock has not left the latest one.
+/// Records all written to the microsecond are a microsecond apart at least; a case holding a
+/// record in whole seconds is compared in whole seconds, and an ordered record is stamped in the
+/// next second at once. Nothing waits for the clock. A floor past the last instant Canon writes
+/// is held at [`LAST_MICROS`].
+pub(crate) fn stamp_after(clock: i128, latest: Option<&LatestStamp>, ordered: bool) -> i128 {
+    let Some(latest) = latest else {
+        return clock;
+    };
+    let floor = if ordered {
+        (latest.tick + 1) * latest.tick_micros()
+    } else {
+        latest.micros
+    };
+    clock.max(floor.min(LAST_MICROS))
+}
+
+/// 9999-12-31T23:59:59.999999Z in microseconds since the epoch: the last microsecond an instant
+/// Canon reads can name.
+pub(crate) const LAST_MICROS: i128 = 253_402_300_799_999_999;
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::stamp_after;
+    use crate::case::LatestStamp;
+
+    /// 2026-10-29T12:00:00Z in microseconds since the epoch.
+    const NOON: i128 = 1_761_739_200_000_000;
+
+    fn latest(digits: u32, tick: i128, micros: i128) -> LatestStamp {
+        LatestStamp {
+            digits,
+            tick,
+            kinds: BTreeSet::from(["tests_change".to_owned()]),
+            micros,
+        }
+    }
+
+    /// With no record, the clock's microsecond.
+    #[test]
+    fn the_first_stamp_is_the_clock() {
+        assert_eq!(stamp_after(NOON + 7, None, true), NOON + 7);
+    }
+
+    /// Records to the microsecond: an ordered record in the latest record's microsecond is
+    /// stamped one microsecond later; a later clock is kept.
+    #[test]
+    fn an_ordered_stamp_in_the_latest_microsecond_is_one_microsecond_later() {
+        let at = latest(6, NOON + 500_000, NOON + 500_000);
+        assert_eq!(stamp_after(NOON + 500_000, Some(&at), true), NOON + 500_001);
+        assert_eq!(stamp_after(NOON + 499_000, Some(&at), true), NOON + 500_001);
+        assert_eq!(stamp_after(NOON + 900_000, Some(&at), true), NOON + 900_000);
+    }
+
+    /// A case holding a record in whole seconds is compared in whole seconds: an ordered record in
+    /// the latest second is stamped at the start of the next one, at once.
+    #[test]
+    fn an_ordered_stamp_in_a_whole_second_case_is_the_next_second() {
+        let at = latest(0, NOON / 1_000_000, NOON);
+        assert_eq!(
+            stamp_after(NOON + 400_000, Some(&at), true),
+            NOON + 1_000_000
+        );
+        assert_eq!(
+            stamp_after(NOON + 1_000_001, Some(&at), true),
+            NOON + 1_000_001
+        );
+    }
+
+    /// A record of a kind no order form reads with the latest is stamped no earlier than it, in
+    /// its tick if the clock is behind.
+    #[test]
+    fn an_unordered_stamp_is_never_before_the_latest() {
+        let at = latest(0, NOON / 1_000_000, NOON);
+        assert_eq!(stamp_after(NOON - 5, Some(&at), false), NOON);
+        assert_eq!(stamp_after(NOON + 3, Some(&at), false), NOON + 3);
+    }
+
+    /// Records in nanoseconds are compared to the microsecond once takt's stamp joins them.
+    #[test]
+    fn a_finer_latest_is_compared_at_the_microsecond() {
+        let at = latest(6, NOON + 123_456, NOON + 123_457);
+        assert_eq!(stamp_after(NOON + 123_456, Some(&at), true), NOON + 123_457);
+        assert_eq!(
+            stamp_after(NOON + 123_400, Some(&at), false),
+            NOON + 123_457
+        );
+    }
+
+    /// A floor past the last microsecond Canon writes (year 9999) is held at that microsecond, so
+    /// a stamp never wraps to the epoch: the adversary's year-9999 cases.
+    #[test]
+    fn a_floor_past_the_last_instant_is_held_at_the_last_microsecond() {
+        let last_second = super::LAST_MICROS / 1_000_000;
+        let at = latest(0, last_second, last_second * 1_000_000);
+        assert_eq!(stamp_after(NOON, Some(&at), true), super::LAST_MICROS);
+        let at = latest(6, super::LAST_MICROS, super::LAST_MICROS + 1);
+        assert_eq!(stamp_after(NOON, Some(&at), false), super::LAST_MICROS);
     }
 }

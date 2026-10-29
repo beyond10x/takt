@@ -2794,12 +2794,12 @@ fn kinds_read_directly(predicate: &b10x_canon::model::Predicate) -> Vec<String> 
     let mut kinds = Vec::new();
     predicate.visit(&mut |inner| match inner {
         Predicate::Evidence(matched) => kinds.push(matched.kind.as_str().to_owned()),
-        Predicate::First(first) => kinds.push(first.kind.as_str().to_owned()),
-        Predicate::Before(order) => {
-            kinds.push(order.first.as_str().to_owned());
-            kinds.push(order.then.as_str().to_owned());
-        }
-        _ => {}
+        order => kinds.extend(
+            order
+                .order_reads()
+                .into_iter()
+                .map(|(kind, _)| kind.as_str().to_owned()),
+        ),
     });
     kinds
 }
