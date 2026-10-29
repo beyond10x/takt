@@ -69,10 +69,8 @@ architecture.svg` renders it again.
 | forge safety in the pod | a run that cannot reach its forge stops before it spends tokens; a resumed run never opens a second pull request; a forge write whose answer was lost is read back, never sent twice | `story:forge-preflight`, `story:pr-open-not-idempotent-on-resume`, `story:fenced-forge-dispatch` |
 | a token stop that holds for failed steps | a step that fails or is killed after spending tokens counts them toward the stop | `story:a-killed-step-records-its-tokens` |
 | pull-request reads without `gh` | the bot forge reads a pull request's state and checks with `gh`, which the image does not ship and which has no login in the pod | `story:bot-forge-reads-through-the-app` |
-| a merge with no person's step | `repository.merge` is granted per case by `takt approve`; an unattended run needs a grant on record that no person gives at run time | `story:an-unattended-run-merges-under-a-delegated-grant`, `decision-blocker:unattended-merge-grant` |
-| a summary across cases | `takt report --cases` sums what the runs did | `story:week-of-daily-runs` |
-| pull-request reads without `gh` | (above) | `story:bot-forge-reads-through-the-app` |
-| a merge with no person's step | (above) | `story:an-unattended-run-merges-under-a-delegated-grant`, `decision-blocker:unattended-merge-grant` |
+| a merge with no person's step | `repository.merge` is granted per case by `takt approve`; an unattended run needs a grant on record that no person gives at run time | `story:an-unattended-run-merges-under-a-delegated-grant` |
+| a summary across cases | `takt report --cases` sums what the runs did | `story:report-sums-cases` |
 
 ## The three stories
 
