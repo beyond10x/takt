@@ -167,8 +167,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-assertion-providers"
-version = "0.12.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.12.0#2bb0eae58972fdbb4f0a4234f23ea9df2c6c0788"
+version = "0.12.2"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.12.2#80ee44a991c574f8cc633b6a0f985b2ab7e77141"
 dependencies = [
  "clap",
  "jsonschema 0.33.0",
@@ -205,11 +205,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-canon-engineering"
-version = "0.12.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.12.0#2bb0eae58972fdbb4f0a4234f23ea9df2c6c0788"
+version = "0.12.2"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.12.2#80ee44a991c574f8cc633b6a0f985b2ab7e77141"
 dependencies = [
  "b10x-canon",
- "b10x-canon-engineering-assertions 0.12.0",
+ "b10x-canon-engineering-assertions 0.12.2",
  "clap",
  "serde",
  "serde_yaml_ng",
@@ -233,11 +233,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-canon-engineering-assertions"
-version = "0.12.0"
-source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.12.0#2bb0eae58972fdbb4f0a4234f23ea9df2c6c0788"
+version = "0.12.2"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.12.2#80ee44a991c574f8cc633b6a0f985b2ab7e77141"
 dependencies = [
  "anyhow",
- "b10x-assertion-providers 0.12.0",
+ "b10x-assertion-providers 0.12.2",
  "b10x-canon-expr",
  "clap",
  "rustix",
@@ -707,8 +707,8 @@ version = "0.18.0"
 dependencies = [
  "anyhow",
  "b10x-canon",
- "b10x-canon-engineering 0.12.0",
- "b10x-canon-engineering-assertions 0.12.0",
+ "b10x-canon-engineering 0.12.2",
+ "b10x-canon-engineering-assertions 0.12.2",
  "b10x-canon-expr",
  "b10x-loom-sdk",
  "b10x-substrate-host 0.14.0 (git+https://github.com/beyond10x/substrate?tag=0.14.0)",
@@ -735,8 +735,8 @@ name = "b10x-takt-cli"
 version = "0.18.0"
 dependencies = [
  "anyhow",
- "b10x-canon-engineering 0.12.0",
- "b10x-canon-engineering-assertions 0.12.0",
+ "b10x-canon-engineering 0.12.2",
+ "b10x-canon-engineering-assertions 0.12.2",
  "b10x-takt",
  "clap",
  "serde_json",
@@ -1362,7 +1362,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3656,7 +3656,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3923,7 +3923,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3990,7 +3990,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4396,7 +4396,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -4931,7 +4931,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

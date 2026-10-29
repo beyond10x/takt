@@ -10,8 +10,8 @@ repository = "https://github.com/beyond10x/takt"
 
 [workspace.dependencies]
 b10x-canon = { git = "https://github.com/beyond10x/canon", tag = "0.6.0" }
-b10x-canon-engineering = { git = "https://github.com/beyond10x/engineering-protocols", tag = "0.12.0" }
-b10x-canon-engineering-assertions = { git = "https://github.com/beyond10x/engineering-protocols", tag = "0.12.0" }
+b10x-canon-engineering = { git = "https://github.com/beyond10x/engineering-protocols", tag = "0.12.2" }
+b10x-canon-engineering-assertions = { git = "https://github.com/beyond10x/engineering-protocols", tag = "0.12.2" }
 b10x-canon-expr = { git = "https://github.com/beyond10x/canon", tag = "0.6.0" }
 b10x-loom-sdk = { git = "https://github.com/beyond10x/loom", tag = "0.47.0" }
 b10x-substrate-host = { git = "https://github.com/beyond10x/substrate", tag = "0.14.0" }
