@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- The loom pin moves to 0.49.1, which carries Canon 0.7.0 and engineering-protocols 0.13.0; takt pins both with it, and a decision names Canon 0.7.0.
+- `story.delivery/2` is engineering-protocols 0.13.0's: under `tests_first=required` a red gate or CI admits the edit only after a test failed since the tests were first written.
+- A record is stamped when submitted, never before the case's latest; Canon orders in whole seconds, so where an order form reads both kinds it waits up to 1.1 s to leave that second.
 ## [0.20.0] - 2026-10-29
 
 `--forge local` merges a story into a target branch on this machine; a Codex step is given each

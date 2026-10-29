@@ -1,6 +1,7 @@
 //! A protocol as data: a built-in of the engineering protocols or a `protocol/1` file,
 //! validated and compiled by Canon. Nothing here models a protocol in Rust.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context as _, Result, anyhow, bail};
@@ -146,6 +147,35 @@ impl LoadedProtocol {
 }
 
 impl LoadedProtocol {
+    /// The kinds each order form of the protocol reads (`first`, `before`, `after`), one set a
+    /// form, over every predicate Canon reads evidence through: each claim's, obligation's and
+    /// action's, and each outcome's requirement. Only within one form does Canon compare two
+    /// records' instants.
+    ///
+    /// # Errors
+    /// A document Canon does not read or compile.
+    pub fn order_reads(&self) -> Result<Vec<BTreeSet<String>>> {
+        let model = b10x_canon::model::parse(&self.yaml).map_err(|error| anyhow!("{error}"))?;
+        let ir = b10x_canon::ir::compile(&model)
+            .map_err(|problems| anyhow!("the protocol does not compile: {problems:?}"))?;
+        let predicates = ir
+            .claims
+            .values()
+            .map(|claim| &claim.true_when)
+            .chain(ir.obligations.values().map(|o| &o.discharged_when))
+            .chain(ir.actions.values().map(|action| &action.precondition))
+            .chain(ir.outcomes.values().filter_map(|o| o.requires.predicate()));
+        Ok(predicates
+            .flat_map(|predicate| predicate.order_forms())
+            .map(|form| {
+                form.order_reads()
+                    .into_iter()
+                    .map(|(kind, _)| kind.as_str().to_owned())
+                    .collect()
+            })
+            .collect())
+    }
+
     /// The artifact a grant of `capability` binds to: the subject of the evidence the
     /// precondition of each action requiring it names, directly or through the claims it names.
     /// Refused, naming the action, when an action's precondition names evidence about no

@@ -7,6 +7,11 @@
 //! the case's own `protocol.yaml`. The two are compared as parsed values. A decision that read no
 //! grant must come back equal. A decision that read one may differ only where the missing grant
 //! puts it, which [`allowed`] names; any other difference in any decision fails.
+//!
+//! A decision names the Canon release that rendered it (`explanation.computed_from.semantics
+//! .canon`). Each recorded decision must name [`RECORDED_CANON`] and the governor's must name the
+//! `b10x-canon` that `Cargo.lock` holds; the recorded stamp is then read as the governor's, and
+//! every other member is compared as above.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -29,8 +34,47 @@ const CASES: [&str; 3] = ["turn-1-scenario-help", "turn-2-case-id", "turn-3-hour
 /// registration name is not part of Canon's decision (its `protocol` is the document's id).
 const REGISTERED_AS: &str = "self-improvement@1";
 
+/// The Canon release every recorded decision names: the one takt linked when it decided them.
+const RECORDED_CANON: &str = "0.6.0";
+
 fn cases_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.engineering/cases")
+}
+
+/// The version of the one `b10x-canon` package `Cargo.lock` holds.
+fn locked_canon() -> String {
+    let lock =
+        std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Cargo.lock"))
+            .expect("read Cargo.lock");
+    let marker = "name = \"b10x-canon\"\n";
+    assert_eq!(
+        lock.matches(marker).count(),
+        1,
+        "Cargo.lock holds one b10x-canon"
+    );
+    let at = lock.find(marker).expect("Cargo.lock holds b10x-canon") + marker.len();
+    lock[at..]
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("version = \""))
+        .and_then(|rest| rest.strip_suffix('"'))
+        .expect("b10x-canon's version")
+        .to_owned()
+}
+
+/// Checks the Canon release each side names, the recorded decision [`RECORDED_CANON`] and the
+/// governor's the locked `b10x-canon`, and answers the recorded decision with the governor's
+/// stamp in its place.
+fn with_governors_canon(mut takt: Value, loom: &Value, canon: &str, name: &str) -> Value {
+    let recorded = &mut takt["explanation"]["computed_from"]["semantics"]["canon"];
+    assert_eq!(
+        recorded, RECORDED_CANON,
+        "{name}: the Canon the record names"
+    );
+    let rendered = &loom["explanation"]["computed_from"]["semantics"]["canon"];
+    assert_eq!(rendered, canon, "{name}: the Canon the governor names");
+    *recorded = rendered.clone();
+    takt
 }
 
 /// One catalog per case: the cases' `protocol.yaml` files differ while sharing one id, and the
@@ -96,6 +140,7 @@ struct Fixture {
 }
 
 fn fixtures() -> Vec<Fixture> {
+    let canon = locked_canon();
     let mut out = Vec::new();
     for name in CASES {
         let case = cases_root().join(name);
@@ -147,14 +192,16 @@ fn fixtures() -> Vec<Fixture> {
                         .to_owned()
                 })
                 .collect();
+            let name = path
+                .strip_prefix(cases_root())
+                .unwrap_or(&path)
+                .display()
+                .to_string();
+            let loom = from_loom(&decided.canon);
             out.push(Fixture {
-                name: path
-                    .strip_prefix(cases_root())
-                    .unwrap_or(&path)
-                    .display()
-                    .to_string(),
-                takt,
-                loom: from_loom(&decided.canon),
+                takt: with_governors_canon(takt, &loom, &canon, &name),
+                name,
+                loom,
                 granted,
                 requires: decided
                     .actions
@@ -469,4 +516,29 @@ fn a_planted_difference_in_a_granted_action_goes_red() {
             "{granted}: a planted {what} is not caught"
         );
     }
+}
+
+fn stamped(canon: &str) -> Value {
+    serde_json::json!({"explanation": {"computed_from": {"semantics": {"canon": canon}}}})
+}
+
+/// A recorded decision that names a Canon other than [`RECORDED_CANON`] goes red.
+#[test]
+#[should_panic(expected = "the Canon the record names")]
+fn a_record_naming_another_canon_goes_red() {
+    let canon = locked_canon();
+    with_governors_canon(stamped("0.5.0"), &stamped(&canon), &canon, "planted");
+}
+
+/// A governor decision that names a Canon other than the locked one goes red.
+#[test]
+#[should_panic(expected = "the Canon the governor names")]
+fn a_governor_naming_another_canon_goes_red() {
+    let canon = locked_canon();
+    with_governors_canon(
+        stamped(RECORDED_CANON),
+        &stamped("0.5.0"),
+        &canon,
+        "planted",
+    );
 }

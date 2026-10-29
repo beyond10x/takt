@@ -11,7 +11,7 @@
 //! case's authority provider ([`CaseAuthority`]). A case is opened once and resumed by every
 //! later run on it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -3773,6 +3773,29 @@ impl CaseDir {
         std::fs::write(&path, record.to_json())
             .with_context(|| format!("write {}", path.display()))?;
         Ok(path)
+    }
+
+    /// The latest `observed_at` of the case's records, in whole seconds since the epoch as Canon
+    /// reads it, with the kinds of the records observed in that second; none when no record has
+    /// one. Every record is read, as [`CaseDir::has_evidence`] reads it.
+    pub fn latest_second(&self) -> Result<Option<(i64, BTreeSet<String>)>> {
+        let stamped: Vec<(i64, String)> = self
+            .evidence_records()?
+            .iter()
+            .filter_map(|record| {
+                let second = record.observed_at.as_ref()?.seconds()?;
+                Some((second, record.kind.as_str().to_owned()))
+            })
+            .collect();
+        let Some(latest) = stamped.iter().map(|(second, _)| *second).max() else {
+            return Ok(None);
+        };
+        let kinds = stamped
+            .into_iter()
+            .filter(|(second, _)| *second == latest)
+            .map(|(_, kind)| kind)
+            .collect();
+        Ok(Some((latest, kinds)))
     }
 
     /// Whether a record of `kind` exists about `subject` at its current revision. Each record

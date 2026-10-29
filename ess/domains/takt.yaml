@@ -4,7 +4,7 @@
 # the design where the kernel has nothing yet (docs/design/takt.md § 3), and the cleared decision
 # on the approval grant and the case resume
 # (.engineering/planning/decision-blocker/approval-grant-and-case-resume.md).
-# Canon's declarations (b10x-canon 0.6.0, the release Cargo.toml pins, ess/domains/protocol.yaml)
+# Canon's declarations (b10x-canon 0.7.0, the release Cargo.toml pins, ess/domains/protocol.yaml)
 # are named where a takt noun holds one and never redeclared: the protocol, the case snapshot, the
 # evidence record and the decision are Canon's. An identifier a protocol declares is carried here as
 # a newtype over String so that a takt field has a type, and each names the Canon type it carries.
@@ -28,7 +28,7 @@ naming:
 types:
   # The case id: `--case-id`; else, from the instant the case is opened, `story-<name>-<instant>`
   # for a story the frontier took and `takt-<instant>` for an intent. Carries
-  # canon.protocol.CaseId (protocol.yaml:526), the `id` of the snapshot. One plain name under the
+  # canon.protocol.CaseId (protocol.yaml:578), the `id` of the snapshot. One plain name under the
   # cases directory: an id that is empty, `.`, holds `..` or a path separator, starts with `/`, or
   # holds a control, whitespace, separator or format character or a default-ignorable code point
   # (Unicode 16.0; U+034F COMBINING GRAPHEME JOINER, the variation selectors among them) is
@@ -79,16 +79,16 @@ types:
   # under (`story-delivery/1`, `eval-gated-change/1` for `eval.gated_change/1`), one of takt's
   # own built-ins, embedded in the binary and listed after the registry's of its name
   # (`story.delivery/3`), or a `protocol/1` file Canon validated and compiled.
-  # read from: crates/takt/src/protocol.rs:10-16
-  # read from: crates/takt/src/protocol.rs:43-67
+  # read from: crates/takt/src/protocol.rs:11-17
+  # read from: crates/takt/src/protocol.rs:44-68
   - name: takt.work.ProtocolId
     kind: newtype
     of: String
 
   # A protocol's name alone (`software.change`): what the snapshot's `protocol` key holds, and
   # what a `protocol` block names beside its `revision`. Carries canon.protocol.ProtocolId
-  # (protocol.yaml:32).
-  # read from: crates/takt/src/protocol.rs:13-14
+  # (protocol.yaml:33).
+  # read from: crates/takt/src/protocol.rs:14-15
   # read from: crates/takt/src/case.rs:3083
   - name: takt.work.ProtocolName
     kind: newtype
@@ -99,7 +99,7 @@ types:
   # `takt` runs in.
   # read from: crates/takt/src/run.rs:55
   # read from: crates/takt/src/run.rs:9704-9707
-  # read from: crates/takt/src/protocol.rs:72-77
+  # read from: crates/takt/src/protocol.rs:73-78
   - name: takt.work.ProtocolSource
     kind: union
     tag: kind
@@ -162,8 +162,8 @@ types:
       story: takt.work.StoryId
 
   # An action the protocol declares, by id (`tests.run`, `implementation.edit`, `repository.merge`).
-  # Carries canon.protocol.ActionId (protocol.yaml:57).
-  # read from: crates/takt/src/protocol.rs:25-26
+  # Carries canon.protocol.ActionId (protocol.yaml:58).
+  # read from: crates/takt/src/protocol.rs:26-27
   - name: takt.work.ActionId
     kind: newtype
     of: String
@@ -188,7 +188,7 @@ types:
     of: String
 
   # An evidence kind the protocol declares, by id (`test_result`). Carries
-  # canon.protocol.EvidenceKindId (protocol.yaml:42).
+  # canon.protocol.EvidenceKindId (protocol.yaml:43).
   # read from: crates/takt/src/validator.rs:67-68
   - name: takt.work.EvidenceKindId
     kind: newtype
@@ -196,18 +196,18 @@ types:
 
   # An artifact the protocol declares, by id (`intent`, `implementation`): what a case gives a
   # revision for and what an evidence record is about. Carries canon.protocol.ArtifactId
-  # (protocol.yaml:37).
-  # read from: crates/takt/src/protocol.rs:21-22
+  # (protocol.yaml:38).
+  # read from: crates/takt/src/protocol.rs:22-23
   # read from: crates/takt/src/validator.rs:69-70
   - name: takt.work.ArtifactId
     kind: newtype
     of: String
 
   # A capability an action requires (`repository.merge`): what an authority decision grants or
-  # denies. Carries canon.protocol.CapabilityId (protocol.yaml:67). A grant names one that some
+  # denies. Carries canon.protocol.CapabilityId (protocol.yaml:68). A grant names one that some
   # action of the case's protocol `requires`, or it is refused.
   # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:47
-  # read from: b10x-canon 0.6.0, crates/canon/src/model/authority.rs:24
+  # read from: b10x-canon 0.7.0, crates/canon/src/model/authority.rs:24
   # read from: crates/takt/src/case.rs:1057-1078
   - name: takt.work.CapabilityId
     kind: newtype
@@ -216,9 +216,9 @@ types:
   # An authority decision on one capability, as a `canon-authority/1` entry carries it: an action
   # whose precondition holds is admissible when every capability it requires is granted, blocked
   # when one is denied, and approval-required when none is denied and one is undecided. The same
-  # two values as canon.protocol.Grant (protocol.yaml:682).
-  # read from: b10x-canon 0.6.0, crates/canon/src/model/authority.rs:34
-  # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-12
+  # two values as canon.protocol.Grant (protocol.yaml:734).
+  # read from: b10x-canon 0.7.0, crates/canon/src/model/authority.rs:34
+  # read from: b10x-canon 0.7.0, crates/canon/src/eval/authority.rs:7-12
   # read from: crates/takt/src/case.rs:620-624
   - name: takt.work.Grant
     kind: enum
@@ -233,7 +233,7 @@ types:
   # revision and the artifact revisions the decision was computed at, and takes an answer only
   # where the record's line for that evaluation shows the run had it (takt.work.StepReplay).
   # read from: crates/takt/src/case.rs:1958-2073
-  # read from: crates/takt/src/case.rs:3865-3882
+  # read from: crates/takt/src/case.rs:3888-3905
   # read from: crates/takt/src/case.rs:2081-2089
   # read from: crates/takt/src/replay.rs:285-323
   # read from: loom-sdk 0.31.0, crates/loom-commission/src/ports/authority.rs:36-45
@@ -250,7 +250,7 @@ types:
   # read from: crates/takt/src/case.rs:86-89
   # read from: crates/takt/src/case.rs:1486-1503
   # read from: crates/takt/src/case.rs:3747-3762
-  # read from: b10x-canon 0.6.0, crates/canon/src/model/case.rs:37-40
+  # read from: b10x-canon 0.7.0, crates/canon/src/model/case.rs:37-40
   - name: takt.work.CaseRevision
     kind: newtype
     of: String
@@ -318,16 +318,16 @@ types:
         type: takt.work.Revision
 
   # An outcome the protocol declares, by id: the one a run completes through. Carries
-  # canon.protocol.OutcomeId (protocol.yaml:62).
+  # canon.protocol.OutcomeId (protocol.yaml:63).
   # read from: crates/takt/src/run.rs:78-79
   - name: takt.work.OutcomeId
     kind: newtype
     of: String
 
   # A case input the protocol declares, by id (`risk`, `change_kind`). Carries
-  # canon.protocol.InputId (protocol.yaml:293); the value given is text, `true` and `false` written
+  # canon.protocol.InputId (protocol.yaml:294); the value given is text, `true` and `false` written
   # into the snapshot as booleans.
-  # read from: crates/takt/src/protocol.rs:23-24
+  # read from: crates/takt/src/protocol.rs:24-25
   # read from: crates/takt/src/case.rs:3087-3111
   - name: takt.work.InputId
     kind: newtype
@@ -809,17 +809,17 @@ types:
 
   # A validator's name, the `producer` every record it writes names (`takt.tests-run`,
   # `takt.gate-run`). Carries
-  # canon.protocol.Principal (protocol.yaml:241), an opaque principal Canon records as given.
+  # canon.protocol.Principal (protocol.yaml:242), an opaque principal Canon records as given.
   # read from: crates/takt/src/validator.rs:63-64
   # read from: crates/takt/src/validator.rs:2089
-  # read from: crates/takt/src/evidence.rs:33
+  # read from: crates/takt/src/evidence.rs:34
   - name: takt.work.ProducerName
     kind: newtype
     of: String
 
   # An evidence record's id, unique within the case (`test-result-<seq>`). Carries
-  # canon.protocol.EvidenceId (protocol.yaml:538).
-  # read from: crates/takt/src/evidence.rs:26
+  # canon.protocol.EvidenceId (protocol.yaml:590).
+  # read from: crates/takt/src/evidence.rs:27
   # read from: crates/takt/src/validator.rs:2200
   # Takt's ids are `<kind>-<evaluation number>`, the number continued across the case's runs, so an
   # id is unique within a case.
@@ -831,7 +831,7 @@ types:
 
   # A revision of an artifact: a commit for `implementation`, the SHA-256 of the intent text for
   # `intent`, `r0` for every other artifact at open. Carries canon.protocol.Revision
-  # (protocol.yaml:533); evidence is bound to the revision it was observed on. `implementation`
+  # (protocol.yaml:585); evidence is bound to the revision it was observed on. `implementation`
   # opens at the tip of the case's branch and moves to every commit the run makes: the take of a
   # story, and each accepted judgement step. A resumed case moves it to the branch's `HEAD` when a
   # commit was made between runs, so the claims about it return to unknown, except when every
@@ -844,7 +844,7 @@ types:
   # read from: crates/takt/src/run.rs:13865
   # read from: crates/takt/src/case.rs:3311-3315
   # read from: crates/takt/src/case.rs:2366-2368
-  # read from: crates/takt/src/evidence.rs:31
+  # read from: crates/takt/src/evidence.rs:32
   - name: takt.work.Revision
     kind: newtype
     of: String
@@ -2029,7 +2029,7 @@ types:
   # `--input`, and the loaded protocol keeps name and major apart.
   # read from: docs/design/takt.md:77
   # read from: crates/takt/src/run.rs:54-60
-  # read from: crates/takt/src/protocol.rs:13-16
+  # read from: crates/takt/src/protocol.rs:14-17
   - name: takt.work.ProtocolBlock
     kind: struct
     fields:
@@ -3839,7 +3839,7 @@ types:
   # `--protocol`), `tag` (a story's `input:<name>=<value>` or `protocol:<name>/<major>`), `run_file`
   # (the run file's `protocols` section or `protocol` key) and `default` (takt's built-in default).
   # The case record writes `run-file` for `run_file`.
-  # read from: crates/takt/src/protocol.rs:350-362
+  # read from: crates/takt/src/protocol.rs:380-392
   - name: takt.work.SettingSource
     kind: enum
     variants: [flag, tag, run_file, default]
@@ -3848,7 +3848,7 @@ types:
   # `case.yaml` keeps the sources beside `inputs`, as `input_sources`, each input to its source,
   # and where the protocol was chosen as `protocol_source`; the run says them on one line after the
   # case opens.
-  # read from: crates/takt/src/protocol.rs:377-386
+  # read from: crates/takt/src/protocol.rs:407-416
   # read from: crates/takt/src/case.rs:3493-3519
   - name: takt.work.ProtocolSetting
     kind: struct
@@ -3862,7 +3862,7 @@ types:
 
   # The value a run file's `protocols` section sets for one input, with the file's path and the
   # line it is written on, as `takt protocol show` prints it.
-  # read from: crates/takt/src/protocol.rs:844-855
+  # read from: crates/takt/src/protocol.rs:874-885
   - name: takt.work.RunFileValue
     kind: struct
     fields:
@@ -3881,7 +3881,7 @@ types:
   # One input a protocol declares as `takt protocol show` lists it: its values (none listed admits
   # any) and one-line description, takt's built-in default when it ships one, and the value the
   # run file sets when it sets one.
-  # read from: crates/takt/src/protocol.rs:858-871
+  # read from: crates/takt/src/protocol.rs:888-901
   - name: takt.work.InputListing
     kind: struct
     fields:
@@ -3900,7 +3900,7 @@ types:
   # protocol's id and each declared input in declaration order. An unknown protocol is refused with
   # exit 1 naming the protocols takt knows. The run file is the one `--config` names; the listing
   # shows what it says and does not validate it.
-  # read from: crates/takt/src/protocol.rs:873-881
+  # read from: crates/takt/src/protocol.rs:903-911
   - name: takt.work.ProtocolListing
     kind: struct
     fields:
@@ -4048,10 +4048,10 @@ types:
 
 entities:
   # The case a run opens: the directory `<tree>/.takt/cases/<id>/` (a case already under the legacy `<tree>/.engineering/cases/<id>/` resumes there), holding `case.yaml`, the
-  # `canon-case/1` snapshot that canon.protocol.Case declares (protocol.yaml:861) with its
+  # `canon-case/1` snapshot that canon.protocol.Case declares (protocol.yaml:913) with its
   # `protocol` relation to canon.protocol.Protocol; `protocol.yaml` and `protocol.ir.json`;
   # `intent.md`; `evidence/*.json`, the `canon-evidence/1` records validators wrote
-  # (canon.protocol.EvidenceRecord, protocol.yaml:571); `decisions/*.json`, one `canon-decision/1`
+  # (canon.protocol.EvidenceRecord, protocol.yaml:623); `decisions/*.json`, one `canon-decision/1`
   # per evaluation; `branch.yaml`, the case's branch (takt.work.CaseBranch); `artifacts/`, what
   # validators retain (the gate's evaluated bundle, and under the bot route
   # `pull-request.{request,response}.json` and `.merge.request`/`.merge.response` for the merge),
@@ -4099,7 +4099,7 @@ entities:
   # read from: crates/takt/src/case.rs:186
   # read from: crates/takt/src/run.rs:9737-9740
   # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
-  # read from: crates/takt/src/case.rs:3831-3881
+  # read from: crates/takt/src/case.rs:3854-3904
   # read from: crates/takt/src/case.rs:1599-1608
   # read from: crates/takt/src/case.rs:1863-1868
   # A case is neither opened nor resumed while a link stands on the way to its directory
@@ -4269,11 +4269,11 @@ entities:
       # read from: crates/takt/src/case.rs:842-859
       # read from: crates/takt/src/case.rs:1189-1202
       # read from: crates/takt/src/case.rs:1285
-      # read from: crates/takt/src/protocol.rs:149-226
+      # read from: crates/takt/src/protocol.rs:179-256
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:46-52
-      # read from: b10x-canon 0.6.0, crates/canon/src/eval/authority.rs:7-21
-      # read from: b10x-canon 0.6.0, crates/canon/src/eval/mod.rs:359-365
-      # read from: crates/takt/src/case.rs:3865-3882
+      # read from: b10x-canon 0.7.0, crates/canon/src/eval/authority.rs:7-21
+      # read from: b10x-canon 0.7.0, crates/canon/src/eval/mod.rs:362-368
+      # read from: crates/takt/src/case.rs:3888-3905
       # read from: crates/takt/src/validator.rs:5211
       # read from: crates/takt/src/case.rs:667-673
       # read from: crates/takt/src/case.rs:1369-1375
@@ -4319,9 +4319,9 @@ entities:
       # (story:a-turn-does-not-open-when-the-mainline-tip-cannot-be-read).
       # read from: engineering-protocols 0.10.0, protocols/self-improvement/1.yaml:28-32
       # read from: .engineering/planning/story/self-improvement-protocol.md:64
-      # read from: crates/takt/src/case.rs:4264-4287
+      # read from: crates/takt/src/case.rs:4287-4310
       # read from: crates/takt/src/improvement.rs:1127-1145
-      # read from: crates/takt/src/case.rs:4207-4228
+      # read from: crates/takt/src/case.rs:4230-4251
       - name: finding
         type: Optional<takt.work.FindingKey>
       # The producers the case declares independent of its work, each with the independence
@@ -4350,7 +4350,7 @@ entities:
       # the case directory, `judge.sha256` among it, being writable between runs: what the
       # operator runs, and what the operator's account can write, are trusted, as everything
       # under `--forge none` is (story:self-improvement-protocol, part 2, correction 2).
-      # read from: crates/takt/src/case.rs:4389-4400
+      # read from: crates/takt/src/case.rs:4412-4423
       # read from: crates/takt/src/promotion.rs:2388-2393
       # read from: crates/takt-cli/src/main.rs:1726-1735
       # read from: crates/takt-cli/src/main.rs:4064-4076
@@ -4365,7 +4365,7 @@ entities:
       # protocol, part 2, correction 2). A resume given `--install-root` again is accepted when
       # its canonical path is the recorded root, and refused naming both roots when it is not; a
       # turn that recorded none, or a case under another protocol, refuses any.
-      # read from: crates/takt/src/case.rs:3930-3936
+      # read from: crates/takt/src/case.rs:3953-3959
       # read from: crates/takt/src/improvement.rs:1914-1922
       # read from: crates/takt-cli/src/main.rs:4177-4180
       - name: install_root
@@ -4385,20 +4385,20 @@ entities:
       # that names `bot` alone, a turn opened before the repository was recorded, still reads and
       # is not refused for its repository; its grant's record holds it
       # (`Case.authority`; story:a-turn-pins-the-repository-of-its-forge).
-      # read from: crates/takt/src/case.rs:3955-4015
+      # read from: crates/takt/src/case.rs:3978-4038
       # read from: crates/takt/src/case.rs:3725-3726
-      # read from: crates/takt/src/case.rs:4368
+      # read from: crates/takt/src/case.rs:4391
       # read from: crates/takt/src/improvement.rs:1155-1164
-      # read from: crates/takt/src/case.rs:4042-4054
-      # read from: crates/takt/src/case.rs:3955-3958
-      # read from: crates/takt/src/case.rs:3960-3962
+      # read from: crates/takt/src/case.rs:4065-4077
+      # read from: crates/takt/src/case.rs:3978-3981
+      # read from: crates/takt/src/case.rs:3983-3985
       # read from: crates/takt/src/forge/bot.rs:127-130
       # read from: crates/takt-cli/src/main.rs:2829-2837
-      # read from: crates/takt/src/case.rs:4057-4061
+      # read from: crates/takt/src/case.rs:4080-4084
       # read from: crates/takt-cli/src/main.rs:1783-1793
       # read from: crates/takt/src/case.rs:1380-1382
       # read from: crates/takt/src/improvement.rs:1166-1170
-      # read from: crates/takt/src/case.rs:4040-4041
+      # read from: crates/takt/src/case.rs:4063-4064
       # read from: crates/takt/src/improvement.rs:1158-1159
       - name: forge
         type: Optional<String>
@@ -4573,7 +4573,7 @@ entities:
       # read from: crates/takt/src/run.rs:9704-9707
       # read from: crates/takt-cli/src/main.rs:1674-1681
       # read from: crates/takt-cli/src/main.rs:4147-4161
-      # read from: crates/takt/src/protocol.rs:614-668
+      # read from: crates/takt/src/protocol.rs:644-698
       - name: protocol
         type: takt.work.ProtocolSource
         summary: The protocol id, `software.change/1`, or the path of a `protocol/1` file.
@@ -4614,8 +4614,8 @@ entities:
       # read from: crates/takt/src/run.rs:10067
       # read from: crates/takt-cli/src/main.rs:1815-1879
       # read from: crates/takt-cli/src/main.rs:2080-2084
-      # read from: crates/takt/src/case.rs:4150-4365
-      # read from: crates/takt/src/protocol.rs:737-839
+      # read from: crates/takt/src/case.rs:4173-4388
+      # read from: crates/takt/src/protocol.rs:767-869
       # read from: crates/takt/src/improvement.rs:52-68
       - name: inputs
         type: Map<takt.work.InputId, String>
@@ -5669,13 +5669,26 @@ entities:
   # takes a record only for its own case, from a producer among those it was made for (the run's
   # validators, `takt.choice` or `takt.tests-write`), citing an observation the case received at the record's `observed_at`, and as
   # a `canon-evidence/1` record that reads back whole; any other is refused with nothing written.
+  # A record whose stamp is the one the clock gave when it was made is stamped again when it is
+  # submitted: the clock's second, never before the case's latest record, so a case's stamps only
+  # grow. Canon compares two records' instants in whole seconds, within one order form, and reads
+  # two in one second as of unknown order; so where the stamp would fall in the latest record's
+  # second and an order form of the protocol reads both that record's kind and this one's, the
+  # record waits until the clock leaves that second, at most 1.1 s by the monotonic clock, after
+  # which it takes the second after. A stamp a caller set is kept, and nothing waits on it.
   # read from: loom-sdk 0.31.0, crates/loom-commission/src/ports/evidence.rs:13-16
   # read from: loom-sdk 0.31.0, crates/loom-commission/src/ports/evidence.rs:102-135
   # read from: loom-sdk 0.31.0, crates/loom-governor/src/lib.rs:1280-1289
-  # read from: crates/takt/src/evidence.rs:130-145
-  # read from: crates/takt/src/evidence.rs:160-237
-  # read from: crates/takt/src/evidence.rs:246-281
+  # read from: crates/takt/src/evidence.rs:145-164
+  # read from: crates/takt/src/evidence.rs:214-305
+  # read from: crates/takt/src/evidence.rs:314-349
   # read from: crates/takt/src/run.rs:13910-13955
+  # read from: crates/takt/src/evidence.rs:184-212
+  # read from: crates/takt/src/lib.rs:65-89
+  # read from: crates/takt/src/case.rs:3778-3799
+  # read from: crates/takt/src/evidence.rs:35-39
+  # read from: crates/takt/src/evidence.rs:85-89
+  # read from: crates/takt/src/protocol.rs:150-177
   - name: takt.work.CaseEvidence
     naming:
       summary: >-
