@@ -1,7 +1,7 @@
 ---
 title: Getting started
 sidebar_position: 2
-description: Install takt 0.19.0, run it once with no model and no credentials, then once with a model, and pick the guide for what comes next.
+description: Install takt 0.20.0, run it once with no model and no credentials, then once with a model, and pick the guide for what comes next.
 lede: One run needs nothing but git and cargo; the second adds a model, and both leave a case directory you can read.
 source: takt run --help and takt approve --help at 0.14.0; runs of takt 0.14.0 on fresh cargo crates, 2026-10-26; the install commands run against the 0.14.0 release assets
 ---
@@ -19,7 +19,7 @@ Each version tag publishes `takt-<version>-<target>.tar.gz` for `x86_64-unknown-
 needs no Rust toolchain to start, though a repository whose tests are cargo's needs one to test.
 
 ```sh
-version=0.19.0 target=x86_64-unknown-linux-gnu
+version=0.20.0 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
@@ -32,7 +32,7 @@ Put `takt` on your `PATH`. `takt --version` prints the version and the commit it
 
 ```console
 $ takt --version
-takt 0.19.0 (<the commit the 0.19.0 tag names>)
+takt 0.20.0 (<the commit the 0.20.0 tag names>)
 ```
 
 macOS, `cargo install` from the tag, and the container image are in [Install](./guides/install.md).
@@ -47,7 +47,7 @@ macOS, `cargo install` from the tag, and the container image are in [Install](./
 | Claude Code | `claude` on the `PATH`, logged in (the default harness) |
 | Codex or b10x-harness | `codex` or `b10x-harness` on the `PATH`, and a scan adapter for what they propose (below) |
 | a story | `aep`, a planning store with a ready story, and a gates document ([Run a story](./guides/run-a-story.md)) |
-| a pull request or merge request | a forge adapter: `gitlab` (`glab` logged in to the host) or `bot` (github.com through the beyond10x bot App); `--forge none` runs without one |
+| a pull request or merge request | a forge adapter: `gitlab` (`glab` logged in to the host), `bot` (github.com through the beyond10x bot App) or `local` (a bare repository on this machine, with `local_checks` in the run file); `--forge none` runs without one |
 | `takt promote` | on Linux bubblewrap (`bwrap`), on macOS `/usr/bin/sandbox-exec`; and rustup's default toolchain |
 
 ### The scan before a proposal is accepted
@@ -71,8 +71,11 @@ tools stay inside the copy, so a Claude Code run needs neither.
 The forge is the adapter a change leaves the machine through. `gitlab` pushes over HTTPS under
 `glab`'s login and opens the merge request through `glab api`. `bot` is beyond10x's route for
 github.com: `b10x-gates bot` pushes and opens the pull request as a GitHub App, and `gh` reads it.
-`none` opens nothing and leaves the delivery as a candidate commit. Without `--forge`, takt picks
-one from `origin` ([Configuration](./reference/configuration.md#the-forge)).
+`local` keeps the change on this machine: a bare repository the tree was cloned from with
+`--no-local` holds the request, runs the checks the run file names and takes the merge
+([Run a story](./guides/run-a-story.md#on-this-machine-the-local-forge)). `none` opens nothing
+and leaves the delivery as a candidate commit. Without `--forge`, takt picks one from `origin`,
+never `local` ([Configuration](./reference/configuration.md#the-forge)).
 
 :::note[Confinement]
 
@@ -92,7 +95,10 @@ sandbox of its own:
   `--confinement-needs` names among them, is refused by name and never run unconfined. The `case`
   line and the `opened` event name the adapter and the facts it proved.
 - `--confinement none`, the default, starts the test command through Substrate's `local` adapter,
-  declared insecure with its reason, which the `case` line and the `opened` event carry. It runs on
+  declared insecure with its reason, which the `case` line and the `opened` event carry. From
+  0.20.0 a run started without `--confinement` says it got `none` as the default (`the run was
+  started with the default confinement none: …`), and one given `--confinement none` names the
+  flag. It runs on
   the host as this user, with an environment cleared of logins, a scratch home and `TMPDIR`, the
   timeout and a bounded output, and can read whatever this user can. On macOS it no longer runs
   under takt's Seatbelt profile, so its writes, the programs it starts, launchd and the keychain

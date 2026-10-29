@@ -41,7 +41,7 @@ takt run --repo ~/demo --intent "make the failing test pass" --iterations 1
 | A model router | [llm](https://beyond10x.github.io/llm/) ([GitHub](https://github.com/beyond10x/llm)) and the endpoint you configure. takt names the endpoint; the harness calls the model. |
 | A planner | [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) holds the plan. takt reads its ready stories and records results on them. |
 | An orchestrator of agents | One case per run. [Loom](https://beyond10x.github.io/loom/) ([GitHub](https://github.com/beyond10x/loom)) runs agents, and runs a takt container once as a `LoomAgent`. |
-| A CI system | Your forge's CI runs the checks. takt reads their result through the forge as evidence. |
+| A CI system | Your forge's CI runs the checks. takt reads their result through the forge as evidence. Under `--forge local` takt runs the commands its run file names as the checks, on this machine. |
 
 ## Where it sits
 

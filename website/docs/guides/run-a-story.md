@@ -3,7 +3,7 @@ title: Run a story
 sidebar_position: 3
 description: Prepare a repository for story delivery, let takt take the next ready story or the one you name, follow its steps to a pull request, and grant the merge.
 lede: takt delivers one story of the planning store per case, through tests and gates it runs itself, and the merge waits for your grant.
-source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/console.rs, run.rs (said_line, gate_stop); docs/runs/2026-10-29-self-run-story-delivery.md; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; the aep commands of step 1 run with aep 0.78.0 in a fresh repository, 2026-10-27; docs/design/takt.md § 4
+source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/forge/local.rs; crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/console.rs, run.rs (said_line, gate_stop); docs/runs/2026-10-29-self-run-story-delivery.md; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; the aep commands of step 1 run with aep 0.78.0 in a fresh repository, 2026-10-27; docs/design/takt.md § 4
 ---
 
 # Run a story
@@ -206,7 +206,7 @@ stopped: Unperformable (pr.opened; nothing performs it without the forge); steps
 
 ## 4. With a forge
 
-With `--forge bot` or `--forge gitlab`, the steps go on from `change.read`:
+With `--forge bot`, `--forge gitlab` or `--forge local`, the steps go on from `change.read`:
 
 1. `pr.open` pushes the case's branch and opens the pull request.
 2. `ci.read` reads its checks, waiting while they run. A run whose budget ends while it waits
@@ -215,6 +215,62 @@ With `--forge bot` or `--forge gitlab`, the steps go on from `change.read`:
 4. After the grant, the next run commits the evidence and the story's move to `implemented` on
    the case's branch, then merges, so both reach the base with the merge. It stops `Completed`,
    exit 0.
+
+### On this machine: the local forge
+
+From 0.20.0 `--forge local` takes a bare repository on this machine as the forge, the hub. The
+pull request is a request record in the hub, the checks are commands you name, and the merge goes
+into a branch of the hub. Nothing leaves the machine. Every rule is in
+[The local forge](../reference/configuration.md#the-local-forge).
+
+1. Make the hub a bare clone of the prepared repository, and the tree a clone of the hub with
+   `--no-local`. A plain `git clone` of a local path shares object files with the hub, and takt
+   refuses such a tree before the case opens:
+
+   ```sh
+   git clone --bare my-repo hub.git
+   git clone --no-local hub.git tree
+   ```
+
+   The tree's `origin` is now the hub. The commit identity comes from
+   `.engineering/commit-identity.conf`, committed in step 1, or from `--commit-identity`; the
+   merge commit in the hub is made under it, and without one the run is refused.
+
+2. Write the run file outside the tree, so the tree stays clean. `local_checks` is required and is
+   run as the test command is, without a shell:
+
+   ```yaml title="run.yaml"
+   forge: local
+   local_checks: [cargo, test, --quiet]
+   ```
+
+3. Run the story. Its forge line names the hub:
+
+   ```sh
+   cd tree
+   takt run --repo . --story story:add-sub --harness codex --config ../run.yaml --hours 1
+   ```
+
+   After `change.read`, `pr.open` pushes the case's branch to the hub and writes
+   `<hub>/takt/requests/<n>.json`, `ci.read` runs `local_checks` on the head in a fresh clone,
+   and with the checks passing the run stops `ApprovalRequired (repository.merge)`, exit 4.
+
+4. Grant the merge on the case the first line named, then resume it:
+
+   ```sh
+   takt approve --repo . <case> repository.merge --by human:<name>
+   takt run --repo . --case <case> --harness codex --config ../run.yaml --hours 1
+   ```
+
+   The run merges the case's head into the hub's `main`, a merge commit under the run's commit
+   identity, and records `pr.merged`. It stops `Completed`, exit 0. `git -C ../hub.git log -1 main`
+   shows the merge.
+
+The end-to-end test `a_granted_case_merges_into_the_hub_and_records_pr_merged`
+([`crates/takt-cli/tests/local_forge_cli.rs`](https://github.com/beyond10x/takt/blob/main/crates/takt-cli/tests/local_forge_cli.rs))
+runs these steps with the built binary on a fixture: one ready story on `story.delivery/1`,
+`--harness none`, a `sh` command as `local_checks`, and the work committed by the test in place
+of a harness.
 
 ### A trial on a GitHub repository
 
@@ -412,3 +468,7 @@ repository's five gates, handed the change over and stopped `Unperformable (pr.o
 No run opened a pull request, read its CI or merged it, so delivery with a forge on takt's own
 repository is not proven
 ([run record](https://github.com/beyond10x/takt/blob/main/docs/runs/2026-10-29-self-run-story-delivery.md)).
+
+For the local forge the one record is the end-to-end test
+[above](#on-this-machine-the-local-forge): the binary opens the request, runs the checks, stops
+for the grant and merges into the hub on a fixture, with no harness.

@@ -31,7 +31,8 @@ takt scenario run --repo <path> <id> --hours 1
 
 Nothing of an earlier run is resumed. A refusal before the push removes the branch and puts the
 tree back. Without the bot route nothing is fetched or pushed, and `<n>` is 22 digits instead:
-the UTC time to the second and a random 8-digit nonce. A scenario run refuses `--forge gitlab`.
+the UTC time to the second and a random 8-digit nonce. A scenario run refuses `--forge gitlab`,
+`command`, `connectors` and `local`.
 
 A trial branch is deleted afterwards with
 `b10x-gates bot --repository <owner>/<repo> -- delete-branch trial/<n>`, which the bot route

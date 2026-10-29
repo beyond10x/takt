@@ -3,7 +3,7 @@ title: Known limitations
 sidebar_position: 4
 description: What takt 0.14.0 does not do yet, what a run on a cluster still needs by hand, and which open story addresses each.
 lede: Each limitation below was met in a real run of takt as a Loom agent, and each takt one is an open story in the planning store.
-source: .engineering/planning/story (status active and draft, epic takt-as-a-loom-agent; story:duplicate-key-reader-limits); CHANGELOG.md 0.12.0 to 0.14.0 and 0.19.0; Loom CHANGELOG 0.44.0; docs/runs/2026-10-29-self-run-story-delivery.md
+source: .engineering/planning/story (status active and draft, epic takt-as-a-loom-agent; story:duplicate-key-reader-limits); CHANGELOG.md 0.12.0 to 0.14.0, 0.19.0 and 0.20.0; Loom CHANGELOG 0.44.0; docs/runs/2026-10-29-self-run-story-delivery.md; crates/takt-cli/tests/local_forge_cli.rs
 ---
 
 # Known limitations
@@ -44,6 +44,7 @@ without the forge)`, exit 7. The runs used development builds without the work o
 | limitation | what to do today |
 |---|---|
 | No run on this repository has opened a pull request, read its CI and merged it under a grant with `--forge bot`. Every delivery above ended at `pr.opened`. | Take the printed `candidate: <commit>` (`refs/takt/candidates/<case>`) and open its pull request yourself, or run again with a forge. |
+| From 0.20.0 `--forge local` takes a bare repository on this machine as the forge. Its one record is an end-to-end test of the binary on a fixture, [`local_forge_cli.rs`](https://github.com/beyond10x/takt/blob/main/crates/takt-cli/tests/local_forge_cli.rs): with `--harness none` and the work committed by the test, the run opens the request, runs `local_checks`, stops `ApprovalRequired`, exit 4, and after `takt approve` merges into the hub's `main` and records `pr.merged`, exit 0. No record shows a run with a harness delivering a story through it. | [Run a story](./guides/run-a-story.md#on-this-machine-the-local-forge) shows the setup. |
 | In four of those five runs, the Codex session said it could not run the format and specification checks: `ess` was unavailable and rustup's home could not be written. Only the gate ran them, so a format failure cost one more edit and one more gate run. | Expect the first gate to find formatting under Codex; the gate's output reaches the next step's prompt. |
 
 ## Running under Loom

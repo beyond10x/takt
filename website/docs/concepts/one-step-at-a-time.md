@@ -4,7 +4,7 @@ sidebar_label: The step loop and the frontier
 sidebar_position: 3
 description: The loop takt runs, what the frontier is, which step comes next, and what a judgement step may do.
 lede: A run is a loop of evaluate, pick one step, perform it, observe, and evaluate again; the frontier Canon computes decides what may be done, and a harness is offered only what the frontier admits and no validator performs.
-source: crates/takt/src/lib.rs, run.rs (the loop in Run::run_held, Shape::for_harness, Shape::for_stateless), harness.rs (SessionHarness, ClaudeCode::ISOLATION, ClaudeCode::TOOLS, prompt_with, red_tests_block, tests_path_block, failed_block, earlier_gate_line, CHECKS_RULE), obligations.rs (block, commands_at), console.rs (may, may_now), frontier.rs; docs/design/takt.md § 3; takt run --help at 0.14.0; a scratch run of takt 0.14.0
+source: crates/takt/src/lib.rs, run.rs (the loop in Run::run_held, Shape::for_harness, Shape::for_stateless), harness.rs (SessionHarness, ClaudeCode::ISOLATION, ClaudeCode::TOOLS, prompt_with, red_tests_block, red_tests_block_scanned, scanned_per_line, ChangeSoFar, tests_path_block, failed_block, earlier_gate_line, CHECKS_RULE), obligations.rs (block, commands_at), console.rs (may, may_now), frontier.rs; docs/design/takt.md § 3; takt run --help at 0.14.0; a scratch run of takt 0.14.0
 ---
 
 # The step loop and the frontier
@@ -113,9 +113,15 @@ order, it holds:
    `implementation.edit`, a list follows of where each failing test's assertion is,
    `- <test> at <file>:<line>[:<col>]`, read from the runner's output, with the ask to follow the
    calls from each assertion to the behaviour the intent names and change every function on that
-   path.
+   path. From 0.20.0 paths under the tree are written relative to it, and a line the secret scan
+   refuses is withheld on its own, counted in the block's heading; before, one refused line
+   withheld the whole block.
 2. **The intent**, and the files of the story's `## Scope`: attached as `@<path>` for Claude
-   Code, or named as given in full for Codex.
+   Code, or named as given in full for Codex. From 0.20.0 a Codex step is given each file once.
+   It is not given the `AGENTS.md` Codex loads itself from the session's copy, and a step whose
+   session shows Codex did not load it stops `StepRefused`. Beside an `AGENTS.md` it is not given
+   a `CLAUDE.md` that only points there or whose text `AGENTS.md` holds; any other `CLAUDE.md` is
+   given. A file the change so far shows whole is not given again.
 3. **The protocol, the step, the claims and the open obligations.**
 4. **The repository obligations**: each gate of the gates document at the case's base, with its
    status at this revision. From 0.19.0 each line also names the gate's commands,
@@ -132,7 +138,10 @@ order, it holds:
    run at this revision; it runs after <actions>.`
 7. **The change so far, the offered actions** with their meaning, the write actions that are not
    admissible now with what their precondition lacks, the actions that need an approval, and
-   `decline`.
+   `decline`. From 0.20.0 the change so far shows every file whole within its 8 KiB bound, test
+   files in the intent's Scope too; a test file outside the Scope keeps only its changed lines.
+   A binary file, a mode-only change and a file with a carriage return are not counted as shown
+   whole.
 8. **The rules.** For a harness that runs commands (Codex) and a step that may change files,
    when the obligations name commands, from 0.19.0 the rules ask it to run each named command that
    compiles nothing and changes no file (a format, specification or citation check, never a

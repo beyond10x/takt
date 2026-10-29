@@ -128,9 +128,16 @@ takt: the endpoint's credential variable LLM_API_KEY is empty; nothing was start
 | not set | `bot` for a github.com `origin`, `gitlab` for another host `glab` is logged in to, else `none` |
 | `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the branch under a GitHub App and `b10x-gates api` opens and merges the pull request; `gh` reads its checks |
 | `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request, after the run's scan adapter scanned what it publishes |
+| `local` | a bare repository on this machine, the tree's `origin`, is the forge: `git` pushes to it, a request record in it is the pull request, the run file's `local_checks` are the checks, and the merge is made in it; never a default ([The local forge](../reference/configuration.md#the-local-forge)) |
 | `none` | no pull request: a story stops `Unperformable` at `pr.opened`, exit 7, and prints its candidate commit |
 
-How each forge is set up: [Configuration](../reference/configuration.md#the-forge).
+How each forge is set up: [Configuration](../reference/configuration.md#the-forge). The local
+forge needs `local_checks` beside it in the file:
+
+```yaml
+forge: local
+local_checks: [cargo, test, --quiet]
+```
 
 ## 6. Set the test command and the base check
 
