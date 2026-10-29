@@ -447,44 +447,63 @@ fn a_step_budget_that_ends_while_the_checks_are_pending_stops_waiting_and_the_ne
 
 /// An hour budget bounds the wait as a step budget does: a poll longer than what is left of
 /// the hours is cut to it, and the run stops `Waiting` with `Hours` spent, well before the poll.
-/// The budget is 3 s and the poll 120 s, and the run ends within 60 s: a loaded host may take
-/// 57 s past the budget, and a wait the budget did not cut takes the whole poll.
+/// The budget starts at 3 s and the poll is 600 s, and the run ends within 57 s past its
+/// budget: a loaded host may take that long, and a wait the budget did not cut takes the whole
+/// poll. The budget runs from the resume, so on a loaded host it can run out before the run
+/// reaches the checks at all (`Hours`, the checks never read; 5 of 5 with four busy loops on
+/// the test's CPU): that attempt does not test the wait, and the next has twice the budget, up
+/// to [`HOUR_BUDGETS`]'s last (story:gate-tests-are-deterministic).
 #[test]
 fn an_hour_budget_cuts_the_wait_and_stops_waiting() {
-    let repo = repository("pending-hours");
-    let (id, _) = worked_case(&repo);
-    let forge = Rc::new(PendingFor::new(usize::MAX));
-    let validators = validators(forge.clone());
-    let hours = 3.0 / 3600.0;
-    let mut run = Run::resume(
-        &repo,
-        options(None, Some(hours)),
-        &id,
-        &NoHarness,
-        &validators,
-    )
-    .expect("the case resumes");
-    run.poll = Duration::from_secs(120);
-    let mut out = Vec::new();
-    let started = Instant::now();
-    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
-    let text = String::from_utf8_lossy(&out);
-    assert!(
-        started.elapsed() < Duration::from_secs(60),
-        "waited {:?}: {text}",
-        started.elapsed()
+    let mut spent_before_the_wait = Vec::new();
+    for (attempt, seconds) in HOUR_BUDGETS.iter().enumerate() {
+        let repo = repository(&format!("pending-hours-{attempt}"));
+        let (id, _) = worked_case(&repo);
+        let forge = Rc::new(PendingFor::new(usize::MAX));
+        let validators = validators(forge.clone());
+        let hours = seconds / 3600.0;
+        let mut run = Run::resume(
+            &repo,
+            options(None, Some(hours)),
+            &id,
+            &NoHarness,
+            &validators,
+        )
+        .expect("the case resumes");
+        run.poll = Duration::from_secs(600);
+        let mut out = Vec::new();
+        let started = Instant::now();
+        let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+        let elapsed = started.elapsed();
+        let text = String::from_utf8_lossy(&out);
+        if stop == Ok(Stop::Hours(hours)) && forge.checks_read() == 0 {
+            spent_before_the_wait.push(*seconds);
+            continue;
+        }
+        assert!(
+            elapsed < Duration::from_secs_f64(seconds + 57.0),
+            "waited {elapsed:?} on a {seconds} s budget: {text}"
+        );
+        assert_eq!(
+            stop,
+            Ok(Stop::Waiting {
+                on: vec!["ci.read".to_owned()],
+                budget: Some(Box::new(Stop::Hours(hours))),
+                local: Vec::new(),
+            }),
+            "{text}"
+        );
+        assert!(forge.checks_read() >= 1, "{text}");
+        return;
+    }
+    panic!(
+        "every hour budget ({spent_before_the_wait:?} s) ran out before the run read the checks once"
     );
-    assert_eq!(
-        stop,
-        Ok(Stop::Waiting {
-            on: vec!["ci.read".to_owned()],
-            budget: Some(Box::new(Stop::Hours(hours))),
-            local: Vec::new(),
-        }),
-        "{text}"
-    );
-    assert!(forge.checks_read() >= 1, "{text}");
 }
+
+/// The hour budgets [`an_hour_budget_cuts_the_wait_and_stops_waiting`] tries in turn, in
+/// seconds: each twice the last, every one with its 57 s of grace under the 600 s poll.
+const HOUR_BUDGETS: [f64; 5] = [3.0, 6.0, 12.0, 24.0, 48.0];
 
 /// A run with neither a step nor an hour budget has nothing to wait in: it stops `Waiting` at
 /// the first pending read, with no budget named, and never offers the harness a step.

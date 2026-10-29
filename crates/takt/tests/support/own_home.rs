@@ -14,6 +14,11 @@
 //! process exits. Any failure to make them aborts the binary before a test runs.
 #![cfg(unix)]
 
+/// The rest of what a test binary reads of the operator's state: git's automatic maintenance
+/// and aep's protocol cache (story:gate-tests-are-deterministic).
+#[path = "own_state.rs"]
+mod own_state;
+
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
