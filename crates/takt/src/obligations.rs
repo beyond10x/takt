@@ -430,13 +430,21 @@ mod tests {
 
     #[test]
     fn a_gate_runs_the_commands_its_assertions_name_at_the_base() {
-        let dir = std::env::temp_dir().join(format!("takt-gate-commands-{}", std::process::id()));
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/tmp")
+            .join(format!("takt-gate-commands-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         let tree = dir.as_path();
         let git = |args: &[&str]| {
-            let status = std::process::Command::new("git")
+            let status = crate::confinement::Command::new("git")
                 .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+                .args([
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                ])
                 .args(args)
                 .current_dir(tree)
                 .status()
