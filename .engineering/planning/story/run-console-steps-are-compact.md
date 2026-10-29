@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-console-steps-are-compact
 kind: story
-status: active
+status: implemented
 title: A takt run's step lines are compact and say what each step cost
 summary: 'a working line before each harness call; time, tokens and cost on step lines; paths on effect: committed; wall time and commits on stopped:'
 tags:
@@ -23,10 +23,11 @@ scope:
   path: crates/takt/src/console.rs
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T19:21:09Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-28T20:20:28Z", actor: "human:timo", revision: 6, executor: "agent:developer"}
+- {from: "active", to: "implemented", at: "2026-10-29T21:30:17Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A takt run's step lines are compact and say what each step cost
 

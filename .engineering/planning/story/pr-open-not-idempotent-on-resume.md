@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:pr-open-not-idempotent-on-resume
 kind: story
-status: draft
+status: active
 title: pr.open is not idempotent on resume
 tags:
 - finding
@@ -10,7 +10,15 @@ tags:
 refs:
 - provider: finding
   reference: pr-open-not-idempotent-on-resume
-revision: 2
+relations:
+- depends_on: story:bot-forge-reads-through-the-app
+- decomposes: epic:takt-as-a-loom-agent
+- depends_on: story:forge-preflight
+- serves: vision:safe-agentic-coding
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T21:36:07Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "proposed", to: "active", at: "2026-10-29T21:36:07Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":2}}}
 ---
 # pr.open is not idempotent on resume
 
@@ -42,3 +50,31 @@ healthy_exit: 0
 output: A pull request already exists
 source: .engineering/planning/approval-record/trial-2026-10-21-bb4072a3-hand-over.md
 ```
+
+## Scope
+
+- `crates/takt/src/validator.rs`: `PrOpen` (`:3718`): before a POST, and after a POST that failed, read the open pull requests whose head is the case's branch and take an existing one's number (cited)
+- `crates/takt/src/forge/bot.rs`: a read of the open pull requests for a head branch, through `b10x-gates api` `GET` (inferred)
+- `crates/takt/tests/`: the predicate's lost-answer world with a forge double (inferred)
+
+The read of open pull requests is shared with story:fenced-forge-dispatch, which records the
+outcome class of the same write: one unit delivers both.
+
+## Acceptance
+
+The predicate in the body exits 0 on takt with the fix: with a forge double whose first `POST`
+creates the pull request and then fails (502), the resumed run reads the pull request the first
+POST created, records its number in the case, sends no second `POST`, and does not stop on
+`A pull request already exists`. The double's call log shows exactly one `POST` to `/pulls`
+across both runs.
+
+## Why a resume
+
+A cluster run resumes a case: to run once more, the operator changes the `LoomAgent`, the new
+generation's Job starts takt again, and takt resumes the case that is open for the story
+(`examples/cluster-delivery/README.md`, § One run; `website/docs/guides/deploy-on-kubernetes.md`,
+§ Watch it). A resume after a lost `pr.open` answer then stops on GitHub's 422 for good.
+
+This story owns `pr.open`'s lost answer: before a `POST`, and after a `POST` that failed, it reads
+the open pull requests for the case's branch and takes an existing one. story:fenced-forge-dispatch
+keeps the outcome record of the forge writes and the merge's `unknown`, and depends on this story.

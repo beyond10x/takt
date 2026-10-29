@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-revision-without-code-is-no-new-attempt
 kind: story
-status: active
+status: implemented
 title: A revision that changes no code counts toward a repeated test failure
 summary: a doc-only edit after a red run is the second failure, and a resume stops at once
 tags:
@@ -15,10 +15,11 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:red-run-is-no-repeated-failure
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T23:15:14Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-28T23:15:15Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-29T21:30:15Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A revision that changes no code counts toward a repeated test failure
 

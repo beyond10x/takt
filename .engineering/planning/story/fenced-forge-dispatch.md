@@ -8,7 +8,11 @@ summary: applied, refused, not_attempted or unknown; a write that may have been 
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 3
+- depends_on: story:bot-forge-reads-through-the-app
+- depends_on: story:pr-open-not-idempotent-on-resume
+- depends_on: story:forge-preflight
+- depends_on: story:an-unattended-run-merges-under-a-delegated-grant
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:22:43Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T21:22:43Z", actor: "human:timo", revision: 3}
@@ -27,15 +31,28 @@ takt's forge writes today: `Forge::open_pull_request` and `Forge::merge` (`crate
 
 ## Scope
 
-- `crates/takt/src/forge.rs`: the write calls return an outcome class; a timeout after the request was written is `unknown` (cited)
-- `crates/takt/src/validator.rs`: `PrOpen` and the merge step record the outcome and, on `unknown`, read before writing (cited)
+- `crates/takt/src/forge.rs`: the `Forge` trait's write calls (`:369`, `:378`) return an outcome class; a timeout after the request was written is `unknown` (cited)
+- the five adapters' write calls: `forge/bot.rs:544`, `:632`; `forge/connectors.rs:508`, `:570`; `forge/gitlab.rs:728`, `:777`; `forge/local.rs:599`, `:709`; `forge/command.rs:724`, `:847` (cited)
+- `crates/takt/src/validator.rs`: `PrMerged` records the outcome and, on `unknown`, reads before writing (cited)
 - `crates/takt/src/events.rs`: the outcome on the step's event (inferred)
-- `ess/domains/takt.yaml`: the outcome class, if it is a new noun (inferred)
 - new: `crates/takt/tests/fenced_forge_dispatch.rs` (inferred)
+
+`pr.open`'s lost answer is story:pr-open-not-idempotent-on-resume's; this story records the
+outcome class of both writes and resolves the merge's `unknown`. It comes after
+story:pr-open-not-idempotent-on-resume, story:forge-preflight (both edit `forge/bot.rs`) and
+story:an-unattended-run-merges-under-a-delegated-grant (both edit `PrMerged`'s surroundings in
+`validator.rs`).
 
 ## Acceptance
 
-With the in-memory forge set to apply a merge and then report a timeout, the run records `repository.merge` with outcome `unknown`, and the next run writes a `merge_observation` of `merged` after reading the pull request, with the forge's call log showing exactly one merge call across both runs.
+With the in-memory forge, each case read from the step's event in `events.jsonl`:
+
+1. a merge applied and then a timeout reported: the run records `repository.merge` with outcome
+   `unknown`; the next run reads the pull request, writes a `merge_observation` of `merged`, and
+   the forge's call log shows one merge call across both runs.
+2. a merge the forge refuses (405): outcome `refused`, no `merge_observation`.
+3. a merge not sent because the head moved: outcome `not_attempted`.
+4. a `pr.open` that is applied: outcome `applied`, with the pull request's number.
 
 ## Ambiguities
 

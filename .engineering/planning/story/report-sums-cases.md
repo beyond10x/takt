@@ -10,7 +10,8 @@ tags:
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 3
+- depends_on: story:a-killed-step-records-its-tokens
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:22:44Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T21:22:44Z", actor: "human:timo", revision: 3}
@@ -27,13 +28,16 @@ human interventions, and a total row; a figure no record states is `unknown`, ne
 
 The counting half of story:week-of-daily-runs, which needs a week of scheduled runs on three
 repositories before its acceptance can be checked. This story is the command that week will be
-read with, and it is what the pod runs of the kind-cluster goal are reported with.
+read with, and it is what the pod runs of the cluster example are reported with
+(`examples/cluster-delivery/README.md`).
 
 - units accepted: cases whose last `stop` line in `events.jsonl` is `Completed` with an accepted
   outcome (`crates/takt/src/events.rs`, `Event::Stop`).
-- tokens: the sum over the case's `stop` lines of `tokens`, one per run of the case.
-- interventions: `takt approve` grants, one per approval the case records
-  (`authority.yaml`, `crates/takt/src/case.rs`).
+- tokens: the sum over the case's `stop` lines of `tokens`, one per run of the case; a stop line
+  whose tokens are unknown (story:a-killed-step-records-its-tokens) makes the sum `unknown`.
+- interventions: grants by a person, one per approval in the case's `authority.yaml` whose
+  approver is `human:`; a grant by an agent role (story:an-unattended-run-merges-under-a-delegated-grant)
+  is not an intervention.
 - the day: the UTC date of the run's `opened` line; the repository: the directory the cases
   directory sits in (`<repo>/.engineering/cases`), or the `--cases` argument as given.
 
