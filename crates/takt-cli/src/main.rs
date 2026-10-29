@@ -4349,6 +4349,10 @@ fn one_line(text: &str) -> String {
 /// The gates document a run takes when `--gates` is not given and this is a file.
 const DEFAULT_GATES: &str = ".engineering/gates.yaml";
 
+#[cfg(test)]
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 /// The file `--<flag>` names, relative to `repo`: given, it must be a file under the repository,
 /// or the run is refused in one line before any case is opened; not given, `default` when that
 /// is a file, else none.

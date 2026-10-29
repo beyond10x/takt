@@ -10,8 +10,9 @@
 //! private directories is still seen, as it was in the real one. Every test file that runs a
 //! step under the guard includes this module (`tests_have_a_home_of_their_own.rs`).
 //!
-//! The private directories are under this crate's `CARGO_TARGET_TMPDIR` and removed when the
-//! process exits. Any failure to make them aborts the binary before a test runs.
+//! The private directories are under this crate's `CARGO_TARGET_TMPDIR`, or the system temporary
+//! directory for unit tests, and removed when the process exits. Any failure to make them aborts
+//! the binary before a test runs.
 #![cfg(unix)]
 
 /// The rest of what a test binary reads of the operator's state: git's automatic maintenance
@@ -98,9 +99,11 @@ fn isolate() -> std::io::Result<()> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.subsec_nanos());
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("own-home-{}-{nanos:09}", std::process::id()));
-    std::fs::create_dir_all(Path::new(env!("CARGO_TARGET_TMPDIR")))?;
+    let tmp = option_env!("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let root = tmp.join(format!("own-home-{}-{nanos:09}", std::process::id()));
+    std::fs::create_dir_all(&tmp)?;
     std::fs::create_dir(&root)?;
     let _ = ROOT.set(root.clone());
     // SAFETY: `atexit` takes a function that lives for the whole process.
