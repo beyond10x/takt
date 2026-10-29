@@ -23,7 +23,7 @@ cd takt
 docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.19.0 .
 ```
 
-The image carries takt, `aep`, `b10x-harness` 0.20.0, `ess`, `b10x-gates` (the `gates` scan
+The image carries takt, `aep`, `b10x-harness` 0.22.0, `ess`, `b10x-gates` (the `gates` scan
 adapter's program and the `bot` forge's) and a Rust toolchain with `clippy` and `rustfmt`. The
 toolchain is owned by root and cannot be written by the run, so
 neither a step nor a test can change the tools the gates trust. takt runs under `tini`, not as

@@ -29,7 +29,7 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 7
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":6}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":6}}}
@@ -88,8 +88,10 @@ that writes the argv it was started with to a file.
    `--max-turns 60`, and no argv file of that run holds `40`.
 3. `harness-section/unadmitted-key-refused`: a key outside the admitted six (`retain-dir`, and a key no metaharness
    has) exits 1 before any case opens with takt's message naming the key as not admitted, and no stub is started.
-4. `harness-section/bad-value-refused-by-metaharness`: `harness: {kind: claude, effort: extreme}` exits 1 before any
-   case opens with metaharness's own message, and no stub is started.
+4. `harness-section/bad-value-refused-by-metaharness`: `harness: {kind: claude, max-turns: sixty}` exits 1 before
+   any case opens with metaharness's own message (`RunSpecDocumentError`, a value of the wrong type), and no stub
+   is started. An unknown `effort` value is no such case: metaharness passes effort through to whoever serves the
+   model (metaharness 0.23.0 `spec.rs:357-365`).
 5. `harness-section/kind-check-refused`: `harness: {kind: codex, max-turns: 60}` exits 1 before any case opens with
    metaharness's refusal, and no stub is started.
 6. `harness-section/takt-owned-key-refused`: `harness: {kind: claude, hermetic: off}` exits 1 before any case opens,
