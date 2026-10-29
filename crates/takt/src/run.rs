@@ -1579,28 +1579,50 @@ fn kinds_read(
         Predicate::Evidence(matched) => {
             kinds.insert(matched.kind.as_str().to_owned());
         }
-        Predicate::First(first) => {
-            kinds.insert(first.kind.as_str().to_owned());
-        }
-        Predicate::Before(order) => {
-            kinds.insert(order.first.as_str().to_owned());
-            kinds.insert(order.then.as_str().to_owned());
-        }
         Predicate::Claim(test) => {
             if let Some(through) = reads.get(test.claim.as_str()) {
                 kinds.extend(through.iter().cloned());
             }
         }
-        _ => {}
+        order => kinds.extend(order_kinds(order)),
     });
     kinds
 }
 
+/// Notes how an `after` or a `since` form reads its kinds, for [`Shape::of`]: `earlier` without a
+/// result, `later` with one, both about `subject` when it names one.
+fn note_later(
+    with_result: &mut BTreeMap<String, bool>,
+    subjects: &mut BTreeMap<String, BTreeSet<String>>,
+    earlier: &b10x_canon::model::EvidenceKindId,
+    later: &b10x_canon::model::EvidenceKindId,
+    subject: Option<&b10x_canon::model::ArtifactId>,
+) {
+    with_result.entry(earlier.as_str().to_owned()).or_default();
+    *with_result.entry(later.as_str().to_owned()).or_default() = true;
+    if let Some(subject) = subject {
+        for kind in [earlier, later] {
+            subjects
+                .entry(kind.as_str().to_owned())
+                .or_default()
+                .insert(subject.as_str().to_owned());
+        }
+    }
+}
+
+/// The kinds an order form (`first`, `before`, `after`, `since`) reads; none for another form.
+fn order_kinds(predicate: &b10x_canon::model::Predicate) -> impl Iterator<Item = String> + '_ {
+    predicate
+        .order_reads()
+        .into_iter()
+        .map(|(kind, _)| kind.as_str().to_owned())
+}
+
 /// The first form in `predicate`, or in a claim it tests `is: true`, that is not monotone in a
 /// choice kind: `not` over a predicate that reads one, a claim that reads one tested `is: false`
-/// or `is: unknown`, or an order form (`first`, `before`) that names one. With none, a choice
-/// record can only make the predicate truer, and its value with every choice record present
-/// ([`under_choices`]) is the most choice records alone can make of it.
+/// or `is: unknown`, or an order form (`first`, `before`, `after`, `since`) that names one. With
+/// none, a choice record can only make the predicate truer, and its value with every choice record
+/// present ([`under_choices`]) is the most choice records alone can make of it.
 fn non_monotone_choice(
     predicate: &b10x_canon::model::Predicate,
     model: &b10x_canon::model::Protocol,
@@ -1617,13 +1639,11 @@ fn non_monotone_choice(
             .find_map(|member| non_monotone_choice(member, model, choices, reads, seen)),
         Predicate::Not(inner) => choice_in(&kinds_read(inner, reads))
             .map(|kind| format!("`not` over a predicate that reads {kind}")),
-        Predicate::First(first) => choices
-            .contains_key(first.kind.as_str())
-            .then(|| format!("an order form naming {}", first.kind.as_str())),
-        Predicate::Before(order) => [&order.first, &order.then]
-            .into_iter()
-            .find(|kind| choices.contains_key(kind.as_str()))
-            .map(|kind| format!("an order form naming {}", kind.as_str())),
+        Predicate::First(_) | Predicate::Before(_) | Predicate::After(_) | Predicate::Since(_) => {
+            order_kinds(predicate)
+                .find(|kind| choices.contains_key(kind))
+                .map(|kind| format!("an order form naming {kind}"))
+        }
         Predicate::Claim(test) => {
             let claim = test.claim.as_str();
             if test.is != Truth::True {
@@ -1703,6 +1723,20 @@ impl Shape {
                     }
                 }
             }
+            Predicate::After(order) => note_later(
+                &mut with_result,
+                &mut subjects,
+                &order.first,
+                &order.then.kind,
+                order.subject.as_ref(),
+            ),
+            Predicate::Since(order) => note_later(
+                &mut with_result,
+                &mut subjects,
+                &order.last,
+                &order.then.kind,
+                order.subject.as_ref(),
+            ),
             _ => {}
         };
         for (_, claim) in model.claims.iter() {
@@ -1826,17 +1860,10 @@ impl Shape {
                 Predicate::Evidence(matched) => {
                     kinds.insert(matched.kind.as_str().to_owned());
                 }
-                Predicate::First(first) => {
-                    kinds.insert(first.kind.as_str().to_owned());
-                }
-                Predicate::Before(order) => {
-                    kinds.insert(order.first.as_str().to_owned());
-                    kinds.insert(order.then.as_str().to_owned());
-                }
                 Predicate::Claim(test) => {
                     claims.insert(test.claim.as_str().to_owned());
                 }
-                _ => {}
+                order => kinds.extend(order_kinds(order)),
             });
             direct.insert(id.as_str().to_owned(), (kinds, claims));
         }

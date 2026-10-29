@@ -448,6 +448,59 @@ outcomes:
     );
 }
 
+/// An outcome that reads a choice kind through an `after` or a `since` order form (Canon 0.7.0
+/// and 0.8.0) is refused at load, naming the form and the kind, as one through `first` or
+/// `before` is: a choice record could make it falser by its order.
+#[test]
+fn a_choice_kind_read_through_after_or_since_is_refused_at_load() {
+    for (form, first) in [("after", "first"), ("since", "last")] {
+        let yaml = proto(
+            &format!("order.{form}"),
+            &format!(
+                r#"evidence_kinds:
+  said:
+    description: the model said it is reviewed
+  reviewed:
+    description: a review
+actions:
+  implementation.edit:
+    description: change the code
+    effect: write
+  review.write:
+    description: write a review
+    effect: write
+    may_produce:
+      - evidence: reviewed
+  it.say:
+    description: say it
+    effect: read
+    may_produce:
+      - evidence: said
+outcomes:
+  accepted:
+    description: a review after the saying
+    requires:
+      {form}:
+        {first}: said
+        then:
+          kind: reviewed
+          result: pass
+        subject: implementation
+"#
+            ),
+        );
+        let err = refused_at_load(
+            &format!("p3-{form}"),
+            &yaml,
+            vec![step("it.say", &[], "said")],
+        );
+        assert!(
+            err.starts_with("open:") && err.contains("an order form naming said"),
+            "{form}: {err}"
+        );
+    }
+}
+
 fn refused_at_load(name: &str, yaml: &str, script: Vec<Step>) -> String {
     let harness = Script::new(false, script);
     let (stop, text, dir, _b) = run_custom(name, yaml, &harness);

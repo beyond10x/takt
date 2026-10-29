@@ -3775,27 +3775,53 @@ impl CaseDir {
         Ok(path)
     }
 
-    /// The latest `observed_at` of the case's records, in whole seconds since the epoch as Canon
-    /// reads it, with the kinds of the records observed in that second; none when no record has
-    /// one. Every record is read, as [`CaseDir::has_evidence`] reads it.
-    pub fn latest_second(&self) -> Result<Option<(i64, BTreeSet<String>)>> {
-        let stamped: Vec<(i64, String)> = self
+    /// The latest `observed_at` of the case's records as Canon compares it once a record written
+    /// to the microsecond joins them ([`LatestStamp`]); none when no record has one. Every record
+    /// is read, as [`CaseDir::has_evidence`] reads it.
+    pub fn latest_stamp(&self) -> Result<Option<LatestStamp>> {
+        let stamped: Vec<(b10x_canon::model::Instant, String)> = self
             .evidence_records()?
             .iter()
             .filter_map(|record| {
-                let second = record.observed_at.as_ref()?.seconds()?;
-                Some((second, record.kind.as_str().to_owned()))
+                let at = record.observed_at.clone()?;
+                at.digits()?;
+                Some((at, record.kind.as_str().to_owned()))
             })
             .collect();
-        let Some(latest) = stamped.iter().map(|(second, _)| *second).max() else {
+        let Some(digits) = stamped
+            .iter()
+            .filter_map(|(at, _)| at.digits())
+            .min()
+            .map(|digits| digits.min(LatestStamp::MICRO_DIGITS))
+        else {
             return Ok(None);
         };
-        let kinds = stamped
+        let ticked: Vec<(i128, i128, String)> = stamped
             .into_iter()
-            .filter(|(second, _)| *second == latest)
-            .map(|(_, kind)| kind)
+            .filter_map(|(at, kind)| {
+                let (start, _) = at.interval()?;
+                Some((at.ticks(digits)?, start, kind))
+            })
             .collect();
-        Ok(Some((latest, kinds)))
+        let Some(tick) = ticked.iter().map(|(tick, _, _)| *tick).max() else {
+            return Ok(None);
+        };
+        let micros = ticked
+            .iter()
+            .map(|(_, start, _)| start.div_euclid(1_000) + i128::from(start.rem_euclid(1_000) > 0))
+            .max()
+            .unwrap_or_default();
+        let kinds = ticked
+            .into_iter()
+            .filter(|(at, _, _)| *at == tick)
+            .map(|(_, _, kind)| kind)
+            .collect();
+        Ok(Some(LatestStamp {
+            digits,
+            tick,
+            kinds,
+            micros,
+        }))
     }
 
     /// Whether a record of `kind` exists about `subject` at its current revision. Each record
@@ -4453,6 +4479,35 @@ pub fn turn_judge_refusal(case_dir: &Path, binary: &Path) -> Result<Option<Strin
     Ok(Some(format!(
         "{TURN_PROTOCOL}: this binary hashes to sha256 {digest}, not to {recorded}, the binary that judges the turn since it opened; a turn is judged by one binary only, so run it with that one{kept}; nothing was run"
     )))
+}
+
+/// A case's latest evidence stamp as Canon compares it once a record written to the microsecond
+/// joins the case's records ([`CaseDir::latest_stamp`]). Canon 0.8.0 reads every instant of one
+/// evaluation at the coarsest precision written among its records, each as whole ticks of that
+/// resolution; two instants in one tick are of unknown order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LatestStamp {
+    /// The resolution, in fraction digits: the fewest any of the case's records is written in,
+    /// and at most [`LatestStamp::MICRO_DIGITS`].
+    pub digits: u32,
+    /// The latest tick at that resolution among the case's records.
+    pub tick: i128,
+    /// The kinds of the records in that tick.
+    pub kinds: BTreeSet<String>,
+    /// The latest record's instant in microseconds since the epoch, a fraction of a microsecond
+    /// rounded up: no stamp below it is later than every record.
+    pub micros: i128,
+}
+
+impl LatestStamp {
+    /// The fraction digits takt writes a stamp in: microseconds.
+    pub const MICRO_DIGITS: u32 = 6;
+
+    /// The microseconds in one tick at [`LatestStamp::digits`].
+    #[must_use]
+    pub fn tick_micros(&self) -> i128 {
+        10_i128.pow(Self::MICRO_DIGITS - self.digits.min(Self::MICRO_DIGITS))
+    }
 }
 
 #[cfg(test)]
