@@ -2,6 +2,7 @@
 //! reach a case through ([`CaseEvidence`]).
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow, bail};
@@ -31,6 +32,11 @@ pub struct Record {
     pub subject_revision: String,
     pub observed_at: String,
     pub producer: String,
+    /// The stamp [`Record::new`] took from the clock, never written: while `observed_at` is
+    /// still it, the stamp is the clock's, and the case's evidence port stamps the record again
+    /// when it is submitted ([`CaseEvidence::submit`]); a stamp a caller set is kept.
+    #[serde(skip)]
+    clock: Option<String>,
 }
 
 /// The format every record names.
@@ -62,6 +68,7 @@ impl Record {
         revision: impl Into<String>,
         producer: impl Into<String>,
     ) -> Self {
+        let observed_at = crate::now();
         Self {
             format: FORMAT,
             id: id.into(),
@@ -69,9 +76,16 @@ impl Record {
             result,
             subject: subject.into(),
             subject_revision: revision.into(),
-            observed_at: crate::now(),
+            clock: Some(observed_at.clone()),
+            observed_at,
             producer: producer.into(),
         }
+    }
+
+    /// Whether `observed_at` is the stamp [`Record::new`] took from the clock: no caller set it.
+    #[must_use]
+    pub fn clock_stamped(&self) -> bool {
+        self.clock.as_deref() == Some(self.observed_at.as_str())
     }
 
     /// The record as JSON.
@@ -103,6 +117,7 @@ impl Record {
             subject_revision: read.subject_revision,
             observed_at: read.observed_at,
             producer: read.producer,
+            clock: None,
         };
         (record.facts().ok()? == *facts).then_some(record)
     }
@@ -140,26 +155,70 @@ pub struct CaseEvidence<'c> {
     case: RefCell<&'c mut CaseDir>,
     governor: CanonGovernor<CaseFiles>,
     producers: Vec<String>,
+    /// The kinds each order form of the case's protocol reads ([`LoadedProtocol::order_reads`]).
+    ///
+    /// [`LoadedProtocol::order_reads`]: crate::protocol::LoadedProtocol::order_reads
+    orders: Vec<BTreeSet<String>>,
     written: RefCell<Option<PathBuf>>,
     refused: RefCell<Option<String>>,
 }
 
 impl<'c> CaseEvidence<'c> {
     /// The evidence port of `case`, taking records from `producers` alone.
+    ///
+    /// # Errors
+    /// The case's protocol does not compile.
     pub fn new(case: &'c mut CaseDir, producers: Vec<String>) -> Result<Self> {
         let files = CaseFiles::new(&case.dir, &case.id, &case.protocol.id);
+        let orders = case.protocol.order_reads()?;
         Ok(Self {
             case: RefCell::new(case),
             governor: CanonGovernor::new(files),
             producers,
+            orders,
             written: RefCell::new(None),
             refused: RefCell::new(None),
         })
     }
 
+    /// The second a record of `kind` whose stamp is the clock's is stamped with when it is
+    /// submitted, `latest` the case's latest second and the kinds observed in it
+    /// ([`CaseDir::latest_second`]). The clock's second now, but never earlier than `latest`, so
+    /// a case's stamps only grow. Canon compares two records' instants in whole seconds within one
+    /// order form, and reads two records in one second as of unknown order; so where the stamp
+    /// would fall in `latest` and an order form of the protocol reads both `kind` and another kind
+    /// observed then, the record waits until the clock leaves that second
+    /// ([`crate::now_after`], at most about a second). Without such a form there is no wait.
+    fn second_for(&self, kind: &str, latest: Option<(i64, BTreeSet<String>)>) -> i64 {
+        let clock = crate::clock_second();
+        let Some((last, kinds)) = latest else {
+            return clock;
+        };
+        if clock > last {
+            return clock;
+        }
+        let ordered = kinds.iter().any(|other| {
+            other != kind
+                && self
+                    .orders
+                    .iter()
+                    .any(|form| form.contains(other) && form.contains(kind))
+        });
+        if ordered {
+            crate::now_after(last)
+        } else {
+            last
+        }
+    }
+
     /// Submits `record` as `producer`'s, for the action request `request` when an effect
     /// performing one wrote it: the producer's observation of it first, then the record citing
     /// that observation. Answers the file it was written to.
+    ///
+    /// A record whose stamp is the clock's ([`Record::clock_stamped`]) is stamped again now, as
+    /// [`CaseEvidence::second_for`] says: never before the case's latest record, and out of that
+    /// record's second where an order form reads both kinds. A stamp a caller set is kept, and the
+    /// port does not wait on it.
     ///
     /// # Errors
     /// The port's refusal, naming the producer and why.
@@ -169,6 +228,15 @@ impl<'c> CaseEvidence<'c> {
         record: &Record,
         request: Option<&str>,
     ) -> Result<PathBuf> {
+        let restamped = if record.clock_stamped() {
+            let latest = self.case.borrow().latest_second()?;
+            let mut again = record.clone();
+            again.observed_at = crate::instant_at(self.second_for(&record.kind, latest));
+            Some(again)
+        } else {
+            None
+        };
+        let record = restamped.as_ref().unwrap_or(record);
         let (id, files) = {
             let case = self.case.borrow();
             (

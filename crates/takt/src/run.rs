@@ -219,21 +219,38 @@ pub enum Stop {
 /// changed nothing but documentation since the row's last ([`code_changed`]).
 pub const REPEATED_FAILURES: u64 = 2;
 
-/// Whether `path`, relative to the tree, is documentation the tests cannot depend on: under
-/// `docs/`, or `README.md` or `CHANGELOG.md` at the root. The paths the repository's own rules
-/// leave off the judge surface; no protocol or case names its documentation paths.
+/// Whether `path`, relative to the tree, is a documentation path.
 fn is_documentation_path(path: &str) -> bool {
     path.starts_with("docs/") || path == "README.md" || path == "CHANGELOG.md"
 }
-
-/// Whether the tree of revision `to` differs from that of `from` at a path that is not
-/// documentation ([`is_documentation_path`]): a new attempt at what the tests decide. True when
-/// git cannot compare them, so a result is counted as it was before the rule.
-fn code_changed(tree: &Path, from: &str, to: &str) -> bool {
-    match crate::git::paths_differing_outside(tree, from, to, "docs") {
-        Ok(paths) => paths.iter().any(|path| !is_documentation_path(path)),
-        Err(_) => true,
-    }
+/// Whether the tree of revision `to` differs from that of `from`, outside `.engineering/`, at a
+/// path that is not documentation ([`is_documentation_path`]) or at a documentation path a test
+/// file names at `to` ([`names_doc_path`]): a new attempt at what the tests decide. A test file
+/// is a path a `tests.write` commit in `written` changed. True when git cannot compare them, so
+/// a result is counted as it was before the rule.
+fn code_changed(tree: &Path, from: &str, to: &str, written: &BTreeSet<String>) -> bool {
+    let check = || -> Option<bool> {
+        let paths = crate::git::paths_differing_outside(tree, from, to, ".engineering").ok()?;
+        if paths.iter().any(|path| !is_documentation_path(path)) {
+            return Some(true);
+        }
+        let mut test_paths = BTreeSet::new();
+        for revision in written {
+            let parent = format!("{revision}^");
+            test_paths.extend(
+                crate::git::paths_differing_outside(tree, &parent, revision, ".engineering")
+                    .ok()?,
+            );
+        }
+        for path in test_paths {
+            let content = crate::git::blob(tree, &format!("{to}:{path}")).ok()?;
+            if paths.iter().any(|path| names_doc_path(&content, path)) {
+                return Some(true);
+            }
+        }
+        Some(false)
+    };
+    check().unwrap_or(true)
 }
 /// How many `gate.run` results in a row, each at a new revision, failing the same set of gates
 /// stop the run ([`Stop::RepeatedGateFailure`]).
@@ -413,6 +430,10 @@ pub const CHOICE_PRODUCER: &str = "takt.choice";
 fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
 }
+
+/// The most bytes of a step's diff the console reads from git ([`Run::committed_diff`]); a
+/// larger diff is one line naming its commit.
+const DIFF_BYTES: usize = 4 << 20;
 
 /// The text a step's `summary` is printed with on the console: whole, unless it ends in the
 /// same bracketed `[metaharness …]` verdict the console printed last (`last`), which is then
@@ -609,7 +630,7 @@ impl TestsSoFar {
                         continue;
                     }
                     Failing::after(&mut failing, revision, failed, |from| {
-                        code_changed(tree, from, revision)
+                        code_changed(tree, from, revision, written)
                     });
                 }
                 _ => {}
@@ -11362,6 +11383,54 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
+    /// The paint the console's lines are written in ([`crate::console::Paint`]): colour only
+    /// under a console in colour, so without the console every line is as it was.
+    fn paint(&self) -> crate::console::Paint {
+        self.console
+            .map(crate::console::Console::paint)
+            .unwrap_or_default()
+    }
+
+    /// A step line's `effect:` label, dim in colour.
+    fn effect_label(&self) -> String {
+        self.paint().dim("effect:")
+    }
+
+    /// The diff of the step's commit `head` as the console prints it before the step's
+    /// `effect:` line ([`crate::console::diff`]): `git diff <head>^ <head>` outside
+    /// `.engineering/` and `.takt/`, with no external diff, text conversion or colour of git's;
+    /// none without the console or when it lists none. A diff git does not give, or one past
+    /// [`DIFF_BYTES`], is one line saying so, and the run goes on.
+    fn committed_diff(&self, head: &str) -> Vec<String> {
+        let Some(console) = self.console.filter(|console| console.diff) else {
+            return Vec::new();
+        };
+        let short = crate::trace::escape(short(head));
+        let parent = format!("{head}^");
+        let args = [
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            parent.as_str(),
+            head,
+            "--",
+            ".",
+            ":(exclude).engineering",
+            ":(exclude).takt",
+        ];
+        match crate::git::run_bounded(&self.tree, &args, DIFF_BYTES) {
+            Ok(Some(text)) => crate::console::diff(&text, &short, console.paint()),
+            Ok(None) => vec![format!(
+                "    … the diff passes {} MiB (git show {short})",
+                DIFF_BYTES >> 20
+            )],
+            Err(_) => vec![format!("    the diff was not read (git show {short})")],
+        }
+    }
+
     /// What a harness step's line appends under the console: the duration and cost the harness
     /// reported of its last call and the step's `tokens`, each when reported
     /// ([`crate::console::harness_figures`]); nothing without the console.
@@ -11885,7 +11954,7 @@ impl<'a> Run<'a> {
             };
             let took =
                 u64::try_from(returned.duration_since(began).as_millis()).unwrap_or(u64::MAX);
-            crate::console::validator_figures(result, &named, took)
+            crate::console::validator_figures_in(result, &named, took, self.paint())
         } else {
             String::new()
         };
@@ -11893,14 +11962,15 @@ impl<'a> Run<'a> {
             out,
             "step {}: {} {{}}{figures}",
             self.steps,
-            validator.action()
+            self.paint().bold(validator.action())
         )?;
         // A `tests.run` summary keeps its failed tests whole; its printed line is bounded.
+        let effect = self.effect_label();
         if validator.action() == crate::validator::TestsRun::ACTION {
             let line = crate::validator::tests_line(&observation.summary);
-            writeln!(out, "  effect: {line}")?;
+            writeln!(out, "  {effect} {line}")?;
         } else {
-            writeln!(out, "  effect: {}", observation.summary)?;
+            writeln!(out, "  {effect} {}", observation.summary)?;
         }
         // What the validator retains lands before the records that refer to it: a
         // retention that fails ends the run with nothing written for the step.
@@ -12010,7 +12080,8 @@ impl<'a> Run<'a> {
                 rerun: failures.rerun,
             }));
         }
-        if tests_written_at(&self.case.dir)?.contains(revision) {
+        let written = tests_written_at(&self.case.dir)?;
+        if written.contains(revision) {
             Failing::after_written(&mut so_far.failing, &failures.tests);
             return Ok(None);
         }
@@ -12018,7 +12089,7 @@ impl<'a> Run<'a> {
             &mut so_far.failing,
             revision,
             Some(failures.tests),
-            |from| code_changed(&self.tree, from, revision),
+            |from| code_changed(&self.tree, from, revision, &written),
         );
         Ok(so_far
             .failing
@@ -13033,7 +13104,7 @@ impl<'a> Run<'a> {
                                 out,
                                 "step {}: {} ({}){}",
                                 self.steps,
-                                report.action,
+                                self.paint().bold(&report.action),
                                 self.harness.name(),
                                 self.call_figures(report.tokens)
                             )?;
@@ -13245,19 +13316,35 @@ impl<'a> Run<'a> {
             )
         };
         // A step that cannot be told on `out` is not judged: it is discarded whole, as
-        // one whose harness failed, and the run ends on the error.
+        // one whose harness failed, and the run ends on the error. Under the console the
+        // `said:` line is followed by what the step looked at, its transcript's tool calls
+        // ([`crate::console::reads`]), unless the console lists none.
+        let paint = self.paint();
+        let reads = match self.console {
+            Some(console) if console.reads => harness
+                .last_transcript()
+                .map(|transcript| crate::console::reads(&transcript, paint))
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
         let told = writeln!(
             out,
             "step {}: {} ({}){}",
             self.steps,
-            report.action,
+            paint.bold(&report.action),
             self.harness.name(),
             self.call_figures(report.tokens)
         )
         .and_then(|()| {
             let said = said_line(&report.summary, &mut self.said_verdict);
-            writeln!(out, "  said: {}", crate::trace::escape(&said))
-        });
+            writeln!(
+                out,
+                "  {} {}",
+                paint.dim("said:"),
+                crate::trace::escape(&said)
+            )
+        })
+        .and_then(|()| reads.iter().try_for_each(|line| writeln!(out, "{line}")));
         if let Err(error) = told {
             let moved = undo()?;
             record_step(self)?;
@@ -13548,7 +13635,8 @@ impl<'a> Run<'a> {
             )?;
             writeln!(
                 out,
-                "  effect: none; declined at case revision {case_revision}, the case stays open"
+                "  {} none; declined at case revision {case_revision}, the case stays open",
+                self.effect_label()
             )?;
             return Ok(Judgement::Stop(Stop::Declined(declined_reason(&reason))));
         }
@@ -13568,7 +13656,12 @@ impl<'a> Run<'a> {
                 return Ok(Judgement::Stop(Stop::StepRefused(why)));
             }
             record_step(self)?;
-            writeln!(out, "  effect: none; {} needs an approval", report.action)?;
+            writeln!(
+                out,
+                "  {} none; {} needs an approval",
+                self.effect_label(),
+                report.action
+            )?;
             // The request for the approval is the proposal: the runtime asks the case's
             // authority, and whatever it answers nothing is performed for it.
             return Ok(Judgement::Propose(Box::new(Proposed {
@@ -13695,7 +13788,7 @@ impl<'a> Run<'a> {
                     revision: None,
                 },
             )?;
-            writeln!(out, "  effect: no file changed")?;
+            writeln!(out, "  {} no file changed", self.effect_label())?;
             // The records missing, each about an artifact at its revision: written by the
             // choice effect ([`crate::validator::ChoiceEffect`]), which Commission's runtime
             // handed the request for the action the harness chose, through the case's
@@ -13793,7 +13886,7 @@ impl<'a> Run<'a> {
                     revision: None,
                 },
             )?;
-            writeln!(out, "  effect: no file changed")?;
+            writeln!(out, "  {} no file changed", self.effect_label())?;
             return Ok((false, None));
         }
         // The message is the harness's `commit` when it passes its check, else the fallback,
@@ -13857,9 +13950,13 @@ impl<'a> Run<'a> {
         } else {
             String::new()
         };
+        for line in self.committed_diff(&head) {
+            writeln!(out, "{line}")?;
+        }
         writeln!(
             out,
-            "  effect: committed {} path(s); implementation is now {}{named}",
+            "  {} committed {} path(s); implementation is now {}{named}",
+            self.effect_label(),
             changed.len(),
             &head[..8.min(head.len())]
         )?;
@@ -13936,6 +14033,36 @@ pub const TESTS_CHANGE: &str = "tests_change";
 
 /// The producer of a `tests_change` record: takt, attesting the commit of a `tests.write` step.
 pub const TESTS_CHANGE_PRODUCER: &str = "takt.tests-write";
+
+/// Whether the text names the path, or one of its parent directories with or without its
+/// trailing `/`, at a path boundary: the match is followed by the end of the text or by a byte
+/// that is not an ASCII letter or digit, a non-ASCII byte, `_`, `-`, `.`, `/` or `~`. Nothing is
+/// required before the match, so `/../../docs/runs` names `docs/runs/x`; a parent directory is a
+/// prefix of the path that holds a `/`, so the top directory alone (`docs`) is not one.
+fn names_doc_path(text: &[u8], path: &str) -> bool {
+    std::iter::once(path)
+        .chain(
+            path.match_indices('/')
+                .map(|(i, _)| &path[..i])
+                .filter(|p| p.contains('/')),
+        )
+        .any(|candidate| {
+            text.windows(candidate.len()).enumerate().any(|(i, bytes)| {
+                if bytes != candidate.as_bytes() {
+                    return false;
+                }
+                let rest = &text[i + candidate.len()..];
+                let rest = if candidate != path && rest.starts_with(b"/") {
+                    &rest[1..]
+                } else {
+                    rest
+                };
+                rest.first().is_none_or(|b| {
+                    !(b.is_ascii_alphanumeric() || !b.is_ascii() || b"_-./~".contains(b))
+                })
+            })
+        })
+}
 
 #[cfg(test)]
 mod tests {

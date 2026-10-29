@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-edits-the-tests-read-are-attempts
 kind: story
-status: draft
+status: implemented
 title: An edit under docs/ that the story's tests read is never counted as an attempt
 tags:
 - finding
@@ -14,7 +14,11 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:a-revision-without-code-is-no-new-attempt
-revision: 2
+revision: 10
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T06:37:36Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-29T07:05:34Z", actor: "human:timo", revision: 5, executor: "agent:takt"}
+- {from: "active", to: "implemented", at: "2026-10-29T07:49:35Z", actor: "agent:takt", revision: 9, decided_on: {"recorded":{"test_result":1,"approval":1}}}
 ---
 # An edit under docs/ that the story's tests read is never counted as an attempt
 
@@ -71,3 +75,61 @@ path under `docs/`. A revision that changes only documentation no test reads sti
 
 0.19.0 ships this story's cases `#[ignore]`d, accepted at its release check as a tracked finding
 on the condition that each ignore's reason names this story.
+
+## Decision (wave 44)
+
+A first run declined this story (wave 44): in the scripted case nothing names `docs/fixture.txt`,
+so takt holds no information that tells it from documentation no test reads. The planner's
+decision, which settles that:
+
+- The rule is the first of the two in § Outcome: a path under `docs/`, `README.md` or
+  `CHANGELOG.md` is documentation unless a test file at the revision names it. A test file is a
+  path the case's test-writing steps changed (the paths the tests' own commits touched). What
+  "names it" means is the section "Decision (wave 44, review)" below, and only that section: the
+  path or one of its parent directories, ending at a path boundary.
+- The scripted case is in this story's scope and may be changed so its tests file names the
+  fixture, as a real test does: the `Developer`'s first `tests.write` in
+  `crates/takt/tests/w42_adv_repeat_count.rs` writes a tests file whose content includes
+  `docs/fixture.txt`. The case's assertion (`RepeatedTestFailure`) does not change.
+- The other case of that file and the cases of story:a-revision-without-code-is-no-new-attempt
+  keep passing unchanged: their documentation edits are to files no tests file names.
+- The review's cases in `crates/takt/tests/w44_adv_docs_named.rs` are the planner's: a step may
+  reformat them, but never changes a case's input, name or assertion. A case that seems to
+  contradict this story is a question for the planner, asked by declining with that case named.
+
+## Decision (wave 44, review)
+
+The adversarial pass on the first implementation (aa2b794e) found two cases red, now in
+`crates/takt/tests/w44_adv_docs_named.rs`; the second pass (cda52fd0) four more, now in
+`crates/takt/tests/w44_adv_docs_named_b.rs`. The planner's decision on "names it", which all of
+them hold, and which replaces every other reading:
+
+- A test file names a documentation path `P` when its content holds `P`, or a parent directory
+  of `P` with or without its trailing `/`, as a match that ends at a path boundary: the end of
+  the text, `/`, a quote (`"` or `'`), whitespace, `)`, `,` or `\`. Any other character after the
+  match (a letter, a digit, `.`, `_`, `-`, `~`, `+`, `@`, `=`, `%`, `#`, `:`) continues the path,
+  so `docs/guide.md.tpl` and `docs/guide.md~` do not name `docs/guide.md`.
+- Nothing is required before the match, so `"/../../docs/runs/turn-1/case"` names the files
+  under `docs/runs/turn-1/case`, as `crates/takt-cli/tests/cases_under_dot_takt.rs` reads them.
+  The over-counts this allows (`website/docs/intro.md` names `docs/intro.md`; a test naming
+  `docs` names every documentation file) stop a run earlier, never later, and stand.
+- Windows separators (`docs\guide.md`) name nothing.
+- The comparison that decides whether a revision changed code leaves `.engineering/` out. The doc
+  comment of `code_changed` and the repeated-failure prose in `ess/domains/takt.yaml` state this
+  rule, the boundary characters and the `.engineering/` exclusion.
+
+## Decision (wave 44, integration)
+
+The documentation pass on the integration branch found the merged code (`names_doc_path`,
+`crates/takt/src/run.rs`) reading "a path boundary" otherwise than the section above, after
+four review rounds whose cases it passes. The planner keeps the code and amends the section
+above to it:
+
+- A match ends at a path boundary when the end of the text or any byte follows it but an ASCII
+  letter or digit, a non-ASCII byte, `_`, `-`, `.`, `/` or `~`. So `+`, `@`, `=`, `%`, `#` and
+  `:` end a path (`docs/guide.md:3` names `docs/guide.md`). A parent directory's trailing `/` is
+  read as part of the match before the boundary.
+- A parent directory is a prefix of the path that itself holds a `/`; the top directory alone
+  (`docs`) names no file. A test that reads all of `docs/` therefore counts none of its edits;
+  the run then ends at its iteration budget, as before this story.
+- Everything else in the section above stands.

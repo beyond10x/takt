@@ -53,7 +53,7 @@ kind: its two new stops are `stop` lines like the others, and so is 0.19.0's
 | `Iterations`, `Hours`, `Tokens`, `ActiveTime` | the budget ended | 3 |
 | `NothingAdmissible`, `StepRefused`, `NoProgress` | no admissible step, a step refused, or nothing changed | 3 |
 | `RedBase` | the case's first `tests.run` failed before any step changed the base | 3 |
-| `RepeatedTestFailure` | two `tests.run` results in a row, each at a new revision, failed the same tests; from 0.19.0 neither the red run of newly written tests nor a result at a revision that changed only documentation counts | 3 |
+| `RepeatedTestFailure` | two `tests.run` results in a row, each at a new revision, failed the same tests; from 0.19.0 neither the red run of newly written tests nor a result at a revision that changed only documentation counts; from 0.21.0 a documentation path a test file of the case names is not documentation ([How a run ends](../concepts/how-a-run-ends.md)) | 3 |
 | `RepeatedGateFailure` | three `gate.run` results in a row, each at a new revision, failed the same gates (0.19.0) | 3 |
 | `HarnessUnqualified`, `SetupFailed` | the harness binary does not qualify under the run's hermetic mode, or a `setup` command of the run file did not end 0 | 1 |
 | `ApprovalRequired` | a capability needs a grant (`takt approve`) | 4 |

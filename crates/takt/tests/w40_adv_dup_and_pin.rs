@@ -95,7 +95,6 @@ fn w40_adv_duplicates_found_at_their_line_bom_unicode_depth() {
 /// first line and says nothing of a key held twice, where the story asks for the duplicate's
 /// own line.
 #[test]
-#[ignore = "story:duplicate-key-reader-limits: an alias written as a key"]
 fn w40_adv_a_duplicate_written_as_an_alias_is_refused_at_its_line() {
     let wrong = wrong(&[(
         "alias-key",
@@ -108,7 +107,6 @@ fn w40_adv_a_duplicate_written_as_an_alias_is_refused_at_its_line() {
 /// A tagged key before the duplicate (`!!str model`): the event reader stops at the first tag,
 /// so the refusal falls back to the mapping's first line and says nothing of a key held twice.
 #[test]
-#[ignore = "story:duplicate-key-reader-limits: a tagged key before the duplicate"]
 fn w40_adv_a_tagged_key_before_the_duplicate_hides_it() {
     let wrong = wrong(&[(
         "tag-before",
@@ -122,7 +120,6 @@ fn w40_adv_a_tagged_key_before_the_duplicate_hides_it() {
 /// as `k: iterations:` is not one scalar, so the reader gives up on the mapping, and the refusal
 /// says nothing of a key held twice.
 #[test]
-#[ignore = "story:duplicate-key-reader-limits: a plain key ending in a colon"]
 fn w40_adv_a_plain_key_ending_in_a_colon_is_found_at_its_line() {
     let wrong = wrong(&[(
         "colon-key",

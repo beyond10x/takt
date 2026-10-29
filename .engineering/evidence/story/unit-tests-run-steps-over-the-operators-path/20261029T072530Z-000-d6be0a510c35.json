@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-29T07:25:30Z",
+  "actor": "agent:takt",
+  "artifact": "story:unit-tests-run-steps-over-the-operators-path",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "takt",
+    "reference": ".takt/cases/story-unit-tests-run-steps-over-the-operators-path-20261029T065945Z/evidence/0018-test-result-21.json#sha256=8fa8eff3064a365b706b071d334f167e6a52ccd97767e697fcafcd1d2254897f&result=pass&revision=90c1fea2f7497c998bf578737b7c9c6f253348c9&producer=takt.tests-run"
+  }
+}

@@ -145,12 +145,9 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
 
 /// U3's commit: "every test binary that runs steps reads program directories of its own".
 /// `tests_have_a_home_of_their_own` reads `crates/*/tests` only; a `#[cfg(test)]` module in
-/// `crates/*/src` is a test binary too, and the `own_home` hook cannot be in it. The takt
-/// binary's unit tests run `takt run --harness none --test-cmd true` in process
-/// (`crates/takt-cli/src/main.rs`, `fn takt`), a `tests.run` step under the guard over the
-/// operator's `PATH` and `~/.cargo/bin`.
+/// `crates/*/src` is a test binary too. A module that runs steps must include the same
+/// pre-main `own_home` hook as the integration test binaries.
 #[test]
-#[ignore = "story:unit-tests-run-steps-over-the-operators-path: unit-test modules in crates/*/src run steps over the operator's program directories"]
 fn no_unit_test_module_runs_steps_over_the_operators_program_directories() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -170,6 +167,7 @@ fn no_unit_test_module_runs_steps_over_the_operators_program_directories() {
         let tests = &text[at..];
         if RUNS_STEPS.iter().any(|needle| tests.contains(needle))
             && tests.contains("\"--test-cmd\"")
+            && !text.contains("#[path = \"../../takt/tests/support/own_home.rs\"]\nmod own_home;")
         {
             exposed.push(
                 file.strip_prefix(crates)

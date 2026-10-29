@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-29T08:46:41Z",
+  "actor": "agent:planner",
+  "artifact": "story:duplicate-key-reader-limits",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "takt approve repository.merge --by agent:planner at 97115763eddc5e88252d4e8c1406d69d2477d185",
+    "reference": "story-duplicate-key-reader-limits-20261029T065955Z/authority.yaml"
+  }
+}

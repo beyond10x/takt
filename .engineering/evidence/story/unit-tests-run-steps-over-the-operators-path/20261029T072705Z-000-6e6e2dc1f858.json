@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-29T07:27:05Z",
+  "actor": "agent:planner",
+  "artifact": "story:unit-tests-run-steps-over-the-operators-path",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "takt approve repository.merge --by agent:planner at 90c1fea2f7497c998bf578737b7c9c6f253348c9",
+    "reference": "story-unit-tests-run-steps-over-the-operators-path-20261029T065945Z/authority.yaml"
+  }
+}

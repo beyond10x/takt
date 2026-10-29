@@ -10,8 +10,9 @@
 //! private directories is still seen, as it was in the real one. Every test file that runs a
 //! step under the guard includes this module (`tests_have_a_home_of_their_own.rs`).
 //!
-//! The private directories are under this crate's `CARGO_TARGET_TMPDIR` and removed when the
-//! process exits. Any failure to make them aborts the binary before a test runs.
+//! The private directories are under this crate's `CARGO_TARGET_TMPDIR`, or the system temporary
+//! directory for unit tests, and removed when the process exits. Any failure to make them aborts
+//! the binary before a test runs.
 #![cfg(unix)]
 
 /// The rest of what a test binary reads of the operator's state: git's automatic maintenance
@@ -36,11 +37,6 @@ const MARK: &str = "TAKT_TEST_OWN_HOME";
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".init_array"))]
 #[cfg_attr(target_os = "macos", unsafe(link_section = "__DATA,__mod_init_func"))]
 static BEFORE_MAIN: extern "C" fn() = before_main;
-
-unsafe extern "C" {
-    fn atexit(callback: extern "C" fn()) -> std::ffi::c_int;
-    fn access(path: *const std::ffi::c_char, mode: std::ffi::c_int) -> std::ffi::c_int;
-}
 
 /// `access(2)`'s `W_OK`, the same on Linux and macOS.
 const W_OK: std::ffi::c_int = 2;
@@ -68,7 +64,7 @@ fn writable(dir: &Path) -> bool {
         return false;
     };
     // SAFETY: `path` is a valid NUL-terminated string that outlives the call.
-    unsafe { access(path.as_ptr(), W_OK) == 0 }
+    unsafe { libc::access(path.as_ptr(), W_OK) == 0 }
 }
 
 /// Whether the entry at `path` is one a lookup by name may find, as the step guard lists a
@@ -98,14 +94,16 @@ fn isolate() -> std::io::Result<()> {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| elapsed.subsec_nanos());
-    let root = Path::new(env!("CARGO_TARGET_TMPDIR"))
-        .join(format!("own-home-{}-{nanos:09}", std::process::id()));
-    std::fs::create_dir_all(Path::new(env!("CARGO_TARGET_TMPDIR")))?;
+    let tmp = option_env!("CARGO_TARGET_TMPDIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let root = tmp.join(format!("own-home-{}-{nanos:09}", std::process::id()));
+    std::fs::create_dir_all(&tmp)?;
     std::fs::create_dir(&root)?;
     let _ = ROOT.set(root.clone());
     // SAFETY: `atexit` takes a function that lives for the whole process.
     unsafe {
-        atexit(at_exit);
+        libc::atexit(at_exit);
     }
     // Each real program directory, at its real path, to its private copy.
     let mut copies: Vec<(PathBuf, PathBuf)> = Vec::new();

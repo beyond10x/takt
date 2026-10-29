@@ -3,7 +3,7 @@ title: How a run ends
 sidebar_position: 6
 description: Every stop a takt run can end on, grouped, with its exit code and what the next run does; the two test stops added in 0.14.0 and the gate stop added in 0.19.0.
 lede: Every run ends on one named stop, printed as one stopped line and recorded in the case, with an exit code a script or a Loom Job can read; every stop but Completed leaves the case open, and the next run resumes it.
-source: takt run --help (Exit codes) at 0.14.0; crates/takt/src/run.rs (Stop, STOP_KINDS, REPEATED_FAILURES, REPEATED_GATE_FAILURES, is_documentation_path, Run::tests_stop, Run::before_any_effect), crates/takt/src/console.rs (stop_figures), crates/takt-cli/src/main.rs (EXIT_*); crates/takt-cli/tests/test_failure_stops_cli.rs; CHANGELOG.md 0.14.0; Loom 0.44.0 CHANGELOG (status.run); scratch runs of takt 0.14.0; one case record of a cluster run of takt 0.13.1
+source: takt run --help (Exit codes) at 0.14.0; crates/takt/src/run.rs (Stop, STOP_KINDS, REPEATED_FAILURES, REPEATED_GATE_FAILURES, is_documentation_path, code_changed, names_doc_path, Run::tests_stop, Run::before_any_effect), crates/takt/src/console.rs (stop_figures), crates/takt-cli/src/main.rs (EXIT_*); crates/takt-cli/tests/test_failure_stops_cli.rs; crates/takt/tests/w42_adv_repeat_count.rs, w44_adv_docs_named.rs, w44_adv_docs_named_b.rs; CHANGELOG.md 0.14.0; Loom 0.44.0 CHANGELOG (status.run); scratch runs of takt 0.14.0; one case record of a cluster run of takt 0.13.1
 ---
 
 # How a run ends
@@ -90,7 +90,13 @@ before it spends model calls on them.
   revision a `tests.write` step committed, which shows the story's new tests failing as the
   protocol asks, and a result at a revision that changed only documentation (`docs/`,
   `README.md`, `CHANGELOG.md`) since the last one. A first edit that leaves the new tests red no
-  longer ends the run.
+  longer ends the run. From 0.21.0 a documentation path counts as code when a test file names
+  it. A test file is one a `tests.write` commit of the case changed; it names the path when it
+  holds the path, or a parent directory of it below `docs/` (`docs/runs` for
+  `docs/runs/a.md`) with or without its trailing `/`, followed by the end of the text or a
+  character that cannot go on with a path: anything but a letter, a digit, a non-ASCII
+  character, `_`, `-`, `.`, `/` or `~`. So an edit to a fixture under `docs/` that the story's
+  tests read is an attempt like any other. A change under `.engineering/` never counts.
 
 A resume after either stop runs the tests again before any model call, and stops again while
 they fail the same way. Once they pass, or fail differently, the run goes on.

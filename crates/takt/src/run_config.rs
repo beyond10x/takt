@@ -927,7 +927,20 @@ fn duplicate_yaml_key(text: &str, error: &serde_yaml_ng::Error) -> Option<(usize
 /// read as a mapping's value; none when that reading is not one scalar or does not give the
 /// text back as the string it is.
 fn plain_scalar(text: &str) -> Option<serde_yaml_ng::Value> {
-    let read: serde_yaml_ng::Mapping = serde_yaml_ng::from_str(&format!("k: {text}")).ok()?;
+    let read: serde_yaml_ng::Mapping = match serde_yaml_ng::from_str(&format!("k: {text}")) {
+        Ok(read) => read,
+        Err(_) => {
+            let extended = format!("{text}a");
+            let read: serde_yaml_ng::Mapping =
+                serde_yaml_ng::from_str(&format!("k: {extended}")).ok()?;
+            return match read.into_iter().next()?.1 {
+                serde_yaml_ng::Value::String(value) if value == extended => {
+                    Some(serde_yaml_ng::Value::String(text.to_owned()))
+                }
+                _ => None,
+            };
+        }
+    };
     let (_, value) = read.into_iter().next()?;
     match &value {
         serde_yaml_ng::Value::String(string) if string != text => None,
@@ -943,8 +956,7 @@ fn plain_scalar(text: &str) -> Option<serde_yaml_ng::Value> {
 /// byte `mapping` of the YAML `text`, and the key, read from the parser's own events: a scalar
 /// or a comment is never read as a key, and a key is compared as serde_yaml_ng compares it, as
 /// the value it resolves to. None when the mapping holds no such key, when one of its keys
-/// before it is an alias or carries a tag, which this does not resolve, or when the parser
-/// cannot be set up.
+/// before it cannot be resolved, or when the parser cannot be set up.
 fn repeated_key(text: &str, mapping: usize) -> Option<(usize, serde_yaml_ng::Value)> {
     use unsafe_libyaml as unsafe_yaml;
     /// An open sequence or mapping; a mapping's next node is a key or a value, and the one
@@ -952,14 +964,27 @@ fn repeated_key(text: &str, mapping: usize) -> Option<(usize, serde_yaml_ng::Val
     struct Open {
         mapping: bool,
         key_next: bool,
-        keys: Option<Vec<serde_yaml_ng::Value>>,
+        keys: Option<std::collections::HashSet<serde_yaml_ng::Value>>,
     }
     let size = u64::try_from(text.len()).ok()?;
     let mapping = u64::try_from(mapping).ok()?;
     let mut parser = Box::<unsafe_yaml::yaml_parser_t>::new_uninit();
     let parser = parser.as_mut_ptr();
     let mut open: Vec<Open> = Vec::new();
+    let mut anchors = std::collections::HashMap::new();
     let mut found = None;
+    // Marks count UTF-8 bytes. Index their file lines once so looking up every event
+    // stays linear even for large mappings, including CR-only and CRLF line endings.
+    let mut lines = vec![1usize];
+    let mut line = 1usize;
+    let mut after_cr = false;
+    for ch in text.bytes() {
+        if ch == b'\r' || (ch == b'\n' && !after_cr) {
+            line = line.saturating_add(1);
+        }
+        after_cr = ch == b'\r';
+        lines.push(line);
+    }
     // SAFETY: as `anchor_line`'s (`loop_scorecard`): the parser lives in its own allocation,
     // never moved, initialized before any other call and deleted after the last; the input
     // outlives it. Each event is filled by `yaml_parser_parse` before it is read, its union read
@@ -977,41 +1002,107 @@ fn repeated_key(text: &str, mapping: usize) -> Option<(usize, serde_yaml_ng::Val
                 break;
             }
             let kind = (*event).type_;
-            let line = usize::try_from((*event).start_mark.line)
-                .unwrap_or(usize::MAX)
-                .saturating_add(1);
+            // libyaml counts Unicode line separators as breaks, but file line numbers count
+            // CR, LF and CRLF. Its index counts UTF-8 bytes.
+            let index = usize::try_from((*event).start_mark.index).unwrap_or(usize::MAX);
+            let line = lines.get(index).copied().unwrap_or(line);
+
             let counted = open
                 .last()
                 .is_some_and(|parent| parent.mapping && parent.key_next && parent.keys.is_some());
             // Some(Some(key)): a key of the mapping, resolved; Some(None): one not resolved.
             let key = match kind {
-                unsafe_yaml::YAML_SCALAR_EVENT if counted => {
+                unsafe_yaml::YAML_SCALAR_EVENT => {
                     let scalar = (*event).data.scalar;
                     let bytes = std::slice::from_raw_parts(
                         scalar.value,
                         usize::try_from(scalar.length).unwrap_or(0),
                     );
                     let resolved = match std::str::from_utf8(bytes) {
-                        Ok(_) if !scalar.tag.is_null() => None,
+                        Ok(text) if !scalar.tag.is_null() => {
+                            let tag = std::ffi::CStr::from_ptr(scalar.tag.cast()).to_bytes();
+                            if tag == b"tag:yaml.org,2002:str" {
+                                Some(serde_yaml_ng::Value::String(text.to_owned()))
+                            } else if matches!(
+                                tag,
+                                b"tag:yaml.org,2002:null"
+                                    | b"tag:yaml.org,2002:bool"
+                                    | b"tag:yaml.org,2002:int"
+                                    | b"tag:yaml.org,2002:float"
+                            ) {
+                                let tag = std::str::from_utf8(tag).ok();
+                                tag.and_then(|tag| {
+                                    let quoted = serde_yaml_ng::to_string(text).ok()?;
+                                    serde_yaml_ng::from_str(&format!("!<{tag}> {quoted}")).ok()
+                                })
+                            } else if tag.starts_with(b"!") {
+                                let value = if scalar.style == unsafe_yaml::YAML_PLAIN_SCALAR_STYLE
+                                {
+                                    plain_scalar(text)
+                                } else {
+                                    Some(serde_yaml_ng::Value::String(text.to_owned()))
+                                };
+                                std::str::from_utf8(tag).ok().and_then(|tag| {
+                                    value.map(|value| {
+                                        serde_yaml_ng::Value::Tagged(Box::new(
+                                            serde_yaml_ng::value::TaggedValue {
+                                                tag: serde_yaml_ng::value::Tag::new(tag),
+                                                value,
+                                            },
+                                        ))
+                                    })
+                                })
+                            } else {
+                                Some(serde_yaml_ng::Value::String(text.to_owned()))
+                            }
+                        }
                         Ok(text) if scalar.style == unsafe_yaml::YAML_PLAIN_SCALAR_STYLE => {
                             plain_scalar(text)
                         }
                         Ok(text) => Some(serde_yaml_ng::Value::String(text.to_owned())),
                         Err(_) => None,
                     };
-                    Some(resolved)
+                    if !scalar.anchor.is_null() {
+                        let anchor = std::ffi::CStr::from_ptr(scalar.anchor.cast())
+                            .to_bytes()
+                            .to_vec();
+                        anchors.insert(anchor, Some(resolved.clone()));
+                    }
+                    counted.then_some(resolved)
                 }
-                unsafe_yaml::YAML_ALIAS_EVENT if counted => Some(None),
+                unsafe_yaml::YAML_ALIAS_EVENT if counted => {
+                    let anchor = std::ffi::CStr::from_ptr((*event).data.alias.anchor.cast());
+                    match anchors.get(anchor.to_bytes()) {
+                        Some(Some(Some(value))) => Some(Some(value.clone())),
+                        Some(Some(None)) => Some(None),
+                        // A collection cannot equal a scalar key. Keep looking for a
+                        // scalar duplicate; the deserializer's error corroborates it.
+                        Some(None) => None,
+                        None => Some(None),
+                    }
+                }
                 _ => None,
             };
             let complete = match kind {
                 unsafe_yaml::YAML_SCALAR_EVENT | unsafe_yaml::YAML_ALIAS_EVENT => true,
                 unsafe_yaml::YAML_SEQUENCE_START_EVENT | unsafe_yaml::YAML_MAPPING_START_EVENT => {
                     let is_mapping = kind == unsafe_yaml::YAML_MAPPING_START_EVENT;
+                    let anchor = if is_mapping {
+                        (*event).data.mapping_start.anchor
+                    } else {
+                        (*event).data.sequence_start.anchor
+                    };
+                    if !anchor.is_null() {
+                        anchors.insert(
+                            std::ffi::CStr::from_ptr(anchor.cast()).to_bytes().to_vec(),
+                            None,
+                        );
+                    }
                     open.push(Open {
                         mapping: is_mapping,
                         key_next: true,
-                        keys: (is_mapping && (*event).start_mark.index == mapping).then(Vec::new),
+                        keys: (is_mapping && (*event).start_mark.index == mapping)
+                            .then(std::collections::HashSet::new),
                     });
                     false
                 }
@@ -1027,12 +1118,11 @@ fn repeated_key(text: &str, mapping: usize) -> Option<(usize, serde_yaml_ng::Val
                 Some(None) => break,
                 Some(Some(key)) => {
                     let keys = open.last_mut().and_then(|parent| parent.keys.as_mut());
-                    if let Some(keys) = keys {
-                        if keys.contains(&key) {
-                            found = Some((line, key));
-                            break;
-                        }
-                        keys.push(key);
+                    if let Some(keys) = keys
+                        && !keys.insert(key.clone())
+                    {
+                        found = Some((line, key));
+                        break;
                     }
                 }
                 None => {}

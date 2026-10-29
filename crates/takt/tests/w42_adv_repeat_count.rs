@@ -140,6 +140,7 @@ impl Validator for Scripted {
             let names: Vec<String> = tests
                 .unwrap_or_default()
                 .lines()
+                .filter(|line| !line.starts_with('#'))
                 .map(str::to_owned)
                 .collect();
             (
@@ -221,7 +222,11 @@ impl Harness for Developer {
         };
         let tests = fs::read_to_string(context.tree.join(TESTS)).ok();
         if tests.is_none() && offered("tests.write") {
-            return write(TESTS, "remove::t1\n".to_owned(), "tests.write");
+            let text = match self.style {
+                Style::EditsTheDocsFixture => "# reads docs/fixture.txt\nremove::t1\n",
+                Style::AddsATestAfterEachEdit => "remove::t1\n",
+            };
+            return write(TESTS, text.to_owned(), "tests.write");
         }
         let n = self.edits() + 1;
         match self.style {
@@ -352,7 +357,6 @@ fn alternating_a_new_test_and_an_edit_that_fixes_nothing_stops_the_run() {
 /// `REPEATED_FAILURES` stops, as two code edits are. None is counted, and the run spends its
 /// whole step budget.
 #[test]
-#[ignore = "story:docs-edits-the-tests-read-are-attempts: edits under docs/ that the tests read are never counted as attempts"]
 fn attempts_in_a_docs_file_the_tests_read_are_counted() {
     let (stop, text, actions) =
         delivered("docs-fixture", Style::EditsTheDocsFixture, Decided::Docs);

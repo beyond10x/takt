@@ -3,7 +3,7 @@ title: Configuration
 sidebar_position: 1
 description: The run configuration file takt run --config reads, the loom.agent/1 takt member, the endpoint file, and every takt run flag grouped by purpose.
 lede: A run's settings come from flags, from one configuration file and from defaults, in that order, and a file with a key takt does not know is refused before any case opens.
-source: crates/takt/src/run_config.rs (RunConfig, SHAPE, from_toml, from_yaml); crates/takt/src/case.rs (Records); crates/takt/src/events.rs (Opened); crates/takt/src/replay.rs; crates/takt/src/scan.rs (Scan, of_run, refused_at_open); crates/takt/src/forge/gitlab.rs, forge/bot.rs and forge/local.rs; crates/takt-cli/src/main.rs (RunArgs, EndpointArgs, configured, local_forge, scenario_forge_of); crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/harness.rs (EndpointFields, EndpointConfig); takt run --help at 0.14.0; ADR 0099
+source: crates/takt/src/run_config.rs (RunConfig, SHAPE, from_toml, from_yaml); crates/takt/src/case.rs (Records); crates/takt/src/events.rs (Opened); crates/takt/src/replay.rs; crates/takt/src/scan.rs (Scan, of_run, refused_at_open); crates/takt/src/forge/gitlab.rs, forge/bot.rs and forge/local.rs; crates/takt-cli/src/main.rs (RunArgs, LoopArgs, EndpointArgs, configured, local_forge, scenario_forge_of); crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/harness.rs (EndpointFields, EndpointConfig); takt run --help at 0.14.0; ADR 0099
 ---
 
 # Configuration
@@ -57,7 +57,7 @@ for `_`; those seven have no flag.
 `takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
-`--tokens`, `--active-seconds`, `--min-free-gib`, `--verbose`, `--gate`, `--gates`, `--project`,
+`--tokens`, `--active-seconds`, `--min-free-gib`, `--verbose`, `--color`, `--quiet-steps`, `--gate`, `--gates`, `--project`,
 `--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
 `--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
 `--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
@@ -579,7 +579,8 @@ story; it never reads one from the reply, and a case opened on an intent has non
 
 ## Every takt run flag
 
-One line each, from `takt run --help` at 0.14.0. The generated [CLI reference](./cli.md) has the
+One line each, from `takt run --help` at 0.14.0, and the console flags from `LoopArgs` in
+`crates/takt-cli/src/main.rs` at 0.21.0. The generated [CLI reference](./cli.md) has the
 full text of each, and the [exit codes](./exit-codes.md) are generated from the same help.
 
 ### What to work on
@@ -607,6 +608,16 @@ full text of each, and the [exit codes](./exit-codes.md) are generated from the 
 | `--min-free-gib <GIB>` | stop `DiskLow` under this much free disk; default 10; `0` turns the check off |
 
 How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
+
+### Console
+
+| flag | meaning |
+|---|---|
+| `--verbose` | print the full `frontier:` line at each decision, besides `may:` and `may now:` |
+| `--color <WHEN>` | `auto` (default): colour when standard output is a terminal and `NO_COLOR` is unset or empty; `always`; `never`. Colour never reaches a case's records (0.21.0) |
+| `--quiet-steps` | list neither a harness step's tool calls under its `said:` line nor its commit's diff before its `effect:` line; nothing else changes (0.21.0) |
+
+What the console prints: [The console](../guides/run-a-story.md#the-console).
 
 ### Harness and endpoint
 

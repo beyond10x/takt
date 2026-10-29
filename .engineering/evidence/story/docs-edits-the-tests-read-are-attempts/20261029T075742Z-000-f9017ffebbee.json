@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-29T07:57:42Z",
+  "actor": "agent:planner",
+  "artifact": "story:docs-edits-the-tests-read-are-attempts",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "approval",
+    "source": "takt approve repository.merge --by agent:planner at e26a8b08fc48852fdee7e7832df0c0891c261717",
+    "reference": "story-docs-edits-the-tests-read-are-attempts-20261029T070534Z/authority.yaml"
+  }
+}
