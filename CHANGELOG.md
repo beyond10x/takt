@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-29
+
+The console lists a harness step's tool calls and its commit's diff, in colour; a documentation edit a
+test names counts as an attempt; loom 0.49.1 with Canon 0.7.0 and engineering-protocols 0.13.0.
+
 ### Added
 
 - Under its `said:` line a harness step lists its tool calls: shell commands, and file tools with their path or pattern; at most 20.
@@ -832,7 +837,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.20.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.21.0...HEAD
+[0.21.0]: https://github.com/beyond10x/takt/compare/0.20.0...0.21.0
 [0.20.0]: https://github.com/beyond10x/takt/compare/0.19.0...0.20.0
 [0.19.0]: https://github.com/beyond10x/takt/compare/0.18.1...0.19.0
 [0.18.1]: https://github.com/beyond10x/takt/compare/0.18.0...0.18.1

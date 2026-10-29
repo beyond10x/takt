@@ -23,7 +23,7 @@ spec:
     fsGroup: 10001
   containers:
     - name: clone
-      image: registry.example/takt:0.20.0
+      image: registry.example/takt:0.21.0
       command: [git, clone, https://github.com/example/my-repo.git, /workspace]
       volumeMounts:
         - name: workspace

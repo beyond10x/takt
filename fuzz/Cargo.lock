@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "b10x-harness-wire"
-version = "0.20.0"
+version = "0.21.0"
 source = "git+https://github.com/beyond10x/harness?rev=684c99f5e8c7e1d22d7b29f717b71856db81766a#684c99f5e8c7e1d22d7b29f717b71856db81766a"
 dependencies = [
  "httpdate",
