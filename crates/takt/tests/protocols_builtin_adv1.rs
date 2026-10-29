@@ -63,11 +63,11 @@ fn adv_every_listed_builtin_resolves_to_its_own_id() {
 
 /// A major the registry does not hold for a protocol it does hold is refused, and the refusal
 /// says that the major is unknown, not that the protocol is: `story-delivery` is a built-in, so
-/// `story.delivery/3` names a known protocol at an unknown major.
+/// `story.delivery/4` names a known protocol at an unknown major.
 #[test]
 fn adv_an_unknown_major_of_a_known_builtin_is_not_called_an_unknown_name() {
     for spec in [
-        "story.delivery/3",
+        "story.delivery/4",
         "self.improvement/2",
         "loop.improvement/2",
     ] {

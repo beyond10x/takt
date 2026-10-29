@@ -1150,6 +1150,14 @@ fn commit_of(transcript: &[u8], action: &str) -> Option<serde_json::Value> {
 /// The line that opens the block of failed checks in a judgement step's prompt.
 pub const FAILED_CHECKS_LABEL: &str = "The last gate run failed";
 
+/// The lines that close the block of failed checks ([`failed_block`]): the gate passes before
+/// the change is handed over and merged, a file the failed gates' output names is part of the
+/// change whatever the story's Scope names, and the step fixes every failed gate it can.
+pub const FAILED_CHECKS_FIX: &str = "The gate must pass before the change can be handed over and \
+     merged. A file the failed gates' output names is part of this change, even when it is \
+     outside the story's Scope: fix every failed gate in this one edit where its output shows \
+     how.\n";
+
 /// The action a judgement step names to decline the intent instead of taking an offered one,
 /// with no file changed and its reason as the reply's summary: takt's own exit, offered beside
 /// the approvals in every step's prompt ([`DECLINE_PARAGRAPH`]), never a protocol's action. The
@@ -1191,7 +1199,8 @@ impl std::error::Error for NoActionLine {}
 /// The block of a judgement step's prompt that shows `failed`, between the open obligations and
 /// the change so far: one line naming it, then for each failed check `gate <id>:` (with ` (<n>
 /// lines left out)` before the colon when some were) and its kept lines fenced as data with a
-/// backtick run longer than any inside them. Empty when nothing failed, so the prompt of a step
+/// backtick run longer than any inside them, then [`FAILED_CHECKS_FIX`]. Empty when nothing
+/// failed, so the prompt of a step
 /// after a passing gate is as it was.
 #[must_use]
 pub fn failed_block(failed: &[crate::validator::FailedCheck]) -> String {
@@ -1238,6 +1247,7 @@ fn block_withheld(failed: &[crate::validator::FailedCheck], withheld: &[u64]) ->
             check.id
         ));
     }
+    text.push_str(FAILED_CHECKS_FIX);
     text
 }
 
@@ -2102,8 +2112,11 @@ fn reason_text(reason: &serde_json::Value) -> String {
 /// The list of a step's prompt after its offered actions: each action the protocol declares with
 /// the effect `write` that the decision finds `blocked` and that is not offered, with what its
 /// precondition lacks, each reason the decision gives ([`reason_text`]), then the protocol's own
-/// description of it; then one sentence: a step that needs one of them declines, naming it,
-/// rather than make an edit that does not move the work. Empty when there is none.
+/// description of it; then one sentence: when the gate's line ([`earlier_gate_line`]) is shown
+/// and an action the gate runs after is offered, a step that needs one of them takes that
+/// action, and declines only when no offered action leads to it; otherwise a step that needs
+/// one of them and has no offered action leading to it declines, naming it, rather than make an
+/// edit that does not move the work. Empty when there is none.
 fn blocked_block(context: &StepContext<'_>) -> String {
     let Ok(model) = b10x_canon::model::parse(&context.protocol.yaml) else {
         return String::new();
@@ -2138,11 +2151,24 @@ fn blocked_block(context: &StepContext<'_>) -> String {
     if lines.is_empty() {
         return String::new();
     }
-    format!(
-        "\n{BLOCKED_LABEL}, each with what its precondition lacks:\n{lines}If this step needs one \
-         of these, name `decline` with that action in its summary rather than make an edit that \
-         does not move the work.\n"
-    )
+    let next: Vec<String> = gate_runs_after(context)
+        .map(|(_, after)| after)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|action| context.offered.contains(action))
+        .collect();
+    let then = if next.is_empty() {
+        "If this step needs one of these and no action offered now leads to it, name `decline` \
+         with that action in its summary rather than make an edit that does not move the work.\n"
+            .to_owned()
+    } else {
+        format!(
+            "If this step needs one of these, take {}, offered now: the gate runs after it. Name \
+             `decline` only when no action offered now leads to the one this step needs.\n",
+            next.join(" or ")
+        )
+    };
+    format!("\n{BLOCKED_LABEL}, each with what its precondition lacks:\n{lines}{then}")
 }
 
 /// The kinds of evidence `predicate` reads itself, not through the claims it tests.
@@ -2167,15 +2193,37 @@ fn kinds_read_directly(predicate: &b10x_canon::model::Predicate) -> Vec<String> 
 /// the current revision, `The gate last failed at <short revision> on <gates>; it has not run at
 /// this revision; it runs after <actions>.` The actions are those the protocol declares to
 /// produce evidence a claim reads that the decision names as blocking an action producing the
-/// gate's evidence; the clause is left out when there is none. Empty otherwise.
+/// gate's evidence ([`gate_runs_after`]); the clause is left out when there is none. Empty
+/// otherwise.
 fn earlier_gate_line(context: &StepContext<'_>) -> String {
+    let Some((failure, after)) = gate_runs_after(context) else {
+        return String::new();
+    };
+    let on = if failure.gates.is_empty() {
+        String::new()
+    } else {
+        format!(" on {}", failure.gates.join(", "))
+    };
+    let runs = if after.is_empty() {
+        String::new()
+    } else {
+        format!("; it runs after {}", after.join(", "))
+    };
+    let short = failure.revision.get(..8).unwrap_or(&failure.revision);
+    format!("\nThe gate last failed at {short}{on}; it has not run at this revision{runs}.\n")
+}
+
+/// When [`earlier_gate_line`] is shown, the gate failure it names and the actions after which
+/// the gate runs: those the protocol declares to produce evidence a claim reads that the
+/// decision names as blocking an action producing the gate's evidence. None when the case's
+/// record does not end on a gate failure or no claim reading the gate's evidence is unknown at
+/// the current revision.
+fn gate_runs_after<'a>(
+    context: &StepContext<'a>,
+) -> Option<(&'a crate::run::GateFailure, Vec<String>)> {
     let kind = crate::validator::GateRun::KIND;
-    let Some(failure) = context.last_gate else {
-        return String::new();
-    };
-    let Ok(model) = b10x_canon::model::parse(&context.protocol.yaml) else {
-        return String::new();
-    };
+    let failure = context.last_gate?;
+    let model = b10x_canon::model::parse(&context.protocol.yaml).ok()?;
     let unknown = model.claims.iter().any(|(id, claim)| {
         kinds_read_directly(&claim.true_when)
             .iter()
@@ -2183,7 +2231,7 @@ fn earlier_gate_line(context: &StepContext<'_>) -> String {
             && context.decision.claims.get(id.as_str()).map(String::as_str) == Some("unknown")
     });
     if !unknown {
-        return String::new();
+        return None;
     }
     let produces = |declared: &b10x_canon::model::Action, kinds: &[String]| {
         declared
@@ -2211,24 +2259,13 @@ fn earlier_gate_line(context: &StepContext<'_>) -> String {
             }
         }
     }
-    let after: Vec<&str> = model
+    let after = model
         .actions
         .iter()
         .filter(|(_, declared)| !produces(declared, &gate_kind) && produces(declared, &lacking))
-        .map(|(id, _)| id.as_str())
+        .map(|(id, _)| id.as_str().to_owned())
         .collect();
-    let on = if failure.gates.is_empty() {
-        String::new()
-    } else {
-        format!(" on {}", failure.gates.join(", "))
-    };
-    let runs = if after.is_empty() {
-        String::new()
-    } else {
-        format!("; it runs after {}", after.join(", "))
-    };
-    let short = failure.revision.get(..8).unwrap_or(&failure.revision);
-    format!("\nThe gate last failed at {short}{on}; it has not run at this revision{runs}.\n")
+    Some((failure, after))
 }
 
 impl ClaudeCode {
@@ -4871,6 +4908,52 @@ mod tests {
         assert!(obligations < at && at < change, "{with}");
     }
 
+    /// A failed gate whose output names a file outside the story's Scope: the block ends on the
+    /// lines that say the gate must pass before the change is handed over and merged, that the
+    /// file is part of this change, and that every failed gate is fixed in this one edit; a
+    /// prompt with no failed gate says none of it.
+    #[test]
+    fn failed_checks_say_the_files_they_name_are_part_of_the_change() {
+        let dir = scratch("failed-outside-scope");
+        committed(&dir.0, &[TODO, TESTS]);
+        let intent = "Read duplicate keys\n\n## Scope\n\n- `todo.py` (cited)\n";
+        let failed = [
+            crate::validator::FailedCheck {
+                id: "citations".to_owned(),
+                lines: vec![
+                    "ess/domains/takt.yaml:621: unresolved: todo.py:1-2 needles found at: 3-4"
+                        .to_owned(),
+                    "1 unresolved".to_owned(),
+                ],
+                omitted: 0,
+            },
+            crate::validator::FailedCheck {
+                id: "format".to_owned(),
+                lines: vec!["Diff in todo.py:1:".to_owned()],
+                omitted: 0,
+            },
+        ];
+        let fix = "The gate must pass before the change can be handed over and merged. A file \
+                   the failed gates' output names is part of this change, even when it is \
+                   outside the story's Scope: fix every failed gate in this one edit where its \
+                   output shows how.\n";
+        let (plain, with) = in_context(&dir.0, intent, |context| {
+            let plain = ClaudeCode::prompt_with(context, ClaudeCode::CODEX_RULE, None, &[]);
+            let shown = StepContext {
+                failed: &failed,
+                ..*context
+            };
+            let with = ClaudeCode::prompt_with(&shown, ClaudeCode::CODEX_RULE, None, &[]);
+            (plain, with)
+        });
+        assert!(
+            with.contains(&format!("Diff in todo.py:1:\n```\n{fix}")),
+            "{with}"
+        );
+        assert!(with.contains("ess/domains/takt.yaml:621"), "{with}");
+        assert!(!plain.contains("The gate must pass"), "{plain}");
+    }
+
     /// Under a scan, the failed checks' block is shown when it passes and, when it does not or
     /// the scan cannot run, one line naming the gates stands for it; with nothing failed the
     /// scan is not run.
@@ -5146,8 +5229,9 @@ mod tests {
         assert!(!list.contains("- change.read:"), "{prompt}");
         assert!(
             list.contains(
-                "If this step needs one of these, name `decline` with that action in its \
-                 summary rather than make an edit that does not move the work.\n"
+                "If this step needs one of these and no action offered now leads to it, name \
+                 `decline` with that action in its summary rather than make an edit that does \
+                 not move the work.\n"
             ),
             "{prompt}"
         );
@@ -5182,6 +5266,44 @@ mod tests {
         let (protocol, decision) = after_a_red_gate(&at_a.0, "story.delivery/3", false);
         let prompt = prompt_under(&at_a.0, &protocol, &decision, Some(&failure));
         assert!(!prompt.contains("The gate last failed"), "{prompt}");
+    }
+
+    /// At a revision after a failed gate, with the handover offered and `implementation.edit`
+    /// blocked, the sentence after the blocked list names the handover, after which the gate
+    /// runs, as the step to take, and does not ask for a decline.
+    #[test]
+    fn after_a_failed_gate_the_blocked_list_names_the_offered_step_it_runs_after() {
+        let failure = crate::run::GateFailure {
+            revision: AT_A.to_owned(),
+            gates: vec!["citations".to_owned(), "format".to_owned()],
+        };
+        let dir = scratch("gate-earlier-next");
+        let (protocol, decision) = after_a_red_gate(&dir.0, "story.delivery/3", true);
+        assert_eq!(
+            decision
+                .actions
+                .get("implementation.edit")
+                .map(String::as_str),
+            Some("blocked"),
+            "{}",
+            decision.json
+        );
+        let prompt = prompt_under(&dir.0, &protocol, &decision, Some(&failure));
+        assert!(prompt.contains("- change.handover: "), "{prompt}");
+        let list = &prompt[prompt.find(BLOCKED_LABEL).expect("a blocked list")..];
+        assert!(list.contains("- implementation.edit: "), "{prompt}");
+        assert!(
+            list.contains(
+                "If this step needs one of these, take change.handover, offered now: the gate \
+                 runs after it. Name `decline` only when no action offered now leads to the one \
+                 this step needs.\n"
+            ),
+            "{prompt}"
+        );
+        assert!(
+            !list.contains("name `decline` with that action in its summary"),
+            "{prompt}"
+        );
     }
 
     /// `f` of the context of step 1 in `tree` for `intent`, offering `tests.write`, with no

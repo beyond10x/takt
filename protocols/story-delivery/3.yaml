@@ -203,10 +203,11 @@ actions:
               is: false
   change.handover:
     description: >-
-      hand the change over, changing no file, once it is complete (the story's tests written
-      and the implementation done) and no further edit is needed; takt records the choice, and
-      the pull request is opened for this revision and its continuous integration read once;
-      never at a revision whose tests fail
+      hand the change over, changing no file, once the story's tests are written and pass and
+      the implementation is done; takt records the choice, the repository's gate runs at this
+      revision, and a red gate admits implementation.edit again to fix what it names; on a green
+      gate the pull request is opened for this revision and its continuous integration read
+      once; never at a revision whose tests fail
     effect: read
     precondition:
       all:
