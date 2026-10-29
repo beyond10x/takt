@@ -19,7 +19,7 @@ case:
       description: >-
         whether the story's tests must fail before the implementation is edited; under required,
         the implementation is edited only while the tests, once written, fail at the current
-        revision
+        revision, or while they pass and the gate or continuous integration fails there
       values: [required, optional]
     gate_on:
       description: >-
@@ -189,8 +189,9 @@ actions:
   implementation.edit:
     description: >-
       change the implementation in the repository's working revision; when the case requires its
-      tests first, needs the story's tests written and failing at the current revision, or the
-      tests passing and the repository's gate red at it, so a gate failure is fixed where it is
+      tests first, needs the story's tests written and failing at the current revision, or written
+      and passing there with the gate or continuous integration failed there, so a failure no test
+      reads (formatting, lint, citations, another platform) is fixed where it is
     effect: write
     precondition:
       any:
@@ -198,9 +199,17 @@ actions:
           in: [optional]
         - claim: tests.shown_red
         - all:
+            - any:
+                - claim: gate.green
+                  is: false
+                - claim: ci.green
+                  is: false
             - claim: tests.pass
-            - claim: gate.green
-              is: false
+            - not:
+                first:
+                  kind: tests_change
+                  result: none
+                  subject: implementation
   change.handover:
     description: >-
       hand the change over, changing no file, once the story's tests are written and pass and

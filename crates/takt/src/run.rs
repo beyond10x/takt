@@ -8595,6 +8595,15 @@ pub const GITLAB_TOKEN_PREFIXES: [&str; 14] = [
     "_gitlab_session=",
 ];
 
+/// The most bytes [`credential_shape`] reads between a private key's `-----BEGIN ` and the
+/// `-----` that closes its label.
+const KEY_LABEL: usize = 40;
+
+/// The most bytes one match of [`credential_shape`] spans: a private key's `-----BEGIN `, up to
+/// [`KEY_LABEL`] bytes, and the `-----` after them. That shape is the one that can cross a line
+/// end; every other is made of characters that hold none, so it lies within one line.
+const SHAPE_SPAN: usize = "-----BEGIN ".len() + KEY_LABEL + "-----".len();
+
 /// The first of [`CREDENTIAL_SHAPES`] `text` holds, by its name; none when it holds none. Read
 /// in process, so it always runs; the matched text is never returned.
 #[must_use]
@@ -8610,7 +8619,7 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
     while let Some(at) = rest.find("-----BEGIN ") {
         let after = &rest[at + "-----BEGIN ".len()..];
         if let Some(end) = after.find("-----")
-            && end <= 40
+            && end <= KEY_LABEL
             && after[..end].contains("PRIVATE KEY")
         {
             return Some("private-key");
@@ -8721,10 +8730,72 @@ fn proposed_path_refusal(proposal: &crate::harness::Proposal) -> Option<String> 
     ))
 }
 
+/// What `content`, proposed for `path`, adds to the file `base` holds there: the lines a line
+/// diff finds in `content` and not in the old file, each run of them with the lines around it,
+/// on either side at least one line and as many more as reach [`SHAPE_SPAN`] bytes, so a match
+/// of [`credential_shape`] that takes a byte of an added line is read whole, wherever it starts
+/// and ends; lines the old file held as they are, and shapes they held farther than that from
+/// every added line, are not read. Runs whose lines meet are read as one. `content`
+/// whole when `base` holds no file at `path` (a new file), or one that cannot be read or is no
+/// UTF-8 text, or `path` is no plain path of the tree: what cannot be compared is read whole.
+fn proposed_addition<'a>(
+    tree: &Path,
+    base: &str,
+    path: &str,
+    content: &'a str,
+) -> std::borrow::Cow<'a, str> {
+    let old = loom_sdk::session::plain_relative(path)
+        .then(|| crate::git::blob(tree, &format!("{base}:{path}")).ok())
+        .flatten()
+        .and_then(|bytes| String::from_utf8(bytes).ok());
+    let Some(old) = old else {
+        return content.into();
+    };
+    let old: Vec<&str> = old.split_inclusive('\n').collect();
+    let new: Vec<&str> = content.split_inclusive('\n').collect();
+    let mut added = vec![false; new.len()];
+    for op in similar::capture_diff_slices(similar::Algorithm::Myers, &old, &new) {
+        let (tag, _, lines) = op.as_tag_tuple();
+        if tag != similar::DiffTag::Equal {
+            added[lines].fill(true);
+        }
+    }
+    let mut read = added.clone();
+    let mut at = 0;
+    while at < new.len() {
+        if !added[at] {
+            at += 1;
+            continue;
+        }
+        let start = at;
+        while at < new.len() && added[at] {
+            at += 1;
+        }
+        let (mut before, mut bytes) = (start, 0);
+        while before > 0 && (before == start || bytes < SHAPE_SPAN) {
+            before -= 1;
+            bytes += new[before].len();
+            read[before] = true;
+        }
+        let (mut after, mut bytes) = (at, 0);
+        while after < new.len() && (after == at || bytes < SHAPE_SPAN) {
+            bytes += new[after].len();
+            read[after] = true;
+            after += 1;
+        }
+    }
+    new.iter()
+        .zip(read)
+        .filter_map(|(line, read)| read.then_some(*line))
+        .collect::<String>()
+        .into()
+}
+
 /// Why the content of `proposal` may not reach the tree or the record, read before the edit
-/// effect writes a byte of it: each proposed file's content and the session's summary, each
-/// apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`, the
-/// scan of the run's adapter `adapter` ([`Scan::change_scan`], [`ChangeScan`]); a scan that
+/// effect writes a byte of it: what each proposed file adds to the file `base` (the revision the
+/// step starts from) holds at its path ([`proposed_addition`]), and the session's summary whole,
+/// each apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`,
+/// the scan of the run's adapter `adapter` ([`Scan::change_scan`], [`ChangeScan`]); a scan that
 /// cannot run (no program, a policy that does not load, any exit but 0) refuses as a match does.
 /// With no scan set, the proposal of a harness whose session may have read outside its copy
 /// (`unscanned_refused`, [`crate::harness::Harness::reads_outside_its_copy`]) is refused, as
@@ -8735,6 +8806,7 @@ fn proposed_path_refusal(proposal: &crate::harness::Proposal) -> Option<String> 
 /// exit, never the text matched. None when it passes.
 fn proposal_scan_refusal(
     tree: &Path,
+    base: &str,
     adapter: &Scan,
     scan: Option<&ChangeScan>,
     unscanned_refused: bool,
@@ -8750,17 +8822,18 @@ fn proposal_scan_refusal(
         .map(|file| file.path.as_str())
         .collect();
     let paths = paths.join("\n");
-    let mut texts: Vec<(&str, &str)> = Vec::new();
+    let mut texts: Vec<(&str, std::borrow::Cow<'_, str>)> = Vec::new();
     if !paths.is_empty() {
-        texts.push(("the paths it names", paths.as_str()));
+        texts.push(("the paths it names", paths.as_str().into()));
     }
-    texts.extend(
-        proposal
-            .files
-            .iter()
-            .filter_map(|file| Some((file.path.as_str(), file.content.as_deref()?))),
-    );
-    texts.push(("the step's summary", proposal.summary.as_str()));
+    texts.extend(proposal.files.iter().filter_map(|file| {
+        let content = file.content.as_deref()?;
+        Some((
+            file.path.as_str(),
+            proposed_addition(tree, base, &file.path, content),
+        ))
+    }));
+    texts.push(("the step's summary", proposal.summary.as_str().into()));
     for (what, text) in &texts {
         if let Some(shape) = credential_shape(text) {
             return Some(format!(
@@ -12632,11 +12705,12 @@ impl<'a> Run<'a> {
         // a byte of it reaches the tree; one that passes is written, and judged below as any
         // step's change.
         //
-        // Its content is read before that, whatever the guard says of it: each file and the
-        // summary checked for the shape of a credential and scanned by the run's scan adapter
-        // ([`proposal_scan_refusal`]). One that does not pass is refused, and its summary is
-        // not recorded ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but
-        // after a path of the shape of a credential ([`proposed_path_refusal`]), since a
+        // Its content is read before that, whatever the guard says of it: what each file adds
+        // to the file `HEAD` held before the step, and the summary, checked for the shape of a
+        // credential and scanned by the run's scan adapter ([`proposal_scan_refusal`]). One
+        // that does not pass is refused, and its summary is not recorded
+        // ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but after a
+        // path of the shape of a credential ([`proposed_path_refusal`]), since a
         // refusal on its face names the path.
         // The reply's own summary, as the proposal carries it: the step's summary may add what
         // the harness said of its session (metaharness's rows), which a decline's reason does
@@ -12649,6 +12723,7 @@ impl<'a> Run<'a> {
                     reply_summary = Some(proposal.summary.clone());
                     let unscanned = proposal_scan_refusal(
                         &self.tree,
+                        &head_before,
                         &self.scan,
                         self.change_scan.as_ref(),
                         self.harness.reads_outside_its_copy() && !self.scan.declared_none(),
