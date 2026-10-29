@@ -344,7 +344,8 @@ impl EvidencePort for CaseEvidence<'_> {
 /// compares the case in, the start of the next tick when the clock has not left the latest one.
 /// Records all written to the microsecond are a microsecond apart at least; a case holding a
 /// record in whole seconds is compared in whole seconds, and an ordered record is stamped in the
-/// next second at once. Nothing waits for the clock.
+/// next second at once. Nothing waits for the clock. A floor past the last instant Canon writes
+/// is held at [`LAST_MICROS`].
 pub(crate) fn stamp_after(clock: i128, latest: Option<&LatestStamp>, ordered: bool) -> i128 {
     let Some(latest) = latest else {
         return clock;
@@ -354,8 +355,12 @@ pub(crate) fn stamp_after(clock: i128, latest: Option<&LatestStamp>, ordered: bo
     } else {
         latest.micros
     };
-    clock.max(floor)
+    clock.max(floor.min(LAST_MICROS))
 }
+
+/// 9999-12-31T23:59:59.999999Z in microseconds since the epoch: the last microsecond an instant
+/// Canon reads can name.
+pub(crate) const LAST_MICROS: i128 = 253_402_300_799_999_999;
 
 #[cfg(test)]
 mod tests {
@@ -425,5 +430,16 @@ mod tests {
             stamp_after(NOON + 123_400, Some(&at), false),
             NOON + 123_457
         );
+    }
+
+    /// A floor past the last microsecond Canon writes (year 9999) is held at that microsecond, so
+    /// a stamp never wraps to the epoch: the adversary's year-9999 cases.
+    #[test]
+    fn a_floor_past_the_last_instant_is_held_at_the_last_microsecond() {
+        let last_second = super::LAST_MICROS / 1_000_000;
+        let at = latest(0, last_second, last_second * 1_000_000);
+        assert_eq!(stamp_after(NOON, Some(&at), true), super::LAST_MICROS);
+        let at = latest(6, super::LAST_MICROS, super::LAST_MICROS + 1);
+        assert_eq!(stamp_after(NOON, Some(&at), false), super::LAST_MICROS);
     }
 }

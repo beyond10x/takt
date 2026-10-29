@@ -240,8 +240,8 @@ fn takt_run_on_a_story_whose_case_is_accepted_records_the_test_result_and_moves_
         "{recorded}\n{out}"
     );
     assert!(
-        recorded.contains(&format!("\"at\": \"{observed_at}\"")),
-        "{recorded}"
+        recorded.contains(&format!("\"at\": \"{}Z\"", &observed_at[..19])),
+        "task:canon-0-8-0: the store holds the record's instant in whole seconds, as aep reads it\n{recorded}"
     );
     assert!(recorded.contains("\"source\": \"takt\""), "{recorded}");
     assert!(
