@@ -223,9 +223,11 @@ pub const REPEATED_FAILURES: u64 = 2;
 fn is_documentation_path(path: &str) -> bool {
     path.starts_with("docs/") || path == "README.md" || path == "CHANGELOG.md"
 }
-/// Whether the tree of revision `to` differs from that of `from` at a path that is not
-/// documentation ([`is_documentation_path`]): a new attempt at what the tests decide. True when
-/// git cannot compare them, so a result is counted as it was before the rule.
+/// Whether the tree of revision `to` differs from that of `from`, outside `.engineering/`, at a
+/// path that is not documentation ([`is_documentation_path`]) or at a documentation path a test
+/// file names at `to` ([`names_doc_path`]): a new attempt at what the tests decide. A test file
+/// is a path a `tests.write` commit in `written` changed. True when git cannot compare them, so
+/// a result is counted as it was before the rule.
 fn code_changed(tree: &Path, from: &str, to: &str, written: &BTreeSet<String>) -> bool {
     let check = || -> Option<bool> {
         let paths = crate::git::paths_differing_outside(tree, from, to, ".engineering").ok()?;
@@ -13966,7 +13968,11 @@ pub const TESTS_CHANGE: &str = "tests_change";
 /// The producer of a `tests_change` record: takt, attesting the commit of a `tests.write` step.
 pub const TESTS_CHANGE_PRODUCER: &str = "takt.tests-write";
 
-/// Whether the text names the path or one of its parent directories at a path boundary.
+/// Whether the text names the path, or one of its parent directories with or without its
+/// trailing `/`, at a path boundary: the match is followed by the end of the text or by a byte
+/// that is not an ASCII letter or digit, a non-ASCII byte, `_`, `-`, `.`, `/` or `~`. Nothing is
+/// required before the match, so `/../../docs/runs` names `docs/runs/x`; a parent directory is a
+/// prefix of the path that holds a `/`, so the top directory alone (`docs`) is not one.
 fn names_doc_path(text: &[u8], path: &str) -> bool {
     std::iter::once(path)
         .chain(
