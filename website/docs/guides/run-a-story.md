@@ -3,7 +3,7 @@ title: Run a story
 sidebar_position: 3
 description: Prepare a repository for story delivery, let takt take the next ready story or the one you name, follow its steps to a pull request, and grant the merge.
 lede: takt delivers one story of the planning store per case, through tests and gates it runs itself, and the merge waits for your grant.
-source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/forge/local.rs; crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/console.rs, run.rs (said_line, gate_stop); docs/runs/2026-10-29-self-run-story-delivery.md; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; the aep commands of step 1 run with aep 0.78.0 in a fresh repository, 2026-10-27; docs/design/takt.md § 4
+source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/frontier.rs; crates/takt/src/forge/local.rs; crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/console.rs (reads, diff, color_on, Paint, LINE_WIDTH, READS_SHOWN, DIFF_SHOWN), run.rs (said_line, gate_stop, committed_diff); crates/takt/tests/console_reads_and_diffs.rs; crates/takt-cli/src/main.rs (LoopArgs, console_of); CHANGELOG.md Unreleased; docs/runs/2026-10-29-self-run-story-delivery.md; crates/takt/src/case.rs (approvals_only); a story run of takt 0.14.0 with Codex and --forge none on a scratch repository, 2026-10-26; the aep commands of step 1 run with aep 0.78.0 in a fresh repository, 2026-10-27; docs/design/takt.md § 4
 ---
 
 # Run a story
@@ -164,6 +164,35 @@ and its duration; a harness step's duration, tokens, the cached input tokens amo
 cost when the harness reports one. Before a harness step a `working` line names what it may do.
 The harness's hermetic verdict is printed once with what the harness said, and again only when
 it changes.
+
+From 0.21.0 a harness step also shows what it did. Under its `said:` line it lists its tool
+calls in order, at most 20 and then `… <n> more`: a shell command as `$ <command>`, a file tool
+with its path or pattern (`Read src/lib.rs`, `apply_patch src/lib.rs`), a path under the
+session's working directory relative to it. Before its `effect:` line a step that committed
+prints the commit's diff, outside `.engineering/` and `.takt/`, at most 120 lines and then
+`… <n> more lines (git show <sha>)`. Each listed line is escaped and cut at 100 terminal
+columns, a wide character counting two, and a tab prints as spaces. A scripted step that ran two
+commands and added one function prints this between the two lines (from
+`crates/takt/tests/console_reads_and_diffs.rs`; lines of the diff the test does not check are
+left out as `…`):
+
+```text
+  said: added sub
+  $ cat src/lib.rs
+  $ git status --short
+    diff --git a/src/lib.rs b/src/lib.rs
+    …
+    +pub fn sub() {}
+  effect: committed 1 path(s); …
+```
+
+`--color auto|always|never` colours the console: a step's action is bold, a validator step's
+result green when it passed and red when it failed; the `said:` and `effect:` labels and the
+listed tool calls are dim; in the diff a file header is bold, a hunk header cyan, an added line
+green and a removed one red. `auto`, the default, colours a terminal unless `NO_COLOR` is set
+and not empty; `always` colours a pipe too, as for output piped through `tee` into a terminal.
+No colour reaches a case's records. `--quiet-steps` turns both listings off and leaves every
+other line as it was.
 
 The opening of a run on takt's own repository, from a development build that preceded 0.19.0 and
 printed `takt 0.18.0` (the record is

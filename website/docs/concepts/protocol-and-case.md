@@ -3,7 +3,7 @@ title: Protocol and case
 sidebar_position: 2
 description: A protocol says what must be true before work counts; a case is one unit of work held to one protocol, kept as files in the repository.
 lede: takt holds every unit of work as a case on a Canon protocol, read from the engineering protocols' built-ins, and keeps the case as files in the repository so that any later run can resume it and any reviewer can replay it.
-source: takt protocols and takt run --help at 0.14.0; engineering-protocols 0.10.0 protocols/software-change/1.yaml and protocols/story-delivery/1.yaml, 0.12.2 protocols/story-delivery/2.yaml; protocols/story-delivery/3.yaml and protocols/bench-task/1.yaml; crates/takt/src/protocol.rs (OWN, builtins); crates/takt-cli/tests/bench_task_cli.rs; crates/takt/src/case.rs, frontier.rs, protocol.rs; CHANGELOG.md 0.13.0; a scratch run of takt 0.14.0
+source: takt protocols and takt run --help at 0.14.0; engineering-protocols 0.10.0 protocols/software-change/1.yaml and protocols/story-delivery/1.yaml, 0.12.2 and 0.13.0 protocols/story-delivery/2.yaml; Cargo.lock after 0.20.0; CHANGELOG.md Unreleased; protocols/story-delivery/3.yaml and protocols/bench-task/1.yaml; crates/takt/src/protocol.rs (OWN, builtins); crates/takt-cli/tests/bench_task_cli.rs; crates/takt/src/case.rs, frontier.rs, protocol.rs; CHANGELOG.md 0.13.0; a scratch run of takt 0.14.0
 ---
 
 # Protocol and case
@@ -27,10 +27,10 @@ takt has no Rust model of a protocol. Canon reads the document and computes ever
 
 The protocols takt runs are built-ins of
 [engineering protocols](https://beyond10x.github.io/engineering-protocols/)
-([GitHub](https://github.com/beyond10x/engineering-protocols)), 0.12.2 from takt 0.19.0, and one
-of takt's own: `story.delivery/3`, the document `protocols/story-delivery/3.yaml` of this
-repository, embedded in the binary from 0.19.0. `takt protocols` lists them all, takt's own after
-the registry's `story-delivery/2`:
+([GitHub](https://github.com/beyond10x/engineering-protocols)), 0.12.2 from takt 0.19.0 and
+0.13.0 from 0.21.0, and one of takt's own: `story.delivery/3`, the document
+`protocols/story-delivery/3.yaml` of this repository, embedded in the binary from 0.19.0.
+`takt protocols` lists them all, takt's own after the registry's `story-delivery/2`:
 
 ```text
 eval-gated-change/1
@@ -63,6 +63,12 @@ at the handed-over revision and that a red gate admits `implementation.edit` aga
 `implementation.edit` says that a failure no test reads (formatting, lint, citations, another
 platform) is fixed where it is. Its actions, inputs and artifacts are those of `/2`, and so are
 its input defaults.
+
+From 0.21.0 the built-in `story.delivery/2` is that of engineering protocols 0.13.0, which
+narrows when `tests_first=required` admits `implementation.edit` after a red gate or CI: the
+tests must pass at the current revision and have been seen failing in a run observed after they
+were first written. `story.delivery/3` keeps the rule of 0.12.2: once the tests are written,
+passing tests and a red gate or CI admit the edit.
 
 `bench.task/1` (`protocols/bench-task/1.yaml`, from 0.19.0) is a file, not a built-in: one
 benchmark task, worked under `--protocol protocols/bench-task/1.yaml --forge none`. It has no

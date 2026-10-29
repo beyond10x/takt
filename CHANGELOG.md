@@ -21,6 +21,11 @@ takt's releases.
 - `story.delivery/2` is engineering-protocols 0.13.0's: under `tests_first=required` a red gate or CI admits the edit only after a test failed since the tests were first written.
 - A record is stamped when submitted, never before the case's latest; Canon orders in whole seconds, so where an order form reads both kinds it waits up to 1.1 s to leave that second.
 - The escape every record text and console line passes also escapes the bidi marks U+061C, U+200E and U+200F.
+- A documentation edit a test file of the case names (the path, or a parent directory below the top one) counts as an attempt toward `RepeatedTestFailure`.
+
+### Fixed
+
+- A run file holding a key twice after an alias key, a tagged key or a plain key ending in a colon is refused at the duplicate's line, naming the key.
 
 ## [0.20.0] - 2026-10-29
 

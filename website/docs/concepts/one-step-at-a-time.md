@@ -37,7 +37,8 @@ profiles](../reference/configuration.md#records-profiles)).
 From 0.19.0 the console says the frontier as what the run may do: `may: <action> …` once, at the
 first decision, then `may now: +<added> -<removed>` only when the admissible set changes.
 `takt run --verbose` also prints the full `frontier:` line at every decision, as takt printed it
-before 0.19.0 and as the example below shows.
+before 0.19.0 and as the example below shows. From 0.21.0 a harness step also lists its tool
+calls and its commit's diff ([The console](../guides/run-a-story.md#the-console)).
 
 ## The frontier
 

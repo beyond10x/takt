@@ -19,7 +19,7 @@ from the documents of the `b10x-canon-engineering` release takt pins. It does no
 | id | from | a case is |
 |---|---|---|
 | `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store story, the default; its inputs and [their defaults](protocol-defaults.md) |
-| `story.delivery/3` (listed as `story-delivery/3`) | takt, `protocols/story-delivery/3.yaml`, from 0.19.0 | one planning-store story, as `/2` but `change.handover` is not admissible while the tests fail; the same inputs and defaults ([Protocol and case](../concepts/protocol-and-case.md#the-protocols-takt-runs)) |
+| `story.delivery/3` (listed as `story-delivery/3`) | takt, `protocols/story-delivery/3.yaml`, from 0.19.0 | one planning-store story, as `/2` of engineering protocols 0.12.2 but `change.handover` is not admissible while the tests fail; from 0.21.0 the built-in `/2` (0.13.0) also differs in when a red gate admits `implementation.edit`; the same inputs and defaults ([Protocol and case](../concepts/protocol-and-case.md#the-protocols-takt-runs)) |
 | `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story, no case input |
 | `self.improvement/1` (listed as `self-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |
@@ -82,7 +82,8 @@ end `unreproducible` or `declined`. From 0.2.2 there are also `candidate.merge`,
 `candidate.merge_judge_surface` and `binary.promote`, so a turn can reach `accepted`. How an
 operator runs one: [The loop](../self-improvement/the-loop.md#running-a-turn).
 
-Sources: `takt protocols`, engineering-protocols 0.10.0 `protocols/`, `protocols/` of this
+Sources: `takt protocols`, engineering-protocols 0.10.0 `protocols/` and 0.13.0
+`protocols/story-delivery/2.yaml`, `protocols/` of this
 repository, `crates/takt/src/protocol.rs` (`OWN`, `builtins`), `crates/takt-cli/tests/bench_task_cli.rs`,
 `docs/site/protocols/scripts/collect.mjs`,
 `crates/takt-cli/src/main.rs` (`--input`), `crates/takt/src/loop_scorecard.rs`,

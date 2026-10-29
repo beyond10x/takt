@@ -14,7 +14,7 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:a-revision-without-code-is-no-new-attempt
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T06:37:36Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-29T07:05:34Z", actor: "human:timo", revision: 5, executor: "agent:takt"}
@@ -117,3 +117,19 @@ them hold, and which replaces every other reading:
 - The comparison that decides whether a revision changed code leaves `.engineering/` out. The doc
   comment of `code_changed` and the repeated-failure prose in `ess/domains/takt.yaml` state this
   rule, the boundary characters and the `.engineering/` exclusion.
+
+## Decision (wave 44, integration)
+
+The documentation pass on the integration branch found the merged code (`names_doc_path`,
+`crates/takt/src/run.rs`) reading "a path boundary" otherwise than the section above, after
+four review rounds whose cases it passes. The planner keeps the code and amends the section
+above to it:
+
+- A match ends at a path boundary when the end of the text or any byte follows it but an ASCII
+  letter or digit, a non-ASCII byte, `_`, `-`, `.`, `/` or `~`. So `+`, `@`, `=`, `%`, `#` and
+  `:` end a path (`docs/guide.md:3` names `docs/guide.md`). A parent directory's trailing `/` is
+  read as part of the match before the boundary.
+- A parent directory is a prefix of the path that itself holds a `/`; the top directory alone
+  (`docs`) names no file. A test that reads all of `docs/` therefore counts none of its edits;
+  the run then ends at its iteration budget, as before this story.
+- Everything else in the section above stands.

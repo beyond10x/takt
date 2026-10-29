@@ -3,7 +3,7 @@ title: Evidence and the judge
 sidebar_position: 5
 description: Only a validator writes evidence; evidence is bound to the revision it observed; whose grant merges a change is decided at the merge target's tip.
 lede: Evidence is a canon-evidence/1 record a validator, a program, writes about the exact revision it observed; a model's text is never evidence, a new commit makes every claim about the implementation unknown again, and a change to a judge surface merges only under the owner's grant or a delegation the owner recorded.
-source: AGENTS.md § Rules; crates/takt/src/validator.rs (TestsRun, GateRun, ChangeRead, PrOpen, CiRead, PrMerged, judge_guard, JUDGE_ALLOW, DELEGATIONS), evidence.rs, improvement.rs, run.rs (CHOICE_PRODUCER); crates/takt/tests/validator_confinement.rs, judge_guard.rs; engineering-protocols 0.10.0 protocols/story-delivery/1.yaml; .engineering/judge-allow.yaml; a scratch run of takt 0.14.0
+source: AGENTS.md § Rules; crates/takt/src/validator.rs (TestsRun, GateRun, ChangeRead, PrOpen, CiRead, PrMerged, judge_guard, JUDGE_ALLOW, DELEGATIONS), evidence.rs (CaseEvidence::submit, second_for), lib.rs (now_after), improvement.rs, run.rs (CHOICE_PRODUCER); crates/takt/tests/validator_confinement.rs, judge_guard.rs, records_a_second_apart.rs; CHANGELOG.md Unreleased; engineering-protocols 0.10.0 protocols/story-delivery/1.yaml; .engineering/judge-allow.yaml; a scratch run of takt 0.14.0
 ---
 
 # Evidence and the judge
@@ -31,6 +31,13 @@ the record the tests of a one-test repository left, `evidence/0001-test-result-1
 `subject_revision` is the commit the tests ran at. Canon applies the record to that revision
 only, so after a new commit every claim about the implementation is unknown again: the tests,
 the gate and CI are observed anew, and the merge waits for them.
+
+From 0.21.0 the evidence port stamps `observed_at` when the record is submitted, never before
+the case's latest record. Canon 0.7.0 orders records by `observed_at` in whole seconds and reads
+two records of one second as of unknown order. So when a record would land in the second of the
+case's latest records, and an order form of the protocol (`first`, `before`, `after`) reads its
+kind and another kind recorded in that second, the port waits up to 1.1 s for the next second. A
+stamp a caller set is kept, with no wait.
 
 The model never produces an observation. A step that records a choice (`change.handover`: the
 harness hands the change over, changing no file) gets a record from the producer `takt.choice`.
