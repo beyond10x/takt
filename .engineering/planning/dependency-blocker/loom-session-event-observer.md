@@ -2,14 +2,16 @@
 format: aep.planning-md/3
 id: dependency-blocker:loom-session-event-observer
 kind: dependency-blocker
-status: open
+status: cleared
 title: Loom's session executor calls no caller's observer for a session's events while it runs
 summary: cleared by the first Loom release that ships Loom's story:session-executor-event-observer
 tags:
 - loom
 relations:
 - blocks: story:run-console-shows-the-session-live
-revision: 1
+revision: 2
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-29T00:12:29Z", actor: "human:timo", revision: 2}
 ---
 # Dependency blocker: loom-session-event-observer
 

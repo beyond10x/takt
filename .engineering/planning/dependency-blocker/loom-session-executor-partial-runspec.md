@@ -2,12 +2,14 @@
 format: aep.planning-md/3
 id: dependency-blocker:loom-session-executor-partial-runspec
 kind: dependency-blocker
-status: open
+status: cleared
 title: Loom's session executor takes no partial RunSpec from its caller over its per-kind defaults
 relations:
 - blocks: story:harness-section-is-metaharness-session-request
 - blocks: story:harness-flags-spell-metaharness-names
-revision: 2
+revision: 3
+transitions:
+- {from: "open", to: "cleared", at: "2026-10-29T00:12:30Z", actor: "human:timo", revision: 3}
 ---
 # Dependency blocker: loom-session-executor-partial-runspec
 
