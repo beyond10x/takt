@@ -8742,10 +8742,11 @@ const SHAPE_SPAN: usize = "-----BEGIN ".len() + KEY_LABEL + "-----".len();
 pub fn credential_shape(text: &str) -> Option<&'static str> {
     let bytes = text.as_bytes();
     let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'-';
-    let run = |from: usize, within: &dyn Fn(u8) -> bool| {
+    let token = |c: u8| c.is_ascii_alphanumeric() || b"._~+/=-".contains(&c);
+    let word_run = |from: usize| {
         bytes
             .get(from..)
-            .map_or(0, |rest| rest.iter().take_while(|c| within(**c)).count())
+            .map_or(0, |rest| rest.iter().take_while(|c| word(**c)).count())
     };
     let mut rest = text;
     while let Some(at) = rest.find("-----BEGIN ") {
@@ -8758,47 +8759,86 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
         }
         rest = after;
     }
-    // A JWT: three base64url parts joined by dots, the first two encoding a JSON object.
-    let jwt = |from: usize| {
-        let first = run(from, &word);
-        let second = from + first + 1;
-        let third = second + run(second, &word) + 1;
-        first >= 13
-            && bytes.get(from + first) == Some(&b'.')
-            && bytes.get(second..).is_some_and(|at| at.starts_with(b"eyJ"))
-            && run(second, &word) >= 13
-            && bytes.get(third - 1) == Some(&b'.')
-            && run(third, &word) >= 10
-    };
-    for at in 0..bytes.len() {
-        if at > 0 && word(bytes[at - 1]) {
+    // Every shape is looked for at every byte, also right after a word character: a token
+    // joined to the word before it (`test_`, `x_`) is a token all the same. Every shape's
+    // prefix starts with a word character, so the text is read one run of word characters at a
+    // time: each run's end is measured once, and every position inside the run shares it. What
+    // a position reads past its prefix that the run does not tell (the next upper-case letter,
+    // digit or character that is no letter or digit) is sought forward from where the last
+    // answer left off ([`Seek`]), so the read is linear and its memory constant.
+    let (mut upper, mut digit, mut alphanumeric_end) =
+        (Seek::default(), Seek::default(), Seek::default());
+    let mut start = 0;
+    while start < bytes.len() {
+        if !word(bytes[start]) {
+            start += 1;
             continue;
         }
-        let here = &bytes[at..];
-        let shape = if here.starts_with(b"sk-ant-") && run(at + 7, &word) >= 20 {
-            Some("anthropic-token")
-        } else if here.starts_with(b"sk-") && run(at + 3, &word) >= 32 {
-            Some("openai-key")
-        } else if (here.len() > 4
-            && here.starts_with(b"gh")
-            && b"pousr".contains(&here[2])
-            && here[3] == b'_'
-            && run(at + 4, &|c: u8| c.is_ascii_alphanumeric()) >= 36)
-            || (here.starts_with(b"github_pat_") && run(at + 11, &word) >= 22)
-        {
-            Some("github-token")
-        } else if GITLAB_TOKEN_PREFIXES.iter().any(|prefix| {
-            here.starts_with(prefix.as_bytes()) && run(at + prefix.len(), &word) >= 20
-        }) {
-            Some("gitlab-token")
-        } else if here.starts_with(b"eyJ") && jwt(at) {
-            Some("jwt")
-        } else {
-            None
+        let end = start + word_run(start);
+        // A JWT: three base64url parts joined by dots, the first two encoding a JSON object.
+        // What follows this run's end, the second and third parts, is read once per run.
+        let mut tail: Option<bool> = None;
+        let mut jwt_tail = || {
+            *tail.get_or_insert_with(|| {
+                let second = end + 1;
+                let third = second + word_run(second) + 1;
+                bytes.get(end) == Some(&b'.')
+                    && bytes.get(second..).is_some_and(|at| at.starts_with(b"eyJ"))
+                    && word_run(second) >= 13
+                    && bytes.get(third - 1) == Some(&b'.')
+                    && word_run(third) >= 10
+            })
         };
-        if shape.is_some() {
-            return shape;
+        for at in start..end {
+            let here = &bytes[at..];
+            // A key's random characters after a bare `sk-`: 32 or more, and after a letter or
+            // a digit, where `sk-` ends an ordinary word (`risk-`, `task-`), also an upper-case
+            // letter and a digit. So a key of lower-case hexadecimal right after a letter or a
+            // digit (`xsk-` and 32 of `0-9a-f`) is not found: the price of such words staying
+            // shown.
+            let mut openai = || {
+                let from = at + 3;
+                end - from >= 32
+                    && (at == 0
+                        || !bytes[at - 1].is_ascii_alphanumeric()
+                        || (upper.next(bytes, from, |c| c.is_ascii_uppercase()) < end
+                            && digit.next(bytes, from, |c| c.is_ascii_digit()) < end))
+            };
+            let shape = if here.starts_with(b"sk-ant-") && end - (at + 7) >= 20 {
+                Some("anthropic-token")
+            } else if here.starts_with(b"sk-") && openai() {
+                Some("openai-key")
+            } else if (here.len() > 4
+                && here.starts_with(b"gh")
+                && b"pousr".contains(&here[2])
+                && here[3] == b'_'
+                && alphanumeric_end.next(bytes, at + 4, |c| !c.is_ascii_alphanumeric()) - (at + 4)
+                    >= 36)
+                || (here.starts_with(b"github_pat_") && end - (at + 11) >= 22)
+            {
+                Some("github-token")
+            } else if GITLAB_TOKEN_PREFIXES.iter().any(|prefix| {
+                // A prefix of word characters ends inside the run; one that holds another
+                // (`_gitlab_session=`) ends past it, and the run after it is measured.
+                let from = at + prefix.len();
+                here.starts_with(prefix.as_bytes())
+                    && if from <= end {
+                        end - from
+                    } else {
+                        word_run(from)
+                    } >= 20
+            }) {
+                Some("gitlab-token")
+            } else if here.starts_with(b"eyJ") && end - at >= 13 && jwt_tail() {
+                Some("jwt")
+            } else {
+                None
+            };
+            if shape.is_some() {
+                return shape;
+            }
         }
+        start = end;
     }
     const FIELDS: [&str; 7] = [
         "access_token",
@@ -8809,21 +8849,28 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
         "refreshToken",
         "idToken",
     ];
-    let token = |c: u8| c.is_ascii_alphanumeric() || b"._~+/=-".contains(&c);
     for field in FIELDS {
+        // A field's matches come in order, and each value starts at or after the one before,
+        // so each value's end, digit and letter are sought forward ([`Seek`]).
+        let (mut value_end, mut digit, mut letter) =
+            (Seek::default(), Seek::default(), Seek::default());
         for (at, _) in text.match_indices(field) {
             let mut from = at + field.len();
-            let gap = run(from, &|c: u8| b"\"' \t:=".contains(&c));
+            let gap = bytes[from..]
+                .iter()
+                .take(5)
+                .take_while(|c| b"\"' \t:=".contains(c))
+                .count();
             let assigned = bytes[from..from + gap]
                 .iter()
                 .any(|c| *c == b':' || *c == b'=');
             from += gap;
-            let value = &bytes[from..from + run(from, &token)];
+            let end = value_end.next(bytes, from, |c| !token(c));
             if assigned
                 && gap <= 4
-                && value.len() >= 20
-                && value.iter().any(u8::is_ascii_digit)
-                && value.iter().any(u8::is_ascii_alphabetic)
+                && end - from >= 20
+                && digit.next(bytes, from, |c| c.is_ascii_digit()) < end
+                && letter.next(bytes, from, |c| c.is_ascii_alphabetic()) < end
             {
                 return Some("token-field");
             }
@@ -8846,6 +8893,33 @@ pub fn credential_shape(text: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// The first byte at or after a position for which a test holds, the text's length when none
+/// does, sought forward from where the last answer left off ([`credential_shape`]). The last
+/// answer stands for every position from the one it was sought from up to itself, as no byte
+/// between them passes; asked at positions that do not decrease, with one test, each byte is
+/// read once, and the memory kept is two positions.
+#[derive(Default)]
+struct Seek {
+    last: Option<(usize, usize)>,
+}
+
+impl Seek {
+    fn next(&mut self, bytes: &[u8], from: usize, test: impl Fn(u8) -> bool) -> usize {
+        if let Some((asked, found)) = self.last
+            && asked <= from
+            && from <= found
+        {
+            return found;
+        }
+        let found = from
+            + bytes.get(from..).map_or(0, |rest| {
+                rest.iter().position(|c| test(*c)).unwrap_or(rest.len())
+            });
+        self.last = Some((from, found));
+        found
+    }
 }
 
 /// Why a path `proposal` names may not reach the tree, the record or a refusal: it holds text of
@@ -13929,5 +14003,82 @@ mod tests {
         record.extend(gate_lines(3, "r3", "pass", &[]));
         assert_eq!(last_gate_failure(&record), None);
         assert_eq!(last_gate_failure(&[]), None);
+    }
+
+    /// story:credential-shape-sees-a-token-after-a-word-character: a token is found also right
+    /// after a word character, in a test's name, a path or an identifier; each piece is
+    /// assembled here so this file holds no such shape.
+    #[test]
+    fn a_token_after_a_word_character_is_found() {
+        let github = |n: usize, letter: &str| ["gh", "p_", &letter.repeat(n)].concat();
+        let jwt = [
+            "ey",
+            "J",
+            &"a".repeat(20),
+            ".ey",
+            "J",
+            &"b".repeat(20),
+            ".",
+            &"c".repeat(20),
+        ]
+        .concat();
+        for (text, shape) in [
+            (format!("test_{}", github(36, "A")), "github-token"),
+            (
+                ["test_sk", "-ant-", &"b".repeat(30)].concat(),
+                "anthropic-token",
+            ),
+            (format!("src/x_{}.txt", github(36, "C")), "github-token"),
+            (format!("v2{}", github(36, "D")), "github-token"),
+            (
+                ["test_gl", "pat-", &"e".repeat(20)].concat(),
+                "gitlab-token",
+            ),
+            (
+                ["a", "github", "_pat_", &"f".repeat(22)].concat(),
+                "github-token",
+            ),
+            (format!("value{jwt}"), "jwt"),
+            (
+                ["test_sk", "-proj-", &"g".repeat(32)].concat(),
+                "openai-key",
+            ),
+            (["key-sk", "-", &"h".repeat(32)].concat(), "openai-key"),
+            (["xsk", "-proj-", &"Ab1".repeat(11)].concat(), "openai-key"),
+        ] {
+            assert_eq!(credential_shape(&text), Some(shape), "{} bytes", text.len());
+        }
+    }
+
+    /// The bare `sk-` of an OpenAI key also ends ordinary words (`risk-`, `task-`, `desk-`), so
+    /// after a letter or a digit it is a key's only when the characters after it hold an
+    /// upper-case letter and a digit, as a key's random ones do and words joined by hyphens do
+    /// not: such text is shown, not withheld.
+    #[test]
+    fn a_word_ending_in_sk_is_no_key() {
+        for clean in [
+            "the-risk-assessment-of-the-quarterly-report-v2",
+            "risk-assessment-of-the-whole-repository-in-bytes-per-file",
+            "task-management-of-the-whole-repository-in-bytes-per-file",
+        ] {
+            assert_eq!(credential_shape(clean), None, "{clean}");
+        }
+    }
+
+    /// Every run `credential_shape` measures is read once per call, so a text that names a
+    /// token field over and over in one run of token characters, each name measuring the rest of
+    /// the run as its value, is read in linear time, as are the runs the byte-wise shapes read
+    /// (`credential_shape_adv_u3`).
+    #[test]
+    fn a_run_of_token_field_names_is_read_in_linear_time() {
+        let text = ["access", "Token="].concat().repeat((64 << 10) / 12);
+        let start = std::time::Instant::now();
+        assert_eq!(credential_shape(&text), None);
+        let took = start.elapsed();
+        assert!(
+            took < std::time::Duration::from_millis(500),
+            "{} bytes of token field names took {took:?}",
+            text.len()
+        );
     }
 }

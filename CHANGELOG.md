@@ -6,6 +6,10 @@ takt's releases.
 
 ## [Unreleased]
 
+### Fixed
+
+- A credential joined to a word before it (`test_ghp_…`) is withheld. After a letter or digit, `sk-` needs a capital and a digit after it, so `xsk-` and lower-case hex is shown.
+
 ## [0.19.0] - 2026-10-29
 
 A run's console opens with the story and shows what each step cost; a failed gate or test run
