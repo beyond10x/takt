@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:fenced-forge-dispatch
 kind: story
-status: draft
+status: active
 title: pr.open and repository.merge record an outcome class; unknown is resolved by a read
 summary: applied, refused, not_attempted or unknown; a write that may have been sent is never sent again
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T21:22:43Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-29T21:22:43Z", actor: "human:timo", revision: 3}
 ---
 # Story: fenced-forge-dispatch
 

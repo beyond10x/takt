@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:bench-subset-and-budget
 kind: story
-status: draft
+status: active
 title: takt stops a run at a dollar budget given as --usd
 summary: dataset version and task ids pinned per run; a token and dollar budget per task and per run
 relations:
@@ -12,7 +12,10 @@ relations:
 scope:
 - confidence: inferred
   path: docs/bench
-revision: 9
+revision: 11
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T21:22:41Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "proposed", to: "active", at: "2026-10-29T21:22:42Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"review_outcome":1}}}
 ---
 # Story: bench-subset-and-budget
 

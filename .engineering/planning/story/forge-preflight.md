@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:forge-preflight
 kind: story
-status: draft
+status: active
 title: The bot forge is checked before the case opens
 summary: b10x-gates, gh and B10X_GATES_POLICY are checked in forge_of; a missing one is exit 1 before any step
 relations:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt/src/forge.rs
 - confidence: inferred
   path: crates/takt/tests/forge_preflight.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T21:22:42Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-10-29T21:22:43Z", actor: "human:timo", revision: 6}
 ---
 # Story: forge-preflight
 
