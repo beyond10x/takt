@@ -150,7 +150,7 @@ fn rust_files(dir: &Path, found: &mut Vec<PathBuf>) {
 /// (`crates/takt-cli/src/main.rs`, `fn takt`), a `tests.run` step under the guard over the
 /// operator's `PATH` and `~/.cargo/bin`.
 #[test]
-#[ignore = "finding: unit-test modules in crates/*/src run steps over the operator's program directories (U3)"]
+#[ignore = "story:unit-tests-run-steps-over-the-operators-path: unit-test modules in crates/*/src run steps over the operator's program directories"]
 fn no_unit_test_module_runs_steps_over_the_operators_program_directories() {
     let crates = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

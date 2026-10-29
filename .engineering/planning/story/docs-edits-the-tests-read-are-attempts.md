@@ -14,7 +14,7 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:a-revision-without-code-is-no-new-attempt
-revision: 1
+revision: 2
 ---
 # An edit under docs/ that the story's tests read is never counted as an attempt
 
@@ -66,3 +66,8 @@ path under `docs/`. A revision that changes only documentation no test reads sti
 - `crates/takt/src/run.rs`: `is_documentation_path`, `code_changed` (cited)
 - `crates/takt/tests/w42_adv_repeat_count.rs`: the ignored case un-ignored (cited)
 - `ess/domains/takt.yaml`: the repeated-failure rule's prose and its citations (inferred)
+
+## Release 0.19.0
+
+0.19.0 ships this story's cases `#[ignore]`d, accepted at its release check as a tracked finding
+on the condition that each ignore's reason names this story.

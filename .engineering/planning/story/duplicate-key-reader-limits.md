@@ -16,7 +16,7 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 2
+revision: 3
 ---
 # Three duplicate keys the YAML reader does not find at their line
 
@@ -57,3 +57,8 @@ key when it is a declared name.
 ## Scope
 
 - `crates/takt/src/run_config.rs` (cited)
+
+## Release 0.19.0
+
+0.19.0 ships this story's cases `#[ignore]`d, accepted at its release check as a tracked finding
+on the condition that each ignore's reason names this story.
