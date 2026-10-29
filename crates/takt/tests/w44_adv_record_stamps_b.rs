@@ -142,7 +142,10 @@ fn a_resumed_case_keeps_an_ordered_pair_apart() {
     };
     let mut again = CaseDir::resume(&tree.0, "resume").expect("the case resumes");
     let failed = submit(&mut again, &record("e2", "test_result", Some("fail")));
-    assert!(failed > written, "tests_change {written}, test_result {failed}");
+    assert!(
+        failed > written,
+        "tests_change {written}, test_result {failed}"
+    );
 }
 
 /// The same pair under `story.delivery/2` loaded from a `protocol/1` file, as `--protocol
@@ -165,7 +168,10 @@ fn a_protocol_from_a_file_keeps_an_ordered_pair_apart() {
     early_in_a_second();
     let written = submit(&mut case, &record("e1", "tests_change", None));
     let failed = submit(&mut case, &record("e2", "test_result", Some("fail")));
-    assert!(failed > written, "tests_change {written}, test_result {failed}");
+    assert!(
+        failed > written,
+        "tests_change {written}, test_result {failed}"
+    );
 }
 
 /// A clock-stamped record held past a second before it is submitted (the run loop's checks
@@ -184,5 +190,8 @@ fn a_record_held_before_submit_is_stamped_at_submit_and_never_backwards() {
     std::thread::sleep(Duration::from_millis(1_200));
     let written = submit(&mut case, &record("e1", "tests_change", None));
     let failed = submit(&mut case, &held);
-    assert!(failed > written, "tests_change {written}, test_result {failed}");
+    assert!(
+        failed > written,
+        "tests_change {written}, test_result {failed}"
+    );
 }
