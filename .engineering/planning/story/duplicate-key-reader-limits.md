@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:duplicate-key-reader-limits
 kind: story
-status: draft
+status: proposed
 title: Three duplicate keys the YAML reader does not find at their line
 tags:
 - finding
@@ -16,7 +16,9 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 3
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T06:37:36Z", actor: "human:timo", revision: 4}
 ---
 # Three duplicate keys the YAML reader does not find at their line
 

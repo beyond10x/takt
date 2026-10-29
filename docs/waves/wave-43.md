@@ -95,3 +95,8 @@ request into `main` and the release tag, all through the bot route.
   passed, 0 failed, 10 ignored, each ignore naming its story or its limit; specification,
   citations (1351 resolved, 0 unresolved), changelog, format and lint exit 0. ESS 0.76.0 rides
   along (task:ess-0-76-0). The five stories are implemented on that gate.
+- PR CI: `local_forge_adv_substrate` failed on its runner (git 2.56.0): the push to the hub
+  by its path wrote `refs/remotes/origin/takt/<case>`, which the step guard charged to
+  `pr.open`. git 2.55.0 here writes no such ref, and the test skips itself here for want of a
+  Substrate adapter, so the local gate passed it without running it. Fixed in 6191610b: the
+  push puts back the tracking refs it wrote.

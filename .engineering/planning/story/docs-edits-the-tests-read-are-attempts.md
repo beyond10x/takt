@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:docs-edits-the-tests-read-are-attempts
 kind: story
-status: draft
+status: proposed
 title: An edit under docs/ that the story's tests read is never counted as an attempt
 tags:
 - finding
@@ -14,7 +14,9 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:a-revision-without-code-is-no-new-attempt
-revision: 2
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T06:37:36Z", actor: "human:timo", revision: 3}
 ---
 # An edit under docs/ that the story's tests read is never counted as an attempt
 

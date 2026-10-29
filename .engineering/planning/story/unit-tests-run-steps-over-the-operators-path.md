@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:unit-tests-run-steps-over-the-operators-path
 kind: story
-status: draft
+status: proposed
 title: The takt binary's unit tests run guarded steps over the operator's program directories
 tags:
 - finding
@@ -14,7 +14,9 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:an-unrelated-program-install-refuses-no-step
-revision: 2
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-29T06:37:36Z", actor: "human:timo", revision: 3}
 ---
 # The takt binary's unit tests run guarded steps over the operator's program directories
 
