@@ -8,7 +8,18 @@ summary: http to a loopback origin and a keyless loopback model endpoint
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 4
+scope:
+- confidence: cited
+  path: CHANGELOG.md
+- confidence: cited
+  path: Cargo.lock
+- confidence: cited
+  path: Cargo.toml
+- confidence: cited
+  path: crates/takt-cli/tests/loopback_relays_cli.rs
+- confidence: cited
+  path: website/docs/reference/configuration.md
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T03:35:01Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-30T03:35:01Z", actor: "human:timo", revision: 4}

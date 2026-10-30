@@ -11,7 +11,22 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - depends_on: story:git-and-model-through-loopback-relays
-revision: 3
+scope:
+- confidence: inferred
+  path: .github/workflows/check.yml
+- confidence: cited
+  path: crates/takt-cli/tests/git_relay_refusals.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/git_relay_served.rs
+- confidence: cited
+  path: crates/takt-cli/tests/loopback_relays_cli.rs
+- confidence: cited
+  path: crates/takt-cli/tests/support/smart_http.rs
+- confidence: cited
+  path: ess/domains/takt.citations.tsv
+- confidence: cited
+  path: ess/domains/takt.yaml
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T10:37:02Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-30T10:37:02Z", actor: "human:timo", revision: 3}

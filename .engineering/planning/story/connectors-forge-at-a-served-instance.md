@@ -11,7 +11,24 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - depends_on: story:connectors-forge-speaks-github-at-an-endpoint
-revision: 3
+scope:
+- confidence: inferred
+  path: .github/workflows/check.yml
+- confidence: cited
+  path: CHANGELOG.md
+- confidence: cited
+  path: crates/takt/src/forge/connectors.rs
+- confidence: cited
+  path: crates/takt/tests/connectors_forge_github.rs
+- confidence: inferred
+  path: crates/takt/tests/connectors_served_instance.rs
+- confidence: cited
+  path: ess/domains/takt.citations.tsv
+- confidence: cited
+  path: ess/domains/takt.yaml
+- confidence: cited
+  path: website/docs/reference/configuration.md
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T10:37:01Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-30T10:37:01Z", actor: "human:timo", revision: 3}
