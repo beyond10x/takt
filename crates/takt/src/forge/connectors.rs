@@ -58,15 +58,19 @@
 //!
 //! **Keyed writes.** On the served route each write (the open, the merge) is sent first with an
 //! `idempotency_key` ([`idempotency_key`]): `takt-` and the hex SHA-256 of the case's id, the
-//! operation, its input and how many answers the provider refused that write in this process,
-//! so the same case and write give the same key and a write sent again after a lost answer, or
-//! after `outcome_unknown`, replays its first outcome. A host with standing grants takes the
-//! key; one without them refuses it as a member it does not take (`unsupported`, HTTP 400,
-//! `request_id: null`, nothing run), and the forge then sends that write, and every later one,
-//! with no key. An `idempotency_conflict`, `approval_required` or `outcome_unknown` ends the
-//! write naming the code; after a merge's `outcome_unknown` the pull request is read again
-//! before any further write. A provider's refusal of a write takes a new key next time, so a
-//! merge refused for a pending check is not replayed refused.
+//! operation, the descriptor revision, its input and how many times that write at that revision
+//! was not applied, so the same case and write give the same key and a write sent again after a
+//! lost answer, or after `outcome_unknown`, replays its first outcome. A host with standing
+//! grants takes the key; one without them refuses it as a member it does not take
+//! (`unsupported`, HTTP 400, `request_id: null`, nothing run), and the forge then sends that
+//! write, and every later one, with no key. An `idempotency_conflict`, `approval_required` or
+//! `outcome_unknown` ends the write naming the code; after a merge's `outcome_unknown` the pull
+//! request is read again before any further write. A write whose answer's
+//! `mutation.classification` is `refused` or `not_attempted` takes a new key next time, so a
+//! merge the provider refused is not replayed refused; `applied`, `unknown` or no
+//! classification keeps the key. That count is kept in the case's artifacts directory
+//! ([`ConnectorsForge::REFUSALS`]), so a resumed run reads it back; a descriptor revision
+//! that moves gives a new key, never the host's `idempotency_conflict`.
 //!
 //! `connectors invoke` refuses a write without `--approval-file` (`approval_required`), and none
 //! is given here: on the CLI route the open and the merge fail with that refusal. Standard error
@@ -160,20 +164,95 @@ pub const KEY_PREFIX: &str = "takt-";
 
 /// What the digest of an `idempotency_key` is taken over first, so a change to what goes into it
 /// is a new name and never a key reused for another write.
-const KEY_DOMAIN: &str = "takt.connectors.write/1";
+const KEY_DOMAIN: &str = "takt.connectors.write/2";
 
-/// The `idempotency_key` of the write `operation` on `input` for the case `case`, after the
-/// provider refused that same write `refused` times: [`KEY_PREFIX`] and the lowercase hex
-/// SHA-256 of a JSON array of [`KEY_DOMAIN`], the case, the operation, the input and `refused`.
-/// 69 ASCII bytes, inside the 1 to 256 bytes connectors admits; the same arguments always give
-/// the same key, and any other argument another.
+/// The `idempotency_key` of the write `operation` on `input` at the descriptor revision
+/// `revision` for the case `case`, after the provider refused that same write at that revision
+/// `refused` times: [`KEY_PREFIX`] and the lowercase hex SHA-256 of a JSON array of
+/// [`KEY_DOMAIN`], the case, the operation, the revision, the input and `refused`. The host holds
+/// a key for the operation, revision and input it was first sent with, so a write sent at
+/// another revision goes under another key, never meeting `idempotency_conflict`. 69 ASCII
+/// bytes, inside the 1 to 256 bytes connectors admits; the same arguments always give the same
+/// key, and any other argument another.
 #[must_use]
-pub fn idempotency_key(case: &str, operation: &str, input: &Value, refused: u32) -> String {
+pub fn idempotency_key(
+    case: &str,
+    operation: &str,
+    revision: &str,
+    input: &Value,
+    refused: u32,
+) -> String {
     use sha2::{Digest as _, Sha256};
-    let named = json!([KEY_DOMAIN, case, operation, input, refused]);
+    let named = json!([KEY_DOMAIN, case, operation, revision, input, refused]);
     let digest = Sha256::digest(named.to_string().as_bytes());
     let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
     format!("{KEY_PREFIX}{hex}")
+}
+
+/// What the file of a case's refused writes ([`ConnectorsForge::REFUSALS`]) names itself by.
+const REFUSALS_FORMAT: &str = "takt.connectors.refusals/1";
+
+/// Whether a write's `mutation.classification` says it was not applied: the provider refused it
+/// (`refused`), or its attempt never crossed the dispatch gate (`not_attempted`, an aborted
+/// attempt's replay among them). Only then is the write sent again under a new key; `applied`,
+/// `unknown` and an answer with no classification keep the key, so a write that may have been
+/// made is replayed and never made twice.
+fn not_applied(classification: Option<&str>) -> bool {
+    matches!(classification, Some("refused" | "not_attempted"))
+}
+
+/// How many times the provider refused each write of the case whose artifacts directory is
+/// `dir`, by the write's first key: what [`ConnectorsForge::REFUSALS`] holds there, empty when
+/// it holds nothing. A file that is not one is an error, never a count of zero.
+fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
+    let path = dir.join(ConnectorsForge::REFUSALS);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let document: Value = serde_json::from_str(&text)
+        .with_context(|| format!("{} is not JSON; nothing was sent", path.display()))?;
+    if document["format"] != REFUSALS_FORMAT {
+        bail!(
+            "{} is no {REFUSALS_FORMAT} document; nothing was sent",
+            path.display()
+        );
+    }
+    document["refused"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .map(|(key, count)| {
+            let count = count
+                .as_u64()
+                .and_then(|count| u32::try_from(count).ok())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "{} counts {key} as no number of refusals; nothing was sent",
+                        path.display()
+                    )
+                })?;
+            Ok((key.clone(), count))
+        })
+        .collect()
+}
+
+/// Writes `refused` into the case's artifacts directory `dir` ([`ConnectorsForge::REFUSALS`])
+/// through a file beside it renamed over it, so a later process reads the old count or the new
+/// one, never a part.
+fn record_refusals(dir: &Path, refused: &BTreeMap<String, u32>) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = dir.join(ConnectorsForge::REFUSALS);
+    let partial = dir.join(format!(
+        ".{}.{}.partial",
+        ConnectorsForge::REFUSALS,
+        std::process::id()
+    ));
+    let document = json!({"format": REFUSALS_FORMAT, "refused": refused});
+    std::fs::write(&partial, serde_json::to_vec_pretty(&document)?)
+        .with_context(|| format!("write {}", partial.display()))?;
+    std::fs::rename(&partial, &path).with_context(|| format!("write {}", path.display()))
 }
 
 /// The case whose artifacts directory is `dir` (`<case directory>/artifacts`, as the validators
@@ -463,15 +542,6 @@ impl ServedRefused {
             && !self.echoed
             && self.classification.is_none()
     }
-
-    /// Whether the answer says the write was not applied: its attempt `refused` or
-    /// `not_attempted`.
-    fn not_applied(&self) -> bool {
-        matches!(
-            self.classification.as_deref(),
-            Some("refused" | "not_attempted")
-        )
-    }
 }
 
 impl fmt::Display for ServedRefused {
@@ -533,8 +603,6 @@ pub struct ConnectorsForge {
     /// Whether the served instance refused `idempotency_key` as a member it does not take: then
     /// every write goes with no key.
     unkeyed: Cell<bool>,
-    /// For each write, by its first key, how many times the provider refused it.
-    refused: RefCell<BTreeMap<String, u32>>,
 }
 
 impl fmt::Debug for ConnectorsForge {
@@ -560,6 +628,11 @@ impl ConnectorsForge {
     /// The file that holds what the merge answered, which `repository.merge`'s validator
     /// declares.
     pub const MERGE_RESPONSE: &'static str = super::MERGE_RESPONSE;
+    /// The file under the case's artifacts directory that holds, for each keyed write by its
+    /// first key, how many times the provider refused it: the count a resumed run reads back,
+    /// so its write goes under the key after the last one refused and is not the refusal
+    /// replayed.
+    pub const REFUSALS: &'static str = "pull-request.refusals.json";
 
     /// The forge `forge` names for a run: the adapter over the connector `settings.instance`
     /// names, at `settings.endpoint` when it names one, when `forge` is `connectors`, after the
@@ -656,7 +729,6 @@ impl ConnectorsForge {
             calls: Cell::new(0),
             started,
             unkeyed: Cell::new(false),
-            refused: RefCell::new(BTreeMap::new()),
         };
         forge.preflight(tree)?;
         Ok(forge)
@@ -925,6 +997,10 @@ impl ConnectorsForge {
     /// Invokes the write `operation` once on `input` for the case whose artifacts directory is
     /// `dir`: the provider's `body`. On the served route it carries its `idempotency_key`
     /// ([`idempotency_key`]) until the instance refuses the member, and is then sent with none.
+    /// The key counts the refusals of that write at that revision recorded in `dir`
+    /// ([`Self::REFUSALS`]); an answer whose `mutation.classification` says the write was not
+    /// applied ([`not_applied`]) is recorded there before the answer is returned, so the next
+    /// attempt, in this process or a resumed one, goes under a new key.
     fn write(
         &self,
         tree: &Path,
@@ -942,11 +1018,12 @@ impl ConnectorsForge {
         };
         if !self.unkeyed.get() {
             let case = case_of(dir);
-            let first = idempotency_key(&case, operation, input, 0);
-            let refused = self.refused.borrow().get(&first).copied().unwrap_or(0);
-            let key = idempotency_key(&case, operation, input, refused);
+            let first = idempotency_key(&case, operation, revision, input, 0);
+            let mut refusals = refusals_in(dir)?;
+            let refused = refusals.get(&first).copied().unwrap_or(0);
+            let key = idempotency_key(&case, operation, revision, input, refused);
             let outcome =
-                self.served_invoke(endpoint, *loopback, revision, operation, input, Some(&key));
+                self.served_answer(endpoint, *loopback, revision, operation, input, Some(&key));
             let refusal = outcome
                 .as_ref()
                 .err()
@@ -954,14 +1031,20 @@ impl ConnectorsForge {
             if refusal.is_some_and(ServedRefused::refuses_a_member) {
                 self.unkeyed.set(true);
             } else {
-                let not_applied = match &outcome {
-                    Ok(result) => self.body_of(operation, result).is_err(),
-                    Err(_) => refusal.is_some_and(ServedRefused::not_applied),
+                let classification = match &outcome {
+                    Ok(answer) => answer["mutation"]["classification"].as_str(),
+                    Err(_) => refusal.and_then(|refusal| refusal.classification.as_deref()),
                 };
-                if not_applied {
-                    *self.refused.borrow_mut().entry(first).or_default() += 1;
+                if not_applied(classification) {
+                    refusals.insert(first, refused.saturating_add(1));
+                    record_refusals(dir, &refusals).with_context(|| {
+                        format!(
+                            "{} was not applied, and its refusal could not be recorded for the next attempt",
+                            self.named(operation)
+                        )
+                    })?;
                 }
-                return self.body_of(operation, &outcome?);
+                return self.body_of(operation, &outcome?["result"]);
             }
         }
         let outcome = self.served_invoke(endpoint, *loopback, revision, operation, input, None)?;
@@ -1009,6 +1092,21 @@ impl ConnectorsForge {
         input: &Value,
         key: Option<&str>,
     ) -> Result<Value> {
+        self.served_answer(endpoint, loopback, revision, operation, input, key)
+            .map(|answer| answer["result"].clone())
+    }
+
+    /// [`Self::served_invoke`]'s call, its whole success answer: the `result` and, for a write,
+    /// the `mutation` the instance recorded.
+    fn served_answer(
+        &self,
+        endpoint: &str,
+        loopback: bool,
+        revision: &str,
+        operation: &'static str,
+        input: &Value,
+        key: Option<&str>,
+    ) -> Result<Value> {
         let call = self.calls.get() + 1;
         self.calls.set(call);
         let request_id = format!("takt-{}-{}-{call}", std::process::id(), self.started);
@@ -1037,7 +1135,7 @@ impl ConnectorsForge {
                 if answer["request_id"] != request_id.as_str() {
                     bail!("{named} answered another request than the one sent");
                 }
-                Ok(answer["result"].clone())
+                Ok(answer)
             }
             _ => Err(refused(named, status, &bytes).into()),
         }

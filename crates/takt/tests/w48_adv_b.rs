@@ -86,10 +86,8 @@ impl Scratch {
     fn new(name: &str) -> Self {
         static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
-            "w48-adv-b-{}-{made}-{name}",
-            std::process::id()
-        ));
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("w48-adv-b-{}-{made}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("a scratch directory");
         Self(dir)
@@ -987,11 +985,18 @@ fn a_resumed_process_does_not_replay_a_refusal_the_process_before_it_drew() {
         let error = first
             .merge(&tree, &case, NUMBER, &head)
             .expect_err("a 409 is no merge");
-        assert!(format!("{error:#}").contains("nothing was merged"), "{error:#}");
+        assert!(
+            format!("{error:#}").contains("nothing was merged"),
+            "{error:#}"
+        );
     }
     drop(first);
     let held = refused_keys(&stand_in);
-    assert_eq!(held.len(), 2, "two refusals stored under two keys: {held:?}");
+    assert_eq!(
+        held.len(),
+        2,
+        "two refusals stored under two keys: {held:?}"
+    );
 
     let resumed = select(&scratch, &tree, &stand_in, &pushes).expect("the forge is selected");
     let outcome = resumed.merge(&tree, &case, NUMBER, &head);
@@ -1070,7 +1075,6 @@ fn a_create_the_provider_answered_502_is_sent_again_under_its_key() {
         "one create reaches the provider; keys {keys:?}; first error: {error:#}"
     );
 }
-
 
 /// The options of every run on the case `github`.
 fn run_options() -> RunOptions {
