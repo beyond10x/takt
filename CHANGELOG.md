@@ -6,6 +6,8 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-30
+
 ### Added
 
 - On `forge_endpoint`, each open and merge carries an `idempotency_key` from the case and the write; sent again, it replays the first outcome instead of writing twice.
@@ -959,7 +961,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.24.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.25.0...HEAD
+[0.25.0]: https://github.com/beyond10x/takt/compare/0.24.0...0.25.0
 [0.24.0]: https://github.com/beyond10x/takt/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/beyond10x/takt/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/beyond10x/takt/compare/0.22.0...0.22.1
