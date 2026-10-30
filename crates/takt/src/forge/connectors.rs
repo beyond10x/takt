@@ -201,17 +201,52 @@ fn not_applied(classification: Option<&str>) -> bool {
     matches!(classification, Some("refused" | "not_attempted"))
 }
 
+/// The most bytes of a case's refusal record ([`ConnectorsForge::REFUSALS`]) that are read.
+const REFUSALS_LIMIT: u64 = 64 << 10;
+
 /// How many times the provider refused each write of the case whose artifacts directory is
 /// `dir`, by the write's first key: what [`ConnectorsForge::REFUSALS`] holds there, empty when
-/// it holds nothing. A file that is not one is an error, never a count of zero.
+/// nothing is there. A file that is not one is an error, never a count of zero: the record is
+/// opened without following a link at it (`O_NOFOLLOW`) or waiting on it (`O_NONBLOCK`), must be
+/// a regular file of at most [`REFUSALS_LIMIT`] bytes, and its `refused` must be an object of
+/// non-negative integer counts.
 fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
     let path = dir.join(ConnectorsForge::REFUSALS);
-    let text = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
-        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => bail!(
+            "{} is a link, and a refusal record is never read through one; nothing was sent",
+            path.display()
+        ),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read {}; nothing was sent", path.display()));
+        }
     };
-    let document: Value = serde_json::from_str(&text)
+    let meta = file
+        .metadata()
+        .with_context(|| format!("read {}; nothing was sent", path.display()))?;
+    if !meta.is_file() {
+        bail!("{} is not a regular file; nothing was sent", path.display());
+    }
+    let mut bytes = Vec::new();
+    file.take(REFUSALS_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {}; nothing was sent", path.display()))?;
+    if bytes.len() as u64 > REFUSALS_LIMIT {
+        bail!(
+            "{} is longer than {REFUSALS_LIMIT} bytes; nothing was sent",
+            path.display()
+        );
+    }
+    let document: Value = serde_json::from_slice(&bytes)
         .with_context(|| format!("{} is not JSON; nothing was sent", path.display()))?;
     if document["format"] != REFUSALS_FORMAT {
         bail!(
@@ -219,10 +254,14 @@ fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
             path.display()
         );
     }
-    document["refused"]
-        .as_object()
-        .into_iter()
-        .flatten()
+    let Some(refused) = document["refused"].as_object() else {
+        bail!(
+            "{} holds no object of counts at `refused`; nothing was sent",
+            path.display()
+        );
+    };
+    refused
+        .iter()
         .map(|(key, count)| {
             let count = count
                 .as_u64()
@@ -240,8 +279,12 @@ fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
 
 /// Writes `refused` into the case's artifacts directory `dir` ([`ConnectorsForge::REFUSALS`])
 /// through a file beside it renamed over it, so a later process reads the old count or the new
-/// one, never a part.
+/// one, never a part. That file is made new (`O_EXCL`) without following a link at its name
+/// (`O_NOFOLLOW`); whatever a stale one left there, a link among them, is removed first, never
+/// written through.
 fn record_refusals(dir: &Path, refused: &BTreeMap<String, u32>) -> Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
     let path = dir.join(ConnectorsForge::REFUSALS);
     let partial = dir.join(format!(
@@ -250,8 +293,30 @@ fn record_refusals(dir: &Path, refused: &BTreeMap<String, u32>) -> Result<()> {
         std::process::id()
     ));
     let document = json!({"format": REFUSALS_FORMAT, "refused": refused});
-    std::fs::write(&partial, serde_json::to_vec_pretty(&document)?)
-        .with_context(|| format!("write {}", partial.display()))?;
+    let bytes = serde_json::to_vec_pretty(&document)?;
+    let create = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&partial)
+    };
+    let mut file = match create() {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&partial)
+                .with_context(|| format!("remove the stale {}", partial.display()))?;
+            create()
+        }
+        opened => opened,
+    }
+    .with_context(|| format!("create {}", partial.display()))?;
+    let written = file.write_all(&bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&partial);
+        return Err(error).with_context(|| format!("write {}", partial.display()));
+    }
     std::fs::rename(&partial, &path).with_context(|| format!("write {}", path.display()))
 }
 
@@ -514,6 +579,9 @@ pub struct ServedRefused {
     /// The answer's `mutation.classification`, when it carries one: what the instance recorded
     /// of a write's attempt.
     pub classification: Option<String>,
+    /// Whether the answer is a v1alpha2 error envelope ([`is_error_envelope`]), and not only
+    /// something that names a code.
+    pub envelope: bool,
 }
 
 impl ServedRefused {
@@ -533,11 +601,14 @@ impl ServedRefused {
     }
 
     /// Whether the instance refused the request for a member it does not take, before reading
-    /// the rest of it: `unsupported`, HTTP 400, `request_id: null`, no attempt. A host without
-    /// standing grants answers so to `idempotency_key`, having run nothing.
+    /// the rest of it: a v1alpha2 error envelope ([`is_error_envelope`]) with the code
+    /// `unsupported`, HTTP 400, `request_id: null`, no attempt. A host without standing grants
+    /// answers so to `idempotency_key`, having run nothing. Any other answer, one that only names
+    /// the code among them, is no such refusal.
     #[must_use]
     pub fn refuses_a_member(&self) -> bool {
-        self.status == 400
+        self.envelope
+            && self.status == 400
             && self.code.as_deref() == Some("unsupported")
             && !self.echoed
             && self.classification.is_none()
@@ -1606,7 +1677,58 @@ impl ConnectorsForge {
     }
 }
 
-/// The error of a served call that did not succeed, from its HTTP status and its answer.
+/// Whether `answer` is an error envelope of the v1alpha2 binding, as compatibility §5 closes
+/// it: an object of `version: v1alpha2`, `request_id` (a string or null), `status: error`, an
+/// `error` of a string `code`, a string `message` and an optional positive integer
+/// `retry_after_seconds` and nothing else, no `result`, `audit_ref` and `audit_status`
+/// consistent (`complete` and `incomplete` with a reference, `unavailable` and `not_required`
+/// with null), and no member besides those and `source_audit` and `mutation`.
+#[must_use]
+pub fn is_error_envelope(answer: &Value) -> bool {
+    const MEMBERS: [&str; 8] = [
+        "version",
+        "request_id",
+        "status",
+        "error",
+        "audit_ref",
+        "audit_status",
+        "source_audit",
+        "mutation",
+    ];
+    let Some(members) = answer.as_object() else {
+        return false;
+    };
+    let Some(error) = answer["error"].as_object() else {
+        return false;
+    };
+    let audited = match answer["audit_status"].as_str() {
+        Some("complete" | "incomplete") => answer["audit_ref"].is_string(),
+        Some("unavailable" | "not_required") => {
+            members.contains_key("audit_ref") && answer["audit_ref"].is_null()
+        }
+        _ => false,
+    };
+    members.keys().all(|name| MEMBERS.contains(&name.as_str()))
+        && answer["version"] == "v1alpha2"
+        && members
+            .get("request_id")
+            .is_some_and(|id| id.is_null() || id.is_string())
+        && answer["status"] == "error"
+        && audited
+        && error
+            .keys()
+            .all(|name| matches!(name.as_str(), "code" | "message" | "retry_after_seconds"))
+        && error.get("code").is_some_and(Value::is_string)
+        && error.get("message").is_some_and(Value::is_string)
+        && error
+            .get("retry_after_seconds")
+            .is_none_or(|seconds| seconds.as_u64().is_some_and(|seconds| seconds > 0))
+}
+
+/// The error of a served call that did not succeed, from its HTTP status and its answer. The
+/// code and the message of an answer that is no envelope are read from its top level, for the
+/// message alone: such an answer is never taken for the refusal of a member
+/// ([`ServedRefused::refuses_a_member`]).
 fn refused(call: String, status: u16, bytes: &[u8]) -> ServedRefused {
     let answer: Value = serde_json::from_slice(bytes).unwrap_or_default();
     let error = if answer["error"].is_object() {
@@ -1621,6 +1743,7 @@ fn refused(call: String, status: u16, bytes: &[u8]) -> ServedRefused {
         message: error["message"].as_str().map(bounded).unwrap_or_default(),
         echoed: !answer["request_id"].is_null(),
         classification: answer["mutation"]["classification"].as_str().map(bounded),
+        envelope: is_error_envelope(&answer),
     }
 }
 

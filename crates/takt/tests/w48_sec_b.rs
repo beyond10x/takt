@@ -212,7 +212,12 @@ fn invoke(envelope: &Value, world: &mut World) -> (u16, Value) {
     let standing = world.standing.as_mut().expect("standing grants");
     if let Some((held, (status, answer))) = standing.keys.get(&key) {
         if *held != request {
-            return failure(id, 409, "idempotency_conflict", "the key was used for another request");
+            return failure(
+                id,
+                409,
+                "idempotency_conflict",
+                "the key was used for another request",
+            );
         }
         let mut answer = answer.clone();
         answer["request_id"] = id.clone();
@@ -234,17 +239,29 @@ fn invoke(envelope: &Value, world: &mut World) -> (u16, Value) {
         "replayed": false,
         "cause": null,
     });
-    standing.keys.insert(key, (request, (status, answer.clone())));
+    standing
+        .keys
+        .insert(key, (request, (status, answer.clone())));
     (status, answer)
 }
 
 fn dispatch(envelope: &Value, world: &mut World) -> (u16, Value) {
     let id = &envelope["request_id"];
     if envelope["version"] != "v1alpha2" || !id.is_string() {
-        return failure(&Value::Null, 400, "invalid_input", "invalid invocation envelope");
+        return failure(
+            &Value::Null,
+            400,
+            "invalid_input",
+            "invalid invocation envelope",
+        );
     }
     if envelope["revision"] != REVISION {
-        return failure(id, 409, "stale_description", "the descriptor revision changed");
+        return failure(
+            id,
+            409,
+            "stale_description",
+            "the descriptor revision changed",
+        );
     }
     let input = &envelope["input"];
     match envelope["operation"].as_str().unwrap_or_default() {
@@ -257,8 +274,14 @@ fn dispatch(envelope: &Value, world: &mut World) -> (u16, Value) {
         }
         "pull_request.create" => {
             world.pull = Some(Pull {
-                head: input["body"]["head"].as_str().unwrap_or_default().to_owned(),
-                base: input["body"]["base"].as_str().unwrap_or_default().to_owned(),
+                head: input["body"]["head"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
+                base: input["body"]["base"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_owned(),
                 state: "open",
                 merged: false,
             });
@@ -288,7 +311,11 @@ fn dispatch(envelope: &Value, world: &mut World) -> (u16, Value) {
             };
             pull.state = "closed";
             pull.merged = true;
-            success(id, 200, json!({"sha": "a-merge-commit", "merged": true, "message": "merged"}))
+            success(
+                id,
+                200,
+                json!({"sha": "a-merge-commit", "merged": true, "message": "merged"}),
+            )
         }
         _ => failure(id, 404, "not_found", "no such pull request"),
     }
@@ -315,7 +342,10 @@ fn answer(method: &str, path: &str, body: &Value, world: &mut World) -> (u16, Va
             }),
         ),
         ("POST", INVOKE) => invoke(body, world),
-        _ => (404, json!({"code": "not_found", "message": "no such route"})),
+        _ => (
+            404,
+            json!({"code": "not_found", "message": "no such route"}),
+        ),
     }
 }
 
@@ -406,7 +436,12 @@ impl Runner for Pushes {
         self.run_env(tree, argv, &[])
     }
 
-    fn run_env(&self, _tree: &Path, argv: &[String], _env: &[(&str, &str)]) -> anyhow::Result<Exit> {
+    fn run_env(
+        &self,
+        _tree: &Path,
+        argv: &[String],
+        _env: &[(&str, &str)],
+    ) -> anyhow::Result<Exit> {
         let mut stdout = String::new();
         if argv.iter().any(|word| word == "ls-remote") {
             let reference = argv.last().expect("a reference");
@@ -434,7 +469,12 @@ fn repository(scratch: &Path) -> (PathBuf, String, String) {
     git(&tree, &["commit", "-q", "-m", "start"]);
     git(
         &tree,
-        &["remote", "add", "origin", "https://github.example/owner/repo.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            "https://github.example/owner/repo.git",
+        ],
     );
     let main = git(&tree, &["rev-parse", "HEAD"]);
     git(&tree, &["checkout", "-q", "-b", BRANCH]);
@@ -520,7 +560,7 @@ fn the_refusal_record_does_not_write_through_a_link_at_its_partial_name() {
         "kept\n",
         "recording the refusal wrote through the link into {}; the merge said {:#}",
         victim.display(),
-        outcome.err().expect("an error")
+        outcome.expect_err("an error")
     );
 }
 
@@ -536,7 +576,10 @@ fn a_refusal_record_that_links_out_of_the_case_is_not_read_through() {
     let outside = scratch.join("outside");
     fs::create_dir_all(&outside).expect("a directory outside the case");
     let fifo = outside.join("fifo");
-    let made = Command::new("mkfifo").arg(&fifo).status().expect("mkfifo runs");
+    let made = Command::new("mkfifo")
+        .arg(&fifo)
+        .status()
+        .expect("mkfifo runs");
     assert!(made.success(), "a FIFO outside the case");
     std::os::unix::fs::symlink(&fifo, case.join(ConnectorsForge::REFUSALS))
         .expect("a link at the record's name");
@@ -606,12 +649,10 @@ fn an_answer_that_is_no_envelope_does_not_drop_the_key() {
     let stand_in = StandIn::start(World::keyed(&main, &head));
     let case = artifacts(&scratch);
     let forge = select(&scratch, &tree, &stand_in);
-    stand_in
-        .world
-        .lock()
-        .expect("the world")
-        .front
-        .push_back((400, json!({"code": "unsupported", "message": "unsupported"})));
+    stand_in.world.lock().expect("the world").front.push_back((
+        400,
+        json!({"code": "unsupported", "message": "unsupported"}),
+    ));
 
     let outcome = forge.open_pull_request(&tree, &case, &the_request());
     let keys = stand_in.keys_of("pull_request.create");

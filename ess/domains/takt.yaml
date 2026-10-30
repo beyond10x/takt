@@ -723,7 +723,7 @@ types:
       # It belongs to `forge: connectors`, which needs it.
       # read from: crates/takt/src/run_config.rs:267-271
       # read from: crates/takt/src/run_config.rs:1520-1530
-      # read from: crates/takt/src/forge/connectors.rs:322-335
+      # read from: crates/takt/src/forge/connectors.rs:387-400
       - name: forge_instance
         type: Optional<String>
       # The URL of the served Connectors instance `forge: connectors` calls instead of the
@@ -734,7 +734,7 @@ types:
       # read from: crates/takt/src/run_config.rs:272-275
       # read from: crates/takt/src/run_config.rs:320-322
       # read from: crates/takt/src/run_config.rs:1446-1457
-      # read from: crates/takt/src/forge/connectors.rs:337-370
+      # read from: crates/takt/src/forge/connectors.rs:402-435
       - name: forge_endpoint
         type: Optional<String>
       - name: transport
@@ -2419,9 +2419,14 @@ types:
   # run, so the same case and write give the same key, another write or revision another, a
   # write not applied a new key next time, and a write sent again after a lost answer, a
   # provider's 5xx or `outcome_unknown` (`applied`, `unknown` or no classification) replays its
-  # first outcome, a replay read as that outcome. A
-  # host that refuses the key as a member it does not take (`unsupported`, HTTP 400,
-  # `request_id: null`) gets that write again, and every later one, with no key.
+  # first outcome, a replay read as that outcome. The count is read without following a link,
+  # from a regular file of at most 64 KiB whose `refused` is an object of non-negative integer
+  # counts, and anything else there is an error naming the file, never a count of zero; it is
+  # written through a new file beside it, made without following a link, and renamed over it. A
+  # host that refuses the key as a member it does not take (a v1alpha2 error envelope with
+  # `unsupported`, HTTP 400, `request_id: null`) gets that write again, and every later one,
+  # with no key; any other answer, one that only names `unsupported` among them, ends the write
+  # and keeps the key.
   # `idempotency_conflict`, `approval_required` and `outcome_unknown` end the write naming the
   # code, and a merge answered `outcome_unknown` is read again before any further write, never
   # called no merge. On github the merge target's tip is
@@ -2435,19 +2440,20 @@ types:
   # defaulted to, and a scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/connectors.rs:12-19
   # read from: crates/takt/src/forge/connectors.rs:111-120
-  # read from: crates/takt/src/forge/connectors.rs:448-482
-  # read from: crates/takt/src/forge/connectors.rs:756-772
-  # read from: crates/takt/src/forge/connectors.rs:866-871
-  # read from: crates/takt/src/forge/connectors.rs:1155-1207
-  # read from: crates/takt/src/forge/connectors.rs:1409-1423
-  # read from: crates/takt/src/forge/connectors.rs:1627-1630
-  # read from: crates/takt/src/forge/connectors.rs:1837-1854
+  # read from: crates/takt/src/forge/connectors.rs:513-547
+  # read from: crates/takt/src/forge/connectors.rs:827-843
+  # read from: crates/takt/src/forge/connectors.rs:937-942
+  # read from: crates/takt/src/forge/connectors.rs:1226-1278
+  # read from: crates/takt/src/forge/connectors.rs:1480-1494
+  # read from: crates/takt/src/forge/connectors.rs:1750-1753
+  # read from: crates/takt/src/forge/connectors.rs:1960-1977
   # read from: crates/takt/src/forge/connectors.rs:169-190
-  # read from: crates/takt/src/forge/connectors.rs:535-544
-  # read from: crates/takt/src/forge/connectors.rs:997-1052
+  # read from: crates/takt/src/forge/connectors.rs:603-614
+  # read from: crates/takt/src/forge/connectors.rs:1068-1123
   # read from: crates/takt/src/forge/connectors.rs:200-201
-  # read from: crates/takt/src/forge/connectors.rs:207-255
-  # read from: crates/takt/src/forge/connectors.rs:631-635
+  # read from: crates/takt/src/forge/connectors.rs:213-320
+  # read from: crates/takt/src/forge/connectors.rs:702-706
+  # read from: crates/takt/src/forge/connectors.rs:1680-1726
   # read from: crates/takt/src/forge.rs:1567-1571
   # read from: crates/takt/src/validator.rs:4185-4187
   # read from: crates/takt/src/validator.rs:5252-5258
