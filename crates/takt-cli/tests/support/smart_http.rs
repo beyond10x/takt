@@ -105,6 +105,20 @@ pub enum Push {
     /// Refused, every command with the first reason this names for any command of the push, as a
     /// Connectors git relay refuses one; served when it names none.
     Refused(Refusal),
+    /// Answered with this HTTP status and an empty body, nothing applied.
+    Status(u16),
+}
+
+/// What the stand-in asks of every request before it answers it as [`Push`] says.
+#[derive(Clone, Copy, Default)]
+pub enum Before {
+    /// Nothing.
+    #[default]
+    Nothing,
+    /// A request with no `Authorization` header is answered with a 401 and a Basic challenge.
+    Challenge,
+    /// A fetch (any request to `git-upload-pack`) is answered with this HTTP status.
+    RefuseFetch(u16),
 }
 
 /// One command of a push: the commit it sets its ref to, and the ref.
@@ -201,13 +215,18 @@ impl GitStandIn {
 
     /// Serves the bare repositories under `root`, a push answered as `push` says.
     pub fn serve_with(root: PathBuf, push: Push) -> Self {
+        Self::serve_before(root, push, Before::Nothing)
+    }
+
+    /// [`Self::serve_with`], every request first asked as `before` says.
+    pub fn serve_before(root: PathBuf, push: Push, before: Before) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
         let port = listener.local_addr().expect("an address").port();
         let log = Arc::new(Mutex::new(Vec::new()));
         let seen = Arc::clone(&log);
         std::thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let _ = Self::answer(stream, &root, &push, &seen);
+                let _ = Self::answer(stream, &root, &push, before, &seen);
             }
         });
         Self { port, log }
@@ -217,6 +236,7 @@ impl GitStandIn {
         stream: TcpStream,
         root: &Path,
         push: &Push,
+        before: Before,
         log: &Mutex<Vec<Request>>,
     ) -> std::io::Result<()> {
         let mut reader = BufReader::new(stream.try_clone()?);
@@ -227,7 +247,28 @@ impl GitStandIn {
         log.lock().expect("the log").push(request.clone());
         let mut out = stream;
         let receiving = request.target.contains("git-receive-pack");
+        match before {
+            Before::Challenge if request.header("authorization").is_none() => {
+                return write!(
+                    out,
+                    "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"relay\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+            Before::RefuseFetch(status) if request.target.contains("git-upload-pack") => {
+                return write!(
+                    out,
+                    "HTTP/1.1 {status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
+            _ => {}
+        }
         match push {
+            Push::Status(status) if receiving && request.method == "POST" => {
+                return write!(
+                    out,
+                    "HTTP/1.1 {status} Refused\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+            }
             Push::Redirected(base) if receiving => {
                 return write!(
                     out,
