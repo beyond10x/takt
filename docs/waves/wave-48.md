@@ -1,18 +1,20 @@
 # Wave 48: Loom 0.52.0, the connectors forge at a served instance, git through its relay
 
-Stage: **reviews done (six review-results); b1 and c1 wait for connectors `v0.62.0`**. Units a, b-stand-in and c-stand-in
-are committed on `wave/48` (from 1c0e692c, 0.24.0's merge), head 778cb31e. Skill version 0.25.0
-(aep:implementing, wave mode).
+Stage: **a, b, b1, c, c1 and d merged and reviewed (ten review-results), review fixes at
+fa12f45b; e in implementation**. `wave/48` branches from 1c0e692c, 0.24.0's merge. Skill version
+0.25.0 (aep:implementing, wave mode).
 
 ## Units
 
 | unit | story | objective | scope | stage |
 |---|---|---|---|---|
-| a | story:git-and-model-through-loopback-relays, Acceptance 2 and 4 | a keyless loopback harness session on Loom 0.52.0 | cited | committed 1b2cf797; review pending |
-| b | story:connectors-forge-at-a-served-instance, Acceptance 2, 4, 5 | keyed served writes | cited | committed 5791d8fe; review pending |
-| b1 | story:connectors-forge-at-a-served-instance, Acceptance 1 and 3 | the forge against connectors 0.62.0's served instance | inferred | waits for the connectors 0.62.0 tag |
-| c | story:git-through-the-connectors-git-relay, Acceptance 3 and 4 | relay refusals name the ref and reason; no token in git children | cited | committed 778cb31e; review pending |
-| c1 | story:git-through-the-connectors-git-relay, Acceptance 1 and 2 | fetch, push and `trial/<n>` through 0.62.0's relay | inferred | waits for the connectors 0.62.0 tag; after b1 |
+| a | story:git-and-model-through-loopback-relays, Acceptance 2 and 4 | a keyless loopback harness session on Loom 0.52.0 | cited | committed 1b2cf797; reviewed (adv-a, sec-a) |
+| b | story:connectors-forge-at-a-served-instance, Acceptance 2, 4, 5 | keyed served writes | cited | committed 5791d8fe; reviewed, fixed (adv-b, sec-b) |
+| b1 | story:connectors-forge-at-a-served-instance, Acceptance 1 and 3 | the forge against connectors 0.62.0's served instance | inferred | merged 6dbd4b05; reviewed, fixed fa12f45b |
+| c | story:git-through-the-connectors-git-relay, Acceptance 3 and 4 | relay refusals name the ref and reason; no token in git children | cited | committed 778cb31e; reviewed, fixed (adv-c, sec-c) |
+| c1 | story:git-through-the-connectors-git-relay, Acceptance 1 and 2 | fetch, push and `trial/<n>` through 0.62.0's relay | inferred | merged 005e6003; reviewed, fixed fa12f45b |
+| d | story:connectors-forge-at-a-served-instance, a trial's defect | a merge answered `outcome_unknown` and read open at the same head goes once per run under a fresh key | cited | merged 1a4cda17; reviewed, fixed fa12f45b |
+| e | story:connectors-forge-at-a-served-instance, a trial's defect | a pull request behind its base is brought up to date by takt's own merge commit before the merge | inferred | in implementation (`unit/48-e`) |
 
 Ride-along: story:implementation-prompt-shows-the-tests-path implemented on its recorded self-run
 (docs/runs/2026-10-30-self-run-tests-path.md).
@@ -49,6 +51,11 @@ for touched crates only; no `--workspace`, no root `cargo test`, no local full g
 | sec-a | `rv/48-sec-a` | 3 cases green, no findings; merged 24968c40; tree finished |
 | sec-b | `rv/48-sec-b` | 4 red (refusal record guards, unkeyed fallback), fixed; merged 2b09c607; tree finished |
 | sec-c | `rv/48-sec-c` | 4 red (global config, netrc, included extraHeader, scoped followRedirects reach the relay), fixed; merged 3ae1a408; tree finished |
+| b1 | `unit/48-b1` d7cc20d9 | served-instance tests and the CI install step; merged 6dbd4b05; tree finished |
+| c1 | `unit/48-c1` 3fb1a5fc | git through the served relay, the relay path names the repository; merged 005e6003; tree finished |
+| d | `unit/48-d` 34b33b4e | 4 cases red first, green; merged 1a4cda17; tree finished |
+| adv-bc, sec-bc | `rv/48-adv-bc`, `rv/48-sec-bc` | 0 and 2 red (the mapping on gitlab, percent-encoded segments), a served stand-in blind to the repository; fixed fa12f45b; trees finished |
+| adv-d, sec-d | `rv/48-adv-d`, `rv/48-sec-d` | 4 and 5 red (merged at another head, gitlab locked, a malformed open, the count limit); fixed fa12f45b, two cases ignored with their reason; trees finished |
 
 ## Pre-flight (2026-10-30)
 
