@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:turn-pin-predicate-runs-on-current-takt
 kind: story
-status: draft
+status: active
 title: A judge-surface turn's finding predicate no longer runs on the current takt
 summary: 'check-finding gives error at the candidate: the seed''s check-finding script, protocol file and cases path are all stale'
 tags:
@@ -15,7 +15,10 @@ refs:
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: story:a-turn-pins-the-repository-of-its-forge
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-30T01:26:54Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-30T01:26:55Z", actor: "human:timo", revision: 3}
 ---
 # A judge-surface turn's finding predicate no longer runs on the current takt
 

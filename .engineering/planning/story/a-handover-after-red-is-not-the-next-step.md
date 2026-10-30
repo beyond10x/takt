@@ -14,6 +14,7 @@ refs:
   reference: a-handover-after-red-is-not-the-next-step
 relations:
 - serves: vision:safe-agentic-coding
+- depends_on: story:story-delivery-3-is-the-default
 revision: 3
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T23:15:14Z", actor: "human:timo", revision: 2}
