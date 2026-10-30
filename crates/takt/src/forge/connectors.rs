@@ -374,8 +374,9 @@ pub fn check_endpoint(url: &str) -> std::result::Result<bool, &'static str> {
 /// as [`RemoteTransport::LoopbackHttp`], read by the same parse: the authority ends at the
 /// first `/`, `?` or `#`, the host is what follows its last `@`, and the userinfo is dropped.
 /// A `?` or a `#` anywhere in it is refused, so no reader of the URL, git or curl, finds
-/// another host in it than the one admitted.
-fn relay_of(url: &str) -> Result<String> {
+/// another host in it than the one admitted. `takt run`'s lines and `takt scenario run`'s
+/// trial lines to a loopback relay both go to this URL, so neither sends the userinfo.
+pub fn relay_of(url: &str) -> Result<String> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| anyhow!("the origin remote's URL is no URL of a loopback relay"))?;

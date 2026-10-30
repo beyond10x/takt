@@ -326,7 +326,9 @@ fn every_further_form_takt_reads_as_loopback_the_executor_starts_keyless() {
             failures.push(format!("{endpoint}: handed {flag}: {args:?}"));
         }
         if environment.contains(TOKEN) {
-            failures.push(format!("{endpoint}: the token is in the harness's environment"));
+            failures.push(format!(
+                "{endpoint}: the token is in the harness's environment"
+            ));
         }
         let credential = world.recorded_credential();
         if credential != Some(serde_json::json!({"kind": "none"})) {

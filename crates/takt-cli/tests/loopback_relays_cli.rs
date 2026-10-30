@@ -372,6 +372,38 @@ fn an_http_push_url_on_another_host_is_refused_before_the_fetch() {
     world.unchanged(&head);
 }
 
+/// A line to a loopback relay goes to one URL without its userinfo, so an `origin` that names
+/// two URLs for the fetch, one of them the relay, is refused before git runs, naming the count;
+/// the relay is sent nothing.
+#[test]
+fn an_origin_with_two_urls_to_a_relay_is_refused_before_the_fetch() {
+    let world = world("two-urls");
+    let standin = GitStandIn::serve(world.root.clone(), None);
+    git(
+        &world.repo,
+        &["remote", "add", "origin", &standin.url("o/r.git")],
+    );
+    git(
+        &world.repo,
+        &[
+            "remote",
+            "set-url",
+            "--add",
+            "origin",
+            &standin.url("o/s.git"),
+        ],
+    );
+    let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = world.scenario_run(&[]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("origin names 2 URLs for one line") && err.contains("nothing was sent"),
+        "stderr {err}"
+    );
+    assert!(standin.requests().is_empty(), "{:?}", standin.requests());
+    world.unchanged(&head);
+}
+
 /// And for the URL as git rewrites it: a loopback `origin` that the repository's configuration
 /// rewrites (`url.<base>.insteadOf`) to `http://` on another host is refused, naming the URL git
 /// would reach.

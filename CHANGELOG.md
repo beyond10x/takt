@@ -20,6 +20,11 @@ takt's releases.
 - Loom 0.52.0: `--harness harness` with a loopback endpoint and no credential starts its session; Loom 0.51.0 refused it at the first step.
 - engineering-protocols 0.14.0 leaves the lock: Loom 0.52.0's governor pins 0.15.2, as takt does.
 
+### Fixed
+
+- `takt scenario run` fetches from and pushes to a loopback relay at `origin`'s URL without its userinfo, as `takt run` does, so a token in that URL is no longer sent to the relay.
+- A relay's or a program's control characters in a reason are printed escaped (`\u{1b}`) in `takt:` errors and the stop line, and a trial's refusal names the relay's whole reason, tabs and line breaks included.
+
 ## [0.24.0] - 2026-10-30
 
 ### Added
