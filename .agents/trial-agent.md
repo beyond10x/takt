@@ -54,24 +54,19 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
         10G of § Limits;
      2. usage headroom, with the check the harness provides, for the set's runs at their token
         cap;
-     3. `b10x-gates scan-text`, with `B10X_GATES_POLICY` set as for the runs, over the commit
-        identity the runs will commit as (`--commit-identity`, else
-        `.engineering/commit-identity.conf` at the seed) and over a sample commit message of the
-        scenario's story;
-     4. a bot-route `b10x-gates bot -- push --dry-run` of a `trial/<n>` branch from the scenario
-        checkout;
-     5. the revision of takt under test: its `--version` names the sha of step 1 (or of a takt
+     3. a `git push --dry-run` of a `trial/<n>` branch from the scenario checkout to its
+        `origin`, with the operator's own git, as `takt scenario run` pushes it;
+     4. the revision of takt under test: its `--version` names the sha of step 1 (or of a takt
         candidate, step 8), not `-dirty`. A pinned layer's revision is not checked here: no
         record names it before a step ran, so step 8 reads it from run 1's record.
-     6. the forge and the harness binary: a trial on a github.com repository that should end
-        exit 0 runs with `--forge bot` (under `--forge none` it stops exit 7 at `pr.opened`), and
-        a Claude run names a qualified binary with `--harness-program <absolute path>`, a copy
-        at a stable path outside Claude Code's pruned versions directory, whose sha256 the run's
-        `opened` record must match (the guide *Run a story*, § A trial on a GitHub repository).
+     5. the forge and the harness binary: a trial that should end exit 0 runs with
+        `--forge local` and a run file naming `local_checks`, `origin` a bare hub on this
+        machine (under `--forge none` it stops exit 7 at `pr.opened`), and a Claude run names a
+        qualified binary with `--harness-program <absolute path>`, a copy at a stable path
+        outside Claude Code's pruned versions directory, whose sha256 the run's `opened` record
+        must match (the guide *Scenario run*, § A trial of todo-app-example).
 
      A failed check starts no run; it is a deviation (§ Reports), fixed before the set starts.
-     Release 0.4.0's cycle discarded five runs (368,818 tokens), each refused at `pr.open` by the
-     identity scan, which item 3 catches before run 1.
    - **Budgets per run.** `--tokens` at the saved maximum, for that scenario, of the scorecard
      the set is compared with (the promoted baseline's). A run stopped `Tokens` is not resumed
      and counts as at least the cap. `--active-seconds` at three times the baseline's longest
@@ -144,7 +139,7 @@ Each cycle has its own directory outside the repository, named `<YYYY-MM-DD>-<sh
    For a takt candidate, build the binary of the candidate's committed sha from its clean
    worktree, so every run's `opened` line names that sha and not `-dirty`. For a candidate of
    another repository, takt is step 1's binary, built at the trigger's sha from its clean
-   worktree, so its `--version` names that sha and not `-dirty` (pre-flight item 5), and the
+   worktree, so its `--version` names that sha and not `-dirty` (pre-flight item 4), and the
    candidate is pinned in place of its layer's release:
    - **A binary layer**, a program the runs start from `PATH`: build the candidate's committed
      sha from its clean worktree into `<cycle dir>/cand-<k>/bin`, first on the `PATH` of every
@@ -256,9 +251,8 @@ Trials, scenario runs and scorecard measurement are this role's; the reviewer ke
 verification runs of a finding (`scripts/check-finding`), on request.
 
 - **Scenario runs.** A scenario is a story of the scratch repository at a known seed commit; a
-  trial is a run on it from a fresh base (`takt scenario run --repo <path> <id>`), with
-  `B10X_GATES_POLICY` set to the gates policy's path. A run's outcome is its exit code and the
-  files it wrote, never its printed text.
+  trial is a run on it from a fresh base (`takt scenario run --repo <path> <id>`). A run's
+  outcome is its exit code and the files it wrote, never its printed text.
 - **Runs of other repositories**, on the owner's request: a story-sized merged unit of a public
   repository, seed = the merge's first parent, intent = the story body, hidden acceptance = the
   unit's added or changed test files, copied over the candidate's files after the run
@@ -278,8 +272,8 @@ verification runs of a finding (`scripts/check-finding`), on request.
   never a `CARGO_TARGET_DIR` shared between trees.
 - `df -h /` before each build and each `scripts/check-finding`, in any repository of the cycle;
   under 10G free, stop and report.
-- Scenario runs push their `trial/<n>` branches to the scenario repository through the bot route
-  only (`b10x-gates bot -- <git args>`).
+- Scenario runs push their `trial/<n>` branches with the operator's own git, as `takt scenario
+  run` does, and only to the scenario repository's `origin`.
 - Never use a person's personal token for an API call. Nothing private (no private repository,
   organization, session, host detail or person) enters this repository.
 
