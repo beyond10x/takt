@@ -1,6 +1,6 @@
 //! Wave 47, adversarial pass on story:takt-carries-no-organisations-own-route and
 //! story:git-and-model-through-loopback-relays, at the binary: `takt scenario run`'s trial
-//! route to an `origin` that is a loopback relay, and the removed `--forge bot`.
+//! route to an `origin` that is a loopback relay, and the removed bot value of `--forge`.
 //!
 //! The rule under attack (`crates/takt-cli/src/main.rs`, `TrialRoute`): "Plain `http://` goes
 //! to a loopback host alone, a relay that holds the forge's credential: every URL git reaches
@@ -459,8 +459,8 @@ fn a_rewrite_given_in_the_environment_is_read_by_the_check_as_by_the_fetch() {
 }
 
 /// Holds (story:takt-carries-no-organisations-own-route, acceptance 1 and the predicate's second
-/// half): `--forge bot` is a clap refusal, exit 2, on `takt run` and on `takt scenario run`, and
-/// neither command's help names `bot` as a word.
+/// half): the bot value of `--forge` is a clap refusal, exit 2, on `takt run` and on
+/// `takt scenario run`, and neither command's help names `bot` as a word.
 #[test]
 fn no_command_offers_or_takes_a_bot_forge() {
     for args in [vec!["run", "--help"], vec!["scenario", "run", "--help"]] {
