@@ -25,7 +25,7 @@ digraph cluster_delivery {
           takt [label="takt run --story <id>\nstory.delivery/2\ntoken stop per run", fillcolor="#ffe9a8", penwidth=1.6];
           harness [label="b10x-harness\nmodel session", fillcolor="#fff9e8"];
           checks [label="tests + gates\ncargo", fillcolor="#fff9e8"];
-          forge [label="connectors forge\nconnectors operations invoke", fillcolor="#fff9e8"];
+          forge [label="connectors forge\nconnectors invoke", fillcolor="#fff9e8"];
         }
 
         envsecret [label="Secret (env)\nmodel API key", shape=cylinder, fillcolor="#f9e0e0", color="#b05050"];

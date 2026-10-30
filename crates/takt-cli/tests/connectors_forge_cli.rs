@@ -1,7 +1,9 @@
 //! story:a-connectors-forge-adapter at the binary's edge: `forge: connectors` in a run file is
-//! refused before the case opens, exit 1, when the instance does not list a write; without it
+//! refused before the case opens, exit 1, when the instance does not describe a write; without it
 //! `connectors` is never run. `connectors` is a double on the program path, written into a
 //! scratch directory, that records its arguments; nothing here reaches an instance.
+//! story:connectors-forge-speaks-github-at-an-endpoint: a `forge_endpoint` that is `http://` to
+//! a host other than a loopback one is refused, exit 2, naming the key and its line.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -33,7 +35,8 @@ impl Drop for Scratch {
 
 /// A committed repository at `<scratch>/repo` with `origin` at `url`, and the double of
 /// `connectors` in `<scratch>/stub-bin`: it appends its arguments, one line per run, to
-/// `<scratch>/lines` and answers `operations list` with the read operations only.
+/// `<scratch>/lines` and describes the read operations only, refusing the others `not_found`
+/// as `connectors --output json` does, on standard error.
 fn repository(name: &str, url: &str) -> (Scratch, PathBuf, PathBuf) {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "connectors-forge-cli-{}-{name}",
@@ -56,7 +59,7 @@ fn repository(name: &str, url: &str) -> (Scratch, PathBuf, PathBuf) {
     fs::create_dir_all(&bin).expect("a directory");
     let lines = outer.join("lines");
     let script = format!(
-        "#!/bin/sh\necho \"$*\" >> '{}'\nprintf '%s' '{{\"ok\":true,\"result\":{{\"connector\":\"gitlab\",\"instance\":\"forge\",\"revision\":\"r1\",\"operations\":[{{\"id\":\"merge_request.get\"}},{{\"id\":\"pipeline.get\"}}]}}}}'\n",
+        "#!/bin/sh\necho \"$*\" >> '{}'\ncase \"$*\" in *merge_request.create*|*merge_request.merge*) printf '%s' '{{\"ok\":false,\"error\":{{\"code\":\"not_found\",\"data\":{{}}}}}}' >&2; exit 1;; esac\nprintf '%s' '{{\"ok\":true,\"result\":{{\"connector\":\"gitlab\",\"instance\":\"forge\",\"effect\":\"read\",\"schema\":\"s1\",\"revision\":\"r1\"}}}}'\n",
         lines.display()
     );
     let path = bin.join("connectors");
@@ -105,13 +108,13 @@ fn takt(bin: &Path, repo: &Path, extra: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// A fake listing read operations only: exit 1 before the case opens, naming the create
-/// operation; the one line the double saw is the listing, on the named instance.
+/// A fake describing read operations only: exit 1 before the case opens, naming the create
+/// operation; the lines the double saw are one description per operation, on the named target.
 #[test]
 fn preflight_names_the_missing_write() {
     let (outer, repo, bin) = repository("preflight", "https://forge.example/group/project.git");
     let config = outer.0.join("run.yaml");
-    fs::write(&config, "forge: connectors\nforge_instance: forge\n").expect("a file");
+    fs::write(&config, "forge: connectors\nforge_instance: gitlab/forge\n").expect("a file");
     let (code, out, err) = takt(&bin, &repo, &["--config", config.to_str().expect("utf-8")]);
     assert_eq!(code, 1, "stdout {out} stderr {err}");
     assert!(
@@ -125,8 +128,61 @@ fn preflight_names_the_missing_write() {
     );
     assert_eq!(
         fs::read_to_string(outer.0.join("lines")).expect("connectors ran"),
-        "operations list --instance forge --output json\n"
+        [
+            "merge_request.create",
+            "merge_request.get",
+            "merge_request.merge",
+            "pipeline.get"
+        ]
+        .map(|operation| format!("--output json invoke gitlab/forge {operation} --describe\n"))
+        .concat()
     );
+}
+
+/// Acceptance 4 of story:connectors-forge-speaks-github-at-an-endpoint: `forge_endpoint` that
+/// is `http://` to a host that is not a loopback host is refused before any case opens, exit 2,
+/// naming the file, the key and its line and never the value; nothing is called.
+#[test]
+fn an_endpoint_over_plain_http_to_another_host_exits_2() {
+    let (outer, repo, bin) = repository("endpoint", "https://forge.example/owner/repo.git");
+    for (name, text, line) in [
+        (
+            "run.yaml",
+            "forge: connectors\nforge_instance: github\nforge_endpoint: http://example.com\nscan: none\n",
+            3,
+        ),
+        (
+            "run.toml",
+            "forge = \"connectors\"\nforge_endpoint = \"http://example.com\"\nforge_instance = \"github\"\n",
+            2,
+        ),
+    ] {
+        let config = outer.0.join(name);
+        fs::write(&config, text).expect("a file");
+        let (code, out, err) = takt(&bin, &repo, &["--config", config.to_str().expect("utf-8")]);
+        assert_eq!(code, 2, "{name}: stdout {out} stderr {err}");
+        assert!(
+            err.contains(&format!(
+                "{} is refused at line {line}: `forge_endpoint`",
+                config.display()
+            )),
+            "{name}: stderr {err}"
+        );
+        assert!(!err.contains("example.com"), "{name}: stderr {err}");
+        assert!(!repo.join(".takt/cases").exists(), "{name}");
+    }
+    assert!(!outer.0.join("lines").exists());
+
+    let config = outer.0.join("other.yaml");
+    fs::write(
+        &config,
+        "forge: none\nforge_endpoint: https://connectors.example\n",
+    )
+    .expect("a file");
+    let (code, out, err) = takt(&bin, &repo, &["--config", config.to_str().expect("utf-8")]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(err.contains("`forge_endpoint` is set"), "stderr {err}");
+    assert!(!repo.join(".takt/cases").exists());
 }
 
 /// A run file without `forge: connectors`, and a flag that names none, never run `connectors`.
@@ -153,9 +209,10 @@ fn the_key_and_the_forge_go_together() {
     let (outer, repo, bin) = repository("together", "https://forge.example/group/project.git");
     let config = outer.0.join("run.yaml");
     for text in [
-        "forge_instance: forge\n",
-        "forge: none\nforge_instance: forge\n",
+        "forge_instance: gitlab/forge\n",
+        "forge: none\nforge_instance: gitlab/forge\n",
         "forge: connectors\n",
+        "forge: connectors\nforge_instance: forge\n",
     ] {
         fs::write(&config, text).expect("a file");
         let (code, out, err) = takt(&bin, &repo, &["--config", config.to_str().expect("utf-8")]);

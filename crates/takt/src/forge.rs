@@ -6,7 +6,7 @@
 //! |---|---|---|
 //! | `gitlab` | [`gitlab`] ([`gitlab::Glab`]) | `glab` under the user's own GitLab login |
 //! | `command` | [`command`] ([`command::CommandForge`]) | the argument lists of the run file's `forge_commands`; named, never a default |
-//! | `connectors` | [`connectors`] ([`connectors::ConnectorsForge`]) | `connectors operations invoke` on the run file's `forge_instance`; named, never a default |
+//! | `connectors` | [`connectors`] ([`connectors::ConnectorsForge`]) | `connectors invoke` on the target the run file's `forge_instance` names, or `POST /v1alpha2/invoke` to its `forge_endpoint`; named, never a default |
 //! | `local` | [`local`] ([`local::Local`]) | a bare repository on this machine, the hub `origin` names, outside the tree; named, never a default, and nothing leaves the machine |
 //! | `none` | none | nothing; nothing leaves the machine |
 //!

@@ -82,6 +82,8 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "{ env = \"X\" }",
         "[{ name = \"a\", argv = [\"true\"] }]",
         "[\"true\"]",
+        "\"github\"",
+        "\"https://connectors.example\"",
     ]
     .into_iter()
     .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())

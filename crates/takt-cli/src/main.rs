@@ -1190,10 +1190,12 @@ struct LoopArgs {
     /// asked), `command` (the exact
     /// argument lists the run file's `forge_commands` section names for `open`, `read`, `checks` and
     /// `merge`, run without a shell; the push stays takt's; never a default, and
-    /// refused for a scenario run), `connectors` (`connectors operations invoke` on the instance the
-    /// run file's `forge_instance` names, its preflight listing change request create, read and
-    /// merge and pipeline read before any case opens; the push stays takt's; never a
-    /// default, and refused for a scenario run), `local` (the bare repository on this machine the
+    /// refused for a scenario run), `connectors` (`connectors invoke`, or the served wire at
+    /// `forge_endpoint`, on the target the run file's `forge_instance` names, `gitlab` or
+    /// `github` with an optional `/<instance>`, its preflight describing every operation that
+    /// connector's map needs before any case opens; the push stays takt's; never a default, and
+    /// refused for a scenario run), `local` (the bare
+    /// repository on this machine the
     /// tree's `origin` names by its path, outside the tree, the tree cloned with `--no-local`: git
     /// pushes the case's branch to it, a request record under its `takt/requests` opens the pull
     /// request, the run file's `local_checks` argument list runs as its checks, as the test
@@ -1401,7 +1403,8 @@ const EXIT_DONE: u8 = 0;
 /// Exit 1: refused before the run, the reason on stderr (`main`).
 const EXIT_REFUSED: u8 = 1;
 /// Exit 2: the arguments do not parse, clap's own, and a run file's `tokens` that is no whole
-/// number above zero ([`takt::run_config::TokensRefused`]), as `--tokens x` does not parse.
+/// number above zero or `forge_endpoint` that is no URL the forge calls
+/// ([`takt::run_config::MemberRefused`]), as `--tokens x` does not parse.
 const EXIT_USAGE: u8 = 2;
 /// The token budget of a run that names none, by `--tokens` or its run file's `tokens`.
 const DEFAULT_TOKENS: u64 = 3_000_000;
@@ -1430,7 +1433,7 @@ const EXIT_DECLINED: u8 = 9;
 const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it; or stopped: SetupFailed (<name> exited <code>): a command of the run file's `setup` list did not end 0 when the case opened, before the red-base check and any model call; its output is kept under the state directory
-  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero (the file and the line named), before any case opens
+  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero or its `forge_endpoint` no `https://` URL nor `http://` to a loopback host (the file and the line named), before any case opens
   3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
@@ -1444,7 +1447,7 @@ const EXIT_CODES: &str = "Exit codes:
 const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it
-  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero (the file and the line named), before any case opens
+  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero or its `forge_endpoint` no `https://` URL nor `http://` to a loopback host (the file and the line named), before any case opens
   3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
@@ -3166,8 +3169,9 @@ fn forge_with(
         Box::new(Process::default()),
     )? {
         let line = format!(
-            "forge: connectors ({}); pr.open, ci.read and repository.merge run connectors operations invoke",
-            connectors.identity()
+            "forge: connectors ({}); pr.open, ci.read and repository.merge run {}",
+            connectors.identity(),
+            connectors.route()
         );
         return Ok(Forged {
             forge: Some(Rc::new(connectors)),
