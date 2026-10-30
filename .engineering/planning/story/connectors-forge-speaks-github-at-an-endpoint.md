@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:connectors-forge-speaks-github-at-an-endpoint
 kind: story
-status: draft
+status: active
 title: The connectors forge drives a GitHub pull request through a served instance at forge_endpoint
 summary: github operations over /v1alpha2/invoke, no credential in takt
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-30T04:29:50Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-10-30T04:29:51Z", actor: "human:timo", revision: 3}
 ---
 # Story: connectors-forge-speaks-github-at-an-endpoint
 
