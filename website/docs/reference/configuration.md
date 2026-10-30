@@ -486,14 +486,18 @@ forge_endpoint: http://127.0.0.1:8402
   longer open at that head is not merged at all.
 - **Behind its base.** Before the merge, `repository.merge` reads whether the pull request is
   behind its base: on `github` when `mergeable_state` is `behind`, on `gitlab` when
-  `diverged_commits_count` is above 0 or `detailed_merge_status` is `need_rebase`. One that is
+  `detailed_merge_status` is `need_rebase`, or `diverged_commits_count` is above 0 when the read
+  carries it (takt does not ask GitLab for that count, so it is rarely there). One that is
   behind is brought up to date once per merge attempt: the base's tip the judge guard judged is
   merged into the head as takt's own merge commit (first parent the head, second that tip, the
   run's commit identity), recorded in the case's `artifacts/base-update.json` (previous head,
   base tip, merge, time), scanned and pushed as takt's riders are, and merged at that head once
   its checks pass. A ruleset that requires the branch to be up to date then accepts the merge. A
-  base that conflicts with the head stops naming the conflicting files, with nothing committed,
-  pushed or merged. A state the provider has not computed yet reads as not known, and the merge
+  base that conflicts with the head stops naming the conflicting files, with no merge commit made,
+  recorded or pushed and nothing merged. An update the forge did not take, or has not moved the
+  pull request to yet, is pushed again by the next pass as the same commit. Checks read at the
+  new head that change the case's `branch.yaml` or `artifacts/base-update.json` are refused, and
+  both files are put back. A state the provider has not computed yet reads as not known, and the merge
   goes as it would without the read.
 - **Keyed writes.** With `forge_endpoint` the open and the merge each carry an `idempotency_key`:
   `takt-` and a SHA-256 of the case's id, the operation, the instance's descriptor revision and

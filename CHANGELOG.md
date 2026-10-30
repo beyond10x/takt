@@ -37,6 +37,8 @@ takt's releases.
 - That mapping is github's only, since `git` can be a gitlab group, and a relay `origin` with a percent-encoded part is refused before the case opens.
 - After a merge's `outcome_unknown`, a pull request read merged at another head, or a gitlab merge request read `locked`, sends no merge and says so.
 - Under git 2.56, a push by the command, gitlab or connectors forge puts back the tracking ref git wrote for it, so `pr.open` is not refused for `refs/remotes/origin/<branch>`.
+- A base update the forge did not take, or has not moved the pull request to yet, is pushed again as the same commit, instead of the case stopping at "nothing to merge".
+- Checks read at the merge that change the case's `branch.yaml` or `artifacts/base-update.json` are refused and both files put back.
 
 ## [0.24.0] - 2026-10-30
 

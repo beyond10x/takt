@@ -889,7 +889,7 @@ fn a_base_update_that_conflicts_names_the_file_and_changes_nothing() {
         observation.summary.contains("conflicts at docs/news.md")
             && observation
                 .summary
-                .contains("nothing committed, pushed or merged"),
+                .contains("no merge commit made, recorded or pushed, and nothing merged"),
         "{}",
         observation.summary
     );
