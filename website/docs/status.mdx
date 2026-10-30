@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.23.0, 2026-10-30 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.24.0, 2026-10-30 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
@@ -78,6 +78,7 @@ Each release in one line, from the changelog:
 | 0.22.0 | every evidence record's `observed_at` is written to the microsecond, and a record ordered after another one in the same second is stamped after it at once, with no wait; the planning store's `test_result` keeps whole seconds; loom 0.50.0 with Canon 0.8.0 and engineering-protocols 0.14.0, whose `story.delivery/2` admits the edit after a red gate only once a test failed since the latest tests write |
 | 0.22.1 | `libz-sys` 1.1.31 in the lock, for RUSTSEC-2026-0418 |
 | 0.23.0 | a run that names no token budget stops at 3,000,000 tokens, and a step killed or ending in an error counts the tokens its session reported; `--forge bot` is checked before the case opens (`b10x-gates` on `PATH`, a policy file it would load) and reads pull requests and checks through `b10x-gates api`, with no `gh`; `pr.open` takes the open pull request for its head and base before and after a post, so a resumed run posts once; under a delegation of `repository.merge` to `agent:takt-delivery` in the target's `.engineering/delegations.yaml`, a run whose merge waits on approval grants it as that role once `tests.pass`, `gate.green` and `ci.green` hold, and the merge reads the delegation again |
+| 0.24.0 | `takt report --cases <dir>...` prints units accepted, tokens and human interventions per repository and UTC day, with a total, a figure no record states printed `unknown`; a store story opens on takt's own `story.delivery/3` when nothing names a protocol, and a case open on `story.delivery/2` resumes on it |
 
 ## Every story
 

@@ -5,7 +5,7 @@ This example is the setup for one goal: a takt `LoomAgent` in a local
 real beyond10x repositories and ends each one as a pull request by `b10x-bot[bot]`, merged to
 `main`, with no step by a person.
 
-Status: **not run yet.** takt 0.23.0 has the token stop, the forge preflight, the reads without
+Status: **not run yet.** takt 0.24.0 has the token stop, the forge preflight, the reads without
 `gh` and the merge under a delegated grant. The runs wait for one more change: the setup below
 puts the GitHub App's key, the gates policy and the model key in the takt container, where the
 harness session can read them, and no run starts until they are outside it (*Open*, below). Run
@@ -35,7 +35,7 @@ architecture.svg` renders it again.
 ## One run
 
 1. The operator applies a `LoomAgent` naming one story: `story: story:<id>` in the run file.
-2. takt opens a case on `story.delivery/2` in the workspace clone and takes the story to `active`.
+2. takt opens a case on `story.delivery/3` in the workspace clone and takes the story to `active`.
 3. Each judgement step goes to the model through one `b10x-harness` session. The model may take
    only the actions the protocol's frontier admits; a step that does more is refused and reverted.
 4. Validators write the evidence: `tests.run` runs the target's test command, the gate runs its
