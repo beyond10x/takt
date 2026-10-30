@@ -267,17 +267,27 @@ fn with_both_and_no_gh_the_case_opens() {
 }
 
 /// With a GitHub origin and no `--forge`, the run's forge is the bot route, through the same
-/// preflight: `forge: bot (owner/repo)`, and nothing is pushed in one step. Moved here from the
-/// CLI's unit tests, which run in one process and cannot give the run its own program path.
+/// preflight: `forge: bot (owner/repo)`; on story.delivery/1 the run stops before anything is
+/// pushed, on the gate it has no gates document for (exit 7), and the `b10x-gates` double is
+/// asked for nothing but scans. Moved here from the CLI's unit tests, which run in one process
+/// and cannot give the run its own program path.
 #[test]
 fn with_an_origin_the_default_forge_is_the_bot_route() {
     let setup = Setup::new("default-bot");
     setup.with_gates();
     let policy = setup.policy();
-    let (code, out, err) = setup.run_with_forge("default-bot", Some(&policy), &[]);
-    assert!(
-        out.contains("forge: bot (owner/repo)"),
-        "exit {code}\nstdout {out}\nstderr {err}"
+    let (code, out, err) = setup.run_with_forge(
+        "default-bot",
+        Some(&policy),
+        &["--protocol", "story.delivery/1"],
     );
-    assert!(!out.contains("pr.open {}"), "nothing is pushed: {out}");
+    let context = format!("exit {code}\nstdout {out}\nstderr {err}");
+    assert!(out.contains("forge: bot (owner/repo)"), "{context}");
+    assert_eq!(code, 7, "{context}");
+    assert!(out.contains("step 1: tests.run {}"), "{context}");
+    let log = fs::read_to_string(setup.outer.0.join("b10x-gates.log")).unwrap_or_default();
+    assert!(
+        log.lines().all(|line| line.starts_with("scan-text ")),
+        "nothing is pushed: {log}\n{context}"
+    );
 }
