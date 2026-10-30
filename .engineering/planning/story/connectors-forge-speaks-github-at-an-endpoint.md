@@ -8,7 +8,6 @@ summary: github operations over /v1alpha2/invoke, no credential in takt
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-- depends_on: story:bot-forge-reads-through-the-app
 revision: 1
 ---
 # Story: connectors-forge-speaks-github-at-an-endpoint

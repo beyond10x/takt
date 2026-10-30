@@ -2,13 +2,16 @@
 format: aep.planning-md/3
 id: story:git-and-model-through-loopback-relays
 kind: story
-status: draft
+status: active
 title: Push, fetch and model calls go through loopback relays with no credential in takt
 summary: http to a loopback origin and a keyless loopback model endpoint
 relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-30T03:35:01Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-30T03:35:01Z", actor: "human:timo", revision: 4}
 ---
 # Story: git-and-model-through-loopback-relays
 
@@ -22,12 +25,12 @@ holds neither the forge's token nor the model's key.
 
 In a pod with no secret in its container, a boundary container on loopback relays git
 smart-HTTP to a Connectors instance (`LOOM_BOUNDARY_GIT_URL`, `http://127.0.0.1:8403`), which
-checks the ref policy, the bot identity and the pre-push scan and pushes with the App's
+checks the ref policy, the commit identity and the pre-push scan and pushes with the App's
 installation token; and relays model calls to the LLM gateway (`LOOM_BOUNDARY_MODEL_URL`,
 `http://127.0.0.1:8401/v1`).
 
-Today takt pins git to `GIT_ALLOW_PROTOCOL=https` (`crates/takt-cli/src/main.rs:2940`,
-`crates/takt/src/forge/bot.rs:98`), and a model endpoint needs a credential source
+Today takt pins git to `GIT_ALLOW_PROTOCOL=https` (`crates/takt-cli/src/main.rs`, `FETCH_ENV`,
+and the forges' push environment), and a model endpoint needs a credential source
 (`crates/takt/src/harness.rs:4571`); an llm route of `auth: {kind: anonymous}` is not accepted.
 `http://` is already admitted for a loopback host only (`harness.rs:5047`, `loopback` at
 `:5085`).
@@ -35,12 +38,12 @@ Today takt pins git to `GIT_ALLOW_PROTOCOL=https` (`crates/takt-cli/src/main.rs:
 The pre-push scan runs on the Connectors instance in this mode, so the run's own scan of what it
 publishes is `none`, and says so in the case.
 
-Depends on the Connectors release with the git relay and the Loom release with `spec.boundary`.
+Loom 0.51.0 serves `spec.boundary`: relays on 127.0.0.1:8401 (model), 8402 (connectors) and 8403 (git), plain `http://` only. The takt side is built and tested against loopback stand-ins; the run through the real git relay waits for the Connectors release that serves it.
 
 ## Scope
 
 - `crates/takt-cli/src/main.rs`: `FETCH_ENV` admits `http` when `origin` is a loopback host (cited)
-- `crates/takt/src/forge/bot.rs`, `crates/takt/src/forge/connectors.rs`: the push env, the same rule (cited)
+- `crates/takt/src/forge/connectors.rs`, `crates/takt/src/forge/local.rs` and any other forge that pushes: the push env, the same rule (inferred)
 - `crates/takt/src/harness.rs`: no credential for a loopback endpoint; an anonymous llm route accepted for loopback (cited)
 - new: `crates/takt/tests/loopback_relays.rs` (inferred)
 
