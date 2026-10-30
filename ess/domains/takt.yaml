@@ -2847,6 +2847,36 @@ types:
           step, and its other layers as any run's. A run that took a harness step and states no
           harness layer is compared, never exempted.
 
+  # What `takt report --cases <dir>...` prints for one repository on one UTC day, and the same
+  # figures summed in its total row (story:report-sums-cases). The repository is the directory
+  # above the cases root a `--cases` argument ends in (`<repo>/.takt/cases`,
+  # `<repo>/.engineering/cases`), else the argument as given; the day is the UTC date of a run's
+  # `opened` line, or of a decision's `granted_at`, `unknown` when it does not read. Units
+  # accepted: the cases whose last `stop` line is `Completed (accepted)`, on the day of the run
+  # that wrote it; a scenario case's held-out result does not change it. Tokens: the runs opened
+  # that day, read by the scorecard's rule (takt.work.ScorecardRow), unknown (printed `unknown`)
+  # when a harness step recorded none, or 0; the `stop` line's tokens are never read.
+  # Interventions: entries of the case's `authority.yaml` whose approver is `human:<name>`,
+  # granted or denied; a grant by an agent role is none. Text only: `--format json` beside
+  # `--cases` is refused, exit 2, as is `--cases` beside `--case`, `--steps` or `--trace`.
+  # read from: crates/takt/src/report.rs:921-999
+  # read from: crates/takt/src/report.rs:1001-1112
+  # read from: crates/takt-cli/src/main.rs:460-468
+  # read from: crates/takt-cli/src/main.rs:1075-1084
+  - name: takt.work.CaseDaySums
+    kind: struct
+    fields:
+      - name: repository
+        type: String
+      - name: day
+        type: String
+      - name: accepted
+        type: Integer
+      - name: tokens
+        type: Optional<Integer>
+      - name: interventions
+        type: Integer
+
   # The held-out check's result for a scenario case, as the runner wrote it after the run in
   # `.takt/cases/<case>/held-out.txt`, beside the record and never by the takt binary under
   # judgement: whether it passed (a first line `PASS`) and its first line verbatim (`PASS`,
@@ -4707,7 +4737,7 @@ entities:
       - name: unit
         type: takt.work.Unit
       # Not given, a story the planning store gives opens on its tag `protocol:<name>/<major>`, else
-      # the run file's `protocol`, else `story.delivery/2` (takt's defaults document, `protocol_defaults.yaml`), embedded in the binary, and an intent on
+      # the run file's `protocol`, else `story.delivery/3` (takt's defaults document, `protocol_defaults.yaml`), embedded in the binary, and an intent on
       # `software.change/1`; a resumed case runs on its own protocol, and
       # a `--protocol` that names another, or another document under the same id, is refused
       # before anything is resumed.
@@ -4716,12 +4746,13 @@ entities:
       # read from: crates/takt-cli/src/main.rs:1738-1745
       # read from: crates/takt-cli/src/main.rs:4214-4228
       # read from: crates/takt/src/protocol.rs:644-698
+      # read from: crates/takt/src/protocol_defaults.yaml:2
       - name: protocol
         type: takt.work.ProtocolSource
         summary: The protocol id, `software.change/1`, or the path of a `protocol/1` file.
       # The case inputs, `name=value` each. Each input the protocol declares takes the first of
       # `--input`, the story's tag `input:<name>=<value>`, the run file's `protocols` section and
-      # takt's built-in default from its defaults document (for `story.delivery/2` `tests_first: required` and `gate_on: after_handover`, for `software.change/1` the least demanding values), each recorded
+      # takt's built-in default from its defaults document (for `story.delivery/2` and `story.delivery/3` `tests_first: required` and `gate_on: after_handover`, for `software.change/1` the least demanding values), each recorded
       # with its source (takt.work.ProtocolSetting); an input the protocol a case opens on does not declare is
       # refused before the case is opened, and any input given for a resumed case is refused: it
       # keeps the inputs it was opened with. For `loop.improvement/1`, `loop_baseline=<full
