@@ -4,13 +4,13 @@
 //! is offered again with the writes the frontier admits. A handover at a revision whose tests pass
 //! is recorded as before, and a protocol without a tests claim keeps the handover it had.
 //!
-//! The refusal is the protocol's (`AGENTS.md` § Rules: protocols are data): `story.delivery/2`'s
-//! `change.handover` admitted only while `tests.pass` is not false. The built-in of
-//! `b10x-canon-engineering` at the locked tag does not say so yet; the case runs on a copy of
-//! it whose `change.handover` precondition does ([`story_delivery`]), and on the built-in as it
-//! stands once it does. The prompt is takt's: the test command's failing lines are kept as a
-//! gate's are, and lead the prompt. No live `claude` runs: the harness program is a script that
-//! keeps each prompt it is given and acts on what the prompt offers.
+//! The refusal is the protocol's (`AGENTS.md` § Rules: protocols are data): the protocol a store
+//! story opens on by default, takt's own `story.delivery/3`, admits `change.handover` only while
+//! `tests.pass` is not false, and the case runs on it with its default inputs, as `takt run`
+//! with no `--protocol` and no `--input` opens one. The prompt is takt's: the test command's
+//! failing lines are kept as a gate's are, and lead the prompt. No live `claude` runs: the
+//! harness program is a script that keeps each prompt it is given and acts on what the prompt
+//! offers.
 
 #[path = "support/own_home.rs"]
 mod own_home;
@@ -24,6 +24,8 @@ use std::rc::Rc;
 use takt::evidence::Record;
 use takt::forge::{Checks, Forge, Memory};
 use takt::harness::ClaudeCode;
+use takt::protocol::{SettingsRequest, default_protocol, resolve_settings};
+use takt::run_config::ProtocolSettings;
 use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -65,28 +67,6 @@ exit 101
 fi
 echo 'running 1 test'
 echo 'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out'
-";
-
-/// `story.delivery/2`'s `change.handover` precondition at the locked tag.
-const HANDOVER_TODAY: &str = "    precondition:
-      claim: change.handed_over
-      is: unknown
-    may_produce:
-      - evidence: handover
-";
-
-/// The same, admitted only while the tests do not fail at the current revision: the protocol
-/// change this story asks of `story.delivery/2`.
-const HANDOVER_GUARDED: &str = "    precondition:
-      all:
-        - claim: change.handed_over
-          is: unknown
-        - any:
-            - claim: tests.pass
-            - claim: tests.pass
-              is: unknown
-    may_produce:
-      - evidence: handover
 ";
 
 /// A protocol with no tests claim: the implementation is edited, the change handed over, and
@@ -153,17 +133,37 @@ outcomes:
       claim: gate.green
 ";
 
-/// `story.delivery/2` as this story asks it to be: the built-in of the engineering protocols,
-/// its `change.handover` guarded on the tests ([`HANDOVER_GUARDED`]) while the built-in still
-/// holds the precondition it had ([`HANDOVER_TODAY`]), else the built-in as it stands.
-fn story_delivery() -> String {
-    let builtin = canon_engineering::registry::get("story-delivery", 2)
-        .expect("the built-in story.delivery/2")
-        .yaml;
-    match builtin.matches(HANDOVER_TODAY).count() {
-        0 => builtin.to_owned(),
-        1 => builtin.replace(HANDOVER_TODAY, HANDOVER_GUARDED),
-        n => panic!("story.delivery/2 holds the handover precondition {n} times"),
+/// What a run's case opens on.
+enum Opens {
+    /// The protocol a store story opens on when nothing names one, with the inputs nothing
+    /// sets: takt's defaults document, as `takt run` with no `--protocol` and no `--input`
+    /// resolves it.
+    Default,
+    /// A `protocol/1` document with no inputs.
+    File(&'static str),
+}
+
+/// The protocol spec and the inputs a run opens on for `opens`, the file written under `dir`.
+fn protocol_and_inputs(opens: &Opens, dir: &Path) -> (String, Vec<(String, String)>) {
+    match opens {
+        Opens::Default => {
+            let settings = resolve_settings(&SettingsRequest {
+                file: &ProtocolSettings::default(),
+                flag_protocol: None,
+                flag_inputs: &[],
+                tags: &[],
+                default_protocol: default_protocol(true),
+                file_protocol_applies: true,
+            })
+            .expect("the defaults resolve");
+            assert_eq!(settings.protocol.id, "story.delivery/3");
+            (settings.spec.clone(), settings.pairs())
+        }
+        Opens::File(document) => {
+            let file = dir.join("protocol.yaml");
+            fs::write(&file, document).expect("the protocol file");
+            (file.display().to_string(), Vec::new())
+        }
     }
 }
 
@@ -357,15 +357,14 @@ impl Delivered {
     }
 }
 
-/// A delivery run of the story on the protocol file `protocol` (its `inputs` given), the tests
-/// run by [`TestsRun`] on [`TEST_COMMAND`], the gate green, `pr.open` and `ci.read` on a fake
-/// forge whose checks pass, and `change.read`; the harness is [`fake_claude`].
-fn delivered(name: &str, protocol: &str, inputs: &[(&str, &str)], with_tests: bool) -> Delivered {
+/// A delivery run of the story on what `opens` names ([`protocol_and_inputs`]), the tests run
+/// by [`TestsRun`] on [`TEST_COMMAND`], the gate green, `pr.open` and `ci.read` on a fake forge
+/// whose checks pass, and `change.read`; the harness is [`fake_claude`].
+fn delivered(name: &str, opens: &Opens, with_tests: bool) -> Delivered {
     let tree = repository(name, with_tests);
     let fake = directory(&format!("{name}-claude"));
     let harness = fake_claude(&fake);
-    let file = fake.join("protocol.yaml");
-    fs::write(&file, protocol).expect("the protocol file");
+    let (protocol, inputs) = protocol_and_inputs(opens, &fake);
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
         ..Memory::default()
@@ -382,12 +381,9 @@ fn delivered(name: &str, protocol: &str, inputs: &[(&str, &str)], with_tests: bo
         Box::new(ChangeRead),
     ];
     let options = RunOptions {
-        protocol: file.display().to_string(),
+        protocol,
         intent: "remove a todo by its number".to_owned(),
-        inputs: inputs
-            .iter()
-            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
-            .collect(),
+        inputs,
         iterations: Some(40),
         hours: None,
         tokens: None,
@@ -433,16 +429,13 @@ fn delivered(name: &str, protocol: &str, inputs: &[(&str, &str)], with_tests: bo
     }
 }
 
-/// The inputs a story case opens with by default: tests first, the gate after the handover.
-const INPUTS: [(&str, &str); 2] = [("tests_first", "required"), ("gate_on", "after_handover")];
-
 /// Acceptance 1: a harness that hands over whenever it may, at a revision whose tests fail, is
 /// not offered the handover there: the step after the red `tests.run` is offered the writes the
 /// frontier admits, its prompt opens with the failing test and where its assertion is, and no
 /// handover is recorded at a red revision.
 #[test]
 fn a_handover_at_a_red_revision_is_not_the_next_step() {
-    let run = delivered("red", &story_delivery(), &INPUTS, false);
+    let run = delivered("red", &Opens::Default, false);
     let text = &run.text;
     let red = run.tests_at("fail");
     assert!(!red.is_empty(), "the story's tests never ran red:\n{text}");
@@ -502,7 +495,7 @@ fn a_handover_at_a_red_revision_is_not_the_next_step() {
 /// goes on from it to `change.read`; the prompt it was chosen in carries no failing tests.
 #[test]
 fn a_handover_at_a_passing_revision_is_recorded() {
-    let run = delivered("green", &story_delivery(), &INPUTS, false);
+    let run = delivered("green", &Opens::Default, false);
     let text = &run.text;
     let handovers = run.of("handover");
     assert_eq!(handovers.len(), 1, "{handovers:?}\n{text}");
@@ -540,7 +533,7 @@ fn a_handover_at_a_passing_revision_is_recorded() {
 /// recorded, and the run accepted on the gate after it, whatever the test command would say.
 #[test]
 fn a_protocol_without_a_tests_claim_keeps_the_handover() {
-    let run = delivered("no-tests", NO_TESTS_PROTOCOL, &[], true);
+    let run = delivered("no-tests", &Opens::File(NO_TESTS_PROTOCOL), true);
     let text = &run.text;
     assert_eq!(run.of("handover").len(), 1, "{text}");
     assert!(run.of("test_result").is_empty(), "{text}");

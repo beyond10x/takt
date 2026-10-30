@@ -206,7 +206,7 @@ fn no_steps(repo: &str) -> Vec<&str> {
 }
 
 /// A story the planning store gives, with no `--protocol`: its case opens on
-/// `story.delivery/2`, the protocol that opens a pull request, embedded in the binary so the
+/// `story.delivery/3`, the protocol that opens a pull request, embedded in the binary so the
 /// target repository need not carry it.
 #[test]
 fn a_store_story_without_a_protocol_opens_on_story_delivery() {
@@ -220,7 +220,7 @@ fn a_store_story_without_a_protocol_opens_on_story_delivery() {
     );
     let case = the_case(&repo);
     assert!(
-        out.contains(&format!("case {case} on story.delivery/2 in ")),
+        out.contains(&format!("case {case} on story.delivery/3 in ")),
         "stdout {out} stderr {err}"
     );
     assert!(
@@ -229,7 +229,7 @@ fn a_store_story_without_a_protocol_opens_on_story_delivery() {
     );
 }
 
-/// An input the protocol a case would open on does not declare: `story.delivery/2` declares
+/// An input the protocol a case would open on does not declare: `story.delivery/3` declares
 /// `tests_first` and `gate_on` but no `risk`, so `--input risk=…` on a store story, kept by
 /// nothing, is refused before the story is taken, no case opened; on an intent,
 /// `software.change/1` declares `risk` and takes it.
@@ -243,7 +243,7 @@ fn an_input_the_opening_protocol_does_not_declare_is_refused_before_anything_is_
     let (code, out, err) = takt(&args);
     assert_eq!(code, 1, "stdout {out} stderr {err}");
     assert!(
-        err.contains("story.delivery/2 declares no input risk"),
+        err.contains("story.delivery/3 declares no input risk"),
         "stdout {out} stderr {err}"
     );
     assert_eq!(out, "", "{out}");
@@ -420,6 +420,39 @@ fn the_store_resumed_case_keeps_its_protocol_and_refuses_another() {
         );
         assert_eq!(the_case(&repo), case, "no second case was opened");
     }
+}
+
+/// The open case of a store story opened on `story.delivery/2`, the default before
+/// `story.delivery/3`: a run with no `--protocol` resumes it on `story.delivery/2`, no second
+/// case opened.
+#[test]
+fn a_store_case_opened_on_story_delivery_2_resumes_on_it() {
+    let (_outer, repo) = repository(Some("one-ready"), "resume-two");
+    let path = repo.to_str().expect("utf-8");
+    let mut args = no_steps(path);
+    args.extend(["--protocol", "story.delivery/2"]);
+    let (code, out, err) = takt(&args);
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    let case = the_case(&repo);
+    assert!(
+        out.contains(&format!("case {case} on story.delivery/2 in ")),
+        "stdout {out} stderr {err}"
+    );
+    let (code, out, err) = takt(&no_steps(path));
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
+    assert!(
+        out.contains("frontier: resumed story:ready-one"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        out.contains(&format!("case {case} on story.delivery/2")),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        !out.contains("story.delivery/3"),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(the_case(&repo), case, "no second case was opened");
 }
 
 /// A `--protocol` file under the case's own id whose rules differ (here `pr.open` without the

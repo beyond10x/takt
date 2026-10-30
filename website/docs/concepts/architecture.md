@@ -42,7 +42,8 @@ takt                one case: steps, evidence, grants, stops
   evaluates every case takt holds: claims, obligations, admissible actions, legitimate outcomes.
 - [Engineering protocols](https://beyond10x.github.io/engineering-protocols/)
   ([GitHub](https://github.com/beyond10x/engineering-protocols)) supply the [protocols](/docs/concepts/glossary#protocol) takt runs
-  as built-ins, the default `story.delivery/2` among them.
+  as built-ins, `story.delivery/2` among them; a store story opens on takt's own revision of it,
+  `story.delivery/3`.
 - [Loom](https://beyond10x.github.io/loom/) ([GitHub](https://github.com/beyond10x/loom)) is
   the runtime takt is built on: its Commission runtime drives each step and its governor decides.
 - [metaharness](https://beyond10x.github.io/metaharness/)

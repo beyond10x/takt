@@ -1,0 +1,5 @@
+- capability: repository.merge
+  decision: granted
+  approver: human:operator
+  granted_at: 2026-10-02T07:30:00.000000Z
+  revision: 2222222222222222222222222222222222222222

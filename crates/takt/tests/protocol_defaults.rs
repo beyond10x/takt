@@ -1,5 +1,5 @@
 //! story:takt-ships-default-protocol-settings. takt ships one defaults document, as data: the
-//! protocol a store story opens on (`story.delivery/2`) and the value of each declared input
+//! protocol a store story opens on (`story.delivery/3`) and the value of each declared input
 //! nobody sets (`tests_first: required`, `gate_on: after_handover`). Canon declares those inputs
 //! and gives them no default, so a case whose input nothing sets is refused at open, naming the
 //! input and its values, and the reference page of the defaults is generated from the document
@@ -8,16 +8,24 @@
 //! To rewrite the page after the document changes, run this test with
 //! `TAKT_WRITE_DEFAULTS_PAGE=1`.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
+use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use takt::case::{CaseDir, CommitAs, settings_of};
+use takt::evidence::Record;
+use takt::harness::{Harness, StepContext, StepReport};
 use takt::protocol::{
     LoadedProtocol, Settings, SettingsRequest, Source, default_protocol, defaults_page,
     list_settings, resolve_settings,
 };
 use takt::run_config::ProtocolSettings;
+use takt::validator::{GateRun, Observation, TestsRun, Validator};
+use takt::{Run, RunOptions, Stop};
 
 /// A scratch directory under this crate's build directory, removed on drop.
 struct Scratch(PathBuf);
@@ -75,13 +83,13 @@ fn story_settings() -> Settings {
     .expect("the defaults resolve")
 }
 
-/// Acceptance 1. With no run-file `protocol`, a store story opens on `story.delivery/2` with
+/// Acceptance 1. With no run-file `protocol`, a store story opens on `story.delivery/3` with
 /// `tests_first: required` and `gate_on: after_handover`, each recorded with source `default`,
 /// and `takt protocol show` lists the same two defaults.
 #[test]
-fn a_store_story_opens_on_story_delivery_2() {
+fn a_store_story_opens_on_story_delivery_3() {
     let settings = story_settings();
-    assert_eq!(settings.protocol.id, "story.delivery/2");
+    assert_eq!(settings.protocol.id, "story.delivery/3");
     assert_eq!(settings.protocol_source, Source::Default);
     let values: Vec<(&str, &str, Source)> = settings
         .inputs
@@ -124,19 +132,19 @@ fn a_store_story_opens_on_story_delivery_2() {
         "{held:?}"
     );
 
-    let shown = list_settings("story.delivery/2", &ProtocolSettings::default())
+    let shown = list_settings("story.delivery/3", &ProtocolSettings::default())
         .expect("a built-in")
         .text();
     assert!(shown.contains("  default: required\n"), "{shown}");
     assert!(shown.contains("  default: after_handover\n"), "{shown}");
 }
 
-/// The run file names the protocol the defaults then apply to: `story.delivery/2` is only the
+/// The run file names the protocol the defaults then apply to: `story.delivery/3` is only the
 /// default of a story, an intent keeps `software.change/1`.
 #[test]
 fn an_intent_opens_on_software_change() {
     assert_eq!(default_protocol(false), "software.change/1");
-    assert_eq!(default_protocol(true), "story.delivery/2");
+    assert_eq!(default_protocol(true), "story.delivery/3");
 }
 
 /// A `protocol/1` file declaring the input `mode`, which no flag, tag, run file or default sets.
@@ -230,7 +238,7 @@ fn an_unset_input_is_refused_by_name() {
     assert!(!repo.join(".takt/cases/unset-one").exists(), "{text}");
     fs::remove_file(&file).expect("the protocol file is removed");
 
-    let delivery = LoadedProtocol::builtin("story.delivery/2").expect("a built-in");
+    let delivery = LoadedProtocol::builtin(default_protocol(true)).expect("a built-in");
     let error = CaseDir::open(&repo, delivery, "unset-two", "a story", &[])
         .expect_err("Canon gives the inputs no default");
     let text = format!("{error:#}");
@@ -260,7 +268,7 @@ fn story_delivery_3_opens_with_the_defaults_and_fixes_a_red_gate() {
         LoadedProtocol::builtins()
     );
     assert!(takt::protocol::builtin_ids().contains(&"story.delivery/3".to_owned()));
-    assert_eq!(default_protocol(true), "story.delivery/2");
+    assert_eq!(default_protocol(true), "story.delivery/3");
     let settings = resolve_settings(&SettingsRequest {
         file: &ProtocolSettings::default(),
         flag_protocol: Some("story.delivery/3"),
@@ -383,6 +391,14 @@ fn the_reference_page_matches_the_document() {
          cargo test -p b10x-takt --test protocol_defaults"
     );
     assert!(
+        page.contains("| a story of the planning store | `story.delivery/3` |"),
+        "{page}"
+    );
+    assert!(
+        page.contains("| `story.delivery/3` | `tests_first` |"),
+        "{page}"
+    );
+    assert!(
         page.contains("| `story.delivery/2` | `tests_first` |"),
         "{page}"
     );
@@ -396,7 +412,7 @@ fn every_shipped_default_is_a_declared_value() {
     for id in [default_protocol(true), default_protocol(false)] {
         assert!(LoadedProtocol::builtin(id).is_ok(), "{id} is a built-in");
     }
-    for id in ["story.delivery/2", "software.change/1"] {
+    for id in ["story.delivery/3", "story.delivery/2", "software.change/1"] {
         let protocol = LoadedProtocol::builtin(id).expect("a built-in");
         for input in protocol.declared_inputs() {
             let shipped = takt::protocol::builtin_default(id, &input.name)
@@ -409,4 +425,273 @@ fn every_shipped_default_is_a_declared_value() {
             );
         }
     }
+}
+
+/// The story's tests, its implementation and the edit that fixes the gate, in the scripted run
+/// of [`a_red_gate_with_passing_tests_is_fixed_in_the_implementation`].
+const STORY_TESTS: &str = "tests/story.txt";
+const STORY_CODE: &str = "src/story.txt";
+const GATE_FIX: &str = "src/formatted.txt";
+
+/// `tests.run`: red while the tree holds the story's tests and not its implementation, green
+/// otherwise.
+struct StoryTests;
+
+impl Validator for StoryTests {
+    fn name(&self) -> &str {
+        "story-tests"
+    }
+
+    fn action(&self) -> &str {
+        TestsRun::ACTION
+    }
+
+    fn kind(&self) -> &str {
+        TestsRun::KIND
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> anyhow::Result<Observation> {
+        let red = tree.join(STORY_TESTS).is_file() && !tree.join(STORY_CODE).is_file();
+        let result = if red { "fail" } else { "pass" };
+        Ok(Observation {
+            summary: result.to_owned(),
+            artifact: None,
+            records: vec![Record::new(
+                format!("tests-{seq}"),
+                TestsRun::KIND,
+                Some(result.to_owned()),
+                "implementation",
+                revision,
+                self.name(),
+            )],
+        })
+    }
+}
+
+/// `gate.run`: red until the tree holds [`GATE_FIX`].
+struct FormatGate;
+
+impl Validator for FormatGate {
+    fn name(&self) -> &str {
+        "format-gate"
+    }
+
+    fn action(&self) -> &str {
+        GateRun::ACTION
+    }
+
+    fn kind(&self) -> &str {
+        GateRun::KIND
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> anyhow::Result<Observation> {
+        let result = if tree.join(GATE_FIX).is_file() {
+            "pass"
+        } else {
+            "fail"
+        };
+        Ok(Observation {
+            summary: result.to_owned(),
+            artifact: None,
+            records: vec![Record::new(
+                format!("gate-{seq}"),
+                GateRun::KIND,
+                Some(result.to_owned()),
+                "implementation",
+                revision,
+                self.name(),
+            )],
+        })
+    }
+}
+
+/// One step the scripted harness was given: the claims `tests.pass` and `gate.green`, what it
+/// was offered, and what it chose.
+#[derive(Debug, Clone)]
+struct Given {
+    tests_pass: String,
+    gate_green: String,
+    offered: Vec<String>,
+    chose: String,
+}
+
+/// A harness that writes the story's tests when they are absent, then its implementation, hands
+/// the change over whenever it may, and fixes the gate in the implementation when it is offered
+/// the edit after that; else declines. It keeps each step it was given.
+#[derive(Default)]
+struct Scripted {
+    given: RefCell<Vec<Given>>,
+}
+
+impl Harness for Scripted {
+    fn name(&self) -> &str {
+        "scripted"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+        let offered = |action: &str| context.offered.iter().any(|offer| offer == action);
+        let write = |path: &str| {
+            let at = context.tree.join(path);
+            fs::create_dir_all(at.parent().expect("a parent")).expect("a directory");
+            fs::write(&at, "written\n").expect("a file");
+        };
+        let chose = if !context.tree.join(STORY_TESTS).is_file() && offered("tests.write") {
+            write(STORY_TESTS);
+            "tests.write"
+        } else if !context.tree.join(STORY_CODE).is_file() && offered("implementation.edit") {
+            write(STORY_CODE);
+            "implementation.edit"
+        } else if offered("change.handover") {
+            "change.handover"
+        } else if !context.tree.join(GATE_FIX).is_file() && offered("implementation.edit") {
+            write(GATE_FIX);
+            "implementation.edit"
+        } else {
+            takt::harness::DECLINE
+        };
+        let claim = |id: &str| context.decision.claims.get(id).cloned().unwrap_or_default();
+        self.given.borrow_mut().push(Given {
+            tests_pass: claim("tests.pass"),
+            gate_green: claim("gate.green"),
+            offered: context.offered.to_vec(),
+            chose: chose.to_owned(),
+        });
+        Ok(StepReport {
+            action: chose.to_owned(),
+            summary: format!("step {}: {chose}", context.step),
+            tokens: Some(10),
+        })
+    }
+}
+
+/// story:story-delivery-3-is-the-default, acceptance 3. A store story on the protocol and the
+/// inputs it opens on by default, its tests passing at a revision where the repository's gate
+/// fails: the next step is offered `implementation.edit`, takes it, and the gate is green at the
+/// revision it makes, with no failing test written first.
+#[test]
+fn a_red_gate_with_passing_tests_is_fixed_in_the_implementation() {
+    let repo = repository("red-gate");
+    let settings = story_settings();
+    assert_eq!(settings.protocol.id, "story.delivery/3");
+    let harness = Scripted::default();
+    let validators: Vec<Box<dyn Validator>> = vec![Box::new(StoryTests), Box::new(FormatGate)];
+    let options = RunOptions {
+        protocol: settings.spec.clone(),
+        intent: "a story".to_owned(),
+        inputs: settings.pairs(),
+        iterations: Some(12),
+        hours: None,
+        tokens: None,
+        case_id: Some("red-gate".to_owned()),
+        gate: None,
+    };
+    let mut run = Run::open(&repo, options, &harness, &validators).expect("the case opens");
+    assert_eq!(run.case.protocol.id, "story.delivery/3");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+    let text = String::from_utf8(out).expect("utf-8");
+    let case_dir = run.case.dir.clone();
+    drop(run);
+    assert!(
+        !matches!(stop, Ok(Stop::StepRefused(_))),
+        "{stop:?}\n{text}"
+    );
+    let given = harness.given.borrow().clone();
+    let after_red_gate: Vec<&Given> = given
+        .iter()
+        .filter(|step| step.tests_pass == "true" && step.gate_green == "false")
+        .collect();
+    assert!(
+        !after_red_gate.is_empty(),
+        "no step was given passing tests and a red gate: {given:?}\n{text}"
+    );
+    for step in &after_red_gate {
+        assert!(
+            step.offered
+                .iter()
+                .any(|offer| offer == "implementation.edit"),
+            "a step with passing tests and a red gate is not offered the edit: {step:?}\n{text}"
+        );
+    }
+    assert_eq!(
+        after_red_gate[0].chose, "implementation.edit",
+        "{given:?}\n{text}"
+    );
+    let records: Vec<serde_json::Value> = fs::read_dir(case_dir.join("evidence"))
+        .expect("an evidence directory")
+        .map(|entry| {
+            serde_json::from_str(
+                &fs::read_to_string(entry.expect("an entry").path()).expect("a file"),
+            )
+            .expect("json")
+        })
+        .collect();
+    let gates: Vec<&str> = records
+        .iter()
+        .filter(|record| record["kind"] == "gate_result")
+        .filter_map(|record| record["result"].as_str())
+        .collect();
+    assert!(
+        gates.contains(&"fail") && gates.contains(&"pass"),
+        "the gate was not red and then green: {gates:?}\n{text}"
+    );
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record["kind"] == "tests_change")
+            .count(),
+        1,
+        "a test was written to fix the gate:\n{text}"
+    );
+}
+
+/// story:story-delivery-3-is-the-default, acceptance 4. A case opened on `story.delivery/2`,
+/// as every store story was before `story.delivery/3` became the default, resumes on
+/// `story.delivery/2`, the same document, with the inputs it was opened with, whatever protocol
+/// a new case would open on now.
+#[test]
+fn a_case_opened_on_story_delivery_2_resumes_on_it() {
+    let repo = repository("resume-two");
+    let harness = Scripted::default();
+    let validators: Vec<Box<dyn Validator>> = Vec::new();
+    let inputs = vec![
+        ("tests_first".to_owned(), "required".to_owned()),
+        ("gate_on".to_owned(), "after_handover".to_owned()),
+    ];
+    let options = |protocol: &str| RunOptions {
+        protocol: protocol.to_owned(),
+        intent: "a story".to_owned(),
+        inputs: inputs.clone(),
+        iterations: Some(0),
+        hours: None,
+        tokens: None,
+        case_id: Some("on-two".to_owned()),
+        gate: None,
+    };
+    let opened = Run::open(&repo, options("story.delivery/2"), &harness, &validators)
+        .expect("the case opens on story.delivery/2");
+    assert_eq!(opened.case.protocol.id, "story.delivery/2");
+    let two = opened.case.protocol.ir_json.clone();
+    drop(opened);
+    git(&repo, &["checkout", "-q", "main"]);
+    assert_eq!(default_protocol(true), "story.delivery/3");
+    let resumed = Run::resume(
+        &repo,
+        options(default_protocol(true)),
+        "on-two",
+        &harness,
+        &validators,
+    )
+    .expect("the case resumes");
+    assert_eq!(resumed.case.protocol.id, "story.delivery/2");
+    assert_eq!(resumed.case.protocol.ir_json, two);
+    assert_eq!(resumed.case.inputs(), inputs);
 }

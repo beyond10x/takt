@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:story-delivery-3-is-the-default
 kind: story
-status: draft
+status: implemented
 title: A store story opens on story.delivery/2, which dead-ends after a red gate with passing tests
 tags:
 - finding
@@ -13,7 +13,48 @@ refs:
   reference: story-delivery-3-is-the-default
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: AGENTS.md
+- confidence: cited
+  path: README.md
+- confidence: cited
+  path: crates/takt-cli/tests/protocol_defaults_cli.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/run_console_cli.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/run_console_steps.rs
+- confidence: inferred
+  path: crates/takt-cli/tests/w41_adv_console_cli.rs
+- confidence: cited
+  path: crates/takt/src/protocol.rs
+- confidence: cited
+  path: crates/takt/src/protocol_defaults.yaml
+- confidence: inferred
+  path: crates/takt/tests/handover_after_red.rs
+- confidence: cited
+  path: crates/takt/tests/protocol_defaults.rs
+- confidence: cited
+  path: ess/domains/takt.citations.tsv
+- confidence: cited
+  path: ess/domains/takt.yaml
+- confidence: cited
+  path: website/docs/concepts/architecture.md
+- confidence: cited
+  path: website/docs/concepts/protocol-and-case.md
+- confidence: cited
+  path: website/docs/guides/run-a-story.md
+- confidence: cited
+  path: website/docs/reference/configuration.md
+- confidence: cited
+  path: website/docs/reference/protocols.md
+- confidence: cited
+  path: website/docs/status.mdx
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-30T01:19:14Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-10-30T01:19:15Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-30T02:33:47Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":2}}}
 ---
 # A store story opens on story.delivery/2, which dead-ends after a red gate with passing tests
 

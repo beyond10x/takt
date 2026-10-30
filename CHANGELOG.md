@@ -6,6 +6,14 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- `takt report --cases <dir>...` prints units accepted, tokens and human interventions per repository and UTC day, with a total; tokens no record states are `unknown`.
+
+### Changed
+
+- A store story opens on takt's own `story.delivery/3` when nothing names a protocol; a case already open on `story.delivery/2` resumes on it.
+
 ## [0.23.0] - 2026-10-30
 
 ### Added

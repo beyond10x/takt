@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-handover-after-red-is-not-the-next-step
 kind: story
-status: active
+status: implemented
 title: A step after a red test run hands over instead of acting on the failure
 summary: a harness chose change.handover at a revision whose tests failed, then a doc-only edit; the step does not lead with the failure
 tags:
@@ -14,10 +14,12 @@ refs:
   reference: a-handover-after-red-is-not-the-next-step
 relations:
 - serves: vision:safe-agentic-coding
-revision: 3
+- depends_on: story:story-delivery-3-is-the-default
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T23:15:14Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-28T23:15:14Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-30T02:33:47Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A step after a red test run hands over instead of acting on the failure
 

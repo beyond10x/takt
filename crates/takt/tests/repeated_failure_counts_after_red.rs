@@ -256,7 +256,7 @@ fn forge() -> Rc<dyn Forge> {
 }
 
 /// The options of a delivery run of the story on `protocol`, or on the default protocol for a
-/// story with its default inputs when `None` (`story.delivery/2`, `tests_first: required`), as
+/// story with its default inputs when `None` (`story.delivery/3`, `tests_first: required`), as
 /// `takt run` with no `--protocol` and no `--input` opens it, with `iterations` steps.
 fn options(name: &str, protocol: Option<&str>, iterations: u64) -> RunOptions {
     let (protocol, inputs) = match protocol {
@@ -272,7 +272,7 @@ fn options(name: &str, protocol: Option<&str>, iterations: u64) -> RunOptions {
                 file_protocol_applies: true,
             })
             .expect("the settings resolve");
-            assert_eq!(settings.protocol.id, "story.delivery/2");
+            assert_eq!(settings.protocol.id, "story.delivery/3");
             assert!(
                 settings
                     .pairs()

@@ -918,6 +918,326 @@ pub fn print_json(traces: &[Trace], out: &mut dyn Write) -> std::io::Result<()> 
     writeln!(out, "{}", serde_json::json!({ "runs": runs }))
 }
 
+/// The day of `takt report --cases` an instant no record states, or one that does not read as
+/// one, counts on.
+pub const UNKNOWN_DAY: &str = "unknown";
+
+/// The figures `takt report --cases` sums for one repository on one UTC day, or over all of
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DayFigures {
+    /// The cases whose last `stop` line is `Completed (accepted)`, each on the day of the run
+    /// that wrote that line. A scenario case's held-out result does not change it.
+    pub accepted: u64,
+    /// The tokens the harness reported on the runs opened that day, read by the scorecard's
+    /// rule (`scorecard::runs`): a validator's step adds 0, `skipped` lines and lines after a
+    /// run's `stop` are not read, and the `stop` line's own `tokens` never is. None, printed
+    /// `unknown`, when a harness step of one of them recorded no tokens, or 0, and on the day
+    /// [`UNKNOWN_DAY`] of a repository with a case that holds no run record
+    /// ([`CaseSums::unrecorded`]).
+    pub tokens: Option<u64>,
+    /// The decisions of the cases' `authority.yaml` by a person, granted or denied, each on the
+    /// day it was given (`granted_at`): an approver [`crate::case::is_approver`] admits, of the
+    /// kind `human` (`human:<name>`, a name `takt approve` accepts). A grant by an agent role,
+    /// and an approver `takt approve` refuses (`human:` with no name), is none.
+    pub interventions: u64,
+}
+
+impl Default for DayFigures {
+    fn default() -> Self {
+        Self {
+            accepted: 0,
+            tokens: Some(0),
+            interventions: 0,
+        }
+    }
+}
+
+impl DayFigures {
+    fn add_tokens(&mut self, tokens: Option<u64>) -> anyhow::Result<()> {
+        self.tokens = match (self.tokens, tokens) {
+            (Some(sum), Some(tokens)) => Some(
+                sum.checked_add(tokens)
+                    .ok_or_else(|| anyhow::anyhow!("the tokens summed exceed {}", u64::MAX))?,
+            ),
+            _ => None,
+        };
+        Ok(())
+    }
+
+    fn add(&mut self, other: &Self) -> anyhow::Result<()> {
+        let overflow = || anyhow::anyhow!("a sum exceeds {}", u64::MAX);
+        self.accepted = self
+            .accepted
+            .checked_add(other.accepted)
+            .ok_or_else(overflow)?;
+        self.interventions = self
+            .interventions
+            .checked_add(other.interventions)
+            .ok_or_else(overflow)?;
+        self.add_tokens(other.tokens)
+    }
+}
+
+/// One row of `takt report --cases`: a repository, a UTC day, its figures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayRow {
+    /// The repository: the directory above the cases root a `--cases` argument ends in
+    /// (`<repo>/.takt/cases`, `<repo>/.engineering/cases`), else the argument as given; of a
+    /// cases directory given more than once, however spelled, its first spelling.
+    pub repository: String,
+    /// The UTC date, `YYYY-MM-DD`, or [`UNKNOWN_DAY`].
+    pub day: String,
+    /// What it sums to.
+    pub figures: DayFigures,
+}
+
+/// What `takt report --cases` prints: a row per repository and day, in that order, their
+/// total, and the cases that hold no run record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaseSums {
+    /// The rows.
+    pub rows: Vec<DayRow>,
+    /// The rows summed.
+    pub total: DayFigures,
+    /// The case directories, as found under the cases directory given, whose run record states
+    /// no run: no `events.jsonl`, as a case whose record lives only on its case branch, or one
+    /// with no `opened` line. Each makes its repository's tokens on the day [`UNKNOWN_DAY`]
+    /// unknown, so the total's too, and is named after the table.
+    pub unrecorded: Vec<String>,
+}
+
+/// Whether `dir`, a directory in a cases directory, is a case: it holds `case.yaml` or the run
+/// record (`events.jsonl`), whatever each is; a link at either is refused when it is read.
+fn is_case(dir: &std::path::Path) -> bool {
+    ["case.yaml", crate::events::EVENTS_FILE]
+        .iter()
+        .any(|file| std::fs::symlink_metadata(dir.join(file)).is_ok())
+}
+
+/// The cases under the cases directory `root`, by name: each directory in it that
+/// [`is_case`]; every other directory and every file is skipped. A link in it is refused naming
+/// it, as the run record is never read through one ([`crate::events::Events::read`]), and so is
+/// a cases directory that does not read or holds no case.
+fn cases_in(root: &std::path::Path) -> anyhow::Result<Vec<(String, std::path::PathBuf)>> {
+    use anyhow::Context as _;
+    let mut cases = Vec::new();
+    for entry in std::fs::read_dir(root)
+        .with_context(|| format!("read the cases directory {}", root.display()))?
+    {
+        let entry =
+            entry.with_context(|| format!("read the cases directory {}", root.display()))?;
+        let path = entry.path();
+        let kind = entry
+            .file_type()
+            .with_context(|| format!("read {}", path.display()))?;
+        anyhow::ensure!(
+            !kind.is_symlink(),
+            "{} is a symbolic link in the cases directory {}; a case is never read through one",
+            path.display(),
+            root.display()
+        );
+        if kind.is_dir() && is_case(&path) {
+            cases.push((entry.file_name().to_string_lossy().into_owned(), path));
+        }
+    }
+    anyhow::ensure!(
+        !cases.is_empty(),
+        "the cases directory {} holds no case: no directory in it holds case.yaml or {}",
+        root.display(),
+        crate::events::EVENTS_FILE
+    );
+    cases.sort();
+    Ok(cases)
+}
+
+/// The repository a cases directory belongs to ([`DayRow::repository`]).
+fn repository_of(cases: &std::path::Path) -> String {
+    for root in crate::case::CASE_ROOTS {
+        if cases.ends_with(root)
+            && let Some(repository) = cases.parent().and_then(std::path::Path::parent)
+        {
+            let shown = repository.display().to_string();
+            return if shown.is_empty() {
+                ".".to_owned()
+            } else {
+                shown
+            };
+        }
+    }
+    cases.display().to_string()
+}
+
+/// The UTC date of an event line's instant, or [`UNKNOWN_DAY`] for none and one that does not
+/// read.
+fn day_of(at: Option<&str>) -> String {
+    at.filter(|at| crate::scorecard::instant(at).is_some())
+        .and_then(|at| at.get(..10))
+        .map_or_else(|| UNKNOWN_DAY.to_owned(), str::to_owned)
+}
+
+/// Whether `approver`, a decision's in `authority.yaml`, is a person: an approver
+/// [`crate::case::is_approver`] admits, of the kind `human`.
+fn is_person(approver: &str) -> bool {
+    crate::case::is_approver(approver)
+        && approver
+            .split_once(':')
+            .is_some_and(|(kind, _)| kind == "human")
+}
+
+/// Sums, per repository and UTC day, the cases under each cases directory in `roots`: the
+/// units accepted, the tokens and the interventions ([`DayFigures`]). Each run counts on the UTC
+/// date of its `opened` line, each decision on that of its `granted_at`.
+///
+/// A case is a directory in a cases directory that holds `case.yaml` or `events.jsonl`; any
+/// other directory or file there is not one and is skipped. A cases directory given more than
+/// once, however spelled (its canonical path), is read once, under its first spelling. A case
+/// whose run record states no run counts no tokens as 0: it makes its repository's tokens on
+/// the day [`UNKNOWN_DAY`] unknown and is named in [`CaseSums::unrecorded`].
+///
+/// # Errors
+/// A cases directory that does not read or holds no case, a link in one, a case's
+/// `events.jsonl` or `authority.yaml` that does not read (each named), or a sum past
+/// `u64::MAX`.
+pub fn case_sums(roots: &[std::path::PathBuf]) -> anyhow::Result<CaseSums> {
+    use anyhow::Context as _;
+    let mut days: BTreeMap<(String, String), DayFigures> = BTreeMap::new();
+    let mut read = std::collections::BTreeSet::new();
+    let mut unrecorded = Vec::new();
+    for root in roots {
+        let canonical = std::fs::canonicalize(root)
+            .with_context(|| format!("read the cases directory {}", root.display()))?;
+        if !read.insert(canonical) {
+            continue;
+        }
+        let repository = repository_of(root);
+        for (name, dir) in cases_in(root)? {
+            let lines = crate::events::Events::new(&dir).read()?;
+            // `scorecard::runs` opens one row per `opened` line, in their order.
+            let opened: Vec<String> = lines
+                .iter()
+                .filter(|line| line["event"] == "opened")
+                .map(|line| day_of(line["at"].as_str()))
+                .collect();
+            if opened.is_empty() {
+                days.entry((repository.clone(), UNKNOWN_DAY.to_owned()))
+                    .or_default()
+                    .add_tokens(None)?;
+                unrecorded.push(dir.display().to_string());
+            }
+            let mut last_stop = None;
+            for (run, day) in crate::scorecard::runs(&name, &lines).iter().zip(opened) {
+                days.entry((repository.clone(), day.clone()))
+                    .or_default()
+                    .add_tokens(run.tokens)?;
+                // A run with no stop line has an outcome no stop names ([`scorecard::outcome_of`]).
+                if !matches!(run.stop.as_str(), "error" | "unfinished") {
+                    last_stop = Some((day, run.stop == "accepted"));
+                }
+            }
+            if let Some((day, true)) = last_stop {
+                days.entry((repository.clone(), day))
+                    .or_default()
+                    .add(&DayFigures {
+                        accepted: 1,
+                        ..DayFigures::default()
+                    })?;
+            }
+            let decisions = crate::case::Authority::read(&dir)?
+                .map(|authority| authority.decisions)
+                .unwrap_or_default();
+            for decision in decisions
+                .iter()
+                .filter(|decision| is_person(&decision.approver))
+            {
+                days.entry((repository.clone(), day_of(Some(&decision.granted_at))))
+                    .or_default()
+                    .add(&DayFigures {
+                        interventions: 1,
+                        ..DayFigures::default()
+                    })?;
+            }
+        }
+    }
+    let mut total = DayFigures::default();
+    let mut rows = Vec::new();
+    for ((repository, day), figures) in days {
+        total.add(&figures)?;
+        rows.push(DayRow {
+            repository,
+            day,
+            figures,
+        });
+    }
+    Ok(CaseSums {
+        rows,
+        total,
+        unrecorded,
+    })
+}
+
+/// A table cell's text: escaped ([`escape`]), a `|` as `\|`.
+fn cell(text: &str) -> String {
+    escape(text).replace('|', "\\|")
+}
+
+/// Prints `sums` as one markdown table, a row per repository and day and a total row; tokens
+/// no record states in full print `unknown`, never a number, and a note says why, naming each
+/// case that holds no run record ([`CaseSums::unrecorded`]).
+///
+/// # Errors
+/// A write that fails.
+pub fn print_case_sums(sums: &CaseSums, out: &mut dyn Write) -> std::io::Result<()> {
+    let tokens = |figures: &DayFigures| {
+        figures
+            .tokens
+            .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string())
+    };
+    writeln!(
+        out,
+        "| repository | day (UTC) | units accepted | tokens | interventions |"
+    )?;
+    writeln!(out, "|---|---|---:|---:|---:|")?;
+    for row in &sums.rows {
+        writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            cell(&row.repository),
+            cell(&row.day),
+            row.figures.accepted,
+            tokens(&row.figures),
+            row.figures.interventions
+        )?;
+    }
+    writeln!(
+        out,
+        "| total | | {} | {} | {} |",
+        sums.total.accepted,
+        tokens(&sums.total),
+        sums.total.interventions
+    )?;
+    let a_step_unknown = sums
+        .rows
+        .iter()
+        .any(|row| row.figures.tokens.is_none() && row.day != UNKNOWN_DAY);
+    if a_step_unknown || (sums.total.tokens.is_none() && sums.unrecorded.is_empty()) {
+        writeln!(
+            out,
+            "\ntokens `unknown`: a harness step of a run that day recorded no tokens, or 0, which is never read as 0."
+        )?;
+    }
+    if !sums.unrecorded.is_empty() {
+        writeln!(
+            out,
+            "\ntokens `unknown` on the day `unknown`: these cases hold no run record (no `events.jsonl`, or none with an `opened` line), so no record states their tokens:"
+        )?;
+        for case in &sums.unrecorded {
+            writeln!(out, "- {}", escape(case))?;
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

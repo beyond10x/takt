@@ -16,7 +16,8 @@
 <!-- badges end -->
 
 Point `takt` at a repository and say "work on this". It takes an intent or a story, opens a case
-on an engineering protocol and lets a harness (Claude Code, Codex or b10x-harness) take one
+on an engineering protocol (for a story, takt's own `story.delivery/3` unless you name another)
+and lets a harness (Claude Code, Codex or b10x-harness) take one
 admissible step at a time. A program checks each step's result, not the model that made it.
 [Canon](https://beyond10x.github.io/canon/) ([GitHub](https://github.com/beyond10x/canon)) decides
 what is permitted, what is owed and whether completion was earned.
