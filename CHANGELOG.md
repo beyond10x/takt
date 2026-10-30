@@ -41,6 +41,9 @@ takt's releases.
 - Under git 2.56, a push by the command, gitlab or connectors forge puts back the tracking ref git wrote for it, so `pr.open` is not refused for `refs/remotes/origin/<branch>`.
 - A base update the forge did not take, or has not moved the pull request to yet, is pushed again as the same commit, instead of the case stopping at "nothing to merge".
 - Checks read at the merge that change the case's `branch.yaml` or `artifacts/base-update.json` are refused and both files put back.
+- Known limit: an `unknown` merge key is read only under the refused count's key, so a lagging record would resend one; no writer makes it (story:an-unknown-entry-is-found-whatever-the-count).
+- Known limit: in one process, a pull request read merged after an unknown merge is refused, not counted applied; resume settles it (story:a-merge-read-merged-after-unknown-completes-in-one-process).
+- Known limit: four cases need a real b10x-harness and do not run in CI; they passed locally with b10x-harness 0.24.0 (story:ci-runs-the-real-harness-cases).
 
 ## [0.24.0] - 2026-10-30
 

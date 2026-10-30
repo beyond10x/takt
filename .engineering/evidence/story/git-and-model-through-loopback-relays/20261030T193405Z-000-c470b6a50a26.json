@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T19:34:05Z",
+  "actor": "human:timo",
+  "artifact": "story:git-and-model-through-loopback-relays",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "local, takt 0.25.0 tree 5bcb3538 with b10x-harness 0.24.0 (release asset, SHA256SUMS verified) at TAKT_TEST_B10X_HARNESS: cargo test -p b10x-takt-cli --test loopback_relays_cli --test w48_adv_a -- --ignored: loopback_relays_cli 1 passed (the_real_harness_sends_the_stand_in_no_credential_header); w48_adv_a 3 passed (the_default_token_file_in_home_is_not_sent_to_a_keyless_loopback_endpoint, a_loopback_redirect_does_not_carry_the_token_to_another_host, a_keyless_loopback_redirect_carries_no_credential_header_to_another_host)",
+    "reference": "https://github.com/beyond10x/harness/releases/tag/0.24.0"
+  }
+}
