@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:git-through-the-connectors-git-relay
 kind: story
-status: active
+status: implemented
 title: Fetch and push go through a served Connectors instance's git relay
 summary: connectors 0.62.0 git relay as origin behind a loopback boundary; refusals named
 tags:
@@ -26,10 +26,11 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T10:37:02Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-30T10:37:02Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-30T18:09:09Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":7}}}
 ---
 ## Outcome
 

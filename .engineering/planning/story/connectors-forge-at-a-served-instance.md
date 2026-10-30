@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:connectors-forge-at-a-served-instance
 kind: story
-status: active
+status: implemented
 title: The connectors forge opens and merges through a real served Connectors instance, with keyed writes
 summary: connectors 0.62.0 served instance in the test and CI; idempotency_key on standing-grant writes
 tags:
@@ -28,10 +28,11 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T10:37:01Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-30T10:37:01Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-30T18:09:09Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":9}}}
 ---
 ## Outcome
 
