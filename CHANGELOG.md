@@ -6,6 +6,11 @@ takt's releases.
 
 ## [Unreleased]
 
+### Changed
+
+- Loom 0.52.0: `--harness harness` with a loopback endpoint and no credential starts its session; Loom 0.51.0 refused it at the first step.
+- engineering-protocols 0.14.0 leaves the lock: Loom 0.52.0's governor pins 0.15.2, as takt does.
+
 ## [0.24.0] - 2026-10-30
 
 ### Added

@@ -242,8 +242,8 @@ Rules the run checks before a case opens, each exit 1:
 - A base URL is `https://`, or `http://` to a loopback host, with no userinfo, query or fragment.
 - A base URL other than the default needs a credential, unless its host is a loopback host: there
   a relay beside the run may hold the model's key, and the endpoint takes none (`kind: none` in
-  the case record), as does an `llm` route's anonymous endpoint there. Loom 0.51.0's session
-  executor still refuses such a session at its first step. The claude.ai token goes to the
+  the case record), as does an `llm` route's anonymous endpoint there, and Loom's session
+  executor starts that session (since 0.25.0, on Loom 0.52.0). The claude.ai token goes to the
   default base URL only.
 - A token file that is missing, or whose pointer resolves to no token, is refused naming the path
   and the pointer.
