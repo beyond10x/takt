@@ -16,6 +16,7 @@ takt's releases.
 - A write answered `applied` or `unknown`, a provider's 5xx among them, keeps its key and replays instead of writing twice.
 - `pull-request.refusals.json` is never read or written through a link, is read as a regular file of at most 64 KiB, and a malformed one is an error.
 - Only a v1alpha2 error envelope with `unsupported` turns keying off; any other 400 is an error.
+- A pull request behind its base gets the judged base tip merged in as takt's recorded merge commit, pushed and checked before the merge; a conflict stops naming the files.
 - CI runs a pull request through a served Connectors 0.62.0 instance with standing grants, a lost answer included, against a local GitHub fixture.
 
 ### Changed

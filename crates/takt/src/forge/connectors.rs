@@ -23,7 +23,7 @@
 //! | action | operation | input | read from |
 //! |---|---|---|---|
 //! | open | `merge_request.create` | `id`, `sha` (the case branch's commit), `body` | `iid` |
-//! | read | `merge_request.get` | `id`, `merge_request_iid` | `state`, `source_branch`, `target_branch`, `sha`, `head_pipeline` |
+//! | read | `merge_request.get` | `id`, `merge_request_iid` | `state`, `source_branch`, `target_branch`, `sha`, `head_pipeline`; behind its base from `detailed_merge_status` and `diverged_commits_count` |
 //! | checks | `pipeline.get` | `id`, `pipeline_id` | `sha`, `status` |
 //! | merge | `merge_request.merge` | `id`, `merge_request_iid`, `pipeline_id`, `body.sha` | `state` |
 //!
@@ -32,7 +32,7 @@
 //! | action | operation | input | read from |
 //! |---|---|---|---|
 //! | open | `pull_request.create` | `owner`, `repo`, `sha` (the case branch's commit), `body` (`head`, `base`, `title`, `body`) | `number` |
-//! | read | `pull_request.get` | `owner`, `repo`, `pull_number` | `state`, `merged`, `head.ref`, `head.sha`, `base.ref` |
+//! | read | `pull_request.get` | `owner`, `repo`, `pull_number` | `state`, `merged`, `head.ref`, `head.sha`, `base.ref`; behind its base from `mergeable_state` |
 //! | checks | `check_runs.list`, `commit.status` | `owner`, `repo`, `ref` (the head's sha); `per_page`, `page` | `check_runs[].status`, `check_runs[].conclusion`, `total_count`; `state`, `statuses` |
 //! | merge | `pull_request.merge` | `owner`, `repo`, `pull_number`, `body.sha` (the head) | `merged` |
 //! | merge target | `branch.get` | `owner`, `repo`, `branch` | `commit.sha`, taken only when `git ls-remote` of the project `origin` names lists the branch at the same commit |
@@ -740,6 +740,37 @@ impl fmt::Debug for ConnectorsForge {
 struct Request {
     view: PullRequestView,
     head_pipeline: Option<(u64, Option<String>)>,
+    /// Whether it is behind its target ([`gitlab_behind`]).
+    behind: Option<bool>,
+}
+
+/// Whether a change request `merge_request.get` reported as `body` is behind its target:
+/// `detailed_merge_status` `need_rebase` is; else `diverged_commits_count` above 0 is and 0 is
+/// not; else a `detailed_merge_status` GitLab has settled is not; one it is still computing
+/// (`checking`, `unchecked`, `preparing`, `approvals_syncing`), or neither field, is not known.
+fn gitlab_behind(body: &Value) -> Option<bool> {
+    let status = body["detailed_merge_status"].as_str();
+    if status == Some("need_rebase") {
+        return Some(true);
+    }
+    if let Some(count) = body["diverged_commits_count"].as_u64() {
+        return Some(count > 0);
+    }
+    match status {
+        Some("checking" | "unchecked" | "preparing" | "approvals_syncing") | None => None,
+        Some(_) => Some(false),
+    }
+}
+
+/// Whether a pull request `pull_request.get` reported as `body` is behind its base:
+/// `mergeable_state` `behind` is; any other state GitHub settled on is not; `unknown`, which it
+/// answers while it still computes the state, or no state, is not known.
+fn github_behind(body: &Value) -> Option<bool> {
+    match body["mergeable_state"].as_str() {
+        Some("behind") => Some(true),
+        Some("unknown") | None => None,
+        Some(_) => Some(false),
+    }
 }
 
 impl ConnectorsForge {
@@ -1456,11 +1487,21 @@ impl ConnectorsForge {
                 base: field("target_branch")?,
             },
             head_pipeline,
+            behind: gitlab_behind(&body),
         })
     }
 
     /// The pull request `number` as `pull_request.get` reports it.
     fn read_pull(&self, tree: &Path, number: u64) -> Result<PullRequestView> {
+        self.read_pull_behind(tree, number).map(|(view, _)| view)
+    }
+
+    /// [`Self::read_pull`], and whether the pull request is behind its base ([`github_behind`]).
+    fn read_pull_behind(
+        &self,
+        tree: &Path,
+        number: u64,
+    ) -> Result<(PullRequestView, Option<bool>)> {
         let (owner, repo) = self.repository();
         let body = self.invoke(
             tree,
@@ -1483,14 +1524,15 @@ impl ConnectorsForge {
                 "{named} reported the state {state:?} with merged {merged:?}, not open, or closed with merged true or false"
             ),
         };
-        Ok(PullRequestView {
+        let view = PullRequestView {
             state,
             head: Head {
                 branch: field("/head/ref")?,
                 sha: field("/head/sha")?,
             },
             base: field("/base/ref")?,
-        })
+        };
+        Ok((view, github_behind(&body)))
     }
 
     /// The checks on the head of change request `number`, and the pipeline they were read
@@ -2065,6 +2107,16 @@ impl Forge for ConnectorsForge {
 
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {
         self.view(tree, number)
+    }
+
+    /// From the pull read: on github `mergeable_state` ([`github_behind`]), on gitlab
+    /// `detailed_merge_status` and `diverged_commits_count` ([`gitlab_behind`]); not known when
+    /// the read does not say.
+    fn behind_base(&self, tree: &Path, number: u64) -> Result<Option<bool>> {
+        Ok(match self.connector {
+            Connector::Gitlab => self.read(tree, number)?.behind,
+            Connector::Github => self.read_pull_behind(tree, number)?.1,
+        })
     }
 
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks> {

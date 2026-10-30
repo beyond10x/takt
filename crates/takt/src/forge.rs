@@ -393,6 +393,16 @@ pub trait Forge {
     }
     /// The state and the head of pull request `number`.
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView>;
+    /// Whether pull request `number` is behind its base, as the forge reports it now: its base
+    /// branch moved on and its head does not hold the base's tip, which a host requiring a head
+    /// up to date with its base refuses to merge. `Some(true)` behind, `Some(false)` not; `None`
+    /// when the adapter cannot tell, and by default, so the merge goes as it would without the
+    /// read. `repository.merge` reads it before it merges, and brings a head that is behind up
+    /// to date itself (a merge of the base's tip into it, recorded in the case).
+    fn behind_base(&self, tree: &Path, number: u64) -> Result<Option<bool>> {
+        let _ = (tree, number);
+        Ok(None)
+    }
     /// The checks on the head of pull request `number`.
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks>;
     /// Merges pull request `number`, whose head must still be `head`: a head that moved since it

@@ -4845,7 +4845,155 @@ fn merge_message(
     })
 }
 
+/// Whether `ancestor` is an ancestor of `descendant`, or the same commit, in `tree`'s repository;
+/// not when either is no commit it holds.
+fn is_ancestor(tree: &Path, ancestor: &str, descendant: &str) -> bool {
+    crate::git::run(
+        tree,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            "--end-of-options",
+            ancestor,
+            descendant,
+        ],
+    )
+    .is_ok()
+}
+
+/// What a base update ([`PrMerged::update_base`]) is about: the case's branch `name`, its pull
+/// request `number` into `target`, and `tip`, the target's tip the judge guard judged.
+struct BaseUpdateAt<'a> {
+    name: &'a str,
+    number: u64,
+    target: &'a str,
+    tip: &'a str,
+}
+
 impl PrMerged {
+    /// Brings pull request `at.number`'s head `view` up to date with its base when the forge
+    /// reads it behind ([`Forge::behind_base`]). `None` means the merge goes on: the head is not
+    /// behind, the forge cannot tell, the head already holds `at.tip`, or the head was brought
+    /// up to date and `view` read again at the new head.
+    ///
+    /// The update is takt's own merge commit, made without a work tree and moving no ref of the
+    /// tree: the tree `git merge-tree --write-tree` makes of the head and the tip
+    /// ([`crate::git::merged_tree`]), committed over the head (first parent) and the tip (second)
+    /// under the case's commit identity. What its push would publish is scanned first
+    /// ([`Forge::scan_outgoing`]); it is recorded in the case ([`crate::case::BaseUpdate`],
+    /// [`crate::case::BASE_UPDATE_RECORD`]), so the rider rule takes it as takt's, and named in
+    /// `branch.yaml` before it is pushed as the case's branch, as takt's riders are. A merge of
+    /// the tip that conflicts makes nothing and pushes nothing: `Some`, the conflicting files
+    /// named, the case's branch as it was. A forge that has not moved the pull request to the
+    /// push yet is waited on.
+    fn update_base(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        branch: &mut Branch,
+        at: &BaseUpdateAt<'_>,
+        view: &mut crate::forge::PullRequestView,
+    ) -> Result<Option<(Observation, bool)>> {
+        let BaseUpdateAt {
+            name,
+            number,
+            target,
+            tip,
+        } = *at;
+        let forge = self.forge.name();
+        let nothing = |summary: String, waits: bool| {
+            Some((
+                Observation {
+                    summary,
+                    records: Vec::new(),
+                    artifact: None,
+                },
+                waits,
+            ))
+        };
+        let behind = self.forge.behind_base(tree, number).with_context(|| {
+            format!(
+                "read whether pull request #{number} is behind {target} through the forge {forge}"
+            )
+        })?;
+        let head = view.head.sha.clone();
+        // A head that holds the tip judged is up to date with it: the base moved again since,
+        // and the next pass, which judges the base where it is then, brings the head up to it.
+        if behind != Some(true) || is_ancestor(tree, tip, &head) {
+            return Ok(None);
+        }
+        let merging = crate::git::merged_tree(tree, &head, tip)?;
+        if !merging.conflicted.is_empty() {
+            return Ok(nothing(
+                format!(
+                    "pull request #{number} at its head {} is behind {target}, and merging {target} at {} into it conflicts at {}; takt brings no head up to date across a conflict: nothing committed, pushed or merged, the case's branch as it was; the claim stays unknown",
+                    short(&head),
+                    short(tip),
+                    merging.conflicted.join(", ")
+                ),
+                false,
+            ));
+        }
+        let identity =
+            crate::case::commit_identity_of(dir)?.unwrap_or_else(crate::git::CommitIdentity::takt);
+        let message = format!(
+            "takt: bring {name} up to date with {target}\n\nMerge {target} at {tip} into {name} at {head}: pull request #{number} was behind its base.\n"
+        );
+        let merge =
+            crate::git::commit_tree(tree, &merging.tree, &[&head, tip], &message, &identity)
+                .with_context(|| format!("commit the merge of {target} at {tip} into {name}"))?;
+        let base = branch.base.clone().ok_or_else(|| {
+            anyhow!(
+                "the case has pull request #{number} but no base branch to count the commits it would push from; nothing pushed, nothing merged"
+            )
+        })?;
+        self.forge
+            .scan_outgoing(
+                tree,
+                &dir.join("artifacts"),
+                &crate::forge::Outgoing {
+                    branch: name,
+                    base: &base,
+                    head: &merge,
+                    request: None,
+                },
+            )
+            .with_context(|| format!("scan {name} before the push through the forge {forge}"))?;
+        crate::case::record_base_update(
+            dir,
+            crate::case::BaseUpdate {
+                previous_head: head.clone(),
+                base_tip: tip.to_owned(),
+                merge: merge.clone(),
+                at: crate::now(),
+            },
+        )?;
+        // Named before the push, as a rider's push is: a push the forge took but reported
+        // failed leaves the head it took recorded, and the next run merges it.
+        branch.pushed = Some(merge.clone());
+        branch.write(dir)?;
+        self.forge
+            .push_revision(tree, name, &merge)
+            .with_context(|| format!("push {name} through the forge {forge}"))?;
+        *view = self
+            .forge
+            .pull_request(tree, number)
+            .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
+        if view.head.branch != name || view.head.sha != merge {
+            return Ok(nothing(
+                format!(
+                    "brought {name} up to date with {target} at {} as {} and pushed it through {forge}, and pull request #{number} has the head {} at {}; nothing merged, the claim stays unknown",
+                    short(tip),
+                    short(&merge),
+                    view.head.branch,
+                    short(&view.head.sha)
+                ),
+                view.head.branch == name,
+            ));
+        }
+        Ok(None)
+    }
+
     /// The story file of the case at `dir` whose change the guard does not count, `None` when
     /// none is exempt. The case's story is taken by a commit takt makes on the case's branch
     /// (`takt: take <story>`, [`crate::run::take_subject`]), which changes the story's
@@ -4920,8 +5068,9 @@ impl PrMerged {
         })
     }
 
-    /// Why a merge granted by `approver` of the case at `revision` is refused, `None` when it
-    /// is not. The merge target is `target`, the pull request's base as the forge reports it
+    /// Why a merge granted by `approver` of the case at `revision` is refused (`Err`), or the
+    /// tip of the target it judged when it is not (`Ok`), which a base update merges into the
+    /// pull request's head. The merge target is `target`, the pull request's base as the forge reports it
     /// ([`PullRequestView::base`](crate::forge::PullRequestView)); a case whose `branch.yaml`
     /// names another base is refused, naming both. The target's tip is read through the forge
     /// ([`Forge::target_tip`]); the case's pinned base commit must be an ancestor of it (D4).
@@ -4967,10 +5116,10 @@ impl PrMerged {
         revision: &str,
         approver: &str,
         delegated: Option<&str>,
-    ) -> Result<Option<String>> {
+    ) -> Result<std::result::Result<String, String>> {
         let forge = self.forge.name();
         if branch.base.as_deref() != Some(target) {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "the forge {forge} reports the pull request's base as {}, but the case names {} as its base: the merge target is not the one the case was opened on",
                 target.escape_debug(),
                 branch.base.as_deref().map_or_else(
@@ -4986,7 +5135,7 @@ impl PrMerged {
         // The forge's answer is an object id, never a name git resolves; so is the base the
         // case pinned at open.
         if !crate::forge::is_object_id(&reported) {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "the forge {forge} reports {base}, the merge target, at `{}`, which is no commit this repository holds",
                 reported.escape_debug()
             )));
@@ -4996,7 +5145,7 @@ impl PrMerged {
             .as_deref()
             .filter(|at| crate::forge::is_object_id(at))
         else {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "the case pins no base commit by its id to compare with {base} at {}",
                 short(&reported)
             )));
@@ -5007,7 +5156,7 @@ impl PrMerged {
         let mirror = match Mirror::of(tree, &[&reported, revision, pinned])? {
             Ok(mirror) => mirror,
             Err(why) => {
-                return Ok(Some(format!(
+                return Ok(Err(format!(
                     "the commits of {base} at {}, the revision {} and the base {} do not arrive from this repository as their ids, every object hashed again ({why})",
                     short(&reported),
                     short(revision),
@@ -5028,13 +5177,13 @@ impl PrMerged {
                 .filter(|at| !at.is_empty())
         };
         let Some(tip) = commit(&reported) else {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "the forge {forge} reports {base}, the merge target, at `{}`, which is no commit this repository holds",
                 reported.escape_debug()
             )));
         };
         let Some(at) = commit(pinned) else {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "the case pins no base commit this repository holds to compare with {base} at {}",
                 short(&tip)
             )));
@@ -5044,7 +5193,7 @@ impl PrMerged {
             .status
             .success()
         {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "the case's base {} is not an ancestor of {base} at {}, the merge target's tip as the forge {forge} reports it",
                 short(&at),
                 short(&tip)
@@ -5069,13 +5218,13 @@ impl PrMerged {
                     short(&tip)
                 )),
             };
-            if why.is_some() {
-                return Ok(why);
+            if let Some(why) = why {
+                return Ok(Err(why));
             }
         }
         let merged = mirror.merged_tree(&tip, revision)?;
         if !merged.conflicted.is_empty() {
-            return Ok(Some(format!(
+            return Ok(Err(format!(
                 "merging {} into {base} at {} conflicts at {}, so what the merge would change is not known",
                 short(revision),
                 short(&tip),
@@ -5087,7 +5236,7 @@ impl PrMerged {
         if let Some((_, path)) = story_file(dir)? {
             for (at, name) in [(tip.as_str(), base), (merged.tree.as_str(), "the merge")] {
                 if blob_at(&mirror, at, &path)?.is_some_and(|text| text.contains(&b'\r')) {
-                    return Ok(Some(format!(
+                    return Ok(Err(format!(
                         "the story's file {path} holds a carriage return at {name}, which takt's take never writes"
                     )));
                 }
@@ -5143,7 +5292,7 @@ impl PrMerged {
             }
         }
         if surfaces.is_empty() && owner_only.is_empty() {
-            return Ok(None);
+            return Ok(Ok(tip));
         }
         let shown = if surfaces.len() > 5 {
             format!(
@@ -5168,8 +5317,10 @@ impl PrMerged {
             )
         };
         Ok(
-            approver_refusal(&mirror, &tip, base, approver, &owner_only)?
-                .map(|why| format!("{touches}; {why}")),
+            match approver_refusal(&mirror, &tip, base, approver, &owner_only)? {
+                Some(why) => Err(format!("{touches}; {why}")),
+                None => Ok(tip),
+            },
         )
     }
 }
@@ -5246,7 +5397,8 @@ impl Validator for PrMerged {
         "implementation"
     }
 
-    /// The case's `branch.yaml`, when takt's riders are pushed before the merge, and what the
+    /// The case's `branch.yaml`, when takt's riders or a base update are pushed before the
+    /// merge, the record of the base updates ([`crate::case::BASE_UPDATE_RECORD`]), and what the
     /// forge keeps of the merge request it sent and the response it read and, on the forge
     /// connectors, the count of its keyed writes the provider refused.
     fn writes(&self) -> Vec<PathBuf> {
@@ -5256,6 +5408,7 @@ impl Validator for PrMerged {
             artifacts.join(forge::MERGE_REQUEST),
             artifacts.join(forge::MERGE_RESPONSE),
             artifacts.join(crate::forge::connectors::ConnectorsForge::REFUSALS),
+            PathBuf::from(crate::case::BASE_UPDATE_RECORD),
         ]
     }
 
@@ -5291,6 +5444,7 @@ impl Validator for PrMerged {
             role,
             Some(Self::ACTION),
         )
+        .map(std::result::Result::err)
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
@@ -5392,17 +5546,20 @@ impl Validator for PrMerged {
                 // of the merge does: read again at the tip the merge goes into, so a delegation
                 // revoked after the grant was written merges nothing.
                 let delegated = (approver == crate::run::DELIVERY_ROLE).then_some(Self::ACTION);
-                if let Some(refusal) =
-                    self.judge_guard(tree, &dir, &branch, &target, revision, approver, delegated)?
+                let judged = match self
+                    .judge_guard(tree, &dir, &branch, &target, revision, approver, delegated)?
                 {
-                    return Ok((
-                        nothing(format!(
-                            "pull request #{number} at {} is open and granted by {approver}, and {refusal}; nothing merged, the claim stays unknown",
-                            short(revision)
-                        )),
-                        false,
-                    ));
-                }
+                    Ok(tip) => tip,
+                    Err(refusal) => {
+                        return Ok((
+                            nothing(format!(
+                                "pull request #{number} at {} is open and granted by {approver}, and {refusal}; nothing merged, the claim stays unknown",
+                                short(revision)
+                            )),
+                            false,
+                        ));
+                    }
+                };
                 // takt's riders above the revision go with the pull request, so the store's
                 // records reach the base with the merge: the head is brought up to the
                 // branch's `HEAD` when that carries the revision and descends from the head.
@@ -5460,6 +5617,24 @@ impl Validator for PrMerged {
                         ));
                     }
                 }
+                // A head behind its base, which a host requiring heads up to date with their
+                // base refuses to merge, is brought up to date by takt itself: the tip the guard
+                // judged merged into it, recorded and pushed. At most once in a pass; a base
+                // that moves again is the next pass's.
+                if let Some(stop) = self.update_base(
+                    tree,
+                    &dir,
+                    &mut branch,
+                    &BaseUpdateAt {
+                        name: &name,
+                        number,
+                        target: &target,
+                        tip: &judged,
+                    },
+                    &mut view,
+                )? {
+                    return Ok(stop);
+                }
                 // CI was read on the revision; a head carrying takt's riders above it
                 // is a new head, and a forge that requires checks merges it only once they
                 // pass. Its checks are read first: pending or failing, nothing is merged and no
@@ -5494,6 +5669,28 @@ impl Validator for PrMerged {
                         nothing(format!(
                             "the forge {forge} reports pull request #{number}'s base as {} right before the merge, not {target}, the target the judge guard judged; nothing merged, the claim stays unknown",
                             last.base.escape_debug()
+                        )),
+                        false,
+                    ));
+                }
+                // A base update the head holds merged a tip of the base in: that tip must be on
+                // the target the guard judged, so nothing but the base's own commits rides in
+                // with it.
+                if let Some(update) =
+                    crate::case::base_updates_of(&dir)
+                        .into_iter()
+                        .find(|update| {
+                            is_ancestor(tree, &update.merge, &view.head.sha)
+                                && !is_ancestor(tree, &update.base_tip, &judged)
+                        })
+                {
+                    return Ok((
+                        nothing(format!(
+                            "pull request #{number}'s head {} holds takt's base update {}, which merged {} into it, and {target} at {}, the tip the judge guard judged, does not hold that commit; nothing merged, the claim stays unknown",
+                            short(&view.head.sha),
+                            short(&update.merge),
+                            short(&update.base_tip),
+                            short(&judged)
                         )),
                         false,
                     ));

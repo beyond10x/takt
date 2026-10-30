@@ -8,7 +8,7 @@
 //! |---|---|
 //! | push | `git push` of the case's branch to the hub |
 //! | `pr.open` | a request record `<hub>/takt/requests/<n>.json` (branch, base, title, body), `n` taken with an exclusive create, so runs at once never share a number |
-//! | read | the record, the head as the hub's `refs/heads/<branch>`; merged only when the record names the head and a commit on the hub's base that holds it (the head or a commit whose history has it), so a record written by hand merges nothing |
+//! | read | the record, the head as the hub's `refs/heads/<branch>`, behind its base when the base's tip is not an ancestor of the head; merged only when the record names the head and a commit on the hub's base that holds it (the head or a commit whose history has it), so a record written by hand merges nothing |
 //! | checks | the run file's `local_checks`, an argument list run without a shell as the test command is ([`crate::confinement::Confinement::run_test`]: the adapter in use, its environment and scratch home, no credential), in a fresh repository under the state directory that fetched the head from the hub by its id and names no remote; exit 0 passes, any other exit or the timeout fails, pending while it runs; a pass is recorded per head and per argument list (its digest), so a later read of the same checks does not run them again and other checks are run, and a fail is run again by the next read; not run while the run's `--min-free-gib` is not free |
 //! | merge | in the hub, with no work tree: a base whose tip already holds the head moves no ref and the request is recorded merged by the commit that holds it; else `git merge-tree --write-tree` of the base's tip and the head, a conflict refused naming its paths ([`LocalRefused::Conflict`]); else `git commit-tree` of a merge commit under the run's commit identity, saying takt's merge message, and `git update-ref` of the base from the tip to it, so a base another writer moved meanwhile is refused, not overwritten ([`LocalRefused::BaseMoved`]) |
 //! | target tip | the hub's `refs/heads/<base>`, fetched into the tree's repository; the merge goes onto the tip last reported |
@@ -656,6 +656,29 @@ impl Forge for Local {
             },
             base: request.base,
         })
+    }
+
+    /// Behind when the hub's base tip is not an ancestor of the request's head, the hub's
+    /// `refs/heads/<branch>`; not known for a request that is not open.
+    fn behind_base(&self, _: &Path, number: u64) -> Result<Option<bool>> {
+        let request = self.read(number)?;
+        if request.state != PullRequestState::Open.as_str() {
+            return Ok(None);
+        }
+        let head = self.tip_of(&request.branch)?;
+        let tip = self.tip_of(&request.base)?;
+        let holds = crate::git::run(
+            &self.hub,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                "--end-of-options",
+                &tip,
+                &head,
+            ],
+        )
+        .is_ok();
+        Ok(Some(!holds))
     }
 
     /// A pass recorded for the head under these checks ([`Local::verdict_key`]), else `pending`
