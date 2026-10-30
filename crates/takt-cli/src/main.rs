@@ -457,13 +457,16 @@ struct TraceArgs {
 #[derive(clap::Args)]
 #[command(group(clap::ArgGroup::new("input").required(true).multiple(true).args(["case", "trace", "cases"])))]
 struct ReportArgs {
-    /// A cases directory, `<repo>/.takt/cases` or `<repo>/.engineering/cases`; repeatable.
+    /// A cases directory, `<repo>/.takt/cases` or `<repo>/.engineering/cases`; repeatable, and
+    /// one given twice, however spelled, is read once. Its cases are the directories in it
+    /// holding `case.yaml` or `events.jsonl`; one holding no case, or a link in it, is refused.
     /// Prints, instead of a run report, one row per repository and UTC day with the units
     /// accepted (cases whose last stop is `Completed (accepted)`, on that run's day), the
     /// tokens the harness reported on the runs opened that day (`unknown` when a harness step
-    /// recorded none, or 0) and the interventions (decisions in `authority.yaml` by a
-    /// `human:` approver, granted or denied, on the day given), then a total row. Text only;
-    /// not beside --case, --steps or --trace.
+    /// recorded none, or 0, and on the day `unknown` for a case with no run record, which a
+    /// note names) and the interventions (decisions in `authority.yaml` by a `human:<name>`
+    /// approver `takt approve` accepts, granted or denied, on the day given), then a total row.
+    /// Text only; not beside --case, --steps or --trace.
     #[arg(long, value_name = "DIR", num_args = 1.., conflicts_with_all = ["case", "steps", "trace"])]
     cases: Vec<PathBuf>,
     /// A case directory, holding `events.jsonl`; repeatable.
@@ -1075,7 +1078,11 @@ fn parsed() -> Result<Cli> {
         Commands::Report(args)
             if !args.cases.is_empty() && matches!(args.format, ShowFormat::Json) =>
         {
-            Cli::command()
+            // Built, so the subcommand's usage reads `takt report`, not the top level's.
+            let mut cli = Cli::command();
+            cli.build();
+            cli.find_subcommand_mut("report")
+                .expect("takt has a report subcommand")
                 .error(
                     clap::error::ErrorKind::ArgumentConflict,
                     "--format json does not apply to --cases, which prints text only",

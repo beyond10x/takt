@@ -76,9 +76,17 @@ tokens `unknown`: a harness step of a run that day recorded no tokens, or 0, whi
   the run that wrote it. A scenario's held-out result does not change it.
 - **tokens**: the harness's `tokens` on the `step` lines of the runs opened that day, read as
   `takt scorecard` reads them. A harness step with no count, or 0, makes the figure `unknown`;
-  the `stop` line's total is never used in its place.
-- **interventions**: entries of each case's `authority.yaml` whose approver is `human:<name>`,
-  granted or denied, on the day they were given. A grant by an agent role is not one.
+  the `stop` line's total is never used in its place. A case with no run record (no
+  `events.jsonl`, or none with an `opened` line) makes its repository's tokens `unknown` on the
+  day `unknown`, and a note after the table names it.
+- **interventions**: entries of each case's `authority.yaml` whose approver is `human:<name>`
+  with a name `takt approve` accepts, granted or denied, on the day they were given. A grant by
+  an agent role is not one, and neither is `human:` with no name.
+
+A case is a directory in the cases directory holding `case.yaml` or `events.jsonl`; other
+directories and files there are skipped. A cases directory holding no case, or holding a
+symbolic link, is refused with exit 1, naming it. A cases directory given twice, however spelled,
+is read once, under the first spelling.
 
 The repository is the directory above `.takt/cases` or `.engineering/cases`, or the argument as
 given when it ends in neither. The output is text only: `--format json` beside `--cases` is refused.

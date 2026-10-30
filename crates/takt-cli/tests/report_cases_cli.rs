@@ -105,6 +105,12 @@ fn report_cases_refuses_format_json_as_an_argument() {
     ]);
     assert_eq!(code, 2, "{stdout}{stderr}");
     assert!(stderr.contains("--format"), "{stderr}");
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.starts_with("Usage: takt report ")),
+        "the usage is `takt report`'s, not the top level's: {stderr}"
+    );
     assert!(stdout.is_empty(), "{stdout}");
     let (code, _, stderr) = takt(&[
         "report",
@@ -139,4 +145,16 @@ fn report_cases_on_a_directory_that_is_not_one_is_refused() {
     let (code, _, stderr) = takt(&["report", "--cases", missing.to_str().expect("utf-8")]);
     assert_eq!(code, 1, "{stderr}");
     assert!(stderr.contains("no-such"), "{stderr}");
+}
+
+#[test]
+fn report_cases_on_a_directory_holding_no_case_is_refused() {
+    let repository = fixtures().join("a");
+    let (code, stdout, stderr) = takt(&["report", "--cases", repository.to_str().expect("utf-8")]);
+    assert_eq!(code, 1, "{stdout}{stderr}");
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains(&repository.display().to_string()),
+        "{stderr}"
+    );
 }
