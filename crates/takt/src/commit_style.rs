@@ -180,7 +180,7 @@ pub fn names_a_commit_rule(line: &str) -> bool {
 /// or `revision` tracks none of them. The files are read as that revision holds them.
 #[must_use]
 pub fn rule_in(tree: &Path, revision: &str, paths: &[String]) -> Option<Rule> {
-    let files = crate::harness::instruction_files(tree, revision, paths, None);
+    let files = crate::harness::instruction_files(tree, revision, paths);
     files.given.iter().find_map(|file| {
         file.text()
             .lines()

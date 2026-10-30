@@ -479,7 +479,7 @@ fn settings_must_fit_the_forge() {
         ..Default::default()
     };
     assert!(some.check_for(Some("command")).is_ok());
-    let error = some.check_for(Some("bot")).expect_err("not for bot");
+    let error = some.check_for(Some("gitlab")).expect_err("not for gitlab");
     assert!(format!("{error:#}").contains("forge_commands"));
     let none = takt::run_config::ForgeSettings::default();
     let error = none.check_for(Some("command")).expect_err("needs commands");

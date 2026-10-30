@@ -1,10 +1,7 @@
 //! Adversary pass 1 against `takt scenario run`: where a scenario run does not start from a
-//! state of its own. The bot route's programs and the harness are doubles on the program path;
-//! one double pushes for real into a bare repository standing in for the scratch repository's
-//! remote. Nothing reaches a network or a model.
-
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
+//! state of its own. The scratch repository's `origin` is a bare repository on this machine,
+//! which the operator's git fetches from and pushes into; the harness is a double on the
+//! program path. Nothing reaches a network or a model.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -85,8 +82,8 @@ struct World {
     seed: String,
 }
 
-/// The scratch repository as the implementor's suite builds it, plus a bare repository
-/// `remote.git` the bot route double really pushes into.
+/// The scratch repository as the implementor's suite builds it, its `origin` a bare repository
+/// `remote.git` the run really fetches from and pushes into.
 fn world(name: &str) -> World {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("scenario-adv1-{}-{name}", std::process::id()));
@@ -112,7 +109,12 @@ fn world(name: &str) -> World {
     );
     git(
         &repo,
-        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+        &[
+            "remote",
+            "add",
+            "origin",
+            outer.join("remote.git").to_str().expect("utf-8"),
+        ],
     );
     let remote = outer.join("remote.git");
     git(
@@ -122,7 +124,7 @@ fn world(name: &str) -> World {
     let bin = outer.join("stub-bin");
     let state = outer.join("forge");
     fs::create_dir_all(&state).expect("a state directory");
-    doubles(&bin, &state, &remote);
+    doubles(&bin);
     World {
         _scratch: Scratch(outer.clone()),
         outer,
@@ -140,65 +142,9 @@ fn declare(repo: &Path, text: &str) {
     git(repo, &["commit", "-q", "-m", "declare the scenarios"]);
 }
 
-/// Every `b10x-gates` line is logged to `state/calls`. `b10x-gates bot -- fetch <url> <refspec>`
-/// runs a real `git fetch` of the refspec from the bare `remote`, standing in for the HTTPS
-/// server (so without the HTTPS-only transport takt sets for the route's own git), as
-/// `scenario_run.rs`'s double does; `b10x-gates bot -- push [options] <remote> <spec>` runs a
-/// real `git push` of `<spec>` into `remote` with every option takt gave (`--porcelain`,
-/// `--force-with-lease`), its report on stdout as git prints it. `api --method POST` keeps the
-/// request as `pr-<k>.json`. `claude` answers `implementation.edit`.
-fn doubles(bin: &Path, state: &Path, remote: &Path) {
+/// `claude` answers `implementation.edit`.
+fn doubles(bin: &Path) {
     fs::create_dir_all(bin).expect("a stub directory");
-    let state = state.display().to_string();
-    let remote = remote.display().to_string();
-    executable(
-        bin,
-        "b10x-gates",
-        &format!(
-            r#"#!/bin/sh
-state='{state}'
-remote='{remote}'
-echo "$*" >> "$state/calls"
-case "$1" in
-  bot)
-    shift 2
-    verb="$1"; shift
-    options=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -*) options="$options $1"; shift ;;
-        *) break ;;
-      esac
-    done
-    spec="$2"
-    case "$verb" in
-      fetch) env -u GIT_ALLOW_PROTOCOL git fetch -q "$remote" "$spec"; exit $? ;;
-      push) env -u GIT_ALLOW_PROTOCOL git push $options "$remote" "$spec" 2>/dev/null; exit $? ;;
-    esac ;;
-  scan-text) exit 0 ;;
-  api)
-    method=''; path=''; input=''; output=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --method) method="$2"; shift ;;
-        --path) path="$2"; shift ;;
-        --input) input="$2"; shift ;;
-        --output) output="$2"; shift ;;
-      esac
-      shift
-    done
-    if [ "$method" = POST ]; then
-      k=$(( $(ls "$state" | grep -c '^pr-.*\.json$') + 1 ))
-      cp "$input" "$state/pr-$k.json"
-      printf '{{"number": %s}}' "$k" > "$output"
-      exit 0
-    fi ;;
-esac
-echo "b10x-gates double: $*" >&2
-exit 2
-"#
-        ),
-    );
     executable(
         bin,
         "claude",
@@ -226,7 +172,6 @@ impl World {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
-            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env(
                 "PATH",
                 format!(
@@ -244,12 +189,9 @@ impl World {
         )
     }
 
-    fn calls(&self) -> Vec<String> {
-        fs::read_to_string(self.state.join("calls"))
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect()
+    /// Every ref `origin` holds: empty when nothing was pushed to it.
+    fn remote_refs(&self) -> String {
+        git_out(&self.remote, &["for-each-ref"])
     }
 
     fn trial_branches(&self) -> Vec<String> {
@@ -301,7 +243,7 @@ fn a_scenario_declared_only_through_an_include_outside_the_repository_is_refused
         "{:?}",
         world.trial_branches()
     );
-    assert!(world.calls().is_empty(), "{:?}", world.calls());
+    assert_eq!(world.remote_refs(), "");
 }
 
 /// The remote already has `trial/0` (a run from another checkout of the scratch repository,
@@ -373,13 +315,10 @@ fn a_case_branch_that_collides_is_refused_before_the_trial_branch_is_pushed() {
         err.contains("the case's branch takt/scenario-1-trial-0 exists already"),
         "refused for another reason than the case's branch: stderr {err}"
     );
-    assert!(
-        !world
-            .calls()
-            .iter()
-            .any(|call| call.starts_with("bot -- push")),
-        "trial/0 was pushed before the case's branch collided: {:?}; stderr {err}",
-        world.calls()
+    assert_eq!(
+        world.remote_refs(),
+        "",
+        "trial/0 was pushed before the case's branch collided; stderr {err}"
     );
     assert_eq!(
         git_out(&world.repo, &["branch", "--show-current"]),
@@ -397,7 +336,7 @@ fn a_case_branch_that_collides_is_refused_before_the_trial_branch_is_pushed() {
 /// added one unchecked, so a remote-tracking `trial/18446744073709551615` (any remote's;
 /// `refs/remotes/` is outside the step guard's `refs/heads/` and `refs/tags/`) panicked in a
 /// debug build and wrapped to `trial/0` in a release build. A trial number is counted in `u128`
-/// now (22 digits without the bot route), so the top of `u64` is no edge: a remote-tracking
+/// now (22 digits under `--forge none`), so the top of `u64` is no edge: a remote-tracking
 /// branch there is counted past it, through the fetch, the number, the push and the case id,
 /// never refused, wrapped or a panic. The edge itself, `u128`'s, is `scenario_run.rs`'s
 /// `a_trial_number_at_the_top_of_u128_is_refused_not_wrapped`.

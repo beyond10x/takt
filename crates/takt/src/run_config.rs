@@ -1,7 +1,7 @@
 //! A run's configuration file, `takt run --config <FILE>` and `takt scenario run --config
 //! <FILE>`: the story, the loop's budget, the harness, its model, endpoint file and token
 //! variable, the forge, the test command, the state directory, whether the run goes on past
-//! a red base and its scan adapter (`scan`, `gates` or `none`, set nowhere else), read from
+//! a red base and its scan adapter (`scan`, `none`, set nowhere else), read from
 //! one file so a run started in a container takes them from a mounted file. The file is TOML
 //! (`.toml`) or YAML (`.yaml`, `.yml`), the same fields in either; a YAML file whose `format`
 //! is `loom.agent/1` is the agent document Loom mounts for a `LoomAgent` at
@@ -238,8 +238,8 @@ pub struct RunConfig {
     /// The `commit` section: `style`, `trailer` and `types`, each a `--commit-*` flag's, checked
     /// when the file is read ([`crate::commit_style::Settings::check`]).
     pub commit: Option<crate::commit_style::Section>,
-    /// The run's scan adapter, `gates` or `none` ([`crate::scan::Scan`]): the one field no
-    /// flag sets, so a run is unscanned only where its file says so. Not set, it is `gates`.
+    /// The run's scan adapter, `none` ([`crate::scan::Scan`]): the one field no flag sets, so
+    /// a run is unscanned only where its file says so. Not set, it is `unset`.
     pub scan: Option<crate::scan::ScanName>,
     /// The model routes: an `llm.routes/1` document written as a mapping, or `{path: <file>}`
     /// read beside the file. Kept as written; [`RunConfig::read`] has llm validate it.
@@ -794,7 +794,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1414,6 +1414,20 @@ impl RunConfig {
                 }
             }
         }
+        if let Some(forge) = &config.forge
+            && !crate::forge::FORGES.contains(&forge.as_str())
+        {
+            let toml = extension == Some("toml");
+            let line = locate(text, toml, &["forge"])
+                .or_else(|| locate(text, toml, &["takt", "forge"]))
+                .unwrap_or(1);
+            return Err(anyhow!(
+                "the run configuration file {} is refused at line {line}: `forge` is {}, not `{}`",
+                path.display(),
+                forge_names(),
+                forge.escape_debug()
+            ));
+        }
         if let Some(records) = &config.records
             && crate::case::Records::named(records).is_none()
         {
@@ -1665,6 +1679,15 @@ impl ProtocolSettings {
         }
         Ok(settings)
     }
+}
+
+/// The forges a run may name ([`crate::forge::FORGES`]) as a refusal lists them:
+/// `none, local, gitlab, command or connectors`.
+fn forge_names() -> String {
+    let (last, rest) = crate::forge::FORGES
+        .split_last()
+        .expect("takt has at least one forge");
+    format!("{} or {last}", rest.join(", "))
 }
 
 /// The 1-based line a member of the file is written on, `keys` the path from the top of the
@@ -2084,11 +2107,11 @@ mod tests {
         }
     }
 
-    /// story:scan-and-forge-are-adapters: `scan` names the run's scan adapter, `gates` or
-    /// `none`, in either format; any other value is refused naming the file and the line, never
-    /// the value.
+    /// story:scan-and-forge-are-adapters: `scan` names the run's scan adapter, `none`, in either
+    /// format; any other value, `gates` too, is refused naming the file and the line, never the
+    /// value.
     #[test]
-    fn scan_names_gates_or_none_and_any_other_value_is_refused_at_its_line() {
+    fn scan_names_none_and_any_other_value_is_refused_at_its_line() {
         use crate::scan::ScanName;
         let path = scratch("scan-none", "iterations = 1\nscan = \"none\"\n");
         assert_eq!(
@@ -2098,11 +2121,11 @@ mod tests {
         let path = scratch_named(
             "scan-loom",
             "agent.yaml",
-            "format: loom.agent/1\ntakt:\n  scan: gates\n",
+            "format: loom.agent/1\ntakt:\n  scan: none\n",
         );
         assert_eq!(
             RunConfig::read(&path).expect("read").scan,
-            Some(ScanName::Gates)
+            Some(ScanName::None)
         );
         for (name, file, text, line) in [
             (
@@ -2117,12 +2140,13 @@ mod tests {
                 "iterations: 1\nhours: 1\nscan: MARKER-scan\n",
                 3,
             ),
+            ("scan-gates", "run.yaml", "iterations: 1\nscan: gates\n", 2),
         ] {
             let path = scratch_named(name, file, text);
             let error = format!("{:#}", RunConfig::read(&path).expect_err(name));
             assert!(error.contains(&path.display().to_string()), "{error}");
             assert!(error.contains(&format!("line {line}")), "{error}");
-            assert!(error.contains("`scan`, `gates` or `none`"), "{error}");
+            assert!(error.contains("`scan`, `none`"), "{error}");
             assert!(!error.contains("MARKER"), "{error}");
         }
     }

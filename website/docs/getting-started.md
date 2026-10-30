@@ -61,7 +61,7 @@ takt run --repo . --intent "keep the tests green" --harness none --forge none
 ```
 
 `--harness none` takes no model step. `--forge none` opens no pull request; without it, takt
-picks a forge from `origin`: `bot` for github.com, `gitlab` for a host `glab` is logged in to
+picks a forge from `origin`: `gitlab` for a host `glab` is logged in to, else `none`
 ([forge](./concepts/glossary.md#forge)). In a Rust repository, commit `Cargo.lock`: a test run
 that writes a lock file the commit lacks is refused, and the refusal names the ways out.
 
@@ -200,8 +200,8 @@ To resume an intent's case, name it: `takt run --repo . --case <case>`.
 
 ## Other harnesses and settings
 
-Codex and b10x-harness need a scan of what they propose, a gates policy or `scan = "none"` in a
-run file: [Configure a run](./guides/configure-a-run.md).
+Codex and b10x-harness, and a forge that publishes, need `scan = "none"` declared in a run file:
+[Configure a run](./guides/configure-a-run.md).
 
 ## Next
 

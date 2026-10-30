@@ -10,8 +10,6 @@ use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-const POLICY_VAR: &str = takt::scan::gates::POLICY_VAR;
-
 fn git(tree: &Path, args: &[&str]) {
     let status = Command::new("git")
         .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
@@ -87,7 +85,7 @@ impl World {
     }
 
     /// `takt run` on the repository with an intent, no forge and `args`, HOME the scratch one,
-    /// the double first on the program path, no gates policy.
+    /// the double first on the program path.
     fn run(&self, args: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_takt"))
             .args([
@@ -115,7 +113,6 @@ impl World {
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
             .env_remove("ANTHROPIC_API_KEY")
-            .env_remove(POLICY_VAR)
             .output()
             .expect("takt runs")
     }
@@ -129,7 +126,7 @@ fn text(output: &Output) -> (String, String) {
 }
 
 /// Acceptance 4 end to end, under the harness Acceptance 1 guards: a `--harness codex` run with
-/// no policy whose TOML file holds `scan = { none = {} }`, a table and neither `gates` nor
+/// no scan adapter declared whose TOML file holds `scan = { none = {} }`, a table and not
 /// `none`, is refused before its case opens, naming the file, exit 1. It must not be taken as
 /// the declaration `scan: none` and open a case that accepts what the session proposes
 /// unscanned.

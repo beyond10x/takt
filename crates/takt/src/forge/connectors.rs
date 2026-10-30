@@ -1,7 +1,7 @@
 //! The forge a run file names with `forge: connectors` and `forge_instance`: each action of the
 //! [`Forge`] seam is one `connectors operations invoke` on that instance, run through the forge
 //! [`Runner`] as an argument list, never a shell line. It is optional and never a default: no run
-//! reaches it without both keys. The push stays takt's own, scanned push over HTTPS to the project
+//! reaches it without both keys. The push stays takt's own push over HTTPS to the project
 //! the `origin` remote names; this forge replaces the host's API calls and nothing before them.
 //!
 //! The operations are the instance's `gitlab` connector's, and each takes the project's path
@@ -47,9 +47,9 @@ use crate::run_config::ForgeSettings;
 use crate::scan::Scan;
 
 use super::{
-    BotRoute, Checks, Failed, Forge, Head, IdentityScan, Outgoing, PullRequest, PullRequestState,
-    PullRequestView, Runner, Scanner, exact_ref, fresh, head_is_a_commit, held_by, push_over_https,
-    succeed, write_request,
+    Checks, Failed, Forge, Head, IdentityScan, Outgoing, PullRequest, PullRequestState,
+    PullRequestView, Runner, exact_ref, fresh, head_is_a_commit, may_publish, push_over_https,
+    write_request,
 };
 
 /// The program every line runs.
@@ -94,8 +94,6 @@ pub struct ConnectorsForge {
     identity: String,
     /// The run's scan adapter.
     pub scan: Scan,
-    /// The most bytes of commit messages and files one scan before a push is given.
-    pub scan_limit: usize,
     runner: Box<dyn Runner>,
     described: RefCell<BTreeMap<&'static str, (String, String)>>,
     bound: RefCell<BTreeMap<u64, (String, u64)>>,
@@ -148,7 +146,7 @@ impl ConnectorsForge {
 
     /// Over the instance `instance`, after its preflight: the project `tree`'s `origin` names,
     /// and the operations the instance lists, [`REQUIRED`] among them, else an error naming
-    /// every one it does not, before anything is opened. The push and the scan go to the
+    /// every one it does not, before anything is opened. The push goes to the
     /// project `origin` names. Every line runs through `runner`.
     pub fn for_tree(
         tree: &Path,
@@ -175,7 +173,6 @@ impl ConnectorsForge {
             origin,
             identity: String::new(),
             scan,
-            scan_limit: BotRoute::SCAN_LIMIT,
             runner,
             described: RefCell::new(BTreeMap::new()),
             bound: RefCell::new(BTreeMap::new()),
@@ -424,21 +421,9 @@ impl ConnectorsForge {
         Ok((checks, head, Some(id)))
     }
 
-    /// The project the push and the scan go to.
+    /// The URL of the project the push goes to.
     fn push_url(&self) -> String {
         format!("https://{}/{}.git", self.origin.0, self.origin.1)
-    }
-
-    /// The scan before a push and a request: the run's scan adapter's.
-    fn scanner(&self) -> Option<Scanner<'_>> {
-        match &self.scan {
-            Scan::Gates { policy } => Some(Scanner {
-                runner: &*self.runner,
-                repository: &self.origin.1,
-                policy: policy.as_deref(),
-            }),
-            Scan::None { .. } => None,
-        }
     }
 }
 
@@ -447,37 +432,22 @@ impl Forge for ConnectorsForge {
         "connectors"
     }
 
-    /// The run's scan adapter over what pushing would publish and the request's title and body,
-    /// every commit of the head; under a declared `none`, nothing is scanned.
-    fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
+    /// A head that is not a commit is refused under any adapter; then what pushing would publish
+    /// leaves the machine only under a declared `none` ([`may_publish`]).
+    fn scan_outgoing(&self, tree: &Path, _dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
         head_is_a_commit(tree, outgoing.branch, outgoing.head)?;
-        let Some(scanner) = self.scanner() else {
-            return Ok(());
-        };
-        let held = held_by(tree, "origin", outgoing.base, || Ok(None))?;
-        scanner.outgoing(
-            tree,
-            dir,
-            outgoing,
-            held.as_deref(),
-            self.scan_limit,
-            write_request,
-            "pull request",
-        )
+        may_publish(&self.scan, outgoing.branch)
     }
 
+    /// No scan reads the commit identity: [`IdentityScan::NotScanned`] naming why
+    /// ([`Scan::not_scanned`]), no line run.
     fn scan_identity(
         &self,
-        tree: &Path,
-        dir: &Path,
-        identity: &crate::git::CommitIdentity,
+        _tree: &Path,
+        _dir: &Path,
+        _identity: &crate::git::CommitIdentity,
     ) -> Result<IdentityScan> {
-        match self.scanner() {
-            Some(scanner) => scanner.identity(tree, dir, identity, "the forge connectors"),
-            None => Ok(IdentityScan::NotScanned(
-                self.scan.not_scanned().unwrap_or_default(),
-            )),
-        }
+        Ok(IdentityScan::NotScanned(self.scan.not_scanned()))
     }
 
     fn push(&self, tree: &Path, branch: &str) -> Result<()> {
@@ -506,18 +476,10 @@ impl Forge for ConnectorsForge {
     }
 
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
+        may_publish(&self.scan, &request.branch)?;
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
         let output = fresh(dir.join(Self::RESPONSE))?;
-        let (input, published) = write_request(dir, request)?;
-        if let Some(scanner) = self.scanner() {
-            succeed(&*self.runner, tree, &scanner.argv(&[&input, &published])).with_context(|| {
-                format!(
-                    "the pull request for {branch} did not pass scan-text over {} and was not opened; its title and description stayed on this machine, but the branch {branch} was pushed before this scan",
-                    published.display(),
-                    branch = request.branch
-                )
-            })?;
-        }
+        write_request(dir, request)?;
         let head = exact_ref(tree, &format!("refs/heads/{}", request.branch)).ok_or_else(|| {
             anyhow!(
                 "{} names no commit; no change request was opened",

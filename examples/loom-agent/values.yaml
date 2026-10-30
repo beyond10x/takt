@@ -4,6 +4,6 @@ image:
 agentImage:
   repository: registry.example/loom-agent
   tag: "0.45.0"
-allowedSecretNames: [takt-demo-env, takt-demo-files]
+allowedSecretNames: [takt-demo-env]
 allowedEgressHosts: [llm.example.com, index.crates.io, static.crates.io]
 allowedClaimNames: [takt-demo-workspace]

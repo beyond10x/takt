@@ -207,8 +207,7 @@ fn takt(bin: &Path, state: &Path) -> Command {
                 std::env::var("PATH").unwrap_or_default()
             ),
         )
-        .env("XDG_STATE_HOME", state)
-        .env_remove("B10X_GATES_POLICY");
+        .env("XDG_STATE_HOME", state);
     command
 }
 

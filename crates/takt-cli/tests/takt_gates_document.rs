@@ -5,17 +5,14 @@
 //! tests, is a delivery's test command. A delivery on a scratch repository carrying copies of
 //! those three files offers `gate.run` after the implementation and reaches `pr.open`; a gate
 //! command that fails holds `gate.green` false and opens no pull request. The tools are stubs
-//! (see [`World`]), the forge and the harness doubles on the program path; nothing reaches a
-//! network or a model, and takt's own tests are not run from here.
+//! (see [`World`]), the harness a double on the program path and the forge `local`, its hub a
+//! bare repository; nothing reaches a network or a model, and takt's own tests are not run from here.
 //!
 //! story:gate-exec-is-readable-by-the-gate: `gate-exec` is a Python program, not a shell
 //! script, so the command reader the step guard and the gate share takes it whole and compared
 //! at the base instead of failing closed on its branches: a delivery changing a Python file, a
 //! shell file or a program no gate command runs is judged by the gate, and one changing a script
 //! a gate command runs still stops it, naming the script.
-
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -264,8 +261,9 @@ fn stub(dir: &Path, name: &str, log: &Path, code: i32) {
 }
 
 /// One scratch world: a repository with the fixture store's one story `proposed`, copies of
-/// takt's gates document, project file and `gate-exec` (those takt has), and an `origin` on
-/// github.com; the forge's and the harness's doubles in `bin`, their state in `state`; a `cargo`
+/// takt's gates document, project file and `gate-exec` (those takt has), and an `origin`, the bare
+/// hub `hub` of the local forge, with the run file `run.yaml` beside it; the harness's double in
+/// `bin`; a `cargo`
 /// on the program path, the test command's, logging to `test-log`; a home, a state home and a
 /// temporary directory of its own.
 ///
@@ -283,7 +281,7 @@ struct World {
     outer: PathBuf,
     repo: PathBuf,
     bin: PathBuf,
-    state: PathBuf,
+    hub: PathBuf,
 }
 
 /// The world `name`; the gate's `cargo` stub exits 1 when `clippy_fails`.
@@ -332,17 +330,22 @@ fn world_editing(name: &str, clippy_fails: bool, edit: &str) -> World {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "seed"]);
     git(
-        &repo,
-        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
-    );
-    let state = outer.join("forge");
-    fs::create_dir_all(&state).expect("a state directory");
-    git(
         &outer,
         &["init", "-q", "-b", "main", "--bare", "remote.git"],
     );
+    let hub = outer.join("remote.git");
+    git(
+        &repo,
+        &["remote", "add", "origin", hub.to_str().expect("utf-8")],
+    );
+    git(&repo, &["push", "-q", "origin", "main"]);
+    fs::write(
+        outer.join("run.yaml"),
+        "forge: local\nlocal_checks: [\"true\"]\n",
+    )
+    .expect("the run file is written");
     let bin = outer.join("stub-bin");
-    doubles(&bin, &state, &outer.join("remote.git"), edit);
+    doubles(&bin, edit);
     stub(&bin, "cargo", &outer.join(TEST_LOG), 0);
     let tools = outer.join("cargo-home/bin");
     stub(&tools, "ess", &log, 0);
@@ -368,85 +371,14 @@ fn world_editing(name: &str, clippy_fails: bool, edit: &str) -> World {
         outer,
         repo,
         bin,
-        state,
+        hub,
     }
 }
 
-/// The forge's doubles and the harness's in `bin`. `b10x-gates bot -- push … <remote> <spec>`
-/// keeps the commit pushed per branch (`pushed-<branch, / as _>`) and pushes into the bare
-/// `remote`; `scan-text` passes; `api --method POST` keeps the request as `pr-<k>.json` and
-/// answers pull request `k`; `api --method GET` reports it open at the commit last pushed for
-/// its head, and one check run, passing. `claude` appends a line to `work.txt` and answers
+/// The harness's double in `bin`: `claude` appends a line to `work.txt` and answers
 /// `implementation.edit`, takes `change.handover` once `work.txt` exists, and answers
 /// `repository.merge` once an approval is offered; with each line it adds, it runs `edit`.
-fn doubles(bin: &Path, state: &Path, remote: &Path, edit: &str) {
-    let state = state.display().to_string();
-    let remote = remote.display().to_string();
-    executable(
-        bin,
-        "b10x-gates",
-        &format!(
-            r#"#!/bin/sh
-state='{state}'
-remote='{remote}'
-echo "$*" >> "$state/calls"
-case "$1" in
-  bot)
-    shift 2
-    verb="$1"; shift
-    options=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -*) options="$options $1"; shift ;;
-        *) break ;;
-      esac
-    done
-    spec="$2"
-    case "$verb" in
-      push)
-        branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
-        if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
-        git rev-parse "$revision" > "$state/pushed-$(printf '%s' "$branch" | tr / _)" || exit 1
-        env -u GIT_ALLOW_PROTOCOL git push $options "$remote" "$spec" 2>/dev/null; exit $? ;;
-    esac ;;
-  scan-text) exit 0 ;;
-  api)
-    method=''; path=''; input=''; output=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --method) method="$2"; shift ;;
-        --path) path="$2"; shift ;;
-        --input) input="$2"; shift ;;
-        --output) output="$2"; shift ;;
-      esac
-      shift
-    done
-    if [ "$method" = POST ]; then
-      k=$(( $(ls "$state" | grep -c '^pr-.*\.json$') + 1 ))
-      cp "$input" "$state/pr-$k.json"
-      sed -n 's/.*"head": "\(.*\)".*/\1/p' "$input" > "$state/pr-$k.head"
-      printf '{{"number": %s}}' "$k" > "$output"
-      exit 0
-    fi
-    if [ "$method" = GET ]; then
-      case "$path" in
-        */pulls\?*) printf '[]' > "$output" ;;
-        */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
-        */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
-        *)
-          k="${{path##*/}}"
-          head=$(cat "$state/pr-$k.head")
-          oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
-          printf '{{"state":"open","merged":false,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$head" "$oid" > "$output" ;;
-      esac
-      exit 0
-    fi ;;
-esac
-echo "b10x-gates double: $*" >&2
-exit 2
-"#
-        ),
-    );
+fn doubles(bin: &Path, edit: &str) {
     executable(
         bin,
         "claude",
@@ -488,10 +420,11 @@ fn aep_cache() -> PathBuf {
 
 impl World {
     /// `takt run` on the repository's one story with the claude double and `extra`, the test
-    /// command takt's: the doubles first on the program path, the scratch Cargo home, home,
-    /// state home and temporary directory, no `b10x-gates` policy. The exit code, stdout and
-    /// stderr.
+    /// command takt's, the local forge of the run file `run.yaml`: the doubles first on the
+    /// program path, the scratch Cargo home, home, state home and temporary directory. The exit
+    /// code, stdout and stderr.
     fn deliver(&self, extra: &[&str]) -> (i32, String, String) {
+        let config = self.outer.join("run.yaml");
         let mut args = vec![
             "run",
             "--repo",
@@ -500,6 +433,8 @@ impl World {
             "claude",
             "--test-cmd",
             TEST_COMMAND,
+            "--config",
+            config.to_str().expect("utf-8"),
         ];
         if !extra.contains(&"--protocol") {
             args.extend(["--protocol", "story.delivery/1"]);
@@ -507,7 +442,6 @@ impl World {
         args.extend_from_slice(extra);
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)
-            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env_remove("CARGO_TARGET_DIR")
             .env("HOME", self.outer.join("home"))
             .env("AEP_CACHE_DIR", aep_cache())
@@ -559,16 +493,16 @@ impl World {
         );
     }
 
-    /// The pull requests the forge double was asked to open.
+    /// The pull requests the local forge opened: the records under the hub's `takt/requests`.
     fn pull_requests(&self) -> usize {
-        fs::read_dir(&self.state)
-            .expect("the forge state")
-            .filter(|entry| {
-                let name = entry.as_ref().expect("an entry").file_name();
-                let name = name.to_string_lossy();
-                name.starts_with("pr-") && name.ends_with(".json")
-            })
-            .count()
+        fs::read_dir(self.hub.join("takt/requests")).map_or(0, |entries| {
+            entries
+                .filter(|entry| {
+                    let name = entry.as_ref().expect("an entry").file_name();
+                    name.to_string_lossy().ends_with(".json")
+                })
+                .count()
+        })
     }
 }
 

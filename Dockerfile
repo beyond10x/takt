@@ -21,17 +21,13 @@ ARG HARNESS_VERSION=0.22.0
 ARG HARNESS_SHA256=7db31b78b0c23a988d32697355a721c4f347d5d987d6ed7c2e48e285b178d3ce
 ARG ESS_VERSION=0.77.0
 ARG ESS_SHA256=dd31b828bf6c6d9976f339b0a25dabcf0fa7fbb33c2856c49a1e3b71a5c00089
-ARG GATES_VERSION=0.1.23
-ARG GATES_SHA256=17299ab29c065908edc9d188667f0b954110c690ff9bcd6a370d04a3092cd035
 ADD --checksum=sha256:${AEP_SHA256} https://github.com/beyond10x/aep/releases/download/${AEP_VERSION}/aep-${AEP_VERSION}-x86_64-unknown-linux-gnu.tar.gz /dl/aep.tar.gz
 ADD --checksum=sha256:${HARNESS_SHA256} https://github.com/beyond10x/harness/releases/download/${HARNESS_VERSION}/b10x-harness-${HARNESS_VERSION}-x86_64-unknown-linux-gnu.tar.gz /dl/harness.tar.gz
 ADD --checksum=sha256:${ESS_SHA256} https://github.com/beyond10x/ess/releases/download/${ESS_VERSION}/ess-${ESS_VERSION}-x86_64-unknown-linux-gnu.tar.gz /dl/ess.tar.gz
-ADD --checksum=sha256:${GATES_SHA256} https://github.com/beyond10x/gates/releases/download/${GATES_VERSION}/b10x-gates-linux-x86_64 /dl/b10x-gates
 RUN mkdir -p /out \
  && tar -xzf /dl/aep.tar.gz -C /out --strip-components=1 "aep-${AEP_VERSION}-x86_64-unknown-linux-gnu/aep" \
  && tar -xzf /dl/harness.tar.gz -C /out --strip-components=1 "b10x-harness-${HARNESS_VERSION}-x86_64-unknown-linux-gnu/b10x-harness" \
- && tar -xzf /dl/ess.tar.gz -C /out --strip-components=1 "ess-${ESS_VERSION}-x86_64-unknown-linux-gnu/ess" \
- && install -m 0755 /dl/b10x-gates /out/b10x-gates
+ && tar -xzf /dl/ess.tar.gz -C /out --strip-components=1 "ess-${ESS_VERSION}-x86_64-unknown-linux-gnu/ess"
 
 FROM ${BASE_IMAGE}
 ARG REVISION=unknown

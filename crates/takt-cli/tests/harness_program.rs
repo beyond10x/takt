@@ -123,7 +123,6 @@ impl World {
             .args(extra)
             .env("PATH", path.join(":"))
             .env("XDG_STATE_HOME", self.seen.join("state"))
-            .env_remove("B10X_GATES_POLICY")
             .output()
             .expect("takt runs")
     }
@@ -249,7 +248,6 @@ fn a_relative_or_missing_program_is_refused() {
             "--harness-program",
             named.to_str().expect("utf-8"),
         ])
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let said = said(&output);

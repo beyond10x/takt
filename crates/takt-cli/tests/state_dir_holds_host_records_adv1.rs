@@ -128,7 +128,6 @@ mod state_dir_holds_host_records_adv1 {
                         std::env::var("PATH").unwrap_or_default()
                     ),
                 )
-                .env_remove("B10X_GATES_POLICY")
                 .env_remove("DBUS_SESSION_BUS_ADDRESS")
                 .env_remove("XDG_STATE_HOME")
                 .env_remove("HOME");

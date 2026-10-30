@@ -6,9 +6,9 @@
 //! and the line names the setting instead of a candidate. A resume that can no longer make one
 //! says so and leaves no ref naming the earlier candidate.
 //!
-//! The harness is a `claude` double on the program path; `b10x-gates` and `gh` are doubles that
-//! log each call and fail. The promotion store, the state and cache homes and the install root
-//! are the test's own; nothing reaches a network, a model or the bot route.
+//! The harness is a `claude` double on the program path; `glab` and `gh` are doubles that log
+//! each call and fail. The promotion store, the state and cache homes and the install root
+//! are the test's own; nothing reaches a network, a model or a forge.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -101,7 +101,7 @@ fn sha256(path: &Path) -> String {
 /// `.engineering/commit-identity.conf`, its one commit on `main` the promoted baseline; the
 /// promotion store under `state`, its baseline that commit, stated by the operator for the test
 /// binary; an install root; and `bin`, a `claude` double that edits `work.txt` once and hands the
-/// change over when offered, and `b10x-gates` and `gh` doubles that log each call to `route` and
+/// change over when offered, and `glab` and `gh` doubles that log each call to `forge` and
 /// fail.
 struct World {
     _scratch: Scratch,
@@ -111,7 +111,7 @@ struct World {
     state: PathBuf,
     cache: PathBuf,
     install: PathBuf,
-    route: PathBuf,
+    forge: PathBuf,
 }
 
 fn world(name: &str, identity: bool) -> World {
@@ -189,12 +189,12 @@ esac
 printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","usage":{"input_tokens":1}}' "$action"
 "#,
     );
-    let route = outer.join("route-calls");
+    let forge = outer.join("forge-calls");
     let refusing = format!(
-        "#!/bin/sh\necho \"$0 $*\" >> '{}'\necho 'the route double refuses' >&2\nexit 1\n",
-        route.display()
+        "#!/bin/sh\necho \"$0 $*\" >> '{}'\necho 'the forge double refuses' >&2\nexit 1\n",
+        forge.display()
     );
-    for name in ["b10x-gates", "gh"] {
+    for name in ["glab", "gh"] {
         executable(&bin.join(name), &refusing);
     }
     World {
@@ -205,7 +205,7 @@ printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","u
         state,
         cache,
         install,
-        route,
+        forge,
     }
 }
 
@@ -215,7 +215,6 @@ impl World {
     fn takt(&self, args: &[&str]) -> (i32, String, String) {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(args)
-            .env_remove("B10X_GATES_POLICY")
             .env("XDG_STATE_HOME", &self.state)
             .env("XDG_CACHE_HOME", &self.cache)
             .env("CARGO_INSTALL_ROOT", &self.install)
@@ -304,9 +303,9 @@ impl World {
         ])
     }
 
-    /// The calls the route's doubles logged.
-    fn route_calls(&self) -> String {
-        fs::read_to_string(&self.route).unwrap_or_default()
+    /// The calls the forge doubles logged.
+    fn forge_calls(&self) -> String {
+        fs::read_to_string(&self.forge).unwrap_or_default()
     }
 }
 
@@ -321,7 +320,7 @@ fn candidate_of(text: &str) -> Option<String> {
 /// The story's acceptance, end to end: the delivery stops at ahead, exit 7, printing a candidate
 /// that holds the code commit on `main`'s tip and not the take, under the configured identity;
 /// the turn opened on it passes its opening checks (its case records the candidate) with no
-/// operator step between; the route's doubles are never called.
+/// operator step between; the forge doubles are never called.
 #[test]
 fn a_forge_none_delivery_hands_a_turn_its_candidate() {
     let world = world("handover", true);
@@ -377,7 +376,7 @@ fn a_forge_none_delivery_hands_a_turn_its_candidate() {
     let case = fs::read_to_string(world.repo.join(".takt/cases/turn-1/case.yaml"))
         .unwrap_or_else(|_| panic!("no turn opened: stdout {out} stderr {err}"));
     assert!(case.contains(&candidate), "{case}");
-    assert_eq!(world.route_calls(), "", "the route was called");
+    assert_eq!(world.forge_calls(), "", "a forge was called");
 }
 
 /// The candidate is fetched by id into a copy, as a turn's judge reads it
@@ -523,7 +522,7 @@ fn a_resume_that_cannot_make_a_candidate_removes_the_earlier_one() {
         !line.contains("left out"),
         "the refusal asserts a cause it does not know: {line}"
     );
-    assert_eq!(world.route_calls(), "", "the route was called");
+    assert_eq!(world.forge_calls(), "", "a forge was called");
 }
 
 /// With no identity configured the delivery stops as before, exit 7, and prints no candidate:
@@ -555,5 +554,5 @@ fn with_no_identity_the_delivery_names_the_setting_and_makes_no_candidate() {
             .expect("the refs read")
             .is_empty()
     );
-    assert_eq!(world.route_calls(), "", "the route was called");
+    assert_eq!(world.forge_calls(), "", "a forge was called");
 }

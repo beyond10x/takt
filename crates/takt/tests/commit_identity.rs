@@ -33,8 +33,8 @@ const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
 
 /// The identity the repository configures in these cases.
 const BOT: (&str, &str) = (
-    "b10x-bot[bot]",
-    "316511680+b10x-bot[bot]@users.noreply.github.com",
+    "release-bot[bot]",
+    "1+release-bot[bot]@users.noreply.example.invalid",
 );
 
 /// The operator's own identity, in every place git's configuration can give one.

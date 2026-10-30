@@ -191,7 +191,7 @@ fn scenario_run_refuses_a_minted_case_id_before_any_branch_is_cut() {
         .expect("takt runs");
     let err = String::from_utf8_lossy(&output.stderr);
     assert_eq!(output.status.code(), Some(1), "{err}");
-    // Without the bot route the trial number is the instant's digits and a nonce, all digits.
+    // Under `--forge none` the trial number is the instant's digits and a nonce, all digits.
     let refused = err
         .split_once("the case id `")
         .and_then(|(_, rest)| rest.split_once("` is refused"))

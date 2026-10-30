@@ -1,9 +1,9 @@
 ---
 title: Scenario run
 sidebar_position: 8
-description: Replay a declared scenario from a fresh trial branch, so runs of different takt revisions can be compared on the same work, and run a trial on a GitHub repository.
+description: Replay a declared scenario from a fresh trial branch, so runs of different takt revisions can be compared on the same work, and run a trial of todo-app-example through the local forge.
 lede: A scenario is a story at a known seed commit, and replaying it from that seed on a fresh branch is how one takt revision is compared with another.
-source: takt scenario run --help at 0.14.0; docs/metrics/README.md; the design record of recursive self-improvement, § Scenario corpus; the trial steps as run with takt 0.15.1 on todo-app-example; metaharness 0.23.0 (PINNED_VERSIONS)
+source: takt scenario run --help at 0.14.0; docs/metrics/README.md; the design record of recursive self-improvement, § Scenario corpus; the trial steps as run with takt 0.15.1 on todo-app-example; crates/takt-cli/src/main.rs (TrialRoute, scenario_forge_of) and crates/takt-cli/tests/scenario_run.rs for the trial base and the local forge, whose trial steps have not been run on todo-app-example; metaharness 0.23.0 (PINNED_VERSIONS)
 ---
 
 # Scenario run
@@ -20,23 +20,31 @@ takt scenario run --repo <path> <id> --hours 1
 `--declared-on` reads it from another revision. The run:
 
 1. checks that the tree is clean;
-2. fetches the remote's `trial/*` branches through the bot route;
+2. fetches `origin`'s `trial/*` branches with your own git, under your git configuration and
+   credential helpers, never waiting on a prompt;
 3. cuts `trial/<n>` from the seed and checks it out, `<n>` one past the highest the checkout
    knows, local or remote;
 4. refuses unless the store there shows the story ready;
-5. pushes the branch with a lease that only lets it create it, and refuses unless the push
-   reports it created;
+5. pushes the branch to `origin` with a lease that only lets it create it, and refuses unless the
+   push reports it created;
 6. opens the case `scenario-<id>-trial-<n>` on `story.delivery/1`, whose pull request targets
    `trial/<n>`.
 
 Nothing of an earlier run is resumed. A refusal before the push removes the branch and puts the
-tree back. Without the bot route nothing is fetched or pushed, and `<n>` is 22 digits instead:
-the UTC time to the second and a random 8-digit nonce. A scenario run refuses `--forge gitlab`,
-`command`, `connectors` and `local`.
+tree back. Under `--forge none`, or in a checkout with no `origin`, nothing is fetched or pushed,
+and `<n>` is 22 digits instead: the UTC time to the second and a random 8-digit nonce. Before the
+case opens, one line says where the trial base went:
 
-A trial branch is deleted afterwards with
-`b10x-gates bot --repository <owner>/<repo> -- delete-branch trial/<n>`, which the bot route
-admits only while the branch's tip is merged into the default branch.
+```text
+scenario 1: story:remove-a-todo proposed on trial/<n> at <seed>, pushed to origin, no forge
+```
+
+A scenario run has no forge unless you give `--forge local`, which opens its pull request in the
+hub `origin` names ([The local forge](../reference/configuration.md#the-local-forge)). It refuses
+`--forge gitlab`, `command` and `connectors` before anything is cut. Without a forge, the run
+stops `Unperformable (pr.opened)`, exit 7, and prints `candidate: <commit>`
+(`refs/takt/candidates/<case>`): open its pull request against `trial/<n>` yourself. takt never
+deletes a trial branch; delete it with your own git once its trial is recorded.
 
 `takt scenario run` takes the same budget, harness, endpoint, forge and test flags as
 `takt run`, `--continue-past-red-base` among them. Its token budget has the same default: with
@@ -44,11 +52,13 @@ neither `--tokens` nor the run file's `tokens`, it stops at 3,000,000 tokens, ex
 0.23.0.)
 
 `takt scenario run --config <FILE>` reads the same run configuration file as `takt run`, and
-refuses a `story` in it, since the scenario names the story. (Not in 0.14.0.)
+refuses a `story` in it, since the scenario names the story. (Not in 0.14.0.) A Codex or
+b10x-harness scenario run needs `scan: none` in that file, as `takt run` does
+([The scan](../reference/configuration.md#the-scan)).
 
-## A trial on a GitHub repository
+## A trial of todo-app-example
 
-A trial is one delivery of a known story on
+A trial is one delivery of a known story of
 [todo-app-example](https://github.com/beyond10x/todo-app-example), the scratch repository takt's
 live trials run against, ending `Completed`, exit 0, with its pull request merged. Each trial is
 one `takt scenario run` of scenario 1 (`story:remove-a-todo`, from the seed
@@ -57,20 +67,21 @@ one `takt scenario run` of scenario 1 (`story:remove-a-todo`, from the seed
 pull request targets `trial/<n>`. A second trial is another `takt scenario run`, which takes the
 next `<n>`.
 
+takt opens no pull request on github.com. A trial runs through the local forge: a bare clone of
+todo-app-example on this machine is the hub, the trial base is pushed to it, and the pull request
+is the hub's request record, merged in the hub. A clone of github.com itself gets its `trial/<n>`
+pushed there and stops `Unperformable (pr.opened)`, exit 7.
+
 What a trial needs that a plain run does not:
 
-- **takt 0.15.1 or later.** 0.15.1 is the first release with `--harness-program` and the harness
-  preflight; the steps below install a release from its archive ([Install](./install.md)).
-- **The forge.** `--forge bot`. Under `--forge none` the run stops `Unperformable (pr.opened)`,
-  exit 7, however good the change is. The bot route needs `b10x-gates` on `PATH`, acting as the
-  bot's GitHub App, and `B10X_GATES_POLICY` naming its policy file: a regular file you own, not
-  a symbolic link, at mode 0600 or stricter, in a directory you own that no other user can
-  write. The run checks both before the case opens and is refused with exit 1 when either is
-  missing; `b10x-gates`'s default policy path does not count here. takt reads the pull request and its checks through `b10x-gates api --method GET`, so no
-  `gh` login is needed (0.22.1 and earlier read them with `gh`). todo-app-example need not be
-  listed in the policy's repositories: the scan and the bot route serve it unlisted.
-- **A commit identity.** The repository has no `.engineering/commit-identity.conf`, and the bot
-  route refuses takt's default identity before the case opens: give `--commit-identity`.
+- **A takt release later than 0.23.0.** It is the first that takes `--forge local` for a scenario
+  run; `--harness-program` and the harness preflight are there since 0.15.1. The steps below
+  install a release from its archive ([Install](./install.md)).
+- **The forge.** `--forge local`, and a run file naming the checks, `local_checks: [./check.sh]`.
+  Under `--forge none` the run stops `Unperformable (pr.opened)`, exit 7, however good the change
+  is.
+- **A commit identity.** The repository has no `.engineering/commit-identity.conf`, and the local
+  forge refuses takt's default identity before the case opens: give `--commit-identity`.
 - **The test command.** The repository's tests are `./check.sh`, not `cargo test`: give
   `--test-cmd ./check.sh`.
 - **A qualified Claude Code binary.** The metaharness in takt 0.21.0 is pinned to Claude Code
@@ -85,9 +96,10 @@ What a trial needs that a plain run does not:
 
 Each trial runs in a fresh clone of its own, trials 2 and 3 included: `takt scenario run` needs a
 clean tree, and a trial leaves its clone on the case's branch with the case directory in it. The
-clone's `origin` is the repository on github.com, which the bot route serves. Install takt and the
-qualified binary once, then clone for each trial (`trial-1`, `trial-2`, `trial-3`). `<version>` is
-the takt release you install:
+clone's `origin` is the hub, outside it, and the clone is made with `git clone --no-local`, so it
+shares no object file with the hub. Install takt and the qualified binary, make the hub and the
+run file once, then clone for each trial (`trial-1`, `trial-2`, `trial-3`). `<version>` is the
+takt release you install:
 
 ```sh
 version=<version> target=x86_64-unknown-linux-gnu
@@ -100,9 +112,11 @@ install -D -m 755 "takt-$version-$target/takt" ~/.local/bin/takt
 takt --version
 install -D -m 755 ~/.local/share/claude/versions/2.1.309 ~/.local/opt/claude-2.1.309/claude
 sha256sum ~/.local/opt/claude-2.1.309/claude
-git clone https://github.com/beyond10x/todo-app-example trial-1 && cd trial-1
+git clone --bare https://github.com/beyond10x/todo-app-example hub.git
+printf 'local_checks: [./check.sh]\n' > local.yaml
+git clone --no-local hub.git trial-1 && cd trial-1
 takt scenario run --repo . 1 --harness claude \
-  --harness-program ~/.local/opt/claude-2.1.309/claude --forge bot \
+  --harness-program ~/.local/opt/claude-2.1.309/claude --forge local --config ../local.yaml \
   --commit-identity 'takt-trial <takt-trial@example.com>' --test-cmd ./check.sh --hours 1
 ```
 
@@ -114,7 +128,7 @@ The first line names the case, `scenario-1-trial-<n>`. The run goes on until it 
 | `ApprovalRequired (repository.merge)` | 4 | grant the merge, then resume |
 | `NoProgress` | 3 | the merge was refused: read the last `repository.merge` evidence; a missing delegation reads as below |
 | `HarnessUnqualified` | 1 | the binary is not a qualified version: name one and run again |
-| `Completed` | 0 | the pull request is merged into `trial/<n>`: the trial is done |
+| `Completed` | 0 | the pull request is merged into the hub's `trial/<n>`: the trial is done |
 
 Grant and resume in the same clone. The run that stopped `ApprovalRequired` left the clone on the
 case's branch, `takt/scenario-1-trial-<n>` (`git branch --show-current` prints it), and clean;
@@ -124,7 +138,8 @@ uncommitted work:
 ```sh
 takt approve --repo . scenario-1-trial-<n> repository.merge --by agent:takt-trial
 takt run --repo . --case scenario-1-trial-<n> --harness claude \
-  --harness-program ~/.local/opt/claude-2.1.309/claude --forge bot --test-cmd ./check.sh --hours 1
+  --harness-program ~/.local/opt/claude-2.1.309/claude --forge local --config ../local.yaml \
+  --test-cmd ./check.sh --hours 1
 ```
 
 `--by` names who grants: `agent:takt-trial`, the role the seed delegates the merge to (below), for
@@ -174,8 +189,8 @@ the case directory out of the clone before deleting it.
 A trial counts when both hold:
 
 - the last `takt run` printed `stopped: Completed` and exited 0;
-- `gh pr list -R beyond10x/todo-app-example --base trial/<n> --state merged` lists the case's
-  pull request.
+- `git -C ../hub.git log -1 --format=%s trial/<n>` prints the merge of the case's request,
+  `Merge #<k>: <title>`.
 
 Compare the sha256 that `opened`'s `harness_program` names with the one you noted: a different
 value means the run did not start the binary you qualified, and the trial does not count.

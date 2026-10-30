@@ -283,7 +283,7 @@ at any time.
 
 ## 4. With a forge
 
-With `--forge bot`, `--forge gitlab` or `--forge local`, the steps go on from `change.read`:
+With `--forge gitlab`, `--forge command`, `--forge connectors` or `--forge local`, the steps go on from `change.read`:
 
 1. `pr.open` pushes the case's branch and opens the pull request.
 2. `ci.read` reads its checks, waiting while they run. A run whose budget ends while it waits

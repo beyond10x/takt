@@ -126,7 +126,6 @@ fn run(
 ) -> (Result<Stop, String>, String, Vec<serde_json::Value>) {
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run = Run::open(repo, options, harness, &validators).expect("the case opens");
-    run.scan_change_with(None);
     let mut out = Vec::new();
     let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
     let text = String::from_utf8_lossy(&out).into_owned();

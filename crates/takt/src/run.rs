@@ -46,7 +46,6 @@ use crate::git::{BoundedDiff, DiffContext};
 use crate::harness::{CHANGE_SHOWN_BYTES, ChangeSoFar, Harness, StepContext, is_test_path};
 use crate::protocol::LoadedProtocol;
 use crate::scan::Scan;
-pub use crate::scan::gates::ChangeScan;
 use crate::validator::{ChoiceEffect, Effect, Step, Validator, ValidatorEffect, outcome};
 
 /// What a run is given.
@@ -8712,9 +8711,6 @@ pub fn free_space(path: &Path) -> std::io::Result<FreeSpace> {
     }
 }
 
-/// How [`scan_change`] says a scan that never ran.
-pub(crate) const SCAN_DID_NOT_RUN: &str = "the scan could not run";
-
 /// The summary a harness step's line carries in place of the session's own when its proposal
 /// did not pass the content scan before the edit effect: what the session wrote is never
 /// recorded.
@@ -8746,8 +8742,8 @@ pub const NO_ACTION_SUMMARY: &str = "the session named no action: it ended witho
 /// characters or more; glab's `config.yml`); and a token field (`access_token`,
 /// `refresh_token`, `id_token`, `oauth_token`, `accessToken`, `refreshToken`, `idToken`, and
 /// the key `token:` that starts a line of glab's `config.yml`) set to a value of 20 token
-/// characters or more holding a letter and a digit. Checked beside the gates policy's scan,
-/// which holds no rule for them.
+/// characters or more holding a letter and a digit. Checked under every scan adapter, and
+/// the only check a proposal gets under `none`.
 pub const CREDENTIAL_SHAPES: [&str; 7] = [
     "private-key",
     "jwt",
@@ -9056,21 +9052,18 @@ fn proposed_addition<'a>(
 /// Why the content of `proposal` may not reach the tree or the record, read before the edit
 /// effect writes a byte of it: what each proposed file adds to the file `base` (the revision the
 /// step starts from) holds at its path ([`proposed_addition`]), and the session's summary whole,
-/// each apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`] and pass `scan`,
-/// the scan of the run's adapter `adapter` ([`Scan::change_scan`], [`ChangeScan`]); a scan that
-/// cannot run (no program, a policy that does not load, any exit but 0) refuses as a match does.
-/// With no scan set, the proposal of a harness whose session may have read outside its copy
-/// (`unscanned_refused`, [`crate::harness::Harness::reads_outside_its_copy`]) is refused, as
-/// [`Scan::unscanned`] says: not scanned is never passed. A run under a declared `none` passes
-/// `unscanned_refused` false, and its proposals are checked for the shape of a credential alone.
-/// The paths the proposal names are read first ([`proposed_path_refusal`]) and, under a scan,
-/// scanned as one text. A refusal names the file or the summary and the shape or the scan's
-/// exit, never the text matched. None when it passes.
+/// each apart so the refusal names which, hold no shape of [`CREDENTIAL_SHAPES`]. Nothing scans
+/// it past that: the proposal of a harness whose session may have read outside its copy
+/// (`unscanned_refused`, [`crate::harness::Harness::reads_outside_its_copy`]) is refused, as the
+/// run's scan adapter `adapter` says ([`Scan::unscanned`]): not scanned is never passed. A run
+/// under a declared `none` passes `unscanned_refused` false, and its proposals are checked for
+/// the shape of a credential alone. The paths the proposal names are read first
+/// ([`proposed_path_refusal`]). A refusal names the file or the summary and the shape, never the
+/// text matched. None when it passes.
 fn proposal_scan_refusal(
     tree: &Path,
     base: &str,
     adapter: &Scan,
-    scan: Option<&ChangeScan>,
     unscanned_refused: bool,
     proposal: &crate::harness::Proposal,
 ) -> Option<String> {
@@ -9103,88 +9096,7 @@ fn proposal_scan_refusal(
             ));
         }
     }
-    let Some(scan) = scan else {
-        return unscanned_refused.then(|| adapter.unscanned(action));
-    };
-    texts.iter().find_map(|(what, text)| {
-        scan_bytes(tree, scan, "proposed.txt", text.as_bytes())
-            .err()
-            .map(|why| {
-                if why.starts_with(SCAN_DID_NOT_RUN) {
-                    format!(
-                        "the secret scan of {what}, which {action} proposes, could not run: {why}"
-                    )
-                } else {
-                    format!("{action} proposes {what}, which did not pass the secret scan: {why}")
-                }
-            })
-    })
-}
-
-/// Scans the change so far, `diff`, with `scan` ([`scan_bytes`]). The one scan both the change
-/// so far and each scope file a prompt attaches pass ([`crate::harness::scope_files`]).
-pub(crate) fn scan_change(
-    tree: &Path,
-    scan: &ChangeScan,
-    diff: &[u8],
-) -> std::result::Result<(), String> {
-    scan_bytes(tree, scan, "change.diff", diff)
-}
-
-/// Scans `bytes` with `scan`: written to a file `name` of its own (`0600`, in a directory of its
-/// own, `0700`, under the temporary directory, outside the tree, removed after), then
-/// `<program> scan-text --repo <tree> --policy <policy> <file>` in the tree. `Ok` only when it
-/// exits 0; else why, naming its exit and never what it printed, which may quote the bytes.
-fn scan_bytes(
-    tree: &Path,
-    scan: &ChangeScan,
-    name: &str,
-    bytes: &[u8],
-) -> std::result::Result<(), String> {
-    use std::io::Write as _;
-    use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _};
-    static MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    struct Removed(PathBuf);
-    impl Drop for Removed {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    let dir = std::env::temp_dir().join(format!(
-        "takt-change-{}-{}",
-        std::process::id(),
-        MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    ));
-    std::fs::DirBuilder::new()
-        .mode(0o700)
-        .create(&dir)
-        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: make {}: {error}", dir.display()))?;
-    let dir = Removed(dir);
-    let file = dir.0.join(name);
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&file)
-        .and_then(|mut handle| handle.write_all(bytes))
-        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: write {}: {error}", file.display()))?;
-    let ran = crate::confinement::Command::new(&scan.program)
-        .args(scan.args(tree, &file))
-        .current_dir(tree)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map_err(|error| format!("{SCAN_DID_NOT_RUN}: {}: {error}", scan.program.display()))?;
-    if ran.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "{} scan-text exited {ran}: not passed",
-            scan.program.display()
-        ))
-    }
+    unscanned_refused.then(|| adapter.unscanned(action))
 }
 
 /// What the last observation of each validator's action failed, as `record` (the case's record
@@ -9297,21 +9209,18 @@ fn gate_stop(record: &[serde_json::Value]) -> Option<Stop> {
 /// committed a path; else the diff from `base_commit` to that revision over the paths the
 /// `effect` lines of `record` (the case's record so far) name as committed, `.engineering/` left
 /// out, so a commit on the branch that no accepted step made stays out
-/// ([`crate::git::diff_bounded`]), shown up to [`CHANGE_SHOWN_BYTES`] and, under `scan`, only
-/// when the scan passes it. A diff that cannot be read and a scan that refuses or cannot run show
-/// nothing, and `out` says why, never what the scan said; neither is an error. A run reads it
-/// before each judgement step, under its scan ([`Run::scan_change_with`]); a replay reads it the
-/// same way for the step it rebuilds ([`crate::replay`]). Every changed test file counts as in
-/// the step's scope ([`change_so_far_for`]).
+/// ([`crate::git::diff_bounded`]), shown up to [`CHANGE_SHOWN_BYTES`]. A diff that cannot be
+/// read shows nothing, and `out` says why; that is no error. A run reads it before each
+/// judgement step; a replay reads it the same way for the step it rebuilds ([`crate::replay`]).
+/// Every changed test file counts as in the step's scope ([`change_so_far_for`]).
 pub fn change_so_far(
     tree: &Path,
     case_dir: &Path,
     record: impl FnOnce() -> Result<Vec<serde_json::Value>>,
     at: Option<&str>,
-    scan: Option<&ChangeScan>,
     out: &mut dyn Write,
 ) -> Result<ChangeSoFar> {
-    change_so_far_for(tree, case_dir, record, (at, None), scan, out)
+    change_so_far_for(tree, case_dir, record, (at, None), out)
 }
 
 /// [`change_so_far`] for a step whose intent is `intent`, when one is given: within the bound,
@@ -9324,10 +9233,9 @@ pub fn change_so_far_for(
     case_dir: &Path,
     record: impl FnOnce() -> Result<Vec<serde_json::Value>>,
     (at, intent): (Option<&str>, Option<&str>),
-    scan: Option<&ChangeScan>,
     out: &mut dyn Write,
 ) -> Result<ChangeSoFar> {
-    let read = |out: &mut dyn Write| -> Result<ChangeSoFar> {
+    let read = || -> Result<ChangeSoFar> {
         let Some(base) = crate::case::Branch::read(case_dir)?.base_commit else {
             return Ok(ChangeSoFar::NotKnown);
         };
@@ -9418,24 +9326,11 @@ pub fn change_so_far_for(
         };
         Ok(match diff {
             BoundedDiff::Within(diff) if diff.is_empty() => ChangeSoFar::NoneYet,
-            BoundedDiff::Within(diff) => match scan {
-                None => shown(&diff),
-                Some(scan) => match scan_change(tree, scan, &diff) {
-                    Ok(()) => shown(&diff),
-                    Err(why) => {
-                        writeln!(out, "  the change so far is not shown: {why}")?;
-                        ChangeSoFar::NotShown(if why.starts_with(SCAN_DID_NOT_RUN) {
-                            "the secret scan could not run"
-                        } else {
-                            "it did not pass the secret scan"
-                        })
-                    }
-                },
-            },
+            BoundedDiff::Within(diff) => shown(&diff),
             BoundedDiff::Past { bytes, whole } => ChangeSoFar::TooLarge { bytes, whole },
         })
     };
-    Ok(match read(out) {
+    Ok(match read() {
         Ok(change) => change,
         Err(error) => {
             writeln!(out, "  the change so far is not shown: {error:#}")?;
@@ -9556,12 +9451,9 @@ pub struct Run<'a> {
     /// The author and committer of every commit the run makes, the case's
     /// ([`CaseDir::committer`]), read when the run is opened or resumed.
     committer: crate::git::CommitIdentity,
-    /// The run's scan adapter ([`Scan`]), named on its `opened` line: [`Scan::from_env`] when
-    /// the run opens, unless [`Run::scan_with`] gives another.
+    /// The run's scan adapter ([`Scan`]), named on its `opened` line: [`Scan::Unset`] when the
+    /// run opens, unless [`Run::scan_with`] gives another.
     scan: Scan,
-    /// What the change so far and each proposal pass: the scan adapter's
-    /// ([`Scan::change_scan`]), unless [`Run::scan_change_with`] gives another.
-    change_scan: Option<ChangeScan>,
     /// What the run is configured to write as a step commit's message ([`Run::commit_settings`]).
     commit_settings: crate::commit_style::Settings,
     /// The commit style in effect, decided when the run starts ([`Run::commit_plan_now`]).
@@ -9835,8 +9727,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
-            scan: Scan::from_env(),
-            change_scan: ChangeScan::from_env(),
+            scan: Scan::Unset,
             commit_settings: crate::commit_style::Settings::default(),
             commit_plan: None,
         })
@@ -10034,19 +9925,11 @@ impl<'a> Run<'a> {
         Ok(())
     }
 
-    /// Scans the change so far with `scan` before a prompt shows it, or, given none, shows it
-    /// unscanned; the run opens with [`ChangeScan::from_env`]. The run's scan adapter stays.
-    pub fn scan_change_with(&mut self, scan: Option<ChangeScan>) {
-        self.change_scan = scan;
-    }
-
-    /// Runs under the scan adapter `scan`: its scan ([`Scan::change_scan`]) for the change so
-    /// far and each proposal, and its name on the `opened` line. Under a declared `none`
-    /// ([`Scan::None`]) nothing is scanned, the proposal of a harness whose session may read
-    /// outside its copy is not refused as unscanned, and each is still checked for the shape of
-    /// a credential ([`credential_shape`]). The run opens under [`Scan::from_env`].
+    /// Runs under the scan adapter `scan`, its name on the `opened` line. Under a declared `none`
+    /// ([`Scan::None`]) the proposal of a harness whose session may read outside its copy is not
+    /// refused as unscanned; under either, each is checked for the shape of a credential
+    /// ([`credential_shape`]). The run opens under [`Scan::Unset`].
     pub fn scan_with(&mut self, scan: Scan) {
-        self.change_scan = scan.change_scan();
         self.scan = scan;
     }
 
@@ -10145,8 +10028,7 @@ impl<'a> Run<'a> {
             read_free: Box::new(free_space),
             free_unread_said: false,
             committer,
-            scan: Scan::from_env(),
-            change_scan: ChangeScan::from_env(),
+            scan: Scan::Unset,
             commit_settings: crate::commit_style::Settings::default(),
             commit_plan: None,
         })
@@ -12877,7 +12759,6 @@ impl<'a> Run<'a> {
             &self.case.dir,
             || events.read(),
             (None, Some(&self.options.intent)),
-            self.change_scan.as_ref(),
             out,
         )?;
         let record = events.read()?;
@@ -13142,7 +13023,8 @@ impl<'a> Run<'a> {
         //
         // Its content is read before that, whatever the guard says of it: what each file adds
         // to the file `HEAD` held before the step, and the summary, checked for the shape of a
-        // credential and scanned by the run's scan adapter ([`proposal_scan_refusal`]). One
+        // credential, and refused as unscanned where the scan adapter says so
+        // ([`proposal_scan_refusal`]). One
         // that does not pass is refused, and its summary is not recorded
         // ([`PROPOSAL_NOT_RECORDED`]); a refusal on its face is said first, but after a
         // path of the shape of a credential ([`proposed_path_refusal`]), since a
@@ -13160,7 +13042,6 @@ impl<'a> Run<'a> {
                         &self.tree,
                         &head_before,
                         &self.scan,
-                        self.change_scan.as_ref(),
                         self.harness.reads_outside_its_copy() && !self.scan.declared_none(),
                         &proposal,
                     );

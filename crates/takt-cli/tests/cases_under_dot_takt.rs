@@ -2,11 +2,9 @@
 //! takt writes `.takt/.gitignore` beside it, which keeps the root out of version control; a
 //! `.takt/.gitignore` that exists is left alone; a case under the legacy `.engineering/cases`
 //! resumes where it is; a step that writes under either root is refused; the records a refused
-//! step leaves survive its undo; and the readers list a case under each root. The `claude` and
-//! the forge are doubles: nothing reaches a model or a network.
-
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
+//! step leaves survive its undo; and the readers list a case under each root. The `claude` is a
+//! double and the forge is `local`, its hub a bare repository: nothing reaches a model or a
+//! network.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -105,7 +103,6 @@ fn takt_run(repo: &Path, args: &[&str]) -> (i32, String, String) {
             "--test-cmd",
             "true",
         ])
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -119,7 +116,6 @@ fn takt_run(repo: &Path, args: &[&str]) -> (i32, String, String) {
 fn takt(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -197,7 +193,6 @@ fn takt_run_claude(repo: &Path, bin: &Path, state: &Path, args: &[&str]) -> (i32
             ),
         )
         .env("XDG_STATE_HOME", state)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -208,9 +203,9 @@ fn takt_run_claude(repo: &Path, bin: &Path, state: &Path, args: &[&str]) -> (i32
 }
 
 /// A committed copy of the fixture store `one-ready` with a manifest, a gates document whose
-/// one assertion is true and a commit identity, at `<scratch>/tree`, with an origin on a
-/// github.com address, and the forge double beside it: `<scratch>/stub-bin` holds the
-/// programs, `<scratch>/forge` the state they keep.
+/// one assertion is true and a commit identity, at `<scratch>/tree`, its `origin` the bare hub
+/// `<scratch>/hub.git` holding its `main`, and `<scratch>/run.yaml`, a run file whose forge is
+/// `local` with `true` as its checks. Nothing reaches a network.
 fn delivery_repository(name: &str) -> (Scratch, PathBuf) {
     let outer = fresh(name);
     let repo = outer.join("tree");
@@ -225,95 +220,19 @@ fn delivery_repository(name: &str) -> (Scratch, PathBuf) {
     git(&repo, &["init", "-q", "-b", "main"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "start"]);
+    git(&outer, &["init", "-q", "--bare", "-b", "main", "hub.git"]);
+    let hub = outer.join("hub.git");
     git(
         &repo,
-        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+        &["remote", "add", "origin", hub.to_str().expect("utf-8")],
     );
-    forge_double(&outer);
-    (Scratch(outer), repo)
-}
-
-/// The program of the bot route, in `<outer>/stub-bin`, its state in `<outer>/forge`:
-/// `b10x-gates bot -- push` keeps the branch and the commit pushed, `api --method POST` opens
-/// pull request #7, `api --method PUT` merges it and counts the merge; `api --method GET`
-/// reports the pull request's state and one passing check run. Nothing reaches a network.
-fn forge_double(outer: &Path) {
-    let bin = outer.join("stub-bin");
-    let state = outer.join("forge");
-    fs::create_dir_all(&bin).expect("a stub directory");
-    fs::create_dir_all(&state).expect("a state directory");
-    let state_text = state.display().to_string();
-    executable(
-        &bin,
-        "b10x-gates",
-        &format!(
-            r#"#!/bin/sh
-state='{state_text}'
-case "$1" in
-  bot)
-    if [ "$3" = fetch ]; then
-      printf '  %s %s %s\n' 0000000000000000000000000000000000000000 "$(git rev-parse "${{5%%:*}}")" "${{5#*:}}"
-      exit 0
-    fi
-    spec="$5"; branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
-    if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
-    printf '%s' "$branch" > "$state/branch"
-    git rev-parse "$revision" > "$state/pushed" || exit 1
-    exit 0 ;;
-  scan-text) exit 0 ;;
-  api)
-    method=''; path=''; output=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --method) method="$2"; shift ;;
-        --path) path="$2"; shift ;;
-        --output) output="$2"; shift ;;
-      esac
-      shift
-    done
-    case "$method" in
-      POST) printf 'OPEN' > "$state/state"; printf '{{"number": 7}}' > "$output"; exit 0 ;;
-      PUT) printf 'MERGED' > "$state/state"; echo merged >> "$state/merges"; printf '{{"merged": true}}' > "$output"; exit 0 ;;
-      GET)
-        case "$path" in
-          */pulls\?*) printf '[]' > "$output" ;;
-          */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
-          */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
-          *) s=$(cat "$state/state"); st=open; merged=false
-             case "$s" in MERGED) st=closed; merged=true ;; CLOSED) st=closed ;; esac
-             printf '{{"state":"%s","merged":%s,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$st" "$merged" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")" > "$output" ;;
-        esac
-        exit 0 ;;
-    esac ;;
-esac
-echo "b10x-gates double: $*" >&2
-exit 2
-"#
-        ),
-    );
-}
-
-/// `takt` with `bin` first on the program path, the forge double's programs, and a
-/// `b10x-gates` policy file the double never reads: the exit code, stdout and stderr.
-fn takt_through(bin: &Path, args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
-        .args(args)
-        .env("B10X_GATES_POLICY", stand_in_policy::path())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .output()
-        .expect("takt runs");
-    (
-        output.status.code().expect("an exit code"),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
+    git(&repo, &["push", "-q", "origin", "main"]);
+    fs::write(
+        outer.join("run.yaml"),
+        "forge: local\nlocal_checks: [\"true\"]\n",
     )
+    .expect("the run file");
+    (Scratch(outer), repo)
 }
 
 /// Moves the case `id` from `.takt/cases` to `.engineering/cases`, its files rewritten where
@@ -471,7 +390,7 @@ fn an_existing_gitignore_is_kept() {
 #[test]
 fn a_legacy_case_resumes_where_it_is() {
     let (scratch, repo) = delivery_repository("legacy");
-    let bin = scratch.0.join("stub-bin");
+    let config = scratch.0.join("run.yaml");
     let path = repo.to_str().expect("utf-8");
     let run = [
         "run",
@@ -483,10 +402,12 @@ fn a_legacy_case_resumes_where_it_is() {
         "true",
         "--protocol",
         "story.delivery/1",
+        "--config",
+        config.to_str().expect("utf-8"),
     ];
     let mut first = run.to_vec();
     first.extend(["--iterations", "0"]);
-    let (code, out, err) = takt_through(&bin, &first);
+    let (code, out, err) = takt(&first);
     assert_eq!(code, 3, "stdout {out} stderr {err}");
     let id = git_out(&repo, &["branch", "--show-current"])
         .strip_prefix("takt/")
@@ -497,7 +418,7 @@ fn a_legacy_case_resumes_where_it_is() {
     git(&repo, &["add", "feature.txt"]);
     git(&repo, &["commit", "-q", "-m", "the work"]);
 
-    let (code, out, err) = takt_through(&bin, &run);
+    let (code, out, err) = takt(&run);
     assert_eq!(code, 4, "stdout {out} stderr {err}");
     assert!(
         out.contains("stopped: ApprovalRequired (repository.merge)"),
@@ -512,23 +433,20 @@ fn a_legacy_case_resumes_where_it_is() {
     );
     relocate_to_legacy(&repo, &id);
 
-    let (code, out, err) = takt_through(
-        &bin,
-        &[
-            "approve",
-            "--repo",
-            path,
-            &id,
-            "repository.merge",
-            "--by",
-            "human:operator",
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "approve",
+        "--repo",
+        path,
+        &id,
+        "repository.merge",
+        "--by",
+        "human:operator",
+    ]);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
-    let (code, out, err) = takt_through(&bin, &run);
+    let (code, out, err) = takt(&run);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert!(
-        out.contains("merged pull request #7"),
+        out.contains("merged pull request #1"),
         "the legacy case merges: stdout {out} stderr {err}"
     );
     assert!(

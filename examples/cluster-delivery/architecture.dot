@@ -24,12 +24,12 @@ digraph cluster_delivery {
           init [label="init containers\nb10x-loom agent stage-files\nb10x-loom agent prepare-dirs", fillcolor="#fff9e8"];
           takt [label="takt run --story <id>\nstory.delivery/2\ntoken stop per run", fillcolor="#ffe9a8", penwidth=1.6];
           harness [label="b10x-harness\nmodel session", fillcolor="#fff9e8"];
-          checks [label="tests + gates\ncargo, b10x-gates scan", fillcolor="#fff9e8"];
-          forge [label="bot forge\nb10x-gates bot / api", fillcolor="#fff9e8"];
+          checks [label="tests + gates\ncargo", fillcolor="#fff9e8"];
+          forge [label="connectors forge\nconnectors operations invoke", fillcolor="#fff9e8"];
         }
 
         envsecret [label="Secret (env)\nmodel API key", shape=cylinder, fillcolor="#f9e0e0", color="#b05050"];
-        filesecret [label="Secret (files)\nApp key, App config,\ngates policy", shape=cylinder, fillcolor="#f9e0e0", color="#b05050"];
+        instance [label="Connectors instance\nGitHub connector,\nApp key", fillcolor="#f9e0e0", color="#b05050"];
         pvc [label="PVC workspace\nclone of the target repository\ncases under .takt/cases", shape=cylinder, fillcolor="#e6f2e6", color="#4f8a4f"];
       }
     }
@@ -43,7 +43,7 @@ digraph cluster_delivery {
       label="github.com/beyond10x"; style="rounded,filled"; fillcolor="#f2f2f2"; color="#8a8a8a";
       repoA [label="takt\nAEP store: ready stories", fillcolor="#ffffff"];
       repoB [label="llm\nAEP store: ready stories", fillcolor="#ffffff"];
-      pr [label="pull request\nby b10x-bot[bot]\nCI checks, merge to main", fillcolor="#ffffff"];
+      pr [label="pull request\nby the GitHub App\nCI checks, merge to main", fillcolor="#ffffff"];
     }
   }
 
@@ -53,7 +53,7 @@ digraph cluster_delivery {
   operator -> netpol [label="renders"];
   init -> takt [label="config files,\nprivate dirs"];
   envsecret -> takt [label="env", style=dashed];
-  filesecret -> forge [label="files 0600", style=dashed];
+  forge -> instance [label="open, read,\nmerge"];
   pvc -> takt [label="/workspace"];
   takt -> harness [label="judgement step"];
   takt -> checks [label="tests.run,\ngate"];
@@ -62,5 +62,6 @@ digraph cluster_delivery {
   checks -> crates [label="cargo fetch"];
   repoA -> pvc [label="clone", style=dotted];
   repoB -> pvc [label="clone", style=dotted];
-  forge -> pr [label="push branch,\nopen, read, merge"];
+  forge -> pr [label="push branch"];
+  instance -> pr [label="open, read, merge"];
 }

@@ -10,7 +10,6 @@ mod own_home;
 
 use std::cell::RefCell;
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::rc::Rc;
@@ -20,7 +19,6 @@ use loom_sdk::session::metaharness::{
 };
 use loom_sdk::session::{CredentialSource, Endpoint, Kind};
 use takt::harness::SessionHarness;
-use takt::run::ChangeScan;
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -196,18 +194,6 @@ fn harness(replies: &[Reply]) -> (SessionHarness, Rc<RefCell<Seen>>) {
     (harness, seen)
 }
 
-/// A stand-in for `b10x-gates` beside `tree` that passes what it is given.
-fn scanner(tree: &Path) -> ChangeScan {
-    let dir = tree.with_file_name("scanner-pass");
-    fs::create_dir_all(&dir).expect("the scanner's directory");
-    let policy = dir.join("policy.json");
-    fs::write(&policy, "{}\n").expect("a policy");
-    let program = dir.join("b10x-gates");
-    fs::write(&program, "#!/bin/sh\nexit 0\n").expect("a scanner");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
-    ChangeScan { program, policy }
-}
-
 /// The run of sessions ending as `replies` on `tree`: its stop, what it printed, and what each
 /// session found when it started.
 fn run(
@@ -221,7 +207,9 @@ fn run(
         TestsRun::new("git grep -qE a.[+].b$").expect("a command"),
     )];
     let mut run = Run::open(tree, options(id, 12, tokens), &harness, &validators).expect("opens");
-    run.scan_change_with(Some(scanner(tree)));
+    run.scan_with(takt::scan::Scan::None {
+        declared_in: tree.with_file_name("run.yaml"),
+    });
     run.continue_past_red_base();
     let mut out = Vec::new();
     let stop = run.run(&mut out);

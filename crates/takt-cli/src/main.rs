@@ -13,7 +13,7 @@ use takt::forge::command::CommandForge;
 use takt::forge::connectors::ConnectorsForge;
 use takt::forge::gitlab::Glab;
 use takt::forge::local::Local;
-use takt::forge::{BotRoute, Forge, Process, Runner, repository_of};
+use takt::forge::{Forge, Process, repository_of};
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness, Kind, SessionHarness};
 use takt::scan::Scan;
@@ -590,19 +590,20 @@ struct ProtocolShowArgs {
 
 #[derive(Subcommand)]
 enum ScenarioCommands {
-    /// Run a scenario from a fresh base: on a clean tree, fetch the remote's `trial/*` branches
-    /// through the bot route, cut `trial/<n>` from the scenario's seed commit (`<n>` one past
-    /// the highest `trial/<n>` the checkout then knows, local or remote), check it out, refuse
-    /// unless the store there shows the scenario's story ready (`proposed`, nothing blocking
-    /// it, its dependencies done), push it through the bot route with a lease that only lets
-    /// it create the branch, and refuse unless the push reports it created, then open a case
-    /// for the story on `story.delivery/1`, whose pull request targets `trial/<n>`. The case is
-    /// `scenario-<id>-trial-<n>`, refused before anything is cut when it or its branch exists;
-    /// nothing of an earlier run is resumed. Without the bot route nothing is fetched or
-    /// pushed, and `<n>` is 22 digits: the 14-digit instant to the second (UTC,
-    /// `YYYYMMDDHHMMSS`) and a random 8-digit nonce, so runs from different checkouts very
-    /// likely take different ones (two runs in one second share one with a chance of 1 in
-    /// 10^8), not consecutive ones. The
+    /// Run a scenario from a fresh base: on a clean tree, fetch the `trial/*` branches of the
+    /// checkout's `origin` with the operator's own git, cut `trial/<n>` from the scenario's seed
+    /// commit (`<n>` one past the highest `trial/<n>` the checkout then knows, local or remote),
+    /// check it out, refuse unless the store there shows the scenario's story ready
+    /// (`proposed`, nothing blocking it, its dependencies done), push it to `origin` with a
+    /// lease that only lets it create the branch, and refuse unless the push reports it
+    /// created, then open a case for the story on `story.delivery/1`; under `--forge local` its
+    /// pull request targets `trial/<n>` on that hub. The case is `scenario-<id>-trial-<n>`,
+    /// refused before anything is cut when it or its branch exists; nothing of an earlier run
+    /// is resumed. Under `--forge none`, or without an `origin`, nothing is fetched or pushed,
+    /// and `<n>` is 22 digits: the 14-digit instant to the second (UTC, `YYYYMMDDHHMMSS`) and
+    /// a random 8-digit nonce, so runs from different checkouts very likely take different
+    /// ones (two runs in one second share one with a chance of 1 in 10^8), not consecutive
+    /// ones. The
     /// hard guard is the checkout's own: a number it knows is passed over, and `git checkout -b`
     /// refuses a branch that exists. A refusal before the push removes the branch and
     /// puts the tree back. A scenario whose section gives `red-base = expected` (its seed's
@@ -641,14 +642,22 @@ struct ScenarioRunArgs {
     /// file.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
+    /// The scan adapter `--config`'s file declares, read by [`ScenarioRunArgs::configured`]; no
+    /// flag.
+    #[arg(skip)]
+    declared_scan: Option<takt::scan::ScanName>,
+    /// The forge settings `--config`'s file sets, read by [`ScenarioRunArgs::configured`]; no
+    /// flag.
+    #[arg(skip)]
+    forge_settings: takt::run_config::ForgeSettings,
     #[command(flatten)]
     looping: LoopArgs,
 }
 
 impl ScenarioRunArgs {
     /// Fills each loop flag `matches` did not take from the command line with `--config`'s
-    /// value ([`LoopArgs::configured`]); a file that names a `story`, or declares `scan: none`,
-    /// is refused.
+    /// value ([`LoopArgs::configured`]), and keeps the file's scan adapter and forge settings;
+    /// a file that names a `story` is refused.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
         let Some(path) = &self.config else {
@@ -663,13 +672,8 @@ impl ScenarioRunArgs {
                 path.display()
             ));
         }
-        if file.scan == Some(takt::scan::ScanName::None) {
-            return Err(anyhow!(
-                "the run configuration file {} is refused for a scenario run: it declares `scan: none`, and a scenario run scans what a session proposes with the scan adapter `gates` only; leave `scan: none` out and set {}; nothing was changed",
-                path.display(),
-                takt::scan::gates::POLICY_VAR
-            ));
-        }
+        self.declared_scan = file.scan;
+        self.forge_settings = file.forge_settings();
         self.looping.configured(file, matches)?;
         Ok(())
     }
@@ -768,22 +772,21 @@ struct RunArgs {
     /// read beside the file), `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` (a
     /// relative path read beside the file), `continue_past_red_base` (a boolean) and `records`
     /// (`default` or `trial`), each the flag's of that name, and `scan`, which no flag sets: the
-    /// scan adapter what a session
-    /// proposes passes, `gates` (the default: `b10x-gates scan-text` under the policy
-    /// `B10X_GATES_POLICY` names) or `none` (nothing is scanned, each proposal checked only for
-    /// the shape of a credential, said in one line before the first step; refused while
-    /// `B10X_GATES_POLICY` is set). Under `gates` with no policy, `--harness codex` and
-    /// `--harness harness`, whose sessions may read outside their copy, are refused before the
-    /// case opens. A YAML `loom.agent/1` document, as Loom mounts it at `/config/agent.yaml`,
+    /// scan adapter, `none` (nothing is scanned, each proposal checked only for the shape of a
+    /// credential, said in one line before the first step). Not declared, no adapter is set, and
+    /// not scanned is never passed: `--harness codex` and `--harness harness`, whose sessions
+    /// may read outside their copy, are refused before the case opens, and so are `--forge
+    /// gitlab`, `command` and `connectors`, which publish what the run makes. A YAML
+    /// `loom.agent/1` document, as Loom mounts it at `/config/agent.yaml`,
     /// gives them in its `takt` member, and nothing without one; its `runtime.state_dir` is the
     /// `state_dir` when `takt` names none. A flag given on the command
     /// line wins over the file, the file over the flag's default: the file's `story` is taken
     /// only when neither --story, --intent nor --case is given, and its `endpoint_token_env`
     /// only when no credential flag is. The file's `endpoint_file` and `endpoint_token_env` are
-    /// read only when the harness is `harness`. Any other key, or a `scan` that is neither
-    /// `gates` nor `none`, is refused before the case opens, naming the file and the line, never
-    /// a value written there. A container takes its run from a mounted one. `takt scenario run
-    /// --config` reads the same file, and refuses one that declares `scan: none`. `llm`, the
+    /// read only when the harness is `harness`. Any other key, a `scan` that is not `none`, or a
+    /// `forge` that is not one of `--forge`'s values, is refused before the case opens, naming
+    /// the file and the line. A container takes its run from a mounted one. `takt scenario run
+    /// --config` reads the same file. `llm`, the
     /// model routes, an `llm.routes/1` document or `{path: <file>}` naming one beside the file,
     /// which no flag gives; llm validates it, and a refused section opens no case. With `--harness
     /// harness`, `model` names a route or alias of the section, and that route is the endpoint:
@@ -1179,19 +1182,17 @@ struct LoopArgs {
     /// `.engineering/assertions-project.yaml` when that is a file.
     #[arg(long)]
     project: Option<PathBuf>,
-    /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch,
-    /// opens its pull request, reads its state and checks and merges it; refused before any
-    /// case opens unless `b10x-gates` is on `PATH` and `B10X_GATES_POLICY` names a file),
-    /// `gitlab` (a repository on a GitLab host: git pushes the case's branch over HTTPS under
-    /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
-    /// pipeline and merges it; what it publishes passes the run's scan adapter first, under
-    /// `gates` `b10x-gates scan-text`, under a declared `scan: none` no scan; refused before
-    /// any case opens unless `glab auth status --hostname <host>` exits 0; the run file's `transport: api` with a `credential` calls the GitLab API instead, `glab` never asked), `command` (the exact
+    /// The forge: `gitlab` (a repository on a GitLab host: git pushes the case's branch over
+    /// HTTPS under `glab`'s credential helper, `glab api` opens the merge request, reads its
+    /// state and head pipeline and merges it; refused before any case opens unless the run file
+    /// declares `scan: none`, and unless `glab auth status --hostname <host>` exits 0; the run
+    /// file's `transport: api` with a `credential` calls the GitLab API instead, `glab` never
+    /// asked), `command` (the exact
     /// argument lists the run file's `forge_commands` section names for `open`, `read`, `checks` and
-    /// `merge`, run without a shell; the push stays takt's scanned push; never a default, and
+    /// `merge`, run without a shell; the push stays takt's; never a default, and
     /// refused for a scenario run), `connectors` (`connectors operations invoke` on the instance the
     /// run file's `forge_instance` names, its preflight listing change request create, read and
-    /// merge and pipeline read before any case opens; the push stays takt's scanned push; never a
+    /// merge and pipeline read before any case opens; the push stays takt's; never a
     /// default, and refused for a scenario run), `local` (the bare repository on this machine the
     /// tree's `origin` names by its path, outside the tree, the tree cloned with `--no-local`: git
     /// pushes the case's branch to it, a request record under its `takt/requests` opens the pull
@@ -1200,16 +1201,14 @@ struct LoopArgs {
     /// run's commit identity, moves the base only from the tip it was judged at, and moves
     /// nothing when that tip holds the head; nothing is scanned, nothing leaves the machine;
     /// refused before any case opens without `local_checks`, with checks the confinement cannot
-    /// run, or without such an `origin`; never a default, refused for a scenario run) or `none` (no pull
+    /// run, or without such an `origin`; never a default) or `none` (no pull
     /// request is opened; when `pr.open`,
     /// `ci.read` or `repository.merge` is the only action that decides what is left, nothing
     /// performs it: the run stops `Unperformable`, exit 7, and the case stays open). Not given,
-    /// `bot` when the repository's `origin` is a repository on github.com, the host the bot
-    /// route serves; `gitlab` when it is on another host and `glab` is logged in to it; else
-    /// `none`, said in one line naming what `glab` said. A scenario run creates its trial base
-    /// only through the bot route: it refuses `gitlab` before anything is opened, and on another
-    /// host its default is `none`, said in one line, `glab` never asked.
-    #[arg(long)]
+    /// `gitlab` when the repository's `origin` is on a host and `glab` is logged in to it; else
+    /// `none`, said in one line naming why. A scenario run refuses `gitlab`, `command` and
+    /// `connectors` before anything is cut, and by default has no forge.
+    #[arg(long, value_parser = takt::forge::FORGES)]
     forge: Option<String>,
     /// The least free space, in GiB, a step needs on the file system of the repository's tree
     /// and, when `CARGO_TARGET_DIR` is set, of the one holding that directory, each read before
@@ -1223,7 +1222,7 @@ struct LoopArgs {
     /// <email>'`, over the one `.engineering/commit-identity.conf` names (`[identity]` `name` and
     /// `email`), read at the commit the case forks from, or for a scenario run at
     /// --declared-on. Neither given, the commits are `takt <takt@localhost>`, never the
-    /// operator's git configuration; a run whose forge is the bot route, which pushes them, is
+    /// operator's git configuration; a run whose forge pushes them is
     /// refused before its case opens. Recorded in the case: a resumed case and `takt approve`
     /// commit with the identity it was opened with, and another given for it is refused.
     #[arg(long, value_name = "'NAME <EMAIL>'")]
@@ -1740,9 +1739,9 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 looping,
             } = *args;
             looping.check()?;
-            // The run's scan adapter, `gates` unless the configuration file declares `none`:
-            // `none` with a gates policy set too is refused before anything is read or opened.
-            let scan = Scan::of_run(declared_scan.zip(config.as_deref()))?;
+            // The run's scan adapter: `none` when the configuration file declares it, else
+            // `unset`, under which nothing is scanned and not scanned is never passed.
+            let scan = Scan::of_run(declared_scan.zip(config.as_deref()));
             let repo = repo
                 .canonicalize()
                 .with_context(|| format!("the repository {}", repo.display()))?;
@@ -1876,6 +1875,14 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 local_identity,
                 looping.min_free_gib.saturating_mul(1 << 30),
             )?;
+            // A forge that publishes what the run makes publishes it unscanned only under a
+            // declared `scan: none`: under `unset` the run is refused before its case opens.
+            if let Some(forge) = &forge.forge
+                && publishes(forge.as_ref())
+                && let Some(why) = scan.refused_to_publish(forge.name())
+            {
+                return Err(anyhow!(why));
+            }
             // A resumed turn reads the mainline through the forge it recorded when it opened,
             // from the repository it recorded, as `takt approve` does: a run through another,
             // or on another repository, is refused before anything is written.
@@ -1885,7 +1892,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     &takt::case::CaseDir::locate(&repo, &resuming.id),
                     &resuming.id,
                     run_forge,
-                    forge.repository.as_deref(),
+                    None,
                 )? {
                     return Err(anyhow!(why));
                 }
@@ -2003,10 +2010,10 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             let harness = harness_of(&looping)?;
             let harness = harness.as_ref();
             // A session that may read outside its copy proposes what a scan must pass: under
-            // `gates` with no policy nothing would scan it, so the run is refused before its
-            // case opens or resumes, naming the policy and `scan: none` in `--config`.
+            // `unset` nothing would scan it, so the run is refused before its case opens or
+            // resumes, naming `scan: none` in `--config`.
             if harness.reads_outside_its_copy()
-                && let Some(why) = scan.refused_at_open(&looping.harness, true)
+                && let Some(why) = scan.refused_at_open(&looping.harness)
             {
                 return Err(anyhow!(why));
             }
@@ -2019,8 +2026,8 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             validators.push(Box::new(takt::improvement::CandidateMerged::judge_surface(
                 mainline,
             )));
-            // Through the bot route the identity the run's commits carry is scanned, as the push
-            // would scan it, after every refusal of what was given and before the case opens or
+            // Through a forge the identity the run's commits carry is read as the push would
+            // carry it, after every refusal of what was given and before the case opens or
             // resumes: before step 1.
             if let Some(forge) = &forge.forge
                 && let Some((identity, source)) = identity_at_open(
@@ -2031,7 +2038,6 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             {
                 scan_identity_at_open(
                     forge.as_ref(),
-                    &scan,
                     &repo,
                     &identity,
                     &source,
@@ -2912,96 +2918,99 @@ fn validators_of(
     Ok(validators)
 }
 
-/// The forge a run goes through, the line that says so once its case is open, and, for the bot
-/// route, the route a scenario's trial bases are fetched and created through and the repository
-/// it reads, which an improvement turn records and reads its mainline from.
+/// The forge a run goes through and the line that says so once its case is open.
 struct Forged {
     forge: Option<Rc<dyn Forge>>,
     line: Option<String>,
-    trials: Option<TrialRoute>,
-    repository: Option<String>,
 }
 
 impl Forged {
-    /// The mainline an improvement turn reads through this forge: the repository's `main` for
-    /// the bot route, the forge's for another forge, the local `main` with none.
+    /// The mainline an improvement turn reads through this forge: the forge's `main`, or the
+    /// local `main` with none.
     fn mainline(&self) -> takt::improvement::Mainline {
-        match (&self.forge, &self.repository) {
-            (Some(forge), Some(repository)) => takt::improvement::Mainline::Repository {
-                forge: forge.clone(),
-                repository: repository.clone(),
-            },
-            (Some(forge), None) => takt::improvement::Mainline::Forge(forge.clone()),
-            (None, _) => takt::improvement::Mainline::Local,
+        match &self.forge {
+            Some(forge) => takt::improvement::Mainline::Forge(forge.clone()),
+            None => takt::improvement::Mainline::Local,
         }
     }
 }
 
-/// The bot route's two lines for a scenario's trial bases, beside the forge's own: a fetch of
-/// the remote's `trial/*` branches, so the next number is chosen knowing them, and a push that
-/// may only create `trial/<n>`. The push carries `--force-with-lease=refs/heads/trial/<n>:`
-/// (the branch must not exist), so a `trial/<n>` another run created after the fetch is
-/// rejected, never fast-forwarded; and it reports in `--porcelain` form, where only a `*` (new
-/// ref) for the branch counts: a branch the remote already holds at the same commit is "up to
-/// date", exit 0, which the lease does not refuse.
+/// Whether `forge` publishes what the run makes off the machine: every forge but `local`, whose
+/// hub is on this machine.
+fn publishes(forge: &dyn Forge) -> bool {
+    forge.name() != "local"
+}
+
+/// A scenario's trial bases on the checkout's `origin`, through the operator's own git: a fetch
+/// of `origin`'s `trial/*` branches, so the next number is chosen knowing them, and a push that
+/// may only create `trial/<n>`. The push carries `--force-with-lease=refs/heads/trial/<n>:` (the
+/// branch must not exist), so a `trial/<n>` another run created after the fetch is rejected,
+/// never fast-forwarded; and it reports in `--porcelain` form, where only a `*` (new ref) for
+/// the branch counts: a branch the remote already holds at the same commit is "up to date",
+/// exit 0, which the lease does not refuse.
 ///
-/// The fetch names the remote's HTTPS URL, not `remote`: `origin` may be an SSH URL, and takt
-/// gives no child the user's SSH agent, so a fetch from it has no credential. Over HTTPS it
-/// goes under the bot route's credential (or none, for a public repository). Its child gets
-/// `GIT_ALLOW_PROTOCOL=https` ([`Self::FETCH_ENV`]), so an `insteadOf` rule in the
-/// repository's own configuration, which the bot route's git still reads, cannot turn it back
-/// into SSH: git refuses the transport and never starts `ssh`. Only the fetch gets it; a push or
-/// another bot-route line keeps whatever transport it uses. It is held to
-/// [`Self::FETCH_TIMEOUT`], and its child can wait on no prompt ([`takt::forge::NO_PROMPT`]).
+/// Both reach `origin` as the operator's git does, through its own configuration and credential
+/// helpers and its SSH agent ([`Self::keeps`]); neither can wait on a prompt
+/// ([`takt::forge::NO_PROMPT`]), and the fetch is held to [`Self::FETCH_TIMEOUT`].
 struct TrialRoute {
-    /// The bot route the two lines are built by ([`BotRoute::trial_fetch_argv`],
-    /// [`BotRoute::trial_push_argv`]): its remote, whose remote-tracking refs take the fetched
-    /// branches and which the push goes to, and its HTTPS URL, the fetch's source.
-    route: BotRoute,
     /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
     fetcher: Process,
-    runner: Box<dyn Runner>,
+    /// What the push runs as.
+    pusher: Process,
 }
 
 impl TrialRoute {
+    /// The remote the trial bases are fetched from and created on.
+    const REMOTE: &str = "origin";
+
     /// How long the fetch may take before it is killed and the run refused.
     const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// What the fetch's child is started with beyond every forge child's: git may use HTTPS
-    /// alone, whatever URL the repository's configuration rewrites the fetch's to.
-    const FETCH_ENV: [(&str, &str); 1] = [("GIT_ALLOW_PROTOCOL", "https")];
-
-    /// The trial route of `bot`: its remote, the HTTPS URL of its repository, the fetch held to
-    /// [`Self::FETCH_TIMEOUT`] and the push to the forge's limits.
-    fn of(bot: &BotRoute) -> Self {
-        let mut route = BotRoute::new(
-            bot.repository.clone(),
-            bot.policy.clone(),
-            Box::new(Process::default()),
-        );
-        route.remote.clone_from(&bot.remote);
-        Self {
-            route,
+    /// The trial route of the checkout `repo` when it has an `origin`; none without one.
+    fn of(repo: &Path) -> Option<Self> {
+        takt::git::remote_url(repo, Self::REMOTE).ok()?;
+        Some(Self {
             fetcher: Process {
                 limits: takt::forge::Limits {
                     timeout: Self::FETCH_TIMEOUT,
                     ..Process::LIMITS
                 },
             },
-            runner: Box::new(Process::default()),
-        }
+            pusher: Process::default(),
+        })
     }
 
-    /// The line that fetches the remote's trial branches, from its HTTPS URL, into its
-    /// remote-tracking refs.
-    fn fetch_argv(&self) -> Vec<String> {
-        self.route.trial_fetch_argv()
+    /// What the operator's git keeps of the variables a forge's child is started without: the
+    /// SSH agent, which an `origin` over SSH is reached through.
+    fn keeps(name: &str) -> bool {
+        name == "SSH_AUTH_SOCK"
     }
 
-    /// The line that creates the remote's `trial` from the local one, reporting each ref on
+    /// The line that fetches `origin`'s trial branches into its remote-tracking refs.
+    fn fetch_argv() -> Vec<String> {
+        [
+            "git",
+            "fetch",
+            "--no-tags",
+            "--quiet",
+            Self::REMOTE,
+            "+refs/heads/trial/*:refs/remotes/origin/trial/*",
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    }
+
+    /// The line that creates `origin`'s `trial` from the local one, reporting each ref on
     /// stdout; the lease refuses it when the remote has the branch.
-    fn push_argv(&self, trial: &str) -> Vec<String> {
-        self.route.trial_push_argv(trial)
+    fn push_argv(trial: &str) -> Vec<String> {
+        vec![
+            "git".to_owned(),
+            "push".to_owned(),
+            "--porcelain".to_owned(),
+            format!("--force-with-lease=refs/heads/{trial}:"),
+            Self::REMOTE.to_owned(),
+            format!("refs/heads/{trial}:refs/heads/{trial}"),
+        ]
     }
 
     /// `exit`, how `argv` ended; a program that did not exit 0 is an error naming the line and
@@ -3019,21 +3028,20 @@ impl TrialRoute {
         Ok(exit)
     }
 
-    /// Fetches the remote's trial branches over HTTPS only ([`Self::FETCH_ENV`]), killed past
-    /// [`Self::FETCH_TIMEOUT`].
+    /// Fetches `origin`'s trial branches, killed past [`Self::FETCH_TIMEOUT`].
     fn fetch(&self, tree: &Path) -> Result<()> {
-        let argv = self.fetch_argv();
-        let exit = self.fetcher.run_with(tree, &argv, &Self::FETCH_ENV)?;
+        let argv = Self::fetch_argv();
+        let exit = self.fetcher.run_keeping(tree, &argv, &[], Self::keeps)?;
         Self::succeed(&argv, exit).map(|_| ())
     }
 
     /// Pushes `trial` and answers only when the push exits 0 and reports it created on the
     /// remote. A refusal says what the push reported for the branch and what that means for
     /// the remote's `trial`: as it was (`=` up to date, `!` rejected), moved (` ` or `+`, which
-    /// only a route that dropped the lease reports), or not known (no report for it).
+    /// only a push that dropped the lease reports), or not known (no report for it).
     fn create(&self, tree: &Path, trial: &str) -> Result<()> {
-        let argv = self.push_argv(trial);
-        let exit = self.runner.run(tree, &argv)?;
+        let argv = Self::push_argv(trial);
+        let exit = self.pusher.run_keeping(tree, &argv, &[], Self::keeps)?;
         let target = format!(":refs/heads/{trial}");
         let reported = exit.stdout.lines().find_map(|line| {
             let mut fields = line.split('\t');
@@ -3058,9 +3066,7 @@ impl TrialRoute {
         };
         let meaning = match flag.as_str() {
             "=" => format!("the remote holds {trial} already, at this commit, and it is as it was"),
-            "!" => format!(
-                "the push was rejected: the remote holds {trial} already, and it is as it was"
-            ),
+            "!" => format!("the push was rejected, and the remote's {trial} is as it was"),
             " " | "+" => format!(
                 "the remote's {trial} was there already and was moved, not created: the route did not hold the push to its lease; another run's base may have moved"
             ),
@@ -3128,8 +3134,6 @@ fn forge_with(
         return Ok(Forged {
             forge: Some(Rc::new(connectors)),
             line: Some(line),
-            trials: None,
-            repository: None,
         });
     }
     if forge == Some("gitlab")
@@ -3144,8 +3148,6 @@ fn forge_with(
         return Ok(Forged {
             forge: Some(Rc::new(glab)),
             line: Some(line),
-            trials: None,
-            repository: None,
         });
     }
     forge_of(repo, forge, scan)
@@ -3181,8 +3183,6 @@ fn command_forge(
             "forge: command; pr.open, ci.read and repository.merge run the commands of the run file's forge_commands"
                 .to_owned(),
         ),
-        trials: None,
-        repository: None,
     })
 }
 
@@ -3231,17 +3231,13 @@ fn local_forge(
     Ok(Forged {
         forge: Some(Rc::new(local)),
         line: Some(line),
-        trials: None,
-        repository: None,
     })
 }
 
-/// The forge: the bot route when asked for, or by default when `origin` is a repository on
-/// github.com, the host the bot route serves; `glab` when asked for, or by default when `origin`
-/// is on another host and `glab` is logged in to it. `--forge bot` elsewhere, `--forge gitlab` on
-/// github.com or without a login are refused in one line before any case is opened; by default
-/// another host without a login gets no forge, said in one line once the case is open. `glab`
-/// scans through the run's scan adapter `scan`; the bot route scans as it always does.
+/// The forge: `glab` when asked for, or by default when `origin` is a repository on a host and
+/// `glab` is logged in to it. `--forge gitlab` without a login is refused in one line before any
+/// case is opened; by default an `origin` without a login gets no forge, said in one line once
+/// the case is open. `glab` scans through the run's scan adapter `scan`.
 fn forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Forged> {
     forge_through(repo, forge, &|tree| Glab::for_tree(tree, scan))
 }
@@ -3252,22 +3248,6 @@ fn forge_through(
     forge: Option<&str>,
     glab_of: &dyn Fn(&Path) -> Result<Glab>,
 ) -> Result<Forged> {
-    let bot = |repo: &Path| -> Result<Forged> {
-        let bot = BotRoute::for_tree(repo)?;
-        bot.preflight()?;
-        let line = format!(
-            "forge: bot ({}); pr.open, ci.read and repository.merge go through the bot route",
-            bot.repository
-        );
-        let trials = TrialRoute::of(&bot);
-        let repository = bot.repository.clone();
-        Ok(Forged {
-            forge: Some(Rc::new(bot)),
-            line: Some(line),
-            trials: Some(trials),
-            repository: Some(repository),
-        })
-    };
     let gitlab = |glab: Glab| -> Forged {
         let line = format!(
             "forge: gitlab ({} {}); pr.open, ci.read and repository.merge go through glab",
@@ -3276,19 +3256,11 @@ fn forge_through(
         Forged {
             forge: Some(Rc::new(glab)),
             line: Some(line),
-            trials: None,
-            repository: None,
         }
     };
-    let none = |line: Option<String>| Forged {
-        forge: None,
-        line,
-        trials: None,
-        repository: None,
-    };
+    let none = |line: Option<String>| Forged { forge: None, line };
     Ok(match forge {
         Some("none") => none(None),
-        Some("bot") => bot(repo)?,
         Some("gitlab") => gitlab(glab_of(repo)?),
         None => match takt::git::remote_url(repo, "origin")
             .ok()
@@ -3296,13 +3268,11 @@ fn forge_through(
             .map(repository_of)
         {
             None => none(None),
-            Some(Some(origin)) if BotRoute::serves(&origin.host) => bot(repo)?,
             Some(Some(origin)) => match glab_of(repo) {
                 Ok(glab) => gitlab(glab),
                 Err(error) => none(Some(format!(
-                    "forge: none (origin {} is not {}, and glab is not logged in to it: {})",
+                    "forge: none (glab is not logged in to {}: {})",
                     origin.host,
-                    BotRoute::HOST,
                     one_line(&format!("{error:#}"))
                 ))),
             },
@@ -3312,49 +3282,42 @@ fn forge_through(
         },
         Some(other) => {
             return Err(anyhow!(
-                "no forge `{other}`: bot, gitlab, command, connectors, local or none"
+                "no forge `{other}`: gitlab, command, connectors, local or none"
             ));
         }
     })
 }
 
-/// The forge of a scenario run: [`forge_of`], but never `glab`. A scenario's trial base
-/// `trial/<n>` is created on the remote only through the bot route ([`TrialRoute`]), so
-/// `--forge gitlab`, `command`, `connectors` and `local` are refused before anything is fetched,
-/// cut or opened, and by default an `origin` on a host other than github.com gets no forge, said
-/// in one line, `glab` never asked.
-fn scenario_forge_of(repo: &Path, forge: Option<&str>, scan: &Scan) -> Result<Forged> {
+/// The forge of a scenario run: none by default and under `--forge none`, and `local` under
+/// `--forge local`, whose hub is the `origin` the trial base is created on
+/// ([`forge_with`]). `--forge gitlab`, `command` and `connectors` are refused before anything
+/// is fetched, cut or opened: a scenario's pull request targets its trial base, which only
+/// `origin`'s own git creates ([`TrialRoute`]).
+#[allow(clippy::too_many_arguments)]
+fn scenario_forge_of(
+    repo: &Path,
+    forge: Option<&str>,
+    scan: &Scan,
+    settings: &takt::run_config::ForgeSettings,
+    actions: &[String],
+    state_dir: Option<&Path>,
+    identity: Option<takt::git::CommitIdentity>,
+    min_free: u64,
+) -> Result<Forged> {
     match forge {
-        Some("gitlab") => Err(anyhow!(
-            "--forge gitlab is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, and glab opens a merge request against a base it cannot create; give --forge bot or --forge none; nothing was changed"
-        )),
-        Some("command") => Err(anyhow!(
-            "--forge command is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, which the configured commands cannot do; give --forge bot or --forge none; nothing was changed"
-        )),
-        Some("connectors") => Err(anyhow!(
-            "--forge connectors is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, which `connectors operations invoke` cannot do; give --forge bot or --forge none; nothing was changed"
-        )),
-        Some("local") => Err(anyhow!(
-            "--forge local is not for a scenario run: its trial base trial/<n> is created on the remote only through the bot route, and a hub on this machine is no such remote; give --forge bot or --forge none; nothing was changed"
-        )),
-        None => match takt::git::remote_url(repo, "origin")
-            .ok()
-            .as_deref()
-            .map(repository_of)
-        {
-            Some(Some(origin)) if !BotRoute::serves(&origin.host) => Ok(Forged {
+        None | Some("none") => {
+            settings.check_for(Some("none"))?;
+            Ok(Forged {
                 forge: None,
-                line: Some(format!(
-                    "forge: none (origin {} is not {}, and a scenario run creates its trial base only through the bot route)",
-                    origin.host,
-                    BotRoute::HOST
-                )),
-                trials: None,
-                repository: None,
-            }),
-            _ => forge_of(repo, None, scan),
-        },
-        Some(_) => forge_of(repo, forge, scan),
+                line: None,
+            })
+        }
+        Some("local") => forge_with(
+            repo, forge, scan, settings, actions, state_dir, identity, min_free,
+        ),
+        Some(other) => Err(anyhow!(
+            "--forge {other} is not for a scenario run: its pull request targets the trial base trial/<n>, which the scenario creates on origin itself; give --forge local or --forge none; nothing was changed"
+        )),
     }
 }
 
@@ -3627,7 +3590,7 @@ fn trial_number(name: &str) -> Option<&str> {
 /// knows, a local branch or a remote's (as last fetched), `0` when there is none. Names under
 /// `trial/` that are not all digits are not trial bases. A number too large for `u128`, or a
 /// highest number nothing follows, is refused: never skipped, never wrapped to a number in use.
-/// Only a run through the bot route numbers its trial so ([`unique_trial`] otherwise).
+/// Only a run that creates its trial base on `origin` numbers it so ([`unique_trial`] otherwise).
 fn next_trial(repo: &Path) -> Result<u128> {
     let known = known_trials(repo)?;
     let mut highest: Option<u128> = None;
@@ -3677,11 +3640,11 @@ fn case_taken(repo: &Path, case_id: &str) -> Result<Option<String>> {
     Ok(None)
 }
 
-/// How many nonces a trial number without the bot route can take within one second: eight
+/// How many nonces a trial number without `origin` can take within one second: eight
 /// digits.
 const TRIAL_NONCES: u64 = 100_000_000;
 
-/// The trial number and case id of a scenario run without the bot route, which has no remote
+/// The trial number and case id of a scenario run that creates nothing on `origin`, so no remote
 /// to reserve a number on: the instant `at` (`YYYY-MM-DDTHH:MM:SSZ`, as [`takt::now`] gives it)
 /// to the second, its 14 digits, then an 8-digit nonce, 22 digits in all, past `u64`, so it
 /// is counted in `u128`. Runs from different checkouts very likely take different numbers (two
@@ -3723,7 +3686,7 @@ fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u1
     ))
 }
 
-/// The nonce of a trial number without the bot route ([`unique_trial`]): eight random bytes
+/// The nonce of a trial number without `origin` ([`unique_trial`]): eight random bytes
 /// from the operating system (`/dev/urandom`), modulo [`TRIAL_NONCES`]. Nothing a run shares
 /// with another goes into it: runs each in a PID namespace of its own have the same process id,
 /// and containers started alike the same host name. Where `/dev/urandom` does not read, the
@@ -3758,7 +3721,9 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         repo,
         scenario,
         declared_on,
-        config: _,
+        config,
+        declared_scan,
+        forge_settings,
         mut looping,
     } = args;
     looping.check()?;
@@ -3771,11 +3736,11 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     let scenario = Scenario::read(&repo, &declared_on, &scenario)?;
     let harness = harness_of(&looping)?;
     let harness = harness.as_ref();
-    // A scenario run cannot declare `scan: none` (its --config refuses it), so its scan adapter is `gates`: a session
-    // that may read outside its copy is refused without a policy before anything is cut.
-    let scan = Scan::from_env();
+    // The scan adapter `--config` declares, as for `takt run`: a session that may read outside
+    // its copy is refused under `unset` before anything is cut.
+    let scan = Scan::of_run(declared_scan.zip(config.as_deref()));
     if harness.reads_outside_its_copy()
-        && let Some(why) = scan.refused_at_open(&looping.harness, false)
+        && let Some(why) = scan.refused_at_open(&looping.harness)
     {
         return Err(anyhow!("scenario {}: {why}", scenario.id));
     }
@@ -3807,14 +3772,24 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             repo.display()
         )
     })?;
-    let forge = scenario_forge_of(&repo, looping.forge.as_deref(), &scan)?;
     // The identity the trial's commits carry: the one given, else the one `--declared-on`
-    // configures (the pinned seed predates any such file); none through the bot route, which
-    // pushes them, is refused before anything is fetched, cut or pushed.
+    // configures (the pinned seed predates any such file); none under a forge, which pushes
+    // them, is refused before anything is fetched, cut or pushed.
     let identity = match &looping.commit_identity {
         Some(given) => Some(given.clone()),
         None => takt::git::configured_identity(&repo, &declared_on)?,
     };
+    let forge = scenario_forge_of(
+        &repo,
+        looping.forge.as_deref(),
+        &scan,
+        &forge_settings,
+        &[],
+        looping.state_dir.as_deref(),
+        identity.clone(),
+        looping.min_free_gib.saturating_mul(1 << 30),
+    )
+    .with_context(|| format!("scenario {}", scenario.id))?;
     if identity.is_none() && forge.forge.is_some() {
         return Err(takt::git::no_identity(&declared_on))
             .with_context(|| format!("scenario {}", scenario.id));
@@ -3826,20 +3801,27 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     };
     let scanned_identity = identity.clone();
     let commit_as = identity.map_or(takt::case::CommitAs::Takt, takt::case::CommitAs::Given);
+    // The trial base is created on `origin` by the operator's own git, unless the run is
+    // `--forge none` or the checkout has no `origin`.
+    let trials = match looping.forge.as_deref() {
+        Some("none") => None,
+        _ => TrialRoute::of(&repo),
+    };
     // The fetch is read-only and comes first, so the number is chosen and checked once, on
     // everything the checkout knows after it, and before anything is cut or pushed.
-    if let Some(trials) = &forge.trials {
+    if let Some(trials) = &trials {
         trials.fetch(&repo).with_context(|| {
             format!(
-                "scenario {}: fetch the remote's trial branches; nothing was changed",
-                scenario.id
+                "scenario {}: fetch the trial branches of {}; nothing was changed",
+                scenario.id,
+                TrialRoute::REMOTE
             )
         })?;
     }
-    // Through the bot route the number is one past the highest known and the push's lease
-    // reserves it on the remote; without it, no remote reserves anything, so the number is the
-    // instant and a nonce, unique across checkouts.
-    let (n, case_id) = if forge.trials.is_some() {
+    // On `origin` the number is one past the highest known and the push's lease reserves it
+    // there; without it, no remote reserves anything, so the number is the instant and a nonce,
+    // unique across checkouts.
+    let (n, case_id) = if trials.is_some() {
         let n = next_trial(&repo)?;
         (n, trial_free(&repo, &scenario.id, n)?)
     } else {
@@ -3897,12 +3879,11 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         let story = Aep::default().show(&repo, &scenario.story)?;
         let mut validators = validators_of(&repo, &looping, None)?;
         forge.register(&mut validators);
-        // Through the bot route the identity is scanned, as the push would scan it, before the
-        // trial base is pushed or any step is taken.
+        // Through a forge the identity is read as the push would carry it, before the trial
+        // base is pushed or any step is taken.
         if let (Some(forge), Some(identity)) = (&forge.forge, &scanned_identity) {
             scan_identity_at_open(
                 forge.as_ref(),
-                &scan,
                 &repo,
                 identity,
                 &identity_source,
@@ -3911,11 +3892,12 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             )
             .with_context(|| format!("scenario {}", scenario.id))?;
         }
-        if let Some(trials) = &forge.trials {
+        if let Some(trials) = &trials {
             trials.create(&repo, &trial).with_context(|| {
                 format!(
-                    "scenario {}: create {trial} through the bot route",
-                    scenario.id
+                    "scenario {}: create {trial} on {}",
+                    scenario.id,
+                    TrialRoute::REMOTE
                 )
             })?;
         }
@@ -3929,9 +3911,11 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         scenario.story,
         takt::frontier::READY,
         short(&seed),
-        match &forge.forge {
-            Some(forge) => format!("pushed through {}", forge.name()),
-            None => "not pushed: no forge".to_owned(),
+        match (&trials, &forge.forge) {
+            (Some(_), Some(forge)) =>
+                format!("pushed to {}, forge: {}", TrialRoute::REMOTE, forge.name()),
+            (Some(_), None) => format!("pushed to {}, no forge", TrialRoute::REMOTE),
+            (None, _) => "not pushed: no forge".to_owned(),
         }
     )?;
     // The declaration only turns going on past a red base on: no flag or `--config` value
@@ -4309,8 +4293,8 @@ fn resume_install_root(repo: &Path, id: &str, protocol: &str, given: &Path) -> R
 }
 
 /// Refuses, before the case `id` is resumed, a `--commit-identity` (`given`) other than the
-/// identity the case was opened with, and a run whose commits leave the machine (`pushes`, the
-/// bot route) when the case was opened with none: its commits carry `takt <takt@localhost>`.
+/// identity the case was opened with, and a run whose commits leave the machine (`pushes`, through
+/// a forge) when the case was opened with none: its commits carry `takt <takt@localhost>`.
 fn refuse_identity_for_resume(
     repo: &Path,
     id: &str,
@@ -4343,7 +4327,7 @@ fn refuse_identity_for_resume(
             .unwrap_or_else(|| "its base branch".to_owned());
         let branch = takt::case::Branch::name_of(id);
         return Err(anyhow!(
-            "no commit identity: the case {id} was opened with none, so its commits are {}, and this run's commits leave the machine (the bot route); a case pushes only under the identity it was opened with. Finish it without pushing (`takt run --case {id} --forge none`), or drop it: `git -C {} checkout {base}`, `git -C {} branch -D {branch}` and remove {}; the next run then takes its story again under {} (`identity.name`, `identity.email`) at the base, or under --commit-identity '<name> <email>'; nothing was resumed",
+            "no commit identity: the case {id} was opened with none, so its commits are {}, and this run's commits leave the machine (its forge pushes them); a case pushes only under the identity it was opened with. Finish it without pushing (`takt run --case {id} --forge none`), or drop it: `git -C {} checkout {base}`, `git -C {} branch -D {branch}` and remove {}; the next run then takes its story again under {} (`identity.name`, `identity.email`) at the base, or under --commit-identity '<name> <email>'; nothing was resumed",
             takt::git::CommitIdentity::takt(),
             repo.display(),
             repo.display(),
@@ -4395,11 +4379,10 @@ fn identity_at_open(
 /// scan `forge` runs before a push ([`Forge::scan_identity`]), when the run opens: before step
 /// 1, before its case opens or its trial base is cut. The text scanned is kept under the state
 /// directory while the scan runs, never in `repo`. A refusal ends the run, naming the scan's;
-/// a scan that cannot run (no policy), or none under the run's declared `scan: none` (`scan`),
+/// a forge that scans nothing ([`takt::forge::IdentityScan::NotScanned`])
 /// says "not scanned" on `out`, and the run opens.
 fn scan_identity_at_open(
     forge: &dyn Forge,
-    scan: &Scan,
     repo: &Path,
     identity: &takt::git::CommitIdentity,
     source: &str,
@@ -4415,24 +4398,15 @@ fn scan_identity_at_open(
     let _ = std::fs::remove_dir_all(&dir);
     let scanned = scanned.with_context(|| {
         format!(
-            "{source} gives the commit identity {identity}, which this run's commits would carry off the machine, and it did not pass the bot route's scan; give an identity the scan passes (--commit-identity '<name> <email>', or `identity.name` and `identity.email` in {}); no step was taken, nothing was written or pushed",
+            "{source} gives the commit identity {identity}, which this run's commits would carry off the machine, and it did not pass the forge's scan; give an identity the scan passes (--commit-identity '<name> <email>', or `identity.name` and `identity.email` in {}); no step was taken, nothing was written or pushed",
             takt::git::COMMIT_IDENTITY_FILE
         )
     })?;
-    if let takt::forge::IdentityScan::NotScanned(why) = scanned {
-        // Under a declared `none` a forge that scans through the run's adapter scans nothing
-        // before the push either, nor does the local forge, whose pushes stay on the machine;
-        // the bot route scans whatever is declared.
-        let after = if forge.name() == "local" || scan.not_scanned().as_ref() == Some(&why) {
-            "nothing is scanned before the push either"
-        } else {
-            "the scan before the push still applies"
-        };
-        writeln!(
-            out,
-            "commit identity: {identity} from {source} not scanned ({why}); {after}"
-        )?;
-    }
+    let takt::forge::IdentityScan::NotScanned(why) = scanned;
+    writeln!(
+        out,
+        "commit identity: {identity} from {source} not scanned ({why}); nothing is scanned before the push either"
+    )?;
     Ok(())
 }
 
@@ -4948,41 +4922,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn forge_bot_without_an_origin_is_refused_before_the_run() {
-        let repo = gated_repository("forge-bot-no-origin", None);
-        let error = takt_error(&delivery_args(
-            repo.to_str().expect("utf-8"),
-            "bot",
-            &["--forge", "bot"],
-        ));
-        assert!(error.contains("origin"), "{error}");
-        assert!(!repo.join(".takt/cases").exists());
-    }
-
-    /// The bot route pushes and reads under a GitHub App: asked for on another
-    /// host it is refused before any case is opened.
-    #[test]
-    fn forge_bot_on_a_non_github_origin_is_refused_before_the_run() {
-        let repo = gated_repository("forge-bot-elsewhere", None);
-        git(
-            &repo,
-            &[
-                "remote",
-                "add",
-                "origin",
-                "git@gitlab.example.com:owner/repo.git",
-            ],
-        );
-        let error = takt_error(&delivery_args(
-            repo.to_str().expect("utf-8"),
-            "elsewhere",
-            &["--forge", "bot"],
-        ));
-        assert!(error.contains("not github.com"), "{error}");
-        assert!(!repo.join(".takt/cases").exists());
-    }
-
     /// Answers glab's login check as a glab with no login does, exit 1, and keeps each line
     /// it was asked: the host's own glab is never run.
     struct NotLoggedIn(std::rc::Rc<std::cell::RefCell<Vec<Vec<String>>>>);
@@ -5007,12 +4946,12 @@ mod tests {
         }
     }
 
-    /// Without `--forge`, an origin on another host that glab is not logged in to gets no
-    /// forge, said in one line naming what glab said. glab's login check runs through a double
+    /// Without `--forge`, an origin on a host that glab is not logged in to gets no forge, said
+    /// in one line naming what glab said. glab's login check runs through a double
     /// (`forge_through`); the run that prints the line is `forge_cli`'s, under a glab double on
     /// its `PATH`.
     #[test]
-    fn with_a_non_github_origin_the_default_forge_is_none_and_the_run_says_so() {
+    fn without_a_glab_login_the_default_forge_is_none_and_the_run_says_so() {
         let repo = gated_repository("forge-default-elsewhere", None);
         git(
             &repo,
@@ -5027,17 +4966,16 @@ mod tests {
         let glab_of = |tree: &Path| {
             takt::forge::gitlab::Glab::for_tree_through(
                 tree,
-                &takt::scan::Scan::from_env(),
+                &takt::scan::Scan::Unset,
                 Box::new(NotLoggedIn(asked.clone())),
             )
         };
         let forged = super::forge_through(&repo, None, &glab_of).expect("no forge is no error");
-        assert!(forged.forge.is_none() && forged.trials.is_none());
+        assert!(forged.forge.is_none());
         let line = forged.line.expect("the line that says so");
         assert!(
-            line.starts_with(
-                "forge: none (origin gitlab.example.com is not github.com, and glab is not logged in to it: "
-            ) && line.contains("has not been authenticated with glab"),
+            line.starts_with("forge: none (glab is not logged in to gitlab.example.com: ")
+                && line.contains("has not been authenticated with glab"),
             "{line}"
         );
         assert_eq!(
@@ -5046,17 +4984,20 @@ mod tests {
         );
     }
 
+    /// A forge name no adapter has is refused, naming the ones there are; `--forge` itself
+    /// offers only those (`forge_cli`).
     #[test]
     fn an_unknown_forge_is_refused_before_the_run() {
         let repo = gated_repository("forge-unknown", None);
-        let error = takt_error(&delivery_args(
-            repo.to_str().expect("utf-8"),
-            "unknown",
-            &["--forge", "hub"],
-        ));
+        let glab_of = |_: &Path| -> anyhow::Result<takt::forge::gitlab::Glab> {
+            panic!("glab is not asked for an unknown forge")
+        };
+        let error = super::forge_through(&repo, Some("hub"), &glab_of)
+            .err()
+            .expect("refused");
         assert_eq!(
-            error,
-            "no forge `hub`: bot, gitlab, command, connectors, local or none"
+            format!("{error:#}"),
+            "no forge `hub`: gitlab, command, connectors, local or none"
         );
         assert!(!repo.join(".takt/cases").exists());
     }
@@ -5073,6 +5014,20 @@ mod tests {
         ));
         assert!(error.contains("forge_commands"), "{error}");
         assert!(!repo.join(".takt/cases").exists());
+    }
+
+    /// The forge of a scenario run under `forge`, with no run file settings.
+    fn scenario_forge(repo: &Path, forge: &str) -> anyhow::Result<super::Forged> {
+        super::scenario_forge_of(
+            repo,
+            Some(forge),
+            &takt::scan::Scan::Unset,
+            &takt::run_config::ForgeSettings::default(),
+            &[],
+            None,
+            None,
+            0,
+        )
     }
 
     /// An entry the protocol's actions need and the section lacks is refused naming it, by the
@@ -5097,7 +5052,7 @@ mod tests {
         let error = super::forge_with(
             &repo,
             Some("command"),
-            &takt::scan::Scan::from_env(),
+            &takt::scan::Scan::Unset,
             &settings,
             &actions,
             Some(&state),
@@ -5108,33 +5063,35 @@ mod tests {
         .expect("refused");
         assert!(format!("{error:#}").contains("`merge`"), "{error:#}");
         assert!(!state.exists());
-        let error = super::scenario_forge_of(&repo, Some("command"), &takt::scan::Scan::from_env())
-            .err()
-            .expect("refused");
+        let error = scenario_forge(&repo, "command").err().expect("refused");
         assert!(
             format!("{error:#}").contains("--forge command"),
             "{error:#}"
         );
     }
 
-    /// story:local-forge-merges-into-a-target-branch: a scenario run refuses `--forge local`
-    /// before anything is fetched, cut or opened: its trial base is created only through the bot
-    /// route.
+    /// A scenario run refuses `--forge gitlab` and `--forge connectors` before anything is
+    /// fetched, cut or opened: its pull request targets the trial base, which only `origin`'s
+    /// own git creates.
     #[test]
-    fn the_local_forge_is_refused_for_a_scenario_run() {
-        let repo = gated_repository("forge-local-scenario", None);
-        let error = super::scenario_forge_of(&repo, Some("local"), &takt::scan::Scan::from_env())
-            .err()
-            .expect("refused");
-        assert!(format!("{error:#}").contains("--forge local"), "{error:#}");
+    fn a_publishing_forge_is_refused_for_a_scenario_run() {
+        let repo = gated_repository("forge-gitlab-scenario", None);
+        for forge in ["gitlab", "connectors"] {
+            let error = scenario_forge(&repo, forge).err().expect("refused");
+            assert!(
+                format!("{error:#}")
+                    .contains(&format!("--forge {forge} is not for a scenario run")),
+                "{error:#}"
+            );
+        }
     }
 
-    /// story:trial-numbers-are-unique-across-checkouts: without the bot route a trial number is
+    /// story:trial-numbers-are-unique-across-checkouts: without `origin` a trial number is
     /// the instant's fourteen digits, then the eight-digit nonce, 22 digits; a number whose
     /// trial branch is known (local, or a remote's), whose case is there, or whose case branch
     /// is, is passed over for the next nonce, past 99999999 to 00000000.
     #[test]
-    fn a_trial_number_without_the_bot_route_is_the_instant_and_a_free_nonce() {
+    fn a_trial_number_without_origin_is_the_instant_and_a_free_nonce() {
         let repo = repository("one-ready", "unique-trial");
         let at = "2026-10-19T14:25:30Z";
         let taken = |nonce: u64| {

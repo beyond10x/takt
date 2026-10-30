@@ -633,7 +633,7 @@ fn glab_stays_the_default() {
     settings
         .check_for(Some("gitlab"))
         .expect("api with a credential fits");
-    assert!(settings.check_for(Some("bot")).is_err());
+    assert!(settings.check_for(Some("none")).is_err());
     assert!(settings.check_for(None).is_err());
 
     for (text, why) in [

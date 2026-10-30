@@ -68,7 +68,6 @@ fn takt(repo: &Path, bin: &Path, state: &Path, case: &str, resume: bool) -> Outp
             ),
         )
         .env("XDG_STATE_HOME", state)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs")
 }

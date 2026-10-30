@@ -124,9 +124,9 @@ A grant authorises the merge of that `revision` only
 ([Capabilities and approvals](../concepts/capabilities-and-approvals.md)).
 
 `artifacts/` holds a `gate-result-<n>.bundle.json` (`engineering-gate-evidence/1`: the gates
-document and what each assertion saw) for each gate run, and with `--forge bot` the request and
-response of the pull request, the text scanned before it was published and the commit messages and
-files scanned before each push.
+document and what each assertion saw) for each gate run, and with `--forge gitlab` the request and
+response of the merge request, its title and description as published, and the body and answer
+of its merge.
 
 ## Outside the case directory
 

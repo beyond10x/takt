@@ -63,7 +63,6 @@ fn takt_run(repo: &Path, args: &[&str]) -> (i32, String, String) {
             "--test-cmd",
             "true",
         ])
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (

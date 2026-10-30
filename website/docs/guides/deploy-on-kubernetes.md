@@ -1,7 +1,7 @@
 ---
 title: Deploy on Kubernetes
 sidebar_position: 7
-description: Run takt as a Loom 0.45.0 Command LoomAgent on a kind cluster with its configuration, key, policy and workspace, watch the Job, and know what still stops it.
+description: Run takt as a Loom 0.45.0 Command LoomAgent on a kind cluster with its configuration, key and workspace, watch the Job, and know what still stops it.
 lede: Loom 0.45.0 runs takt once as a Job with its configuration files, key and workspace. The recipe has not been run on a cluster, and Loom's fixed seccomp profile refused takt 0.14.0's test command in the docker runs it rests on.
 source: examples/loom-agent/ (checked by crates/takt/tests/examples_config.rs; takt-agent.yaml rendered by b10x-loom-operator 0.44.0 and the chart's values by helm template); Loom 0.44.0 CHANGELOG, README, charts/loom-agents, deploy/crd, crates/loom-operator/src/render.rs and admission.rs; the docker runs of Run in a container. Not run on a cluster.
 ---
@@ -79,23 +79,21 @@ image:
 agentImage:
   repository: registry.example/loom-agent
   tag: "0.45.0"
-allowedSecretNames: [takt-demo-env, takt-demo-files]
+allowedSecretNames: [takt-demo-env]
 allowedEgressHosts: [llm.example.com, index.crates.io, static.crates.io]
 allowedClaimNames: [takt-demo-workspace]
 ```
 
-## 3. Create the Secrets
+## 3. Create the Secret
 
-One Secret for the key, given to the pod as environment variables, and one for files:
+One Secret for the key, given to the pod as environment variables:
 
 ```sh
 kubectl create secret generic takt-demo-env -n agents --from-env-file=llm.env
-kubectl create secret generic takt-demo-files -n agents --from-file=policy.json=<policy file>
 ```
 
-`llm.env` holds one line, `LLM_API_KEY=<token>`. The file Secret is mounted at
-`/var/run/secrets/takt` with each file at mode 0600 for uid 10001, the owner `b10x-gates` asks of a
-policy. `spec.env` cannot carry a credential: Loom refuses one there.
+`llm.env` holds one line, `LLM_API_KEY=<token>`. `spec.env` cannot carry a credential: Loom
+refuses one there.
 
 ## 4. Fill the workspace
 
@@ -132,9 +130,6 @@ spec:
       - takt
     args: [--config, /config/takt.yaml]
   secretRef: {name: takt-demo-env}
-  secretFiles: {name: takt-demo-files, mountPath: /var/run/secrets/takt}
-  env:
-    - {name: B10X_GATES_POLICY, value: /var/run/secrets/takt/policy.json}
   workspace: {mountPath: /workspace, claimName: takt-demo-workspace}
   configFiles:
     - name: takt.yaml
@@ -142,6 +137,7 @@ spec:
         story: story:add-sub
         hours: 1
         harness: harness
+        scan: none
         model: agent
         llm: {path: llm.yaml}
         forge: none
@@ -190,7 +186,6 @@ What each part does:
 | `command.args` | `--config /config/takt.yaml`: the run file, the same one a host run takes with `takt run --config` |
 | `configFiles` | `/config/takt.yaml` and `/config/llm.yaml`, written verbatim; the run file reads `llm.yaml` beside it |
 | `secretRef` | `LLM_API_KEY` in the environment, which `llm.yaml`'s `auth.secret` names as `env:LLM_API_KEY` |
-| `secretFiles`, `env` | the gates policy file and `B10X_GATES_POLICY` naming it, for the default `gates` scan adapter; a `takt.yaml` that declares `scan: none` needs neither |
 | `workspace` | the claim at `/workspace` |
 | `agent.deploy.kubernetes` | the service account, the pod's resources and the egress |
 
@@ -255,12 +250,12 @@ where the container runtime's own default profile admits unprivileged user names
 | workaround | now |
 |---|---|
 | hold the pod with a restart loop or `sleep infinity` | gone: a `Command` resource runs once as a Job and reports `status.run` (Loom 0.44.0) |
-| put `B10X_GATES_POLICY` in the env Secret | gone: `spec.env` (Loom 0.44.0) |
+| put the scan policy's variable in the env Secret | gone: takt reads no scan policy, and `takt.yaml` declares `scan: none` |
 | make `/tmp` mode 2777 | gone: `/tmp` and `HOME` are mode 0700 (Loom 0.44.0) |
 | apply the resource twice | gone (Loom 0.44.0) |
 | write the endpoint file into the workspace | gone: `spec.configFiles` (Loom 0.44.0) |
 | stage the key as a file by hand | gone: `--endpoint-token-env` or `env` in the endpoint file (takt 0.13.0) |
 | move the [story](/docs/concepts/glossary#story) to active by hand | gone: `--story` (takt 0.13.0) |
-| add packages, toolchain links, b10x-harness 0.20.0 and `b10x-gates` to the image | gone: the image ships them (takt 0.13.0) |
+| add packages, toolchain links and b10x-harness 0.20.0 to the image | gone: the image ships them (takt 0.13.0) |
 | `mkdir -p "$HOME/.cargo/bin"` before takt | still needed at 0.14.0, in `command.entrypoint`; not after it: the first test run in a fresh `HOME` is no longer refused |
 | patch the pod to seccomp and AppArmor `Unconfined` | not possible at Loom 0.45.0 |

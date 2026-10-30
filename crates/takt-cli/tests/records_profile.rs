@@ -109,7 +109,6 @@ impl World {
             .args(["--iterations", "2", "--test-cmd", "true"])
             .env("PATH", self.path())
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
-            .env_remove("B10X_GATES_POLICY")
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .output()
             .expect("takt runs")
@@ -222,7 +221,6 @@ fn default_keeps_the_latest_decision() {
         .args([&case, "repository.merge", "--by", "human:operator"])
         .env("PATH", world.path())
         .env("XDG_STATE_HOME", world.0.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt approve runs");
     let said = text(&approved);
@@ -349,7 +347,6 @@ fn scenario_and_improvement_cases_keep_every_decision() {
         ])
         .env("PATH", &path)
         .env("XDG_STATE_HOME", outer.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let said = text(&output);
@@ -396,7 +393,6 @@ fn scenario_and_improvement_cases_keep_every_decision() {
             &format!("loop_baseline={head}"),
         ])
         .env("XDG_STATE_HOME", outer.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let said = text(&output);
@@ -474,7 +470,6 @@ fn replay_of_a_dropped_decision_is_refused() {
         ])
         .env("PATH", world.path())
         .env("XDG_STATE_HOME", world.0.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt replay runs");
     let said = text(&replay);

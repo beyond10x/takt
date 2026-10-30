@@ -17,7 +17,7 @@
 //! the case wrote as [`TEST_RESULT`] evidence on the story, at the record's own instant, and
 //! moves the story to [`IMPLEMENTED`]; each write is a commit on the case's branch, store paths
 //! only ([`write_on_case_branch`]), made as [`ACTOR`], and a refusal is relayed, never retried.
-//! With a forge both are made before the merge and ride to the base with it
+//! With a forge, both are made before the merge and ride to the base with it
 //! ([`crate::case::approvals_only`]).
 
 use std::path::Path;

@@ -883,7 +883,7 @@ struct RefusesFor {
 /// The API's refusal of the merge of `number` for a required check that has not reported.
 fn pending_check(number: u64) -> anyhow::Error {
     anyhow!(
-        "b10x-gates api --method PUT --path /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"task check\" is expected"
+        "PUT /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"task check\" is expected"
     )
 }
 

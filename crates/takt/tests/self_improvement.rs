@@ -914,8 +914,8 @@ fn judge_grant(turn: &Turn, granted_at: &str, tip: Option<&str>) {
     judge_grant_from(turn, granted_at, tip, None);
 }
 
-/// [`judge_grant`], the tip read from `repository` when some, as a grant read through the bot
-/// route records it.
+/// [`judge_grant`], the tip read from `repository` when some, as a grant read through a forge's
+/// repository records it.
 fn judge_grant_from(turn: &Turn, granted_at: &str, tip: Option<&str>, repository: Option<&str>) {
     let dir = turn.tree.join(".takt/cases/turn");
     let mut text = format!(
@@ -931,42 +931,11 @@ fn judge_grant_from(turn: &Turn, granted_at: &str, tip: Option<&str>, repository
     fs::write(dir.join("authority.yaml"), text).expect("the authority is written");
 }
 
-/// The mainline of `repository` read through the in-memory double, whose `main` is the tree's.
-fn mainline_of(repository: &str) -> takt::improvement::Mainline {
-    takt::improvement::Mainline::Repository {
-        forge: std::rc::Rc::new(takt::forge::Memory::default()),
-        repository: repository.to_owned(),
-    }
-}
-
-/// story:a-turn-pins-the-repository-of-its-forge: the grant read `main` from `acme/one`, and the
-/// merge is read from `acme/two`, whose `main` holds the candidate after the grant: nothing is
-/// recorded, the run does not wait, and the summary names both repositories. Read from
-/// `acme/one`, the same merge records `merged`.
-#[test]
-fn a_judge_surface_merge_read_from_another_repository_than_the_grants_records_nothing() {
-    let turn = turn("merge-other-repository", &finding("docs/runs/trial-1.md"));
-    judge_grant_from(
-        &turn,
-        "2026-10-19T18:05:26Z",
-        Some(&turn.baseline),
-        Some("acme/one"),
-    );
-    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
-    let validator = takt::improvement::CandidateMerged::judge_surface(mainline_of("acme/two"));
-    let (results, waiting, summary) = observed(&validator, &turn);
-    assert!(results.is_empty() && !waiting, "{summary}");
-    assert!(summary.contains("acme/one"), "{summary}");
-    assert!(summary.contains("acme/two"), "{summary}");
-    let validator = takt::improvement::CandidateMerged::judge_surface(mainline_of("acme/one"));
-    let (results, _, summary) = observed(&validator, &turn);
-    assert_eq!(results, ["merged"], "{summary}");
-}
-
 /// A grant read from `acme/one` holds no merge read from the local `main` (`--forge none`), which
 /// counts as no repository: nothing is recorded, naming both.
 #[test]
-fn a_judge_surface_merge_read_from_the_local_main_under_a_bot_routes_grant_records_nothing() {
+fn a_judge_surface_merge_read_from_the_local_main_under_a_grant_pinned_to_a_repository_records_nothing()
+ {
     let turn = turn("merge-local-repository", &finding("docs/runs/trial-1.md"));
     judge_grant_from(
         &turn,
@@ -983,23 +952,8 @@ fn a_judge_surface_merge_read_from_the_local_main_under_a_bot_routes_grant_recor
     assert!(summary.contains("the local main"), "{summary}");
 }
 
-/// A grant given before grants recorded a repository (a tip, no repository) authorises no
-/// judge-surface merge read through a forge's repository: nothing is recorded, saying the grant
-/// records none and naming the one read now.
-#[test]
-fn a_judge_surface_grant_that_records_no_repository_holds_no_merge_through_the_bot_route() {
-    let turn = turn("merge-unpinned-grant", &finding("docs/runs/trial-1.md"));
-    judge_grant(&turn, "2026-10-19T18:05:26Z", Some(&turn.baseline));
-    git(&turn.tree, &["branch", "-f", "main", &turn.candidate]);
-    let validator = takt::improvement::CandidateMerged::judge_surface(mainline_of("acme/one"));
-    let (results, waiting, summary) = observed(&validator, &turn);
-    assert!(results.is_empty() && !waiting, "{summary}");
-    assert!(summary.contains("no repository"), "{summary}");
-    assert!(summary.contains("acme/one"), "{summary}");
-}
-
-/// The `forge` file keeps its one-line form readable: `bot <owner>/<repo>`, the name alone
-/// (`none`, or `bot` from a turn opened before the repository was recorded); anything else is
+/// The `forge` file keeps its one-line form readable: `<name> <owner>/<repo>`, or the name alone
+/// (`none`, or a forge's from a turn opened before the repository was recorded); anything else is
 /// refused, naming the file.
 #[test]
 fn the_forge_file_reads_its_name_and_the_repository_beside_it() {
@@ -1010,8 +964,8 @@ fn the_forge_file_reads_its_name_and_the_repository_beside_it() {
         .expect("recorded");
     assert_eq!((forge.name.as_str(), forge.repository), ("none", None));
     for (text, name, repository) in [
-        ("bot acme/one\n", "bot", Some("acme/one")),
-        ("bot\n", "bot", None),
+        ("gitlab acme/one\n", "gitlab", Some("acme/one")),
+        ("gitlab\n", "gitlab", None),
     ] {
         fs::write(dir.join("forge"), text).expect("written");
         let forge = takt::case::turn_forge(&dir)
@@ -1024,7 +978,12 @@ fn the_forge_file_reads_its_name_and_the_repository_beside_it() {
         );
         assert_eq!(format!("{forge}\n"), text);
     }
-    for text in ["bot acme/one extra\n", "bot  acme/one\n", " bot\n", "\n"] {
+    for text in [
+        "gitlab acme/one extra\n",
+        "gitlab  acme/one\n",
+        " gitlab\n",
+        "\n",
+    ] {
         fs::write(dir.join("forge"), text).expect("written");
         let error = takt::case::turn_forge(&dir).expect_err("refused");
         assert!(
@@ -1454,8 +1413,8 @@ fn binary_promote_observes_only_a_promotion_of_the_candidate_that_is_installed()
     assert!(results.is_empty() && waiting, "the baseline's: {summary}");
 }
 
-/// A forge whose report of every branch's tip fails, as the bot route's does when the route or
-/// the network is down; nothing else of it is called while a turn opens.
+/// A forge whose report of every branch's tip fails, as a forge's does when its host or the
+/// network is down; nothing else of it is called while a turn opens.
 struct RouteDown;
 
 impl takt::forge::Forge for RouteDown {

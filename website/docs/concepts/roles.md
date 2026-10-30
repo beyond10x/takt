@@ -16,7 +16,7 @@ beside them.
 |---|---|---|
 | owner (a person) | merge approval for judge surfaces, or its delegation to a named role on record; scorecard definitions; priorities | |
 | planner | the planning store, filing findings, deciding what the developer escalates, granting merges on a reviewer's verdict, dispatching the reviewer and the doc-writer, reporting to the owner | writes takt code; grants without a reviewer verdict on that exact revision |
-| developer | moving stories to active, waves and their pages, implementation, merges through the bot route | marks its own fix verified; edits `docs/**` other than its wave pages, or this site |
+| developer | moving stories to active, waves and their pages, implementation, merges through the repository's delivery workflow | marks its own fix verified; edits `docs/**` other than its wave pages, or this site |
 | reviewer | a verdict with cited findings on each grant request at its exact revision; code reviews; adversarial passes; verification runs of a finding on request | writes takt code; grants; files to the store; reviews its own work |
 | doc-writer | `docs/**` but the wave pages, the structure of `README.md`, this site | writes takt code; changes the planning store; states a figure no record holds |
 | trial agent | trials and scenario runs, scorecards and measurement against the baseline, proposals and candidates, the promotion of a merged candidate and the install of its binary (`takt promote`) | edits a wave's tree or branch or `main`; merges its own candidate; reviews its own proposal; files to the store |

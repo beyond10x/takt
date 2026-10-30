@@ -133,7 +133,6 @@ fn a_benchmark_task_completes_once_its_visible_tests_pass() {
             "--forge",
             "none",
         ])
-        .env_remove("B10X_GATES_POLICY")
         .env("XDG_STATE_HOME", &state)
         .env(
             "PATH",

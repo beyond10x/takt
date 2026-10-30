@@ -132,7 +132,6 @@ fn takt_run_keeps_each_step_transcript_under_the_state_home() {
             ),
         )
         .env("XDG_STATE_HOME", &state)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -265,7 +264,6 @@ fn takt_run_on_an_empty_home_keeps_the_transcript_and_refuses_no_step() {
         )
         .env("HOME", &home)
         .env_remove("XDG_STATE_HOME")
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -387,8 +385,7 @@ impl Home {
                     std::env::var("PATH").unwrap_or_default()
                 ),
             )
-            .env("HOME", &self.home)
-            .env_remove("B10X_GATES_POLICY");
+            .env("HOME", &self.home);
         for name in [
             "XDG_STATE_HOME",
             "PYTHONPATH",

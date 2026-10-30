@@ -261,7 +261,7 @@ actions:
   pr.open:
     description: >-
       push the implementation revision, with the commits that record its approval above it when
-      there are any, and open its pull request through the repository's bot route; needs the
+      there are any, and open its pull request through the run's forge; needs the
       tests and the gate green, the change handed over at the revision, a merge of it into the
       base branch's tip that would change the tip outside .engineering/, so nothing is opened
       at the seed or for content the base already has, and the change complete, so it opens once,

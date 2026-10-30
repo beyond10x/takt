@@ -26,7 +26,7 @@ Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes
 | base | Debian trixie slim (`docker.io/library/debian:trixie-slim`) |
 | packages | `ca-certificates`, `git`, `gcc`, `libc6-dev`, `pkg-config`, `libssl-dev`, `python3`, `tini` |
 | takt | `/usr/local/bin/takt`, built `--release --locked` from the tree |
-| tools | `aep`, `b10x-harness`, `ess`, `b10x-gates` (the `gates` scan adapter's program and the `bot` [forge](/docs/concepts/glossary#forge)'s) in `/usr/local/bin` |
+| tools | `aep`, `b10x-harness` and `ess` in `/usr/local/bin` |
 | Rust | the toolchain of `rust:1.99-slim-trixie` with `clippy` and `rustfmt`, in `/opt/rust`, linked into `/usr/local/bin` |
 
 The tools are downloaded by release URL and checked against a SHA256 in the Dockerfile:
@@ -36,20 +36,20 @@ The tools are downloaded by release URL and checked against a SHA256 in the Dock
 | [aep](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) | 0.77.1 |
 | [b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness)) | 0.22.0 |
 | [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.76.0 |
-| b10x-gates | 0.1.23 |
 
 `b10x-harness` 0.22.0 is the [harness](/docs/concepts/glossary#harness) that Loom 0.48.0 and metaharness 0.23.0 need. The transcript
 below was recorded from a local build of this Dockerfile at takt 0.13.1, when it pinned
 `b10x-harness` 0.20.0 and ess 0.69.2. The harness and ess pins have changed since then, and the
-image has not been rebuilt with them, so the versions printed below are the ones from that build:
+image has not been rebuilt with them, so the versions printed below are the ones from that build.
+That build also shipped a scanner the image no longer holds; its command and version line are left
+out:
 
 ```console
-$ docker run --rm --entrypoint sh takt:0.13.1 -c 'takt --version; aep --version; b10x-harness --version; ess --version; b10x-gates --version; rustc --version'
+$ docker run --rm --entrypoint sh takt:0.13.1 -c 'takt --version; aep --version; b10x-harness --version; ess --version; rustc --version'
 takt 0.13.1 (02a680699990abb1e0eaed7e16e7c2773030a5d4)
 aep 0.77.1
 b10x-harness 0.20.0
 ess 0.69.2
-b10x-gates 0.1.23
 rustc 1.99.1 (58cf8f9c3 2026-10-13)
 ```
 
@@ -97,10 +97,8 @@ build's `REVISION`. A build from a clone, where `.git` is a directory, names its
 
 The run's outcome is in `/workspace/.takt/cases` and the exit code
 ([exit codes](./exit-codes.md)). With `forge: none` the delivery stays a branch in `/workspace`.
-Under the default `gates` scan adapter, the policy for `b10x-gates` comes from the deployment
-(`B10X_GATES_POLICY`), never the image; a configuration that declares `scan: none` needs none.
-`b10x-gates` reads it only when the file and its directory are owned by the run's uid, the file
-has no group or other bits and the directory is not group- or other-writable.
+The image holds no scanner: a configuration for b10x-harness, or for a forge that publishes,
+declares `scan: none` ([The scan](./configuration.md#the-scan)).
 
 ### Under Loom
 
@@ -124,10 +122,7 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
 - **One harness.** The image holds b10x-harness and no other: no Claude Code, no Codex. Set
   `harness: harness` (or `none`). The default, `claude`, is not there.
 - **No `glab`.** Set `forge: none`. The default follows `origin`, and `gitlab` needs `glab`. The
-  delivery stays a branch in `/workspace`. `bot` needs no `gh` since 0.23.0:
-  it reads through `b10x-gates api`, and the image ships `b10x-gates`. A `bot` run is refused
-  before its case opens unless `B10X_GATES_POLICY` names a policy file the run's uid owns, a
-  regular file, not a symbolic link, at mode 0600 or stricter, in a directory that uid owns and no other user can write. No run of the image through `bot` is recorded.
+  delivery stays a branch in `/workspace`.
 - **Unconfined seccomp and AppArmor (unverified at 0.21.0).** This need was observed on takt
   0.13.1 and 0.14.0 and has not been measured again. Under the default `--confinement none` of
   0.13.1 the test command ran in a user and mount namespace of its own, which a container

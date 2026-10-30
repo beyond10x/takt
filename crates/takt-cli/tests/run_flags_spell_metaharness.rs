@@ -216,6 +216,13 @@ impl World {
                 "run", "--repo", repo, "--intent", "probe", "--forge", "none",
             ]);
         }
+        // A harness run opens only under a declared scan adapter: a run given no run file of its
+        // own reads one that declares `scan: none` and nothing else; no step here reaches a scan.
+        if !args.contains(&"--config") {
+            command
+                .arg("--config")
+                .arg(self.file("scan.yaml", "scan: none\n"));
+        }
         command
             .args(args)
             .env("HOME", self.home())
@@ -230,9 +237,6 @@ impl World {
             .env("XDG_STATE_HOME", self.outer.join("xdg-state"))
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
-            // A harness run opens only under a policy or a declared `scan: none`; no step here
-            // reaches a scan.
-            .env("B10X_GATES_POLICY", self.outer.join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .output()
             .expect("takt runs")
@@ -323,9 +327,9 @@ fn document_b_toml(key: &Path) -> String {
     )
 }
 
-/// A run file on `harness: harness` with `model: small` and the `llm` section `llm`.
+/// A run file on `harness: harness` with `model: small`, the `llm` section `llm` and `scan: none`.
 fn llm_file(llm: &serde_json::Value) -> String {
-    format!("iterations: 0\nharness: harness\nforge: none\nmodel: small\nllm: {llm}\n")
+    format!("iterations: 0\nharness: harness\nscan: none\nforge: none\nmodel: small\nllm: {llm}\n")
 }
 
 /// Acceptance 1, for `takt run`: each new endpoint flag, given alone with the credential it needs,
@@ -466,8 +470,8 @@ fn each_old_name_opens_the_record_of_its_new_name_and_warns_once() {
 }
 
 /// Acceptance 3: `--llm-config` over a run file's `llm` section gives the document's digest in the
-/// `opened` record, the section's own digest is not recorded; and `--llm-config` alone, without
-/// `--config`, does the same from a TOML document.
+/// `opened` record, the section's own digest is not recorded; and `--llm-config` beside a run file
+/// with no `llm` section does the same from a TOML document.
 /// Linux only: llm 0.16.0 reads a `{file: ...}` key on Linux alone and refuses it elsewhere
 /// (`llm-credentials` `file.rs`, `SecretError::UnsupportedPlatform`).
 #[cfg(target_os = "linux")]

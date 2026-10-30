@@ -59,7 +59,7 @@ small = "lab/small"
 "#;
 
 /// A TOML value of a type the file takes for `key` (a string, an integer, a fraction, a
-/// boolean, `"gates"`, a value `scan` takes (story:scan-and-forge-are-adapters), or `"default"`,
+/// boolean, `"none"`, the value `scan` takes (story:scan-and-forge-are-adapters), or `"default"`,
 /// a value `records` takes (story:a-run-keeps-every-decision-only-on-a-trial), or none
 /// when it takes the key with none of them. `llm` takes `{path = <file>}` naming the probe
 /// beside it (story:llm-section-is-an-llm-routes-document). `local_checks` takes an argument
@@ -71,7 +71,7 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "1",
         "1.5",
         "true",
-        "\"gates\"",
+        "\"none\"",
         "{path = \"llm-probe.toml\"}",
         "\"default\"",
         "\"software.change/1\"",
@@ -111,7 +111,7 @@ fn keys_the_file_takes(dir: &Path) -> Vec<String> {
         .split_once(" holds ")
         .unwrap_or_else(|| panic!("the refusal names what the file holds: {message}"))
         .1;
-    // story:scan-and-forge-are-adapters: the refusal names `scan`'s values, `gates` and `none`,
+    // story:scan-and-forge-are-adapters: the refusal names `scan`'s value, `none`,
     // after it, and `records`'s, `default` and `trial`
     // (story:a-run-keeps-every-decision-only-on-a-trial); they are values, not keys. So are the
     // format name and the `{path: <file>}` form `llm` takes
@@ -119,15 +119,7 @@ fn keys_the_file_takes(dir: &Path) -> Vec<String> {
     let keys: Vec<String> = quoted(shape)
         .into_iter()
         .filter(|name| {
-            ![
-                "gates",
-                "none",
-                "default",
-                "trial",
-                "llm.routes/1",
-                "{path: <file>}",
-            ]
-            .contains(&name.as_str())
+            !["none", "default", "trial", "llm.routes/1", "{path: <file>}"].contains(&name.as_str())
         })
         .collect();
     assert!(

@@ -724,8 +724,9 @@ impl From<AuthorityDecision> for AuthorityEntry {
 }
 
 /// The mainline's tip a judge-surface grant records ([`AuthorityDecision::mainline_tip`]), and
-/// the repository the forge read it from: `<owner>/<repo>` for the bot route, none for the
-/// local `main` (`--forge none`) and a grant given before grants recorded one. A merge
+/// the repository the forge read it from: none for the local `main` (`--forge none`) and a
+/// grant given before grants recorded one; a repository only in a record of a forge takt no
+/// longer has. A merge
 /// observation reading the mainline from another repository is held to nothing
 /// (`candidate.merge_judge_surface`). It dereferences to the tip.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1334,8 +1335,8 @@ fn checked_grant(
     let judge_surface_turn =
         protocol == TURN_PROTOCOL && capability == crate::validator::JUDGE_SURFACE_CAPABILITY;
     // The decision this grant may replace at its own revision: only a turn's judge-surface
-    // grant whose tip records no repository, which authorises no merge read through the bot
-    // route (the merge's refusal asks for it again); any other decision there is refused.
+    // grant whose tip records no repository, which authorises no merge read from a recorded
+    // repository (the merge's refusal asks for it again); any other decision there is refused.
     let unpinned = match authority.decision(capability) {
         Some(decided) if decided.applies_at(Some(&revision)) => {
             let already = format!(
@@ -1413,7 +1414,7 @@ fn mainline_at_grant(tree: &Path, dir: &Path, id: &str) -> Result<Option<Mainlin
     let Some(forge) = turn_forge(dir)? else {
         return Ok(None);
     };
-    let mainline = crate::improvement::Mainline::recorded(tree, &forge).with_context(|| {
+    let mainline = crate::improvement::Mainline::recorded(&forge).with_context(|| {
         format!("the grant to the turn {id} reads {main} through the forge it recorded; nothing was written")
     })?;
     let tip = mainline.tip(tree).with_context(|| {
@@ -4005,8 +4006,7 @@ pub struct TurnOpening {
     /// from the environment when the validator observes.
     pub install_root: Option<PathBuf>,
     /// The forge whose mainline the turn reads ([`crate::improvement::Mainline::recorded_as`]:
-    /// `bot` and, after one space, the repository it reads `main` from, or `none` for the local
-    /// `main`; [`TurnForge`]), recorded at open ([`FORGE_FILE`]) for `takt approve` to read the
+    /// `none` for the local `main`; [`TurnForge`]), recorded at open ([`FORGE_FILE`]) for `takt approve` to read the
     /// mainline's tip at a judge-surface grant through; none records nothing, and such a grant
     /// records no tip and authorises no judge-surface merge.
     pub forge: Option<String>,
@@ -4038,18 +4038,17 @@ pub fn install_root_of(case_dir: &Path) -> Result<Option<PathBuf>> {
 }
 
 /// The file of an improvement turn's case that holds the forge it was opened with on one line:
-/// its name and, for a forge that reads a named repository's `main` (the bot route), that
-/// repository after one space, `bot <owner>/<repo>` ([`TurnOpening::forge`], [`TurnForge`]).
+/// its name and, for a forge that reads a named repository's `main`, that repository after one
+/// space ([`TurnOpening::forge`], [`TurnForge`]).
 pub const FORGE_FILE: &str = "forge";
 
 /// The forge a turn recorded when it opened ([`FORGE_FILE`]): its name, and the repository it
-/// reads `main` from. `none` names no repository; nor does `bot` in a file written before turns
-/// recorded one, which still reads.
+/// reads `main` from. `none` names no repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnForge {
-    /// The forge's name, `bot` or `none`.
+    /// The forge's name, `none` for the local `main`.
     pub name: String,
-    /// The repository, `<owner>/<repo>` for the bot route.
+    /// The repository, `<owner>/<repo>`, when the forge named one.
     pub repository: Option<String>,
 }
 
@@ -4115,15 +4114,17 @@ pub fn turn_forge(case_dir: &Path) -> Result<Option<TurnForge>> {
     }
 }
 
-/// Why a resume of the case `id` at `case_dir` by a run whose forge is `run_forge` (`bot`, or
-/// `none` for the local `main`, [`crate::improvement::Mainline::forge`]), reading `main` from
+/// Why a resume of the case `id` at `case_dir` by a run whose forge is `run_forge` (`none` for
+/// the local `main`, [`crate::improvement::Mainline::forge`]), reading `main` from
 /// `run_repository` ([`crate::improvement::Mainline::repository`]), is refused before anything
 /// is written, or none: a turn reads the mainline through the forge it recorded when it opened
 /// ([`turn_forge`]), from the repository it recorded, `takt approve` at a judge-surface grant
 /// and the merge validators alike, so a run through another forge, or the same forge on another
-/// repository, would read another `main`. A case that recorded no forge, any case but a turn
-/// and a turn opened before turns recorded one, is not refused here; nor, for its repository,
-/// is a turn that recorded none beside its forge, whose grant's record holds its merge.
+/// repository, would read another `main`. A turn that recorded a forge takt does not have
+/// ([`crate::forge::FORGES`]) is refused under every forge, with no flag to resume it by. A case
+/// that recorded no forge, any case but a turn and a turn opened before turns recorded one, is
+/// not refused here; nor, for its repository, is a turn that recorded none beside its forge,
+/// whose grant's record holds its merge.
 pub fn turn_forge_refusal(
     case_dir: &Path,
     id: &str,
@@ -4133,6 +4134,12 @@ pub fn turn_forge_refusal(
     let Some(recorded) = turn_forge(case_dir)? else {
         return Ok(None);
     };
+    if !crate::forge::FORGES.contains(&recorded.name.as_str()) {
+        let name = &recorded.name;
+        return Ok(Some(format!(
+            "{TURN_PROTOCOL}: the turn {id} recorded the forge `{name}` when it opened, and takt has no forge `{name}`; a turn reads the mainline through the forge it opened with, so no run resumes it: open a new turn instead; nothing was resumed"
+        )));
+    }
     if recorded.name != run_forge {
         let name = &recorded.name;
         return Ok(Some(format!(

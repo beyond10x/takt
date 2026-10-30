@@ -13,6 +13,18 @@ takt's releases.
 ### Changed
 
 - A store story opens on takt's own `story.delivery/3` when nothing names a protocol; a case already open on `story.delivery/2` resumes on it.
+- **Breaking:** `--forge gitlab`, `command` and `connectors` are refused before the case opens unless the run file declares `scan: none`: takt carries no scanner.
+- Without `--forge`, an origin on a host `glab` is logged in to takes `gitlab`, github.com included; any other origin takes `none`, said in one line.
+- `takt scenario run` fetches and creates `trial/<n>` on `origin` with the operator's own git and has no forge by default; `--forge local` or `--forge none` may be given.
+- A Codex or b10x-harness run with no `scan` declared is refused naming `scan: none` in `--config`; `opened.scan` in `events.jsonl` is `unset` or `none`.
+- An improvement turn that recorded a forge takt no longer has is refused under every forge when resumed; open a new turn.
+- Failed tests and failed gates in a prompt are no longer scanned; a line of a credential's shape is still left out.
+
+### Removed
+
+- **Breaking:** `--forge bot` and its route: clap refuses `--forge bot` with exit 2, and a run file whose `forge` is `bot` is refused naming the file and the line.
+- **Breaking:** the `gates` scan adapter and `B10X_GATES_POLICY`; a run file's `scan: gates` is refused naming the file and the line, and `none` is the one adapter.
+- The container image no longer ships `b10x-gates`.
 
 ## [0.23.0] - 2026-10-30
 

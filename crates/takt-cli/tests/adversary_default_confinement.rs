@@ -356,7 +356,6 @@ fn a_scenario_run_tells_the_flag_from_the_default() {
             ])
             .args(&extra)
             .env("XDG_STATE_HOME", outer.0.join("state"))
-            .env_remove("B10X_GATES_POLICY")
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .output()
             .expect("takt runs");

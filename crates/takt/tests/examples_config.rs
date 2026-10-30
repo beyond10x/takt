@@ -51,6 +51,7 @@ fn assert_run(config: &RunConfig) {
     );
     assert_eq!(config.model, None);
     assert_eq!(config.forge.as_deref(), Some("none"));
+    assert_eq!(config.scan, Some(takt::scan::ScanName::None));
     assert_eq!(
         config.test_cmd.as_deref(),
         Some("cargo test --quiet --locked")
@@ -104,6 +105,7 @@ fn assert_loom_run(config: &RunConfig) {
     );
     assert_eq!(config.model.as_deref(), Some("agent"));
     assert_eq!(config.forge.as_deref(), Some("none"));
+    assert_eq!(config.scan, Some(takt::scan::ScanName::None));
     assert_eq!(
         config.test_cmd.as_deref(),
         Some("cargo test --quiet --locked")
@@ -217,7 +219,11 @@ fn the_loom_agent_uses_only_names_the_chart_values_admit() {
     let agent = yaml("takt-agent.yaml");
     let spec = get(&agent, &["spec"]);
     let secrets = strings(get(&values, &["allowedSecretNames"]));
+    // `secretFiles` is optional: the example mounts none.
     for path in [["secretRef", "name"], ["secretFiles", "name"]] {
+        if path[0] == "secretFiles" && spec.get("secretFiles").is_none() {
+            continue;
+        }
         let name = get(spec, &path).as_str().expect("a name");
         assert!(
             secrets.iter().any(|s| s == name),

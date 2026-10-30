@@ -95,7 +95,6 @@ fn takt(bin: &Path, repo: &Path, extra: &[&str]) -> (i32, String, String) {
             "1",
         ])
         .args(extra)
-        .env_remove("B10X_GATES_POLICY")
         .env("PATH", std::env::join_paths(path).expect("a program path"))
         .output()
         .expect("takt runs");

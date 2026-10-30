@@ -2,18 +2,12 @@
 //! store and in the pull request stands without the case directory. The `test_result` record a
 //! story's run writes names its case record by path, sha256, result, subject revision and
 //! producer, and the record's `StoreEvidence` event names the same reference. The pull request's
-//! body summarises the case's evidence records, the steps and the tokens `events.jsonl` states,
-//! stays under 60,000 bytes however many records the case holds, and is the text the bot route
-//! scans before it opens the pull request.
-//!
-//! The scan itself is `b10x-gates`' and needs its policy, which CI does not hold: the last test
-//! proves the body is what the scan reads and that the pull request opens behind a scan that
-//! accepts it, with a stand-in for the program. It does not prove the policy's rules.
+//! body summarises the case's evidence records, the steps and the tokens `events.jsonl` states, and
+//! stays under 60,000 bytes however many records the case holds.
 
 #[path = "support/own_home.rs"]
 mod own_home;
 
-use std::cell::RefCell;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -24,7 +18,7 @@ use anyhow::anyhow;
 use sha2::{Digest as _, Sha256};
 use takt::case::CASES_DIR;
 use takt::evidence::Record;
-use takt::forge::{BotRoute, Checks, Exit, Forge, Memory, Runner};
+use takt::forge::{Checks, Forge, Memory};
 use takt::frontier::{Aep, approve};
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{ChangeRead, CiRead, PrMerged, PrOpen, TestsRun, Validator};
@@ -47,12 +41,6 @@ const APPROVER: &str = "human:operator";
 
 /// The intent a pull request run is given: its title is the first line.
 const INTENT: &str = "deliver the story\n\nThe story's body.";
-
-/// The file the bot route writes the pull request's title and body to, as published.
-const PUBLISHED: &str = "pull-request.published.txt";
-
-/// The policy file the forge is given; the stand-in scan only checks that a line names it.
-const POLICY: &str = "/policies/gates.json";
 
 /// Runs `git <args>` in `tree`; its standard output, byte for byte.
 fn git_bytes(tree: &Path, args: &[&str]) -> Vec<u8> {
@@ -478,71 +466,6 @@ fn three_records(revision: &str) -> Vec<Record> {
     ]
 }
 
-/// A stand-in for `b10x-gates`: it records every line, reads the file each `scan-text` line
-/// names (the last words that are not options), accepts every scan and answers `api` with pull
-/// request #7 at its `--output`.
-struct Scans {
-    lines: RefCell<Vec<String>>,
-    scanned: RefCell<Vec<String>>,
-}
-
-impl Scans {
-    fn new() -> Rc<Self> {
-        Rc::new(Self {
-            lines: RefCell::new(Vec::new()),
-            scanned: RefCell::new(Vec::new()),
-        })
-    }
-}
-
-/// Lends a shared [`Scans`] to a forge that owns its runner.
-struct Lend(Rc<Scans>);
-
-impl Runner for Lend {
-    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        self.0.lines.borrow_mut().push(argv.join(" "));
-        let command = argv.get(1).map(String::as_str);
-        if command == Some("scan-text") {
-            let mut words = argv.iter().skip(2);
-            while let Some(word) = words.next() {
-                if word.starts_with("--") {
-                    words.next();
-                    continue;
-                }
-                let text = fs::read_to_string(word)
-                    .unwrap_or_else(|error| panic!("scan-text names {word}: {error}"));
-                self.0.scanned.borrow_mut().push(text);
-            }
-        }
-        if command == Some("api") {
-            let output = argv
-                .iter()
-                .position(|a| a == "--output")
-                .map(|i| &argv[i + 1])
-                .expect("--output");
-            // The read of the open pull requests for a head before an open finds none.
-            let listing = argv.iter().any(|word| word.contains("/pulls?"));
-            fs::write(
-                output,
-                if listing {
-                    "[]"
-                } else {
-                    r#"{"number": 7, "state": "open"}"#
-                },
-            )?;
-        }
-        Ok(Exit {
-            code: Some(0),
-            stdout: String::new(),
-            stderr: String::new(),
-        })
-    }
-}
-
 /// `test_result` evidence: the store's record names the case record it refers to by path,
 /// sha256 and fields, and the run's `StoreEvidence` event names the same reference. The source
 /// stays `takt`, and the story resumes as done: nothing is written again.
@@ -714,42 +637,4 @@ fn body_is_bounded() {
         "the body counts the records it left out:\n{}",
         body.get(body.len().saturating_sub(400)..).unwrap_or(body)
     );
-}
-
-/// The body is the text the bot route scans before it opens the pull request: the scan reads
-/// the title and the body as published, the pull request opens behind it, and the body is what
-/// was scanned. The scan's own rules are the policy's; see the module's note.
-#[test]
-fn body_passes_scan_text() {
-    let tree = scratch("scan");
-    let scans = Scans::new();
-    let forge = Rc::new(BotRoute::new(
-        "owner/repo",
-        Some(PathBuf::from(POLICY)),
-        Box::new(Lend(scans.clone())),
-    ));
-    let (stop, text, dir) = pr_run(&tree, "scan", forge, three_records);
-    assert_eq!(stop, Ok(Stop::Iterations(1)), "{text}");
-    assert!(text.contains("opened pull request #7"), "{text}");
-
-    let lines = scans.lines.borrow();
-    let scan = lines
-        .iter()
-        .position(|line| line.starts_with("b10x-gates scan-text ") && line.contains(PUBLISHED))
-        .expect("the title and body are scanned");
-    let open = lines
-        .iter()
-        .position(|line| line.starts_with("b10x-gates api --method POST "))
-        .expect("the pull request is opened");
-    assert!(scan < open, "{lines:?}");
-
-    let published = fs::read_to_string(dir.join("artifacts").join(PUBLISHED))
-        .expect("the published title and body are kept");
-    assert!(
-        published.starts_with("deliver the story\n\n"),
-        "{published}"
-    );
-    assert!(published.contains("Steps: "), "{published}");
-    assert!(published.len() < 60_000, "{}", published.len());
-    assert_eq!(scans.scanned.borrow().last(), Some(&published));
 }

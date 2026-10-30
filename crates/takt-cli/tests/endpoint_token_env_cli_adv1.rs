@@ -101,7 +101,6 @@ impl World {
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
-            .env_remove("B10X_GATES_POLICY")
             .env_remove("ANTHROPIC_API_KEY")
             .env(VARIABLE, MARKER)
             .output()

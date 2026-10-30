@@ -129,7 +129,7 @@ fn change_of(tree: &Path, base: &str, paths: &[&str]) -> ChangeSoFar {
     .expect("a branch record");
     let effect = serde_json::json!({"event": "effect", "revision": "r", "paths": paths});
     let mut out = Vec::new();
-    takt::run::change_so_far(tree, &case, || Ok(vec![effect]), None, None, &mut out)
+    takt::run::change_so_far(tree, &case, || Ok(vec![effect]), None, &mut out)
         .expect("a change so far")
 }
 
@@ -228,7 +228,7 @@ fn a_binary_test_file_shown_only_as_differing_is_still_mentioned() {
         "the precondition: the change so far shows the file only as differing: {shown}"
     );
     let intent = "Update the golden file\n\n## Scope\n\n- `tests/golden.bin`\n";
-    let mentioned = takt::harness::scope_files(&tree.0, None, intent, &change, None);
+    let mentioned = takt::harness::scope_files(&tree.0, None, intent, &change);
     assert_eq!(
         mentioned,
         ["tests/golden.bin"],
@@ -261,7 +261,7 @@ fn a_test_file_changed_only_in_mode_is_still_given_to_codex() {
         "the precondition: the change so far shows none of the file's text: {shown}"
     );
     let intent = "Run the suite\n\n## Scope\n\n- `tests/run.sh`\n";
-    let given = takt::harness::context_files(&tree.0, intent, &change, None, &|_| String::new());
+    let given = takt::harness::context_files(&tree.0, intent, &change, &|_| String::new());
     let paths: Vec<&str> = given.iter().map(|file| file.path()).collect();
     assert_eq!(
         paths,
@@ -296,7 +296,7 @@ fn a_crlf_test_file_shown_whole_reaches_codex_as_it_is() {
     // Read where the prompt is built, not through the scripted log, whose lines lose their `\r`.
     let shown = shown_diff(&change);
     let in_diff = shown.contains("+    def test_remove(self):\r\n+        pass\r\n");
-    let given = takt::harness::context_files(&tree.0, intent, &change, None, &|_| String::new());
+    let given = takt::harness::context_files(&tree.0, intent, &change, &|_| String::new());
     let as_context = given
         .iter()
         .any(|file| file.path() == "tests/test_todo.py" && file.text() == after);
@@ -484,7 +484,6 @@ fn a_quoted_path_after_a_binary_file_does_not_make_the_binary_shown_whole() {
         &case,
         || Ok(vec![effect]),
         (None, Some(intent)),
-        None,
         &mut out,
     )
     .expect("a change so far");
@@ -494,7 +493,7 @@ fn a_quoted_path_after_a_binary_file_does_not_make_the_binary_shown_whole() {
             && shown.contains("diff --git \"a/tests/"),
         "the precondition: the binary shows only as differing and a quoted path follows: {shown}"
     );
-    let mentioned = takt::harness::scope_files(&tree.0, None, intent, &change, None);
+    let mentioned = takt::harness::scope_files(&tree.0, None, intent, &change);
     assert_eq!(
         mentioned,
         ["tests/golden.bin"],

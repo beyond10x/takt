@@ -1,9 +1,6 @@
 //! Adversary pass 1 over the wave 06 integration fixes, through the binary: the approval's own
 //! commit (`approvals_only`) and the case a plain run resumes (`Run::next_to_resume`).
 
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
-
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -87,24 +84,12 @@ fn repository(name: &str, second: bool) -> (Scratch, PathBuf) {
     (Scratch(outer), repo)
 }
 
-/// Runs the built `takt` binary with `args`, `bin` first on the program path when given and
-/// then a `b10x-gates` policy file the double never reads, else no `b10x-gates` policy: the exit
-/// code, stdout and stderr.
-fn takt(bin: Option<&Path>, args: &[&str]) -> (i32, String, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
-    command.args(args).env_remove("B10X_GATES_POLICY");
-    if let Some(bin) = bin {
-        command.env("B10X_GATES_POLICY", stand_in_policy::path());
-        command.env(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        );
-    }
-    let output = command.output().expect("takt runs");
+/// Runs the built `takt` binary with `args`: the exit code, stdout and stderr.
+fn takt(args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(args)
+        .output()
+        .expect("takt runs");
     (
         output.status.code().expect("an exit code"),
         String::from_utf8_lossy(&output.stdout).into_owned(),
@@ -112,69 +97,22 @@ fn takt(bin: Option<&Path>, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// Writes `name` into `bin`, executable, with `text`.
-fn executable(bin: &Path, name: &str, text: &str) {
-    let path = bin.join(name);
-    fs::write(&path, text).expect("the stub is written");
-    use std::os::unix::fs::PermissionsExt as _;
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
-}
-
-/// The bot route's program as a double in `<dir>/stub-bin`, its state in `<dir>/forge`,
-/// as `merge_cli.rs` has it: push keeps the branch and the commit pushed (a branch, or `<revision>:refs/heads/<branch>`), `POST`
-/// opens pull request #7, `PUT` merges it; `GET` reports it with the pushed head and one
-/// passing check run. Nothing reaches a network.
-fn forge_double(dir: &Path) -> PathBuf {
-    let bin = dir.join("stub-bin");
-    let state = dir.join("forge");
-    fs::create_dir_all(&bin).expect("a stub directory");
-    fs::create_dir_all(&state).expect("a state directory");
-    let state_text = state.display().to_string();
-    executable(
-        &bin,
-        "b10x-gates",
-        &format!(
-            r#"#!/bin/sh
-state='{state_text}'
-case "$1" in
-  bot)
-    spec="$5"; branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
-    if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
-    printf '%s' "$branch" > "$state/branch"
-    git rev-parse "$revision" > "$state/pushed" || exit 1
-    exit 0 ;;
-  scan-text) exit 0 ;;
-  api)
-    method=''; path=''; output=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --method) method="$2"; shift ;;
-        --path) path="$2"; shift ;;
-        --output) output="$2"; shift ;;
-      esac
-      shift
-    done
-    case "$method" in
-      POST) printf 'OPEN' > "$state/state"; printf '{{"number": 7}}' > "$output"; exit 0 ;;
-      PUT) printf 'MERGED' > "$state/state"; echo merged >> "$state/merges"; printf '{{"merged": true}}' > "$output"; exit 0 ;;
-      GET)
-        case "$path" in
-          */pulls\?*) printf '[]' > "$output" ;;
-          */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
-          */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
-          *) s=$(cat "$state/state"); st=open; merged=false
-             case "$s" in MERGED) st=closed; merged=true ;; CLOSED) st=closed ;; esac
-             printf '{{"state":"%s","merged":%s,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$st" "$merged" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")" > "$output" ;;
-        esac
-        exit 0 ;;
-    esac ;;
-esac
-echo "b10x-gates double: $*" >&2
-exit 2
-"#
-        ),
+// story:takt-carries-no-organisations-own-route: the bot forge double is gone; these cases run on
+// the local forge.
+/// The local forge for `repo`: a bare hub `<dir>/hub.git` holding its `main`, named by its
+/// `origin`, and a run file `<dir>/run.yaml` whose forge is `local` with `true` as its checks;
+/// the run file. Nothing reaches a network.
+fn local_hub(dir: &Path, repo: &Path) -> PathBuf {
+    git(dir, &["init", "-q", "--bare", "-b", "main", "hub.git"]);
+    let hub = dir.join("hub.git");
+    git(
+        repo,
+        &["remote", "add", "origin", hub.to_str().expect("utf-8")],
     );
-    bin
+    git(repo, &["push", "-q", "origin", "main"]);
+    let config = dir.join("run.yaml");
+    fs::write(&config, "forge: local\nlocal_checks: [\"true\"]\n").expect("the run file");
+    config
 }
 
 /// The one case directory under `repo`, by name.
@@ -205,10 +143,6 @@ fn the_case(repo: &Path) -> String {
 #[test]
 fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request() {
     let (outer, repo) = repository("push-gate", false);
-    git(
-        &repo,
-        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
-    );
     let protocol = outer.0.join("push-gated.yaml");
     let yaml = canon_engineering::registry::get("story-delivery", 1)
         .expect("the delivery protocol")
@@ -220,26 +154,26 @@ fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request()
     assert_ne!(gated, yaml);
     assert!(gated.contains("capability: repository.push"));
     fs::write(&protocol, gated).expect("the protocol file");
-    let bin = forge_double(&outer.0);
+    let config = local_hub(&outer.0, &repo);
+    let config = config.to_str().expect("utf-8");
     let path = repo.to_str().expect("utf-8");
     let protocol = protocol.to_str().expect("utf-8");
 
-    let (code, out, err) = takt(
-        Some(&bin),
-        &[
-            "run",
-            "--repo",
-            path,
-            "--harness",
-            "none",
-            "--test-cmd",
-            "true",
-            "--protocol",
-            protocol,
-            "--iterations",
-            "0",
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        path,
+        "--harness",
+        "none",
+        "--test-cmd",
+        "true",
+        "--protocol",
+        protocol,
+        "--config",
+        config,
+        "--iterations",
+        "0",
+    ]);
     assert_eq!(code, 3, "stdout {out} stderr {err}");
     assert!(out.contains("frontier: took story:ready-one"), "{out}");
     assert!(out.contains("on story.push-gated/1"), "{out}");
@@ -250,38 +184,34 @@ fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request()
     git(&repo, &["commit", "-q", "-m", "the work"]);
     let worked = git(&repo, &["rev-parse", "HEAD"]);
 
-    let (code, out, err) = takt(
-        Some(&bin),
-        &[
-            "run",
-            "--repo",
-            path,
-            "--harness",
-            "none",
-            "--test-cmd",
-            "true",
-            "--gate",
-            "pr.open",
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        path,
+        "--harness",
+        "none",
+        "--test-cmd",
+        "true",
+        "--gate",
+        "pr.open",
+        "--config",
+        config,
+    ]);
     assert_eq!(code, 4, "stdout {out} stderr {err}");
     assert!(
         out.contains("stopped: ApprovalRequired (pr.open)"),
         "stdout {out} stderr {err}"
     );
 
-    let (code, out, err) = takt(
-        Some(&bin),
-        &[
-            "approve",
-            "--repo",
-            path,
-            &id,
-            "repository.push",
-            "--by",
-            "human:operator",
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "approve",
+        "--repo",
+        path,
+        &id,
+        "repository.push",
+        "--by",
+        "human:operator",
+    ]);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert_eq!(
         git(&repo, &["log", "-1", "--format=%s"]),
@@ -289,18 +219,17 @@ fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request()
     );
     assert_eq!(git(&repo, &["rev-parse", "HEAD^"]), worked);
 
-    let (code, out, err) = takt(
-        Some(&bin),
-        &[
-            "run",
-            "--repo",
-            path,
-            "--harness",
-            "none",
-            "--test-cmd",
-            "true",
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        path,
+        "--harness",
+        "none",
+        "--test-cmd",
+        "true",
+        "--config",
+        config,
+    ]);
     assert!(
         out.contains("evidence: pull_request open"),
         "the push the approval was given for never happens: exit {code}\nstdout {out}\nstderr {err}"
@@ -319,24 +248,21 @@ fn adv1_an_approval_before_the_push_lets_the_resumed_run_open_the_pull_request()
 fn adv1_a_plain_run_on_the_cases_own_branch_resumes_only_a_case_whose_take_is_on_its_branch() {
     let (_outer, repo) = repository("own-branch", true);
     let path = repo.to_str().expect("utf-8");
-    let (code, out, err) = takt(
-        None,
-        &[
-            "run",
-            "--repo",
-            path,
-            "--harness",
-            "none",
-            "--test-cmd",
-            "true",
-            "--forge",
-            "none",
-            "--protocol",
-            "software.change/1",
-            "--iterations",
-            "0",
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        path,
+        "--harness",
+        "none",
+        "--test-cmd",
+        "true",
+        "--forge",
+        "none",
+        "--protocol",
+        "software.change/1",
+        "--iterations",
+        "0",
+    ]);
     assert_eq!(code, 3, "the setup run: stdout {out} stderr {err}");
     assert!(out.contains("frontier: took story:ready-one"), "{out}");
     let case = the_case(&repo);
@@ -358,7 +284,7 @@ fn adv1_a_plain_run_on_the_cases_own_branch_resumes_only_a_case_whose_take_is_on
         "0",
     ];
 
-    let (code, out, err) = takt(None, &plain);
+    let (code, out, err) = takt(&plain);
     assert!(
         out.contains(&format!(
             "frontier: resumed story:ready-one: Make the check pass (case {case})"
@@ -367,7 +293,7 @@ fn adv1_a_plain_run_on_the_cases_own_branch_resumes_only_a_case_whose_take_is_on
     );
     assert_eq!(git(&repo, &["branch", "--show-current"]), branch);
 
-    let (code, out, err) = takt(None, &plain);
+    let (code, out, err) = takt(&plain);
     assert!(
         !out.contains("frontier: resumed") && out.contains("frontier: took story:ready-two"),
         "decision B: from a tree on a case branch only a case whose take is committed on its branch is resumed: exit {code}\nstdout {out}\nstderr {err}"

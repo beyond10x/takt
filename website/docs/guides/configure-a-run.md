@@ -63,31 +63,23 @@ names the story.
 ### Codex and b10x-harness: the scan
 
 Claude Code, the default, needs none of this. Codex and b10x-harness sessions may read outside
-their copy, so what they propose is accepted only after a scan passed it. The scan is an
-adapter, `scan` in the file:
+their copy, so what they propose would have to pass a scan. The scan is an adapter, `scan` in
+the file, and takt has one:
 
 | `scan` | what scans a proposal |
 |---|---|
-| `gates` (default) | [b10x-gates](https://github.com/beyond10x/gates), beyond10x's scanner, under the policy file `B10X_GATES_POLICY` names |
+| not set | nothing, and nothing unscanned is accepted: a Codex or b10x-harness run is refused before its case opens, and so is a run whose forge publishes |
 | `none` | nothing; each proposal is still checked for the shape of a credential |
 
-With a gates policy, give it in the variable:
-
-```sh
-B10X_GATES_POLICY=<policy file> takt run --repo . --harness codex --forge none \
-  --intent "add a function sub(left, right) that subtracts right from left, with a test"
-```
-
-With neither the policy nor `scan = "none"`, the run is refused before its case opens, exit 1,
-and the refusal names both ways on:
+Without `scan = "none"`, the run is refused before its case opens, exit 1:
 
 ```console
 $ takt run --repo demo --harness codex --forge none --intent "add a function sub"
-takt: --harness codex runs a session that may read outside its copy, and the scan adapter `gates` has no policy (B10X_GATES_POLICY is not set): what it proposes would not be scanned, and not scanned is never passed; set B10X_GATES_POLICY to a gates policy file, or declare `scan: none` in the run configuration file given with --config (`takt run --config <file>`) to accept what it proposes unscanned, checked only for the shape of a credential; nothing was opened
+takt: --harness codex runs a session that may read outside its copy, and no scan adapter is declared: what it proposes would not be scanned, and not scanned is never passed; declare `scan: none` in the run configuration file given with --config to accept what it proposes unscanned, checked only for the shape of a credential; nothing was opened
 ```
 
-Without b10x-gates, declare in the file that nothing scans. `scan = "none"` is accepted only in a
-file, never as a flag:
+Declare in the file that nothing scans. `scan = "none"` is accepted only in a file, never as a
+flag:
 
 ```toml title="run.toml"
 scan = "none"
@@ -103,8 +95,7 @@ scan: none (declared in run.toml); what --harness codex proposes is accepted uns
 ```
 
 (The other lines of that run are left out.) The case's `opened` event records the adapter as
-`scan`. `scan = "none"` with `B10X_GATES_POLICY` set is refused too: a run has one scan adapter
-([The scan](../reference/configuration.md#the-scan)).
+`scan`, `unset` when the file declares none ([The scan](../reference/configuration.md#the-scan)).
 
 ## 3. Name the endpoint for b10x-harness
 
@@ -160,17 +151,10 @@ takt: the endpoint's credential variable LLM_API_KEY is empty; nothing was start
 
 | `forge` | what happens at the pull request |
 |---|---|
-| not set | `bot` for a github.com `origin`, `gitlab` for another host `glab` is logged in to, else `none` |
-| `bot` | beyond10x's route for github.com: `b10x-gates bot` pushes the branch under a GitHub App, and `b10x-gates api` opens the pull request, reads it and its checks (`--method GET`) and merges it, under the same App; takt runs no `gh` |
-| `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request, after the run's scan adapter scanned what it publishes |
+| not set | `gitlab` for an `origin` on a host `glab` is logged in to, else `none` |
+| `gitlab` | `git` pushes over HTTPS and `glab api` opens, reads and merges the merge request; what it publishes is not scanned, so the file must declare `scan = "none"` |
 | `local` | a bare repository on this machine, the tree's `origin`, is the forge: `git` pushes to it, a request record in it is the pull request, the run file's `local_checks` are the checks, and the merge is made in it; never a default ([The local forge](../reference/configuration.md#the-local-forge)) |
 | `none` | no pull request: a story stops `Unperformable` at `pr.opened`, exit 7, and prints its candidate commit |
-
-`forge: bot` is checked before the case opens. The run is refused with exit 1, and no case is
-opened, when `b10x-gates` is not on `PATH`, or when `B10X_GATES_POLICY` does not name the policy
-file. That file must be a regular file, not a symbolic link, owned by you, and at mode 0600 or
-stricter, in a directory you own that no other user can write. These are the checks `b10x-gates`
-makes when it loads a policy. (Since 0.23.0.)
 
 How each forge is set up: [Configuration](../reference/configuration.md#the-forge). The local
 forge needs `local_checks` beside it in the file:
@@ -207,7 +191,7 @@ opens, exit 1. The refusal names the line and never the value written there:
 
 ```console
 $ takt run --repo . --intent x --config stroy.toml
-takt: the run configuration file stroy.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file stroy.toml is refused at line 4: a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 ### A key written twice
@@ -247,6 +231,7 @@ agent:
 takt:
   hours: 1
   harness: harness
+  scan: none
   endpoint_file: endpoint.toml
   forge: none
   test_cmd: cargo test --quiet --locked

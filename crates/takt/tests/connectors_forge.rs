@@ -391,7 +391,7 @@ fn it_is_never_the_default() {
     assert_eq!(config.forge, None);
     assert!(select(&config).expect("no forge named").is_none());
 
-    for forge in ["bot", "gitlab", "none"] {
+    for forge in ["gitlab", "none"] {
         fs::write(&path, format!("forge: {forge}\n")).expect("a file");
         let config = RunConfig::read(&path).expect("reads");
         assert!(select(&config).expect("another forge").is_none(), "{forge}");
@@ -402,7 +402,7 @@ fn it_is_never_the_default() {
     let error = select(&config).expect_err("an instance with no forge: connectors");
     assert!(format!("{error:#}").contains("forge_instance"), "{error:#}");
 
-    fs::write(&path, "forge: bot\nforge_instance: forge\n").expect("a file");
+    fs::write(&path, "forge: gitlab\nforge_instance: forge\n").expect("a file");
     let config = RunConfig::read(&path).expect("reads");
     assert!(select(&config).is_err());
 

@@ -89,7 +89,6 @@ fn takt(repo: &Path, extra: &[&str]) -> (i32, String, String) {
             "1",
         ])
         .args(extra)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -226,10 +225,9 @@ fn git_out(dir: &Path, args: &[&str]) -> String {
 fn takt_with_credentials(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env_remove("B10X_GATES_POLICY")
         .env("GH_TOKEN", SENTINEL)
         .env("GITHUB_TOKEN", SENTINEL)
-        .env("B10X_GATES_TOKEN", SENTINEL)
+        .env("APP_TOKEN", SENTINEL)
         .env("CARGO_TARGET_DIR", SHARED_TARGET)
         .output()
         .expect("takt runs");

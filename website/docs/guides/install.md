@@ -76,7 +76,7 @@ cd takt
 docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.23.0 .
 ```
 
-The image holds takt, `aep`, `b10x-harness`, `ess`, `b10x-gates` and a Rust toolchain, and runs
+The image holds takt, `aep`, `b10x-harness`, `ess` and a Rust toolchain, and runs
 as uid 10001. It holds no Claude Code. Without `REVISION`, the image's label names an `unknown`
 revision. What is in it: [Container image](../reference/container-image.md). How to run it:
 [Run in a container](./run-in-a-container.md).
@@ -92,12 +92,11 @@ takt starts other programs and finds them on the `PATH`. Which ones depends on t
 |---|---|
 | every run | [`git`](https://git-scm.com/downloads), and the test command's toolchain: `cargo test --quiet` by default ([rustup](https://rustup.rs)), any other with `--test-cmd` |
 | `--harness claude`, the default | [Claude Code](https://github.com/anthropics/claude-code) (`claude`), logged in, at a [qualified version](#claude-codes-version) |
-| `--harness codex` | [Codex](https://github.com/openai/codex) (`codex`), and a scan adapter: [`b10x-gates`](https://github.com/beyond10x/gates) with `B10X_GATES_POLICY` set, or `scan = "none"` in the run file ([Configure a run](./configure-a-run.md)) |
-| `--harness harness` | [`b10x-harness`](https://github.com/beyond10x/harness) 0.22.0, an LLM endpoint, and a scan adapter, as for `codex` |
+| `--harness codex` | [Codex](https://github.com/openai/codex) (`codex`), and `scan = "none"` declared in the run file ([Configure a run](./configure-a-run.md)) |
+| `--harness harness` | [`b10x-harness`](https://github.com/beyond10x/harness) 0.22.0, an LLM endpoint, and `scan = "none"`, as for `codex` |
 | a story | [`aep`](https://github.com/beyond10x/aep) and a planning store; a gates document for the gate ([Run a story](./run-a-story.md)) |
 | `--forge local` | nothing beyond `git`: a bare repository on this machine as the tree's `origin`, and the programs its `local_checks` name |
-| `--forge gitlab` | [`glab`](https://gitlab.com/gitlab-org/cli), with `glab auth status --hostname <host>` exiting 0 |
-| `--forge bot` (beyond10x's route, github.com only) | [`b10x-gates`](https://github.com/beyond10x/gates) acting as the bot's GitHub App, and `B10X_GATES_POLICY` naming its policy file: a regular file you own, not a symbolic link, at mode 0600 or stricter, in a directory you own that no other user can write. Without either the run is refused before its case opens, exit 1. No `gh`: the pull request and its checks are read through `b10x-gates api` (0.22.1 and earlier still need [`gh`](https://cli.github.com) for those reads) |
+| `--forge gitlab` | [`glab`](https://gitlab.com/gitlab-org/cli), with `glab auth status --hostname <host>` exiting 0, and `scan = "none"` in the run file |
 | reading a case | [`jq`](https://jqlang.github.io/jq/), as [Read a case](./read-a-case.md) uses it |
 | `takt promote` | [`bwrap`](https://github.com/containers/bubblewrap) on Linux, `/usr/bin/sandbox-exec` on macOS; and rustup's default toolchain |
 

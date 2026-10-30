@@ -3,7 +3,7 @@
 //! budget, and records `ci_result` `pass` or `fail` once the pipeline of the pushed head ends.
 //!
 //! The run goes through the forge `gitlab` ([`Glab`]) and the real process runner, with doubles
-//! of `glab`, `b10x-gates` and git's HTTPS push first on every child's program path: the `glab`
+//! of `glab` and git's HTTPS push first on every child's program path: the `glab`
 //! double answers the merge request's reads from a script of head pipelines, one line a read.
 //! A library test, not one of the binary: `takt run` waits [`Run::POLL`], thirty seconds,
 //! between two reads and has no flag to shorten it, so only [`Run::poll`] makes a run of several
@@ -247,11 +247,6 @@ fn fixture(name: &str, pipelines: &[&str]) -> Fixture {
         &GIT.replace("@STATE@", state_text)
             .replace("@GIT@", real_git().to_str().expect("utf-8")),
     );
-    executable(
-        &bin,
-        "b10x-gates",
-        "#!/bin/sh\nif [ \"$1\" = scan-text ]; then exit 0; fi\necho \"b10x-gates double: $*\" >&2\nexit 2\n",
-    );
     let mut script = pipelines.join("\n");
     script.push('\n');
     fs::write(state.join("pipelines"), script).expect("the script is written");
@@ -265,7 +260,9 @@ fn fixture(name: &str, pipelines: &[&str]) -> Fixture {
     let forge = Rc::new(Glab::new(
         "gitlab.example",
         "group/sub/repo",
-        takt::scan::Scan::Gates { policy: None },
+        takt::scan::Scan::None {
+            declared_in: outer.join("run.yaml"),
+        },
         Box::new(OnPath { path }),
     ));
     Fixture {

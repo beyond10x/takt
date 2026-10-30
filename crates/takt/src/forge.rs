@@ -1,38 +1,30 @@
 //! The `Forge` seam: the repository host behind a trait, its adapters and an in-memory double
 //! for the tests ([`Memory`]). An adapter pushes a case's branch, opens and merges its pull
-//! request and reads its state and checks; `--forge` names it:
+//! request and reads its state and checks; `--forge` names it ([`FORGES`]):
 //!
 //! | `--forge` | adapter | what it goes through |
 //! |---|---|---|
-//! | `bot` | [`bot`] ([`BotRoute`]) | the organization's bot route, whose credential never enters takt |
 //! | `gitlab` | [`gitlab`] ([`gitlab::Glab`]) | `glab` under the user's own GitLab login |
+//! | `command` | [`command`] ([`command::CommandForge`]) | the argument lists of the run file's `forge_commands`; named, never a default |
 //! | `connectors` | [`connectors`] ([`connectors::ConnectorsForge`]) | `connectors operations invoke` on the run file's `forge_instance`; named, never a default |
 //! | `local` | [`local`] ([`local::Local`]) | a bare repository on this machine, the hub `origin` names, outside the tree; named, never a default, and nothing leaves the machine |
 //! | `none` | none | nothing; nothing leaves the machine |
 //!
-//! Before any of it leaves the machine, an adapter that publishes has a scan read what a push
-//! would publish (the object set it sends: every object of the head the repository's base does
-//! not hold, as the tracking ref of the case's base says while the repository's own base, read
-//! through the adapter, agrees with it, or every object of the head; each commit object raw,
-//! every header and the message, every name in every tree object and every path in full from
-//! each commit's root (`filename:<path>`), a gitlink's and an empty tree's included, every blob
-//! whole and, behind a UTF-16 or UTF-32 mark, decoded too, `git replace` notwithstanding; a head
-//! that is not a commit, a tree entry in a mode git does not write and a disagreeing tracking
-//! ref refused) and a pull request's title and body: the bot route its own, whatever the run's
-//! scan adapter is; the `gitlab` adapter the run's scan adapter's ([`crate::scan::Scan`]), and
-//! none under a declared `none`. A validator turns what the forge reports into evidence; the
-//! forge itself writes no record.
+//! Before any of it leaves the machine, an adapter that publishes asks the run's scan adapter
+//! ([`crate::scan::Scan`]) whether it may: under a declared `none` it publishes unscanned, and
+//! with no adapter declared it publishes nothing, since not scanned is never passed. A head that
+//! is not a commit is refused under either. A validator turns what the forge reports into
+//! evidence; the forge itself writes no record.
 //!
 //! Every child process takt starts, the forge's and the others' (the test command, the
 //! harness, `aep`), goes through [`run_child`]: no standard input, its own process group,
 //! killed once it outlives its [`Limits`], what it started killed with it when it ends, and
 //! only a bounded tail of what it prints kept (and a bounded head, for a harness step's
-//! transcript). Its environment holds no credential but the ones its adapter reads
-//! ([`without_credentials`]): the forge keeps only the `B10X_*` ones the bot route's programs
-//! read, and no GitHub token.
+//! transcript). Its environment holds no credential ([`without_credentials`]): a forge program
+//! reads its own login, and no GitHub token.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -43,14 +35,42 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use crate::confinement::Command;
 
-pub mod bot;
 pub mod command;
 pub mod connectors;
 pub mod credential;
 pub mod gitlab;
 pub mod local;
 
-pub use bot::BotRoute;
+/// The values `--forge` and a run file's `forge` take.
+pub const FORGES: [&str; 5] = ["none", "local", "gitlab", "command", "connectors"];
+
+/// The file under the directory `open_pull_request` is given that holds what was sent.
+pub const REQUEST: &str = "pull-request.request.json";
+/// The file under the directory `open_pull_request` is given that holds what came back.
+pub const RESPONSE: &str = "pull-request.response.json";
+/// The file under the directory `open_pull_request` is given that holds the title and the body
+/// as they are published, decoded.
+pub const PUBLISHED: &str = "pull-request.published.txt";
+/// The file under the directory `merge` is given that holds what was sent.
+pub const MERGE_REQUEST: &str = "pull-request.merge.request.json";
+/// The file under the directory `merge` is given that holds what came back.
+pub const MERGE_RESPONSE: &str = "pull-request.merge.response.json";
+/// What a push's child is started with beyond every forge child's: git may push over HTTPS
+/// alone, whatever URL the remote or the repository's configuration names.
+pub const PUSH_ENV: [(&str, &str); 1] = [("GIT_ALLOW_PROTOCOL", "https")];
+
+/// Whether what pushing `branch` would publish may leave the machine under the run's scan
+/// adapter `scan`: under a declared `none` it may, unscanned; with no adapter declared it may
+/// not, since not scanned is never passed, and nothing is pushed.
+fn may_publish(scan: &crate::scan::Scan, branch: &str) -> Result<()> {
+    if scan.declared_none() {
+        return Ok(());
+    }
+    bail!(
+        "what pushing {branch} would publish was not scanned: {}; not scanned is never passed, so nothing was pushed",
+        scan.not_scanned()
+    )
+}
 
 /// What a pull request is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -139,8 +159,8 @@ impl std::error::Error for Failed {}
 /// `are`.
 const CHECK_PENDING: [&str; 4] = ["expected", "in progress", "pending", "queued"];
 
-/// The heading of a ruleset's refusal, which runs into its first rule once the bot route's
-/// program has dropped the newlines between them.
+/// The heading of a ruleset's refusal, which runs into its first rule once a program that
+/// reports it has dropped the newlines between them.
 const RULESET_HEADING: &str = "repository rule violations found";
 
 /// The forge's own words in one layer of an error: a [`Failed`] program's standard error, or,
@@ -161,15 +181,10 @@ fn forge_words(cause: &(dyn std::error::Error + 'static)) -> Option<String> {
     })
 }
 
-/// The forge's message in `words`, its prefix left out: what follows the bot route's own
-/// prefix and status ([`bot::API_REFUSAL_PREFIX`]; `None` when the bot route withheld the
-/// message), or else what follows a leading HTTP status code (`405 <message>`, as an adapter
-/// that reports text passes it on).
+/// The forge's message in `words`, its prefix left out: what follows a leading HTTP status code
+/// (`405 <message>`, as an adapter that reports text passes it on), or the words whole.
 fn forge_message(words: &str) -> Option<&str> {
     let words = words.trim();
-    if let Some(rest) = words.strip_prefix(bot::API_REFUSAL_PREFIX) {
-        return rest.split_once("): ").map(|(_, message)| message);
-    }
     let digits = words.chars().take_while(char::is_ascii_digit).count();
     Some(
         (digits > 0)
@@ -306,7 +321,7 @@ pub fn is_object_id(text: &str) -> bool {
 /// What an `origin` URL names: the host and the `<owner>/<repo>` on it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Origin {
-    /// The host, `github.com` for the bot route.
+    /// The host.
     pub host: String,
     /// `<owner>/<repo>`.
     pub repository: String,
@@ -319,8 +334,7 @@ pub struct Origin {
 pub struct Outgoing<'a> {
     /// The branch pushed.
     pub branch: &'a str,
-    /// The branch the case forked from: the bot route reads what the remote holds from its
-    /// tracking ref of it.
+    /// The branch the case forked from.
     pub base: &'a str,
     /// The commit pushed.
     pub head: &'a str,
@@ -331,10 +345,8 @@ pub struct Outgoing<'a> {
 /// What the scan of a commit identity found when a run opened ([`Forge::scan_identity`]).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IdentityScan {
-    /// The scan read the identity and refused nothing.
-    Passed,
-    /// No scan read the identity, and why: no policy found, no scanner to run, a forge that has
-    /// none. Not a pass: the scan before the push still applies.
+    /// No scan read the identity, and why: no scan adapter declared, `scan: none` declared, or a
+    /// forge that publishes nothing off the machine. Never a pass.
     NotScanned(String),
 }
 
@@ -572,15 +584,6 @@ pub fn is_credential(name: &str) -> bool {
         || name.starts_with("GITLAB_")
         || name == "SSH_AUTH_SOCK"
         || SUFFIXES.iter().any(|suffix| name.ends_with(suffix))
-}
-
-/// The credentials the bot route's programs read: the variables the bot route's own program
-/// reads (`B10X_*`). No GitHub token: no forge program reads one, since the bot route writes
-/// and reads under its App and `glab` under its own login. Not the SSH agent: a push or a
-/// fetch goes under the bot's credential, never the user's.
-#[must_use]
-pub fn bot_route_reads(name: &str) -> bool {
-    name.starts_with("B10X_")
 }
 
 /// Removes from what `command` inherits every variable that [`is_credential`] and `keep` does
@@ -1432,7 +1435,7 @@ pub fn run_child_keeping_head(
 }
 
 /// The runner that runs the line as a process, without a shell, held to its limits, with no
-/// credential but the ones the bot route reads ([`bot_route_reads`]), and with nothing that can
+/// credential ([`without_credentials`]), and with nothing that can
 /// wait on a person ([`NO_PROMPT`]): standard input is `/dev/null` ([`run_child`]), git asks no
 /// question, neither on the terminal nor through an askpass program, and SSH runs in batch mode,
 /// so a line that cannot authenticate fails at once instead of waiting until its timeout.
@@ -1483,6 +1486,19 @@ impl Process {
     /// Runs `argv` in `tree` as [`Runner::run`] does, with `env` set over [`NO_PROMPT`]: what
     /// one line needs that every other line must not get.
     pub fn run_with(&self, tree: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<Exit> {
+        self.run_keeping(tree, argv, env, |_| false)
+    }
+
+    /// [`Self::run_with`], the credentials `keep` admits left in the child's environment
+    /// ([`without_credentials`]): for a line that goes under the operator's own login, as the
+    /// operator's git does with the SSH agent.
+    pub fn run_keeping(
+        &self,
+        tree: &Path,
+        argv: &[String],
+        env: &[(&str, &str)],
+        keep: fn(&str) -> bool,
+    ) -> Result<Exit> {
         let (program, args) = argv
             .split_first()
             .ok_or_else(|| anyhow!("an empty argument line"))?;
@@ -1492,7 +1508,7 @@ impl Process {
             .current_dir(tree)
             .envs(NO_PROMPT)
             .envs(env.iter().copied());
-        without_credentials(&mut command, bot_route_reads);
+        without_credentials(&mut command, keep);
         let finished = run_child(&mut command, self.limits)
             .with_context(|| format!("run {} in {}", argv.join(" "), tree.display()))?;
         Ok(Exit {
@@ -1503,23 +1519,8 @@ impl Process {
     }
 }
 
-/// Runs `argv` in `tree` through `runner`; a program that did not exit 0 is an error naming the
-/// line and what it said.
-fn succeed(runner: &dyn Runner, tree: &Path, argv: &[String]) -> Result<Exit> {
-    let exit = runner.run(tree, argv)?;
-    if !exit.success() {
-        return Err(Failed {
-            line: argv.join(" "),
-            code: exit.code,
-            stderr: exit.stderr.trim().to_owned(),
-        }
-        .into());
-    }
-    Ok(exit)
-}
-
 /// Runs the push line `argv` in `tree` through `runner` over HTTPS alone
-/// ([`BotRoute::PUSH_ENV`]), the line of every adapter that pushes to `url`. A push git refuses
+/// ([`PUSH_ENV`]), the line of every adapter that pushes to `url`. A push git refuses
 /// because a URL rewrite in the repository's configuration (`insteadOf`, `pushInsteadOf`) would
 /// send it over another transport is refused naming `url` and that transport; `route` names
 /// the adapter in the refusal.
@@ -1530,10 +1531,10 @@ fn push_over_https(
     url: &str,
     route: &str,
 ) -> Result<()> {
-    push_over_https_with(runner, tree, argv, url, route, &BotRoute::PUSH_ENV)
+    push_over_https_with(runner, tree, argv, url, route, &PUSH_ENV)
 }
 
-/// [`push_over_https`] with `env` as the line's environment, which holds [`BotRoute::PUSH_ENV`]
+/// [`push_over_https`] with `env` as the line's environment, which holds [`PUSH_ENV`]
 /// and what the adapter's credential helper reads besides.
 fn push_over_https_with(
     runner: &dyn Runner,
@@ -1560,159 +1561,6 @@ fn push_over_https_with(
     .into())
 }
 
-/// The commit the repository holds as the case's `base`, what the scan before a push need not
-/// read again: the tracking ref `refs/remotes/<remote>/<base>`, read by its full name, but only
-/// while the repository's own `base`, as `remote_base` reads it through the adapter, is at the
-/// same commit. A tracking ref at another commit (stale, or written by hand) refuses the push,
-/// naming both; a repository with no `base` holds nothing of it; no tracking ref says nothing,
-/// and the repository is then not asked. `None` has every commit of the head scanned.
-fn held_by(
-    tree: &Path,
-    remote: &str,
-    base: &str,
-    remote_base: impl FnOnce() -> Result<Option<String>>,
-) -> Result<Option<String>> {
-    let tracking = format!("refs/remotes/{remote}/{base}");
-    let Some(tracked) = exact_ref(tree, &tracking) else {
-        return Ok(None);
-    };
-    match remote_base()? {
-        None => Ok(None),
-        Some(remote) if remote == tracked => Ok(Some(tracked)),
-        Some(remote) => bail!(
-            "{tracking} is at {tracked}, but the repository's {base} is at {remote}: what the repository holds is not what the tracking ref says; refused, nothing was pushed"
-        ),
-    }
-}
-
-/// The scan before anything leaves the machine, shared by every adapter that publishes under
-/// the `gates` scan adapter: one line of it ([`crate::scan::gates::outgoing_argv`]) under
-/// `--repository` and, when the policy file is known, `--policy`, run through `runner`.
-struct Scanner<'a> {
-    runner: &'a dyn Runner,
-    repository: &'a str,
-    policy: Option<&'a Path>,
-}
-
-impl Scanner<'_> {
-    /// The line that scans `paths`, the paths last.
-    fn argv(&self, paths: &[&Path]) -> Vec<String> {
-        crate::scan::gates::outgoing_argv(self.repository, self.policy, paths)
-    }
-
-    /// One `scan-text` line over everything pushing `outgoing.head` would publish: the request
-    /// `write` puts under `dir` (the JSON sent and the title and body as published, as the
-    /// `request` noun names it), when one is opened, and the objects the push sends that the
-    /// repository does not hold (`held`, [`published_commits`], [`outgoing_text`]): every commit
-    /// object raw ([`BotRoute::MESSAGES`]), every tree's entry names, every path in full and
-    /// every blob ([`BotRoute::FILES`]), all written under `dir`. Once git prints more than
-    /// `limit` bytes for them, it is read no further and the push is refused, nothing written or
-    /// scanned.
-    #[allow(clippy::too_many_arguments)]
-    fn outgoing(
-        &self,
-        tree: &Path,
-        dir: &Path,
-        outgoing: &Outgoing<'_>,
-        held: Option<&str>,
-        limit: usize,
-        write: fn(&Path, &PullRequest) -> Result<(PathBuf, PathBuf)>,
-        noun: &str,
-    ) -> Result<()> {
-        let Outgoing {
-            branch,
-            head,
-            request,
-            ..
-        } = *outgoing;
-        let (text, commits) = outgoing_text(tree, held, head, limit)?;
-        let Some((messages, files)) = text else {
-            bail!(
-                "{commits}, which pushing {branch} would publish, come to more than the {limit} bytes of messages and files one scan is given: refused, not cut; nothing was pushed"
-            );
-        };
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let mut paths = Vec::new();
-        if let Some(request) = request {
-            let (input, published) = write(dir, request)?;
-            paths.extend([input, published]);
-        }
-        for (name, text) in [(BotRoute::MESSAGES, messages), (BotRoute::FILES, files)] {
-            let path = dir.join(name);
-            std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
-            paths.push(path);
-        }
-        let paths: Vec<&Path> = paths.iter().map(PathBuf::as_path).collect();
-        succeed(self.runner, tree, &self.argv(&paths)).with_context(|| {
-            format!(
-                "what pushing {branch} would publish did not pass scan-text: {commits}, with their identities, messages and files{}; nothing was pushed{}",
-                if request.is_some() {
-                    format!(", and the {noun}'s title and body")
-                } else {
-                    String::new()
-                },
-                if request.is_some() {
-                    format!(" and no {noun} opened")
-                } else {
-                    String::new()
-                }
-            )
-        })?;
-        Ok(())
-    }
-
-    /// One `scan-text` line over [`BotRoute::IDENTITY`] written under `dir`: the identity as the
-    /// `author` and `committer` headers of a commit object ([`identity_headers`]). A scanner
-    /// that is not on the program path, or that finds no policy file
-    /// ([`crate::scan::gates::NO_POLICY`]), scanned nothing: [`IdentityScan::NotScanned`],
-    /// naming what it said. A refusal names `route`, whose scan before a push it is.
-    fn identity(
-        &self,
-        tree: &Path,
-        dir: &Path,
-        identity: &crate::git::CommitIdentity,
-        route: &str,
-    ) -> Result<IdentityScan> {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let path = dir.join(BotRoute::IDENTITY);
-        std::fs::write(&path, identity_headers(identity))
-            .with_context(|| format!("write {}", path.display()))?;
-        let argv = self.argv(&[&path]);
-        let exit = match self.runner.run(tree, &argv) {
-            Ok(exit) => exit,
-            Err(error)
-                if error.chain().any(|cause| {
-                    cause
-                        .downcast_ref::<std::io::Error>()
-                        .is_some_and(|io| io.kind() == std::io::ErrorKind::NotFound)
-                }) =>
-            {
-                return Ok(IdentityScan::NotScanned(format!("{error:#}")));
-            }
-            Err(error) => return Err(error),
-        };
-        if exit.success() {
-            return Ok(IdentityScan::Passed);
-        }
-        let said = exit.stderr.trim();
-        if said.contains(crate::scan::gates::NO_POLICY) {
-            return Ok(IdentityScan::NotScanned(
-                said.lines().collect::<Vec<_>>().join(" | "),
-            ));
-        }
-        Err(anyhow::Error::new(Failed {
-            line: argv.join(" "),
-            code: exit.code,
-            stderr: said.to_owned(),
-        }))
-        .with_context(|| {
-            format!(
-                "the commit identity {identity} did not pass scan-text, the scan {route} runs over every commit before a push"
-            )
-        })
-    }
-}
-
 /// The transport git names when `GIT_ALLOW_PROTOCOL` refused it: `transport 'ssh' not allowed`.
 fn refused_transport(stderr: &str) -> Option<&str> {
     stderr.lines().find_map(|line| {
@@ -1725,18 +1573,10 @@ fn refused_transport(stderr: &str) -> Option<&str> {
 }
 
 /// Writes the pull request `request` into `dir`: the JSON the API write sends as
-/// [`BotRoute::REQUEST`], and the title and body as they are published, decoded, as
-/// [`BotRoute::PUBLISHED`]. Both paths.
-/// The commit identity `identity` as a commit object carries it, the text the scan before a
-/// push reads for each commit: an `author` and a `committer` header, `<name> <<email>>`, a time
-/// and a zone after it.
-#[must_use]
-pub fn identity_headers(identity: &crate::git::CommitIdentity) -> String {
-    format!("author {identity} 0 +0000\ncommitter {identity} 0 +0000\n")
-}
-
+/// [`REQUEST`], and the title and body as they are published, decoded, as
+/// [`PUBLISHED`]. Both paths.
 fn write_request(dir: &Path, request: &PullRequest) -> Result<(PathBuf, PathBuf)> {
-    let input = dir.join(BotRoute::REQUEST);
+    let input = dir.join(REQUEST);
     let document = serde_json::json!({
         "title": request.title,
         "head": request.branch,
@@ -1745,7 +1585,7 @@ fn write_request(dir: &Path, request: &PullRequest) -> Result<(PathBuf, PathBuf)
     });
     let bytes = serde_json::to_vec_pretty(&document).context("serialize the pull request")?;
     std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
-    let published = dir.join(BotRoute::PUBLISHED);
+    let published = dir.join(PUBLISHED);
     std::fs::write(&published, format!("{}\n\n{}", request.title, request.body))
         .with_context(|| format!("write {}", published.display()))?;
     Ok((input, published))
@@ -1815,267 +1655,6 @@ fn exact_ref(tree: &Path, name: &str) -> Option<String> {
     commit_id(tree, held.trim()).ok()
 }
 
-/// The commits pushing `head` publishes, as the revision arguments of a `git rev-list`, and the
-/// words for them: the commits of `head` that `held` does not hold, the commit the repository
-/// holds as the case's base ([`BotRoute::held`]); with none, every commit of `head`. The
-/// revisions are commit ids, so none is read as an option.
-fn published_commits(tree: &Path, held: Option<&str>, head: &str) -> Result<(Vec<String>, String)> {
-    let head = commit_id(tree, head)?;
-    let short = head[..head.len().min(12)].to_owned();
-    Ok(match held {
-        Some(held) => (
-            vec![head, format!("^{held}")],
-            format!("the commits of {short} the repository's base at {held} does not hold"),
-        ),
-        None => (
-            vec![head],
-            format!("every commit of {short} (nothing says the repository holds any)"),
-        ),
-    })
-}
-
-/// The entries of the raw tree object `bytes`, each `<mode> <name>\0<id>`: the mode, the name
-/// as the tree holds it and the id in hex, then what does not parse after them, kept as it is.
-/// `hash` is the length of an id in bytes, 20 for SHA-1 and 32 for SHA-256.
-fn parse_tree(bytes: &[u8], hash: usize) -> (Vec<(String, String, String)>, &[u8]) {
-    let mut entries = Vec::new();
-    let mut rest = bytes;
-    while !rest.is_empty() {
-        let Some(space) = rest.iter().position(|b| *b == b' ') else {
-            break;
-        };
-        let Some(nul) = rest[space..]
-            .iter()
-            .position(|b| *b == 0)
-            .map(|n| space + n)
-        else {
-            break;
-        };
-        if rest.len() < nul + 1 + hash {
-            break;
-        }
-        let id: String = rest[nul + 1..nul + 1 + hash]
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        entries.push((
-            String::from_utf8_lossy(&rest[..space]).into_owned(),
-            String::from_utf8_lossy(&rest[space + 1..nul]).into_owned(),
-            id,
-        ));
-        rest = &rest[nul + 1 + hash..];
-    }
-    (entries, rest)
-}
-
-/// The entries of the raw tree object `bytes` as lines of text, `<mode> <name> <id>`
-/// ([`parse_tree`]); what does not parse is kept as it is, so nothing in the object goes
-/// unscanned.
-fn tree_entries(bytes: &[u8], hash: usize) -> String {
-    let (entries, rest) = parse_tree(bytes, hash);
-    let mut text = String::new();
-    for (mode, name, id) in entries {
-        text.push_str(&format!("{mode} {name} {id}\n"));
-    }
-    if !rest.is_empty() {
-        text.push_str(&String::from_utf8_lossy(rest));
-        text.push('\n');
-    }
-    text
-}
-
-/// The bytes [`crate::git::read_objects`] counts for `object`: its header line and its bytes.
-fn read_size(object: &crate::git::Object) -> usize {
-    object.id.len() + object.kind.len() + 24 + object.bytes.len()
-}
-
-/// The modes git writes for a tree entry: a file, an executable, a link, a tree, a gitlink.
-/// git walks and pushes other spellings too (`040000` as a tree), so the scan refuses them.
-const GIT_MODES: [&str; 5] = ["100644", "100755", "120000", "40000", "160000"];
-
-/// Every path the trees `roots` hold, each in full from its root as a push publishes it (the
-/// unit gates scans a path in, `filename:<path>`): every entry, an empty tree's and a gitlink's
-/// included, through every subtree. An entry whose mode is not one git writes ([`GIT_MODES`]) is
-/// refused, naming its path and mode. The trees come from `trees` (the object set read already)
-/// or are read through one `git cat-file --batch` per level of the walk
-/// ([`crate::git::read_objects`]); what is read and every path, as it is scanned
-/// (`filename:<path>` and a line end), are counted off `left`, and `None` once that is spent. A
-/// subtree met again at the same path is walked once.
-fn full_paths(
-    tree: &Path,
-    trees: &mut BTreeMap<String, Vec<u8>>,
-    roots: Vec<String>,
-    left: &mut usize,
-) -> Result<Option<BTreeSet<String>>> {
-    let mut paths = BTreeSet::new();
-    let mut walked: BTreeSet<(String, String)> = BTreeSet::new();
-    let mut level: Vec<(String, String)> =
-        roots.into_iter().map(|id| (String::new(), id)).collect();
-    while !level.is_empty() {
-        let missing: Vec<String> = level
-            .iter()
-            .map(|(_, id)| id.clone())
-            .filter(|id| !trees.contains_key(id))
-            .collect::<BTreeSet<String>>()
-            .into_iter()
-            .collect();
-        if !missing.is_empty() {
-            let Some(read) = crate::git::read_objects(tree, &missing, *left)? else {
-                return Ok(None);
-            };
-            for object in read {
-                *left = left.saturating_sub(read_size(&object));
-                trees.insert(object.id, object.bytes);
-            }
-        }
-        let mut next = Vec::new();
-        for (prefix, id) in level {
-            if !walked.insert((prefix.clone(), id.clone())) {
-                continue;
-            }
-            let Some(bytes) = trees.get(&id) else {
-                continue;
-            };
-            let (entries, _) = parse_tree(bytes, id.len() / 2);
-            for (mode, name, entry) in entries {
-                let path = format!("{prefix}{name}");
-                if !GIT_MODES.contains(&mode.as_str()) {
-                    bail!(
-                        "the tree entry {path} has the mode {mode}, which git does not write: refused, nothing was pushed"
-                    );
-                }
-                let Some(rest) = left.checked_sub("filename:\n".len() + path.len()) else {
-                    return Ok(None);
-                };
-                *left = rest;
-                if mode == "40000" {
-                    next.push((format!("{path}/"), entry));
-                }
-                paths.insert(path);
-            }
-        }
-        level = next;
-    }
-    Ok(Some(paths))
-}
-
-/// The text of `bytes` when they start with a UTF-32 or UTF-16 byte-order mark, decoded, with
-/// the encoding's name: what a reader of the file sees, which its bytes, a NUL beside every
-/// ASCII character, never match. `None` for bytes with no such mark (UTF-8, Latin-1 and any
-/// other encoding without a mark are scanned as their bytes alone).
-fn decoded(bytes: &[u8]) -> Option<(&'static str, String)> {
-    let utf32 = |rest: &[u8], unit: fn([u8; 4]) -> u32| -> String {
-        rest.chunks(4)
-            .map(|chunk| {
-                let mut four = [0_u8; 4];
-                four[..chunk.len()].copy_from_slice(chunk);
-                char::from_u32(unit(four)).unwrap_or(char::REPLACEMENT_CHARACTER)
-            })
-            .collect()
-    };
-    let utf16 = |rest: &[u8], unit: fn([u8; 2]) -> u16| -> String {
-        let units: Vec<u16> = rest
-            .chunks(2)
-            .map(|chunk| unit([chunk[0], chunk.get(1).copied().unwrap_or(0)]))
-            .collect();
-        String::from_utf16_lossy(&units)
-    };
-    match bytes {
-        [0xFF, 0xFE, 0x00, 0x00, rest @ ..] => Some(("UTF-32LE", utf32(rest, u32::from_le_bytes))),
-        [0x00, 0x00, 0xFE, 0xFF, rest @ ..] => Some(("UTF-32BE", utf32(rest, u32::from_be_bytes))),
-        [0xFF, 0xFE, rest @ ..] => Some(("UTF-16LE", utf16(rest, u16::from_le_bytes))),
-        [0xFE, 0xFF, rest @ ..] => Some(("UTF-16BE", utf16(rest, u16::from_be_bytes))),
-        _ => None,
-    }
-}
-
-/// What pushing `head` would publish, read in at most `limit` bytes: the object set the push
-/// sends, `git rev-list --objects` over [`published_commits`], every object read raw through
-/// one `git cat-file --batch` ([`crate::git::read_objects`]). Every commit object as the push
-/// sends it, bytes as they are (every header, the encoding's and a signature's included, then
-/// the message, never converted); every tree object's entries, whatever an entry's mode (a
-/// gitlink's, an empty tree's); every path each commit's tree holds, in full from its root, as
-/// `filename:<path>` ([`full_paths`]); every blob's whole content, raw (no text conversion, no
-/// filter). `None` once git prints more than `limit` bytes for all of it, read no further. The
-/// words for the commits.
-fn outgoing_text(
-    tree: &Path,
-    held: Option<&str>,
-    head: &str,
-    limit: usize,
-) -> Result<(Option<(String, String)>, String)> {
-    let (revisions, words) = published_commits(tree, held, head)?;
-    let mut left = limit;
-    let mut args = vec!["rev-list", "--objects", "--no-object-names"];
-    args.extend(revisions.iter().map(String::as_str));
-    let Some(listing) = read(tree, &args, &mut left)? else {
-        return Ok((None, words));
-    };
-    let ids: Vec<String> = listing
-        .lines()
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-        .collect();
-    let Some(objects) = crate::git::read_objects(tree, &ids, left)? else {
-        return Ok((None, words));
-    };
-    let mut messages = String::new();
-    let mut files = String::new();
-    let mut trees: BTreeMap<String, Vec<u8>> = BTreeMap::new();
-    let mut roots = Vec::new();
-    for object in objects {
-        left = left.saturating_sub(read_size(&object));
-        let id = &object.id;
-        match object.kind.as_str() {
-            "commit" => {
-                messages.push_str(&format!("commit {id}\n"));
-                let text = String::from_utf8_lossy(&object.bytes);
-                if let Some(root) = text
-                    .lines()
-                    .next()
-                    .and_then(|line| line.strip_prefix("tree "))
-                {
-                    roots.push(root.trim().to_owned());
-                }
-                messages.push_str(&text);
-                if !messages.ends_with('\n') {
-                    messages.push('\n');
-                }
-            }
-            "tree" => {
-                files.push_str(&format!("tree {id}\n"));
-                files.push_str(&tree_entries(&object.bytes, id.len() / 2));
-                trees.insert(id.clone(), object.bytes);
-            }
-            kind => {
-                files.push_str(&format!("{kind} {id}\n"));
-                files.push_str(&String::from_utf8_lossy(&object.bytes));
-                if !files.ends_with('\n') {
-                    files.push('\n');
-                }
-                if let Some((encoding, text)) = decoded(&object.bytes) {
-                    let Some(rest) = left.checked_sub(text.len()) else {
-                        return Ok((None, words));
-                    };
-                    left = rest;
-                    files.push_str(&format!("{kind} {id} decoded from {encoding}\n"));
-                    files.push_str(&text);
-                    if !files.ends_with('\n') {
-                        files.push('\n');
-                    }
-                }
-            }
-        }
-    }
-    let Some(paths) = full_paths(tree, &mut trees, roots, &mut left)? else {
-        return Ok((None, words));
-    };
-    for path in paths {
-        files.push_str(&format!("filename:{path}\n"));
-    }
-    Ok((Some((messages, files)), words))
-}
 /// `path` with nothing at it: a response file left from before is removed, so what is read
 /// after the call is what the call wrote, never a file something else put there.
 fn fresh(path: PathBuf) -> Result<PathBuf> {

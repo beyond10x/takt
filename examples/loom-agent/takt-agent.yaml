@@ -15,9 +15,6 @@ spec:
       - takt
     args: [--config, /config/takt.yaml]
   secretRef: {name: takt-demo-env}
-  secretFiles: {name: takt-demo-files, mountPath: /var/run/secrets/takt}
-  env:
-    - {name: B10X_GATES_POLICY, value: /var/run/secrets/takt/policy.json}
   workspace: {mountPath: /workspace, claimName: takt-demo-workspace}
   configFiles:
     - name: takt.yaml
@@ -25,6 +22,7 @@ spec:
         story: story:add-sub
         hours: 1
         harness: harness
+        scan: none
         model: agent
         llm: {path: llm.yaml}
         forge: none

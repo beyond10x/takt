@@ -92,7 +92,6 @@ impl World {
                 config.to_str().expect("utf-8"),
             ])
             .env("XDG_STATE_HOME", self.elsewhere.join("state"))
-            .env_remove("B10X_GATES_POLICY")
             .output()
             .expect("takt runs")
     }

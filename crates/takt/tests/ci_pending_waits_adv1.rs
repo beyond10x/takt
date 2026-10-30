@@ -1,6 +1,6 @@
 //! Adversary pass 1 on story:ci-pending-waits: the wait's bound for hour budgets the CLI parses
 //! (`--hours inf`, `--hours NaN`), and the refusal of a merge for a pending required check as the
-//! bot route reports it, read by `forge::refused_for_a_pending_check`.
+//! forge reports it, read by `forge::refused_for_a_pending_check`.
 
 #[path = "support/own_home.rs"]
 mod own_home;
@@ -17,8 +17,7 @@ use anyhow::anyhow;
 use takt::case::{CASES_DIR, LOCK_FILE};
 use takt::evidence::Record;
 use takt::forge::{
-    BotRoute, Checks, Exit, Forge, Memory, PullRequest, PullRequestView, Runner,
-    refused_for_a_pending_check,
+    Checks, Failed, Forge, Memory, PullRequest, PullRequestView, refused_for_a_pending_check,
 };
 use takt::frontier::Aep;
 use takt::harness::{Harness, StepContext, StepReport};
@@ -368,65 +367,34 @@ fn adv1_a_nan_hour_budget_never_polls_the_forge_without_a_pause_or_an_end() {
     );
 }
 
-/// What the bot route's runner answers: every line succeeds but the merge's API write, which
-/// exits 1 with `stderr`.
-struct RefusingMerge {
-    stderr: String,
-}
-
-impl Runner for RefusingMerge {
-    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-    /// dropped.
-    fn run_env(
-        &self,
-        tree: &std::path::Path,
-        argv: &[String],
-        _: &[(&str, &str)],
-    ) -> anyhow::Result<takt::forge::Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        let merge = argv.first().map(String::as_str) == Some("b10x-gates")
-            && argv.iter().any(|arg| arg == "PUT");
-        Ok(Exit {
-            code: Some(i32::from(merge)),
-            stdout: String::new(),
-            stderr: if merge {
-                self.stderr.clone()
-            } else {
-                String::new()
-            },
-        })
-    }
-}
-
-/// The merge's error as the bot route makes it, for the case directory `artifacts` under
-/// `tree`: the line it ran (its `--input`/`--output` paths under the case directory, its
-/// `--repository`) and the forge's words, with the context `PrMerged` adds.
-fn bot_route_refusal(repository: &str, artifacts: &Path, stderr: &str) -> anyhow::Error {
-    let route = BotRoute::new(
-        repository,
-        None,
-        Box::new(RefusingMerge {
-            stderr: stderr.to_owned(),
-        }),
-    );
-    let tree = artifacts.ancestors().nth(4).expect("the tree");
-    route
-        .merge(tree, artifacts, 1, &"a".repeat(40))
-        .expect_err("the forge refuses the merge")
+/// The merge's error as an adapter that runs a program makes it, for the case directory
+/// `artifacts`: a [`Failed`] whose line names the files it wrote under the case directory and
+/// the repository, with the forge's words, and the context `PrMerged` adds.
+fn adapter_refusal(repository: &str, artifacts: &Path, stderr: &str) -> anyhow::Error {
+    anyhow::Error::from(Failed {
+        line: format!(
+            "forge merge --repository {repository} --input {} --output {}",
+            artifacts.join("merge-request.json").display(),
+            artifacts.join("merge-response.json").display()
+        ),
+        code: Some(1),
+        stderr: stderr.to_owned(),
+    })
+    .context(format!(
+        "merge pull request #1 of {repository} at {}",
+        artifacts.display()
+    ))
 }
 
 /// The refusal story:ci-pending-waits waits on, `405 Required status check "<name>" is
-/// expected`, as the bot route reports it. `refused_for_a_pending_check` reads the whole error
-/// chain and gives up on any `fail` in it; the chain carries the line the route ran, and so the
+/// expected`, as an adapter reports it. `refused_for_a_pending_check` reads the whole error
+/// chain and gives up on any `fail` in it; the chain carries the line the adapter ran, and so the
 /// tree's path, the case id (from the story id) and the repository name. A repository checked
 /// out at `.../failover-service`, a story `fix-a-failing-test`, or a repository named
 /// `o/fail2ban` turns the pending-check refusal into an error that ends the run (exit 5),
 /// validator.rs `PrMerged::observe_waiting`, the `Err(error)` arm after the merge.
 #[test]
-fn adv1_a_pending_check_refusal_through_the_bot_route_is_waited_on_whatever_the_paths_say() {
+fn adv1_a_pending_check_refusal_is_waited_on_whatever_the_paths_say() {
     let forge_words = "405 Required status check \"task check\" is expected";
     let root = Scratch(scratch_dir("refusal-paths"));
     let plain = root
@@ -446,7 +414,7 @@ fn adv1_a_pending_check_refusal_through_the_bot_route_is_waited_on_whatever_the_
         .join("artifacts");
 
     // The control: the same refusal, no `fail` in any path, is waited on.
-    let control = bot_route_refusal("o/app", &plain, forge_words);
+    let control = adapter_refusal("o/app", &plain, forge_words);
     assert!(
         refused_for_a_pending_check(&control),
         "the control is not waited on: {control:#}"
@@ -458,7 +426,7 @@ fn adv1_a_pending_check_refusal_through_the_bot_route_is_waited_on_whatever_the_
         ("a story fix-a-failing-test", "o/app", &in_story),
         ("a repository o/fail2ban", "o/fail2ban", &plain),
     ] {
-        let error = bot_route_refusal(repository, artifacts, forge_words);
+        let error = adapter_refusal(repository, artifacts, forge_words);
         if !refused_for_a_pending_check(&error) {
             errors.push(format!("{what}: an error, not waited on: {error:#}"));
         }
@@ -476,8 +444,8 @@ fn adv1_a_pending_required_check_whose_name_holds_fail_is_still_waited_on() {
         "405 Required status check \"fail-fast\" is expected",
         "405 Required status check \"no-failures\" is in progress",
     ] {
-        let error = anyhow!("b10x-gates api exited 1: {words}")
-            .context("merge pull request #1 through the forge bot");
+        let error =
+            anyhow!("forge exited 1: {words}").context("merge pull request #1 through the forge");
         if !refused_for_a_pending_check(&error) {
             errors.push(words);
         }
