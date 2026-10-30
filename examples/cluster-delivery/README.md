@@ -5,8 +5,11 @@ This example is the setup for one goal: a takt `LoomAgent` in a local
 real beyond10x repositories and ends each one as a pull request by `b10x-bot[bot]`, merged to
 `main`, with no step by a person.
 
-Status: **not run yet.** The parts below marked *open* are not built. Run records join this folder
-as the runs happen.
+Status: **not run yet.** takt 0.23.0 has the token stop, the forge preflight, the reads without
+`gh` and the merge under a delegated grant. The runs wait for one more change: the setup below
+puts the GitHub App's key, the gates policy and the model key in the takt container, where the
+harness session can read them, and no run starts until they are outside it (*Open*, below). Run
+records join this folder as the runs happen.
 
 ![Architecture: a Loom operator in a kind cluster runs takt once per LoomAgent as a Job; takt reads
 a story from the workspace clone, asks the model through b10x-harness, runs tests and gates, and
@@ -20,7 +23,7 @@ architecture.svg` renders it again.
 | part | what it is | from |
 |---|---|---|
 | kind cluster | one control-plane node on the operator's machine; images are loaded with `kind load`, never pulled | [`../loom-agent/kind-cluster.yaml`](../loom-agent/kind-cluster.yaml) |
-| Loom operator | chart `loom-agents` of [Loom](https://github.com/beyond10x/loom) 0.50.1; turns each `LoomAgent` into a Job, a NetworkPolicy and a service account; refuses any Secret, claim or egress host its values do not list | Loom `charts/loom-agents`, `deploy/crd/` |
+| Loom operator | chart `loom-agents` of [Loom](https://github.com/beyond10x/loom) 0.50.2; turns each `LoomAgent` into a Job, a NetworkPolicy and a service account; refuses any Secret, claim or egress host its values do not list | Loom `charts/loom-agents`, `deploy/crd/` |
 | `LoomAgent`, `Command` variant | one resource per run; the pod runs the takt image's own program once (`backoffLimit: 0`, `restartPolicy: Never`) and reports the exit code in `status.run` | [Deploy on Kubernetes](../../website/docs/guides/deploy-on-kubernetes.md) |
 | init containers | `b10x-loom agent stage-files` writes the run file and the model routes to `/config`; `b10x-loom agent prepare-dirs` makes `HOME` and `/tmp` private (0700) | Loom agent image |
 | takt image | `takt`, `b10x-harness`, `b10x-gates`, `aep`, `ess`, and a Rust toolchain for the target's tests | [`Dockerfile`](../../Dockerfile) |
@@ -41,7 +44,7 @@ architecture.svg` renders it again.
    with `b10x-gates api`, and waits for its checks. With tests, gate and checks green at the
    revision, and a delegation of the merge to `agent:takt-delivery` recorded by the owner in the
    target repository's `.engineering/delegations.yaml`, takt grants `repository.merge` as that role
-   and merges (*open*: `story:an-unattended-run-merges-under-a-delegated-grant`).
+   and merges.
 6. The Job ends; `status.run.exitCode` is takt's exit code
    ([How a run ends](../../website/docs/concepts/how-a-run-ends.md)).
 
@@ -50,13 +53,12 @@ architecture.svg` renders it again.
 | check | expected |
 |---|---|
 | `kubectl -n loom-agents get loomagent` | 3 runs `Completed`, exit code 0 |
-| `gh pr view <n> --repo beyond10x/<repo> --json state,author` | `MERGED`, author `app/b10x-bot`, for 3 pull requests in 2 repositories |
-| `takt report --cases <dir>` | units accepted, tokens and interventions per run (*open*) |
+| `curl -s https://api.github.com/repos/beyond10x/<repo>/pulls/<n>` | `"merged": true`, `user.login` `b10x-bot[bot]`, for 3 pull requests in 2 repositories |
+| `takt report --cases <dir>` | units accepted, tokens and interventions per run (*open*: `story:report-sums-cases`) |
 
 ## Stop rules
 
-- Each run stops at 3,000,000 tokens, the default when the run names no budget (*open*:
-  `story:a-run-stops-at-a-default-token-budget`).
+- Each run stops at 3,000,000 tokens, the default when the run names no budget.
 - A run on a red base stops at open (`story:a-red-base-stops-at-open`).
 - The same failing tests twice in a row stop the run (`story:repeated-identical-test-failures-stop-the-run`).
 - A trial stops after 2 runs that end on the same stop reason.
@@ -65,11 +67,8 @@ architecture.svg` renders it again.
 
 | what | why it matters here | story |
 |---|---|---|
-| hard token stop per run | no run may spend past 3,000,000 tokens | `story:a-run-stops-at-a-default-token-budget` |
-| forge safety in the pod | a run that cannot reach its forge stops before it spends tokens; a resumed run never opens a second pull request; a forge write whose answer was lost is read back, never sent twice | `story:forge-preflight`, `story:pr-open-not-idempotent-on-resume`, `story:fenced-forge-dispatch` |
-| a token stop that holds for failed steps | a step that fails or is killed after spending tokens counts them toward the stop | `story:a-killed-step-records-its-tokens` |
-| pull-request reads without `gh` | the bot forge reads a pull request's state and checks with `gh`, which the image does not ship and which has no login in the pod | `story:bot-forge-reads-through-the-app` |
-| a merge with no person's step | `repository.merge` is granted per case by `takt approve`; an unattended run needs a grant on record that no person gives at run time | `story:an-unattended-run-merges-under-a-delegated-grant` |
+| no secret in the agent's container | the harness session runs as the same user in the same container as takt, so it can read every key mounted there; Loom's `spec.boundary` puts them in a second container that relays the model, the forge's operations and git on loopback | `story:connectors-forge-speaks-github-at-an-endpoint`, `story:git-and-model-through-loopback-relays`, `story:example-agent-runs-credential-free` |
+| a forge write whose answer was lost | it is read back, never sent twice | `story:fenced-forge-dispatch` |
 | a summary across cases | `takt report --cases` sums what the runs did | `story:report-sums-cases` |
 
 ## The three stories

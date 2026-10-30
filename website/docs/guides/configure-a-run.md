@@ -41,7 +41,7 @@ The budgets are `iterations`, `hours` and `tokens`, each a key and a flag of the
 always has a token budget: with neither `tokens` nor `--tokens` it stops once the harness has
 reported 3,000,000 tokens, `Tokens (3000000)`, exit 3. `tokens` must be a whole number above
 zero. `tokens: 0` or `tokens: x` is refused with exit 2 and names its line. `takt scenario run`
-has the same default. (Not in 0.22.1.)
+has the same default. (Since 0.23.0.)
 
 Every key the file may hold, and which of them have no flag, is in
 [The run configuration file](../reference/configuration.md#the-run-configuration-file). The
@@ -170,7 +170,7 @@ takt: the endpoint's credential variable LLM_API_KEY is empty; nothing was start
 opened, when `b10x-gates` is not on `PATH`, or when `B10X_GATES_POLICY` does not name the policy
 file. That file must be a regular file, not a symbolic link, owned by you, and at mode 0600 or
 stricter, in a directory you own that no other user can write. These are the checks `b10x-gates`
-makes when it loads a policy. (Not in 0.22.1.)
+makes when it loads a policy. (Since 0.23.0.)
 
 How each forge is set up: [Configuration](../reference/configuration.md#the-forge). The local
 forge needs `local_checks` beside it in the file:
