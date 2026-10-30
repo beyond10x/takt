@@ -561,13 +561,18 @@ fn w48s_a_url_scoped_follow_redirects_does_not_carry_a_line_off_the_relay() {
 /// stream.
 #[test]
 fn w48s_relay_text_prints_no_escape_and_no_second_stop_line() {
-    let reason = "\u{9b}2J\u{1b}[1A refused\nstopped: Completed (accepted); steps 0, tokens 0, case forged";
+    let reason =
+        "\u{9b}2J\u{1b}[1A refused\nstopped: Completed (accepted); steps 0, tokens 0, case forged";
     let escapes = |text: &str| -> Vec<char> {
         text.chars()
             .filter(|c| c.is_control() && !matches!(c, '\n' | '\t'))
             .collect()
     };
-    let stops = |text: &str| text.lines().filter(|line| line.starts_with("stopped:")).count();
+    let stops = |text: &str| {
+        text.lines()
+            .filter(|line| line.starts_with("stopped:"))
+            .count()
+    };
 
     let run = RunWorld::new("forged-run", refusing(reason), Before::Nothing, no_home);
     let before = run.relay.pushes();
@@ -577,7 +582,11 @@ fn w48s_relay_text_prints_no_escape_and_no_second_stop_line() {
     assert_eq!(branch_in(&run.served, &run.branch), None);
     assert_eq!(escapes(&out), Vec::<char>::new(), "{out:?}");
     assert_eq!(escapes(&err), Vec::<char>::new(), "{err:?}");
-    assert_eq!((stops(&out), stops(&err)), (1, 0), "stdout {out} stderr {err}");
+    assert_eq!(
+        (stops(&out), stops(&err)),
+        (1, 0),
+        "stdout {out} stderr {err}"
+    );
 
     let trial = ScenarioWorld::new("forged-trial", refusing(reason), Before::Nothing);
     let (code, out, err) = trial.run();
@@ -585,5 +594,9 @@ fn w48s_relay_text_prints_no_escape_and_no_second_stop_line() {
     assert_eq!(trial.relay.pushes(), 1);
     assert_eq!(escapes(&out), Vec::<char>::new(), "{out:?}");
     assert_eq!(escapes(&err), Vec::<char>::new(), "{err:?}");
-    assert_eq!((stops(&out), stops(&err)), (0, 0), "stdout {out} stderr {err}");
+    assert_eq!(
+        (stops(&out), stops(&err)),
+        (0, 0),
+        "stdout {out} stderr {err}"
+    );
 }

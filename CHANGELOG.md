@@ -23,6 +23,7 @@ takt's releases.
 ### Fixed
 
 - `takt scenario run` fetches from and pushes to a loopback relay at `origin`'s URL without its userinfo, as `takt run` does, so a token in that URL is no longer sent to the relay.
+- Git lines to a loopback relay (`forge: connectors` and the trial route) run in an empty home without global or system git configuration, so no credential helper or `~/.netrc` reaches the relay, and are refused before sending when the repository's configuration sets a credential helper, a cookie file, a resolve entry, a URL-scoped extra header, proxy or redirect setting, a proxy off loopback, or a rewrite with userinfo; an included `http.extraHeader` is emptied.
 - A relay's or a program's control characters in a reason are printed escaped (`\u{1b}`) in `takt:` errors and the stop line, and a trial's refusal names the relay's whole reason, tabs and line breaks included.
 
 ## [0.24.0] - 2026-10-30

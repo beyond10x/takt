@@ -392,10 +392,6 @@ pub fn relay_of(url: &str) -> Result<String> {
     Ok(format!("{scheme}://{host_port}{tail}"))
 }
 
-/// What a git line to the loopback relay is given on its command line beside [`NO_REDIRECT`]:
-/// no proxy, so the line goes to the relay itself and through nothing between.
-const NO_PROXY_CONFIG: [&str; 2] = ["-c", "http.proxy="];
-
 /// What a git line to the loopback relay is given in its environment: no proxy for any host,
 /// whatever the operator's environment or a URL-scoped `http.<url>.proxy` names.
 const NO_PROXY_ENV: [(&str, &str); 2] = [("no_proxy", "*"), ("NO_PROXY", "*")];
@@ -604,6 +600,9 @@ pub struct ConnectorsForge {
     /// Whether the served instance refused `idempotency_key` as a member it does not take: then
     /// every write goes with no key.
     unkeyed: Cell<bool>,
+    /// The state directory the empty home of each line to the loopback relay is made under
+    /// ([`Self::with_state_dir`]); none for takt's own.
+    state_dir: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for ConnectorsForge {
@@ -730,6 +729,7 @@ impl ConnectorsForge {
             calls: Cell::new(0),
             started,
             unkeyed: Cell::new(false),
+            state_dir: None,
         };
         forge.preflight(tree)?;
         Ok(forge)
@@ -1426,22 +1426,22 @@ impl ConnectorsForge {
     }
 
     /// What a git line to [`Self::push_url`] is given on its command line after `git`: to the
-    /// loopback relay, no redirect followed ([`NO_REDIRECT`]) and no proxy
-    /// ([`NO_PROXY_CONFIG`]); over HTTPS, nothing.
+    /// loopback relay, no redirect followed ([`NO_REDIRECT`]), no proxy and no extra header
+    /// ([`super::relay::CONFIG`]); over HTTPS, nothing.
     fn relay_options(&self) -> Vec<String> {
         if self.relay.is_none() {
             return Vec::new();
         }
         NO_REDIRECT
             .iter()
-            .chain(&NO_PROXY_CONFIG)
+            .chain(&super::relay::CONFIG)
             .map(|word| (*word).to_owned())
             .collect()
     }
 
     /// `git` and what a line that reads from [`Self::push_url`] (`ls-remote`, `fetch`) is given
     /// before its verb: no hook, no redirect followed ([`NO_REDIRECT`]) and, to the loopback
-    /// relay, no proxy ([`Self::relay_options`]).
+    /// relay, no proxy and no extra header ([`super::relay::CONFIG`]).
     fn read_prefix(&self) -> Vec<String> {
         let mut argv: Vec<String> = ["git", "-c", "core.hooksPath=/dev/null"]
             .into_iter()
@@ -1449,53 +1449,55 @@ impl ConnectorsForge {
             .map(str::to_owned)
             .collect();
         if self.relay.is_some() {
-            argv.extend(NO_PROXY_CONFIG.map(str::to_owned));
+            argv.extend(super::relay::CONFIG.map(str::to_owned));
         }
         argv
     }
 
     /// The environment of a git line to [`Self::push_url`]: the protocols its transport allows
-    /// and, to the loopback relay, no proxy for any host ([`NO_PROXY_ENV`]).
-    fn line_env(&self) -> Vec<(&'static str, &'static str)> {
+    /// and, to the loopback relay, no proxy for any host ([`NO_PROXY_ENV`]) and the line's own
+    /// empty home without global or system configuration ([`super::relay::Line::env`]).
+    fn line_env<'a>(&self, line: Option<&'a super::relay::Line>) -> Vec<(&'static str, &'a str)> {
         let mut env = vec![("GIT_ALLOW_PROTOCOL", self.transport().allowed_protocols())];
         if self.relay.is_some() {
             env.extend(NO_PROXY_ENV);
         }
+        if let Some(line) = line {
+            env.extend(line.env());
+        }
         env
     }
 
-    /// Refuses a line to the loopback relay that git's configuration would carry anywhere else:
-    /// each URL git reaches the relay's URL at, as it reads them for a fetch (`insteadOf`) and
-    /// for a push (`pushInsteadOf`, and a `pushurl` or `url` of a remote named by that URL),
-    /// must be `http://` to a loopback host ([`RemoteTransport::LoopbackHttp`]). Every such URL
-    /// is read off the tree's configuration ([`reached_by`]), as git reads it for this tree,
-    /// with the configuration the environment hands git included, as the push keeps it.
-    /// Over HTTPS, nothing is read: `GIT_ALLOW_PROTOCOL` holds that line to HTTPS.
-    fn relay_reached(&self, tree: &Path) -> Result<()> {
+    /// Admits a line to the loopback relay ([`super::relay::admit`]), its empty home made under
+    /// the run's state directory ([`Self::with_state_dir`]): refused when git's configuration
+    /// would carry it anywhere else (each URL git reaches the relay's URL at, as it reads them
+    /// for a fetch, `insteadOf`, and for a push, `pushInsteadOf` and a `pushurl` or `url` of a
+    /// remote named by that URL, must be `http://` to a loopback host,
+    /// [`RemoteTransport::LoopbackHttp`], [`reached_by`]) or hand it a credential, read as the
+    /// line reads it, with the configuration the environment hands git included. Over HTTPS,
+    /// nothing is read and none is answered: `GIT_ALLOW_PROTOCOL` holds that line to HTTPS.
+    fn relay_reached(&self, tree: &Path) -> Result<Option<super::relay::Line>> {
         let Some(relay) = &self.relay else {
-            return Ok(());
+            return Ok(None);
         };
-        let config = crate::git::bytes_as_remote_git(tree, &["config", "--list", "-z"])
-            .context("read git's configuration of the tree before a line to the loopback relay; nothing was sent")?;
-        for url in reached_by(relay, &config) {
-            if !matches!(
-                crate::git::remote_transport(&url),
-                Ok(RemoteTransport::LoopbackHttp)
-            ) {
-                bail!(
-                    "a line to the loopback relay {relay} would go to {}, no loopback host, as git's configuration rewrites it (`url.<base>.insteadOf`, `url.<base>.pushInsteadOf`, a remote's `pushurl`): the relay's lines go to the relay alone, so nothing was sent",
-                    super::without_userinfo(&url)
-                );
-            }
-        }
-        Ok(())
+        let homes = super::relay::Homes::at(self.state_dir.as_deref())?;
+        super::relay::admit(tree, relay, &homes).map(Some)
+    }
+
+    /// The same forge, the empty home of each line to the loopback relay made under the state
+    /// directory `state` (`<state>/relay-home`), as the run's other state is; none keeps takt's
+    /// own (`$XDG_STATE_HOME/takt/relay-home`, [`super::relay::Homes::at`]).
+    #[must_use]
+    pub fn with_state_dir(mut self, state: Option<&Path>) -> Self {
+        self.state_dir = state.map(Path::to_path_buf);
+        self
     }
 
     /// The commit `origin`'s project holds `base` at, read through git from the URL every line
     /// goes to ([`Self::push_url`]): `git ls-remote --refs <url> refs/heads/<base>`, run
     /// through the runner. A branch it does not list, or a line that fails, is the error.
     fn origin_tip(&self, tree: &Path, base: &str) -> Result<String> {
-        self.relay_reached(tree)?;
+        let line = self.relay_reached(tree)?;
         let url = self.push_url();
         let reference = format!("refs/heads/{base}");
         let mut argv = self.read_prefix();
@@ -1505,7 +1507,9 @@ impl ConnectorsForge {
             url.clone(),
             reference.clone(),
         ]);
-        let exit = self.runner.run_env(tree, &argv, &self.line_env())?;
+        let exit = self
+            .runner
+            .run_env(tree, &argv, &self.line_env(line.as_ref()))?;
         if !exit.success() {
             return Err(Failed {
                 line: argv.join(" "),
@@ -1708,7 +1712,7 @@ impl Forge for ConnectorsForge {
     }
 
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
-        self.relay_reached(tree)?;
+        let line = self.relay_reached(tree)?;
         let mut argv = vec!["git".to_owned()];
         argv.extend(self.relay_options());
         argv.extend([
@@ -1724,7 +1728,7 @@ impl Forge for ConnectorsForge {
             &argv,
             &self.push_url(),
             "the forge connectors",
-            &self.line_env(),
+            &self.line_env(line.as_ref()),
         )
     }
 
@@ -1871,6 +1875,7 @@ impl Forge for ConnectorsForge {
         if commit_id(tree, tip).is_ok() {
             return Ok(tip.to_owned());
         }
+        let line = self.relay_reached(tree)?;
         let url = self.push_url();
         let mut argv = self.read_prefix();
         argv.extend(
@@ -1884,7 +1889,9 @@ impl Forge for ConnectorsForge {
             ]
             .map(str::to_owned),
         );
-        let exit = self.runner.run_env(tree, &argv, &self.line_env())?;
+        let exit = self
+            .runner
+            .run_env(tree, &argv, &self.line_env(line.as_ref()))?;
         if !exit.success() {
             return Err(Failed {
                 line: argv.join(" "),

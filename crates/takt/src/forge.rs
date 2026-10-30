@@ -40,6 +40,7 @@ pub mod connectors;
 pub mod credential;
 pub mod gitlab;
 pub mod local;
+pub mod relay;
 
 /// The values `--forge` and a run file's `forge` take.
 pub const FORGES: [&str; 5] = ["none", "local", "gitlab", "command", "connectors"];
