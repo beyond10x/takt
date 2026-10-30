@@ -38,6 +38,13 @@ takt's releases.
 ### Fixed
 
 - `forge: connectors` writes its open and merge answers under the names `pr.open` and `repository.merge` declare; a run through it was refused at `pr.open` before.
+- On github, `forge: connectors` takes the merge target's tip from `branch.get` only when `origin`'s branch, read through git, names the same commit.
+- `forge: connectors` reads check runs until `total_count` are read, not until a short page.
+- A loopback relay line, in `takt scenario run` and in `forge: connectors`, goes through no proxy.
+- A relay line is refused when a URL rewrite, a `<helper>::<url>` origin or git configuration in the environment would carry it off loopback.
+- An origin whose authority holds a `?` or `#` is refused as a relay.
+- A port above 65535 in `forge_endpoint` or a model endpoint is refused at its line, exit 2.
+- A failing test or gate line holding an `Authorization` header, an AWS access key id or secret, or a URL with a password is left out of the prompt.
 
 ## [0.23.0] - 2026-10-30
 

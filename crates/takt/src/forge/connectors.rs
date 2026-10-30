@@ -4,8 +4,10 @@
 //! `gitlab`, `github/work` ([`target_of`]). With the instance left out the connector's only
 //! instance is used. It is optional and never a default: no run reaches it without both keys.
 //! The push stays takt's own push over HTTPS to the project the `origin` remote names, or over
-//! `http` to the loopback relay it names, port kept ([`RemoteTransport::LoopbackHttp`]); this
-//! forge replaces the host's API calls and nothing before them.
+//! `http` to the loopback relay it names, port kept ([`RemoteTransport::LoopbackHttp`]): a line
+//! to the relay goes through no proxy, and is refused when git's configuration would rewrite
+//! the relay's URL to anything but a loopback host. This forge replaces the host's API calls
+//! and nothing before them.
 //!
 //! **Two routes.** Without `forge_endpoint` each operation is one `connectors --output json
 //! invoke <connector>[/<instance>] <operation> --schema <s> --revision <r> --input-json <json>`,
@@ -33,7 +35,7 @@
 //! | read | `pull_request.get` | `owner`, `repo`, `pull_number` | `state`, `merged`, `head.ref`, `head.sha`, `base.ref` |
 //! | checks | `check_runs.list`, `commit.status` | `owner`, `repo`, `ref` (the head's sha); `per_page`, `page` | `check_runs[].status`, `check_runs[].conclusion`, `total_count`; `state`, `statuses` |
 //! | merge | `pull_request.merge` | `owner`, `repo`, `pull_number`, `body.sha` (the head) | `merged` |
-//! | merge target | `branch.get` | `owner`, `repo`, `branch` | `commit.sha` |
+//! | merge target | `branch.get` | `owner`, `repo`, `branch` | `commit.sha`, taken only when `git ls-remote` of the project `origin` names lists the branch at the same commit |
 //!
 //! **Preflight.** [`ConnectorsForge::for_tree`] describes every operation the connector's map
 //! needs ([`Connector::required`]) before any case opens, and refuses naming each one the
@@ -231,7 +233,7 @@ pub fn check_endpoint(url: &str) -> std::result::Result<bool, &'static str> {
     }
     let Some(host) = crate::harness::host_of(authority) else {
         return Err(
-            "names no host takt reads: a name, an IPv4 address or a bracketed IPv6 address, with an optional `:<port>`",
+            "names no host takt reads: a name, an IPv4 address or a bracketed IPv6 address, with an optional `:<port>` of at most 65535",
         );
     };
     let loopback = crate::harness::loopback(host);
@@ -241,6 +243,81 @@ pub fn check_endpoint(url: &str) -> std::result::Result<bool, &'static str> {
         );
     }
     Ok(loopback)
+}
+
+/// The URL of the loopback relay `url`, an `origin` [`crate::git::remote_transport`] admitted
+/// as [`RemoteTransport::LoopbackHttp`], read by the same parse: the authority ends at the
+/// first `/`, `?` or `#`, the host is what follows its last `@`, and the userinfo is dropped.
+/// A `?` or a `#` anywhere in it is refused, so no reader of the URL, git or curl, finds
+/// another host in it than the one admitted.
+fn relay_of(url: &str) -> Result<String> {
+    let (scheme, rest) = url
+        .split_once("://")
+        .ok_or_else(|| anyhow!("the origin remote's URL is no URL of a loopback relay"))?;
+    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host_port)| host_port);
+    if tail.contains(['?', '#']) {
+        bail!(
+            "the origin remote's URL to the loopback relay {scheme}://{host_port} holds a `?` or a `#`, after which a reader of the URL may find another host; nothing was opened"
+        );
+    }
+    Ok(format!("{scheme}://{host_port}{tail}"))
+}
+
+/// What a git line to the loopback relay is given on its command line beside [`NO_REDIRECT`]:
+/// no proxy, so the line goes to the relay itself and through nothing between.
+const NO_PROXY_CONFIG: [&str; 2] = ["-c", "http.proxy="];
+
+/// What a git line to the loopback relay is given in its environment: no proxy for any host,
+/// whatever the operator's environment or a URL-scoped `http.<url>.proxy` names.
+const NO_PROXY_ENV: [(&str, &str); 2] = [("no_proxy", "*"), ("NO_PROXY", "*")];
+
+/// Every URL git's configuration, `config`, could send a line given `url` on its command line
+/// to: `url` itself, each `url` or `pushurl` of a remote named by `url`, and each of those
+/// rewritten by every `url.<base>.insteadOf` and `url.<base>.pushInsteadOf` whose value begins
+/// it. `config` is `git config --list -z`: `key\nvalue` entries, each ended by a NUL, the
+/// section and the variable of a key in lower case. Every rewrite that matches is listed, not
+/// only the one git picks, so the list holds git's choice whichever it is.
+#[must_use]
+pub fn reached_by(url: &str, config: &[u8]) -> Vec<String> {
+    let entries: Vec<(String, String)> = config
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| {
+            let text = String::from_utf8_lossy(entry);
+            let (key, value) = text.split_once('\n')?;
+            Some((key.to_owned(), value.to_owned()))
+        })
+        .collect();
+    let named = [format!("remote.{url}.url"), format!("remote.{url}.pushurl")];
+    let mut reached = vec![url.to_owned()];
+    reached.extend(
+        entries
+            .iter()
+            .filter(|(key, _)| named.contains(key))
+            .map(|(_, value)| value.clone()),
+    );
+    let rewrites: Vec<(&str, &str)> = entries
+        .iter()
+        .filter_map(|(key, prefix)| {
+            let base = key.strip_prefix("url.")?;
+            let base = base
+                .strip_suffix(".insteadof")
+                .or_else(|| base.strip_suffix(".pushinsteadof"))?;
+            Some((base, prefix.as_str()))
+        })
+        .collect();
+    let mut rewritten = Vec::new();
+    for target in &reached {
+        for (base, prefix) in &rewrites {
+            if let Some(rest) = target.strip_prefix(prefix) {
+                rewritten.push(format!("{base}{rest}"));
+            }
+        }
+    }
+    reached.extend(rewritten);
+    reached
 }
 
 /// The verdict of a GitHub head's checks: `Pass` when every check run is `completed` with
@@ -362,8 +439,8 @@ pub struct ConnectorsForge {
     project: String,
     origin: (String, String),
     /// The `origin` URL without its userinfo when it is `http://` to a loopback relay
-    /// ([`RemoteTransport::LoopbackHttp`]): the push and the fetch go there, port kept, and to
-    /// no other host.
+    /// ([`RemoteTransport::LoopbackHttp`], [`relay_of`]): the push and the fetch go there, port
+    /// kept, and to no other host.
     relay: Option<String>,
     identity: String,
     /// The run's scan adapter.
@@ -458,7 +535,7 @@ impl ConnectorsForge {
             .map(crate::git::remote_transport)
             .transpose()?
         {
-            Some(RemoteTransport::LoopbackHttp) => url.as_deref().map(super::without_userinfo),
+            Some(RemoteTransport::LoopbackHttp) => url.as_deref().map(relay_of).transpose()?,
             _ => None,
         };
         let origin = url
@@ -993,7 +1070,10 @@ impl ConnectorsForge {
     }
 
     /// The checks on the head of pull request `number` on github: every page of its check
-    /// runs and its combined status, for the head's sha ([`github_checks`]).
+    /// runs and its combined status, for the head's sha ([`github_checks`]). The walk ends once
+    /// the runs read reach the `total_count` a page reports, whatever size the instance serves
+    /// a page at; a page that reports none ends it when it is shorter than asked. An empty page
+    /// before the count is reached is an error, never a reading of part of them.
     fn github_checks_of(&self, tree: &Path, number: u64) -> Result<Checks> {
         let head = self.view(tree, number)?.head.sha;
         let (owner, repo) = self.repository();
@@ -1027,9 +1107,21 @@ impl ConnectorsForge {
                 ));
             }
             let total = body["total_count"].as_u64().map(|total| total as usize);
-            if listed.len() < PER_PAGE || total.is_some_and(|total| runs.len() >= total) {
+            let read_all = match total {
+                Some(total) => runs.len() >= total,
+                None => listed.len() < PER_PAGE,
+            };
+            if read_all {
                 complete = true;
                 break;
+            }
+            if listed.is_empty() {
+                bail!(
+                    "{} counts {} check runs and lists {} before an empty page: the rest are not read, so the checks are not known",
+                    self.named(CHECK_RUNS),
+                    total.unwrap_or_default(),
+                    runs.len()
+                );
             }
         }
         if !complete {
@@ -1073,6 +1165,108 @@ impl ConnectorsForge {
         } else {
             RemoteTransport::Https
         }
+    }
+
+    /// What a git line to [`Self::push_url`] is given on its command line after `git`: to the
+    /// loopback relay, no redirect followed ([`NO_REDIRECT`]) and no proxy
+    /// ([`NO_PROXY_CONFIG`]); over HTTPS, nothing.
+    fn relay_options(&self) -> Vec<String> {
+        if self.relay.is_none() {
+            return Vec::new();
+        }
+        NO_REDIRECT
+            .iter()
+            .chain(&NO_PROXY_CONFIG)
+            .map(|word| (*word).to_owned())
+            .collect()
+    }
+
+    /// `git` and what a line that reads from [`Self::push_url`] (`ls-remote`, `fetch`) is given
+    /// before its verb: no hook, no redirect followed ([`NO_REDIRECT`]) and, to the loopback
+    /// relay, no proxy ([`Self::relay_options`]).
+    fn read_prefix(&self) -> Vec<String> {
+        let mut argv: Vec<String> = ["git", "-c", "core.hooksPath=/dev/null"]
+            .into_iter()
+            .chain(NO_REDIRECT)
+            .map(str::to_owned)
+            .collect();
+        if self.relay.is_some() {
+            argv.extend(NO_PROXY_CONFIG.map(str::to_owned));
+        }
+        argv
+    }
+
+    /// The environment of a git line to [`Self::push_url`]: the protocols its transport allows
+    /// and, to the loopback relay, no proxy for any host ([`NO_PROXY_ENV`]).
+    fn line_env(&self) -> Vec<(&'static str, &'static str)> {
+        let mut env = vec![("GIT_ALLOW_PROTOCOL", self.transport().allowed_protocols())];
+        if self.relay.is_some() {
+            env.extend(NO_PROXY_ENV);
+        }
+        env
+    }
+
+    /// Refuses a line to the loopback relay that git's configuration would carry anywhere else:
+    /// each URL git reaches the relay's URL at, as it reads them for a fetch (`insteadOf`) and
+    /// for a push (`pushInsteadOf`, and a `pushurl` or `url` of a remote named by that URL),
+    /// must be `http://` to a loopback host ([`RemoteTransport::LoopbackHttp`]). Every such URL
+    /// is read off the tree's configuration ([`reached_by`]), as git reads it for this tree.
+    /// Over HTTPS, nothing is read: `GIT_ALLOW_PROTOCOL` holds that line to HTTPS.
+    fn relay_reached(&self, tree: &Path) -> Result<()> {
+        let Some(relay) = &self.relay else {
+            return Ok(());
+        };
+        let config = crate::git::bytes(tree, &["config", "--list", "-z"])
+            .context("read git's configuration of the tree before a line to the loopback relay; nothing was sent")?;
+        for url in reached_by(relay, &config) {
+            if !matches!(
+                crate::git::remote_transport(&url),
+                Ok(RemoteTransport::LoopbackHttp)
+            ) {
+                bail!(
+                    "a line to the loopback relay {relay} would go to {}, no loopback host, as git's configuration rewrites it (`url.<base>.insteadOf`, `url.<base>.pushInsteadOf`, a remote's `pushurl`): the relay's lines go to the relay alone, so nothing was sent",
+                    super::without_userinfo(&url)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The commit `origin`'s project holds `base` at, read through git from the URL every line
+    /// goes to ([`Self::push_url`]): `git ls-remote --refs <url> refs/heads/<base>`, run
+    /// through the runner. A branch it does not list, or a line that fails, is the error.
+    fn origin_tip(&self, tree: &Path, base: &str) -> Result<String> {
+        self.relay_reached(tree)?;
+        let url = self.push_url();
+        let reference = format!("refs/heads/{base}");
+        let mut argv = self.read_prefix();
+        argv.extend([
+            "ls-remote".to_owned(),
+            "--refs".to_owned(),
+            url.clone(),
+            reference.clone(),
+        ]);
+        let exit = self.runner.run_env(tree, &argv, &self.line_env())?;
+        if !exit.success() {
+            return Err(Failed {
+                line: argv.join(" "),
+                code: exit.code,
+                stderr: bounded(&exit.stderr),
+            }
+            .into());
+        }
+        exit.stdout
+            .lines()
+            .find_map(|line| {
+                let (object, name) = line.split_once('\t')?;
+                (name.trim_end() == reference).then(|| object.trim().to_owned())
+            })
+            .filter(|object| is_object_id(object))
+            .ok_or_else(|| {
+                anyhow!(
+                    "`git ls-remote` of {url} lists no commit for {reference}: what the project holds of {base} is not known; nothing is merged"
+                )
+            })
     }
 
     /// Merges change request `number` at `head` with the pipeline the checks were read on: the
@@ -1251,10 +1445,9 @@ impl Forge for ConnectorsForge {
     }
 
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
+        self.relay_reached(tree)?;
         let mut argv = vec!["git".to_owned()];
-        if self.relay.is_some() {
-            argv.extend(NO_REDIRECT.map(str::to_owned));
-        }
+        argv.extend(self.relay_options());
         argv.extend([
             "push".to_owned(),
             self.push_url(),
@@ -1268,7 +1461,7 @@ impl Forge for ConnectorsForge {
             &argv,
             &self.push_url(),
             "the forge connectors",
-            &[("GIT_ALLOW_PROTOCOL", self.transport().allowed_protocols())],
+            &self.line_env(),
         )
     }
 
@@ -1365,9 +1558,11 @@ impl Forge for ConnectorsForge {
         Ok(())
     }
 
-    /// On github, the commit `branch.get` reports the base at, fetched from the project `origin`
-    /// names into no ref when the tree does not hold it. On gitlab, refused as the seam's default
-    /// is: nothing is merged through it.
+    /// On github, the commit `branch.get` reports the base at, when the project `origin` names
+    /// holds the base at that same commit, read through git ([`Self::origin_tip`]); a served
+    /// answer that differs is refused, so no instance's answer alone names the commit the judge
+    /// guard reads. The commit is fetched from that project into no ref when the tree does not
+    /// hold it. On gitlab, refused as the seam's default is: nothing is merged through it.
     fn target_tip(&self, tree: &Path, base: &str) -> Result<String> {
         if self.connector == Connector::Gitlab {
             bail!(
@@ -1388,30 +1583,31 @@ impl Forge for ConnectorsForge {
                 tip.escape_debug()
             );
         }
+        let held = self.origin_tip(tree, base)?;
+        if held != tip {
+            bail!(
+                "{} reports {base} at {tip}, and {} holds it at {held}: the tip of the merge target is not known; nothing is merged",
+                self.named(BRANCH),
+                self.push_url()
+            );
+        }
         if commit_id(tree, tip).is_ok() {
             return Ok(tip.to_owned());
         }
         let url = self.push_url();
-        let argv: Vec<String> = [
-            "git",
-            "-c",
-            "core.hooksPath=/dev/null",
-            NO_REDIRECT[0],
-            NO_REDIRECT[1],
-            "fetch",
-            &url,
-            tip,
-            "--no-write-fetch-head",
-            "--no-tags",
-            "--recurse-submodules=no",
-        ]
-        .map(str::to_owned)
-        .to_vec();
-        let exit = self.runner.run_env(
-            tree,
-            &argv,
-            &[("GIT_ALLOW_PROTOCOL", self.transport().allowed_protocols())],
-        )?;
+        let mut argv = self.read_prefix();
+        argv.extend(
+            [
+                "fetch",
+                &url,
+                tip,
+                "--no-write-fetch-head",
+                "--no-tags",
+                "--recurse-submodules=no",
+            ]
+            .map(str::to_owned),
+        );
+        let exit = self.runner.run_env(tree, &argv, &self.line_env())?;
         if !exit.success() {
             return Err(Failed {
                 line: argv.join(" "),

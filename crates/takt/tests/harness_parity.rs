@@ -962,6 +962,25 @@ fn every_credential_shape_takt_lists_matches_its_fake() {
             "token-field",
             format!("\"refresh_token\": \"{}9\"", filler(78, 40, ALNUM)),
         ),
+        (
+            "aws-access-key-id",
+            ["AWS_ACCESS_KEY_ID=", "AKIA", "Z7Q3EGXN2MBV4KPL"].concat(),
+        ),
+        (
+            "aws-secret-access-key",
+            format!("aws_secret_access_key = {}9", filler(81, 39, ALNUM)),
+        ),
+        (
+            "authorization-header",
+            format!("> Authorization: Bearer {}9", filler(82, 39, ALNUM)),
+        ),
+        (
+            "url-password",
+            format!(
+                "https://user:{}9@example.com/o/r.git",
+                filler(83, 15, ALNUM)
+            ),
+        ),
     ];
     for shape in CREDENTIAL_SHAPES {
         assert!(
@@ -982,6 +1001,11 @@ fn every_credential_shape_takt_lists_matches_its_fake() {
         "# The OAuth access_token and refresh_token are read from the login file.\n",
         "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n",
         "risk-assessment-of-the-whole-repository-in-bytes-per-file",
+        "request.header(\"Authorization\", format!(\"Bearer {token}\"));\n",
+        "curl -H \"Authorization: Bearer $TOKEN\" https://example.com/\n",
+        "let url = format!(\"https://{user}:{password}@{host}/\");\n",
+        "DATABASE_URL=postgres://postgres:postgres@localhost/app\n",
+        "const REGION: &str = \"ASIA_PACIFIC\";\n",
     ] {
         assert_eq!(credential_shape(clean), None, "{clean}");
     }

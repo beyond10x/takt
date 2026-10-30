@@ -497,8 +497,9 @@ impl StandIn {
 
 /// The double of the forge's runner: records every argument list and the environment it was
 /// given, takes a `git push` of `<revision>:refs/heads/<branch>` into the stand-in's branches,
-/// as GitHub would, and answers every other `git` line with success. A `connectors` line is
-/// never run.
+/// as GitHub would, lists a branch the stand-in holds to a `git ls-remote` of it, as the
+/// project's repository would, and answers every other `git` line with success. A
+/// `connectors` line is never run.
 #[derive(Clone)]
 struct Pushes {
     lines: Rc<std::cell::RefCell<Vec<Vec<String>>>>,
@@ -556,9 +557,17 @@ impl Runner for Pushes {
                 .branches
                 .insert(branch.to_owned(), revision.to_owned());
         }
+        let mut stdout = String::new();
+        if argv.iter().any(|word| word == "ls-remote") {
+            let reference = argv.last().expect("a reference");
+            let branch = reference.strip_prefix("refs/heads/").expect("a branch");
+            if let Some(sha) = self.world.lock().expect("the world").branches.get(branch) {
+                stdout = format!("{sha}\t{reference}\n");
+            }
+        }
         Ok(Exit {
             code: Some(0),
-            stdout: String::new(),
+            stdout,
             stderr: String::new(),
         })
     }
@@ -858,10 +867,11 @@ fn a_run_opens_reads_and_merges_a_pull_request_through_the_served_wire() {
     );
     let lines = pushes.lines();
     assert!(
-        lines
-            .iter()
-            .all(|argv| argv[0] == "git" && argv.iter().any(|word| word == "push")),
-        "the runner ran only the push: {lines:?}"
+        lines.iter().all(|argv| argv[0] == "git"
+            && argv
+                .iter()
+                .any(|word| word == "push" || word == "ls-remote")),
+        "the runner ran only the push and the read of the target's tip: {lines:?}"
     );
     assert!(!lines.is_empty(), "the branch was pushed");
 }
@@ -1147,9 +1157,10 @@ fn after_a_409_a_read_comes_before_the_merge_is_taken_again() {
     );
 }
 
-/// The merge target's tip is the base branch's `commit.sha` through `branch.get`, a commit the
-/// tree holds; one it does not hold is fetched through the runner from the project `origin`
-/// names before it is answered.
+/// The merge target's tip is the base branch's `commit.sha` through `branch.get` when
+/// `git ls-remote` of the project `origin` names lists the branch at the same commit, a commit
+/// the tree holds; one it does not hold is fetched through the runner from that project before
+/// it is answered.
 #[test]
 fn the_target_tip_is_the_base_branchs_commit() {
     let scratch = Scratch::new("tip");
@@ -1160,7 +1171,21 @@ fn the_target_tip_is_the_base_branchs_commit() {
         stand_in.inputs_of("branch.get"),
         [json!({"owner": "owner", "repo": "repo", "branch": "main"})]
     );
-    assert!(pushes.lines().is_empty(), "a held tip is not fetched");
+    assert_eq!(
+        pushes.lines(),
+        [[
+            "git",
+            "-c",
+            "core.hooksPath=/dev/null",
+            "-c",
+            "http.followRedirects=false",
+            "ls-remote",
+            "--refs",
+            "https://github.example/owner/repo.git",
+            "refs/heads/main",
+        ]],
+        "a held tip is read from origin and not fetched"
+    );
     assert!(forge.target_tip(&tree, "absent").is_err());
 }
 
@@ -1178,9 +1203,9 @@ fn allowed_protocols(pushes: &Pushes) -> Vec<String> {
         .collect()
 }
 
-/// An `origin` that is `http://` to a loopback relay with a port is where the push and the
-/// fetch of the merge target's tip go: that URL without its userinfo, the port kept, no
-/// redirect followed, `http` allowed beside `https` and nothing else. An `https://` origin is
+/// An `origin` that is `http://` to a loopback relay with a port is where the push, the read
+/// and the fetch of the merge target's tip go: that URL without its userinfo, the port kept, no
+/// redirect followed, no proxy, `http` allowed beside `https` and nothing else. An `https://` origin is
 /// pushed to over HTTPS alone, and an `http://` origin to another host is refused before
 /// anything is opened, naming it without its userinfo.
 #[test]
@@ -1210,6 +1235,8 @@ fn a_loopback_relay_origin_keeps_its_port() {
                 "git",
                 "-c",
                 "http.followRedirects=false",
+                "-c",
+                "http.proxy=",
                 "push",
                 relay,
                 &refspec,
@@ -1222,6 +1249,21 @@ fn a_loopback_relay_origin_keeps_its_port() {
                 "core.hooksPath=/dev/null",
                 "-c",
                 "http.followRedirects=false",
+                "-c",
+                "http.proxy=",
+                "ls-remote",
+                "--refs",
+                relay,
+                "refs/heads/main",
+            ],
+            vec![
+                "git",
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "http.followRedirects=false",
+                "-c",
+                "http.proxy=",
                 "fetch",
                 relay,
                 OTHER,
@@ -1231,7 +1273,10 @@ fn a_loopback_relay_origin_keeps_its_port() {
             ],
         ]
     );
-    assert_eq!(allowed_protocols(&pushes), ["http:https", "http:https"]);
+    assert_eq!(
+        allowed_protocols(&pushes),
+        ["http:https", "http:https", "http:https"]
+    );
     assert_ne!(main, OTHER);
 
     let scratch = Scratch::new("over-https");

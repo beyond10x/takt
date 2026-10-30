@@ -2959,7 +2959,8 @@ fn publishes(forge: &dyn Forge) -> bool {
 /// ([`takt::forge::NO_PROMPT`]), and the fetch is held to [`Self::FETCH_TIMEOUT`]. Plain
 /// `http://` goes to a loopback host alone, a relay that holds the forge's credential: every URL
 /// git reaches `origin` at is read before the fetch, and one that is `http://` to another host
-/// is refused, naming it ([`Self::relayed`]); a line to a relay follows no redirect.
+/// is refused, naming it ([`Self::relayed`]); a line to a relay follows no redirect
+/// and goes through no proxy.
 struct TrialRoute {
     /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
     fetcher: Process,
@@ -3012,13 +3013,37 @@ impl TrialRoute {
         Ok((relayed(&fetch)?, relayed(&push)?))
     }
 
-    /// `git`, and [`takt::git::NO_REDIRECT`] after it for a line to a loopback relay.
+    /// `git`, and for a line to a loopback relay [`takt::git::NO_REDIRECT`] and [`Self::NO_PROXY`]
+    /// after it.
     fn git(relayed: bool) -> Vec<String> {
         let mut argv = vec!["git".to_owned()];
         if relayed {
             argv.extend(takt::git::NO_REDIRECT.map(str::to_owned));
+            argv.extend(Self::NO_PROXY.map(str::to_owned));
         }
         argv
+    }
+
+    /// What a line to a loopback relay is given on git's command line: no proxy, whatever the
+    /// environment (`http_proxy`, `all_proxy`) or the configuration names; an empty
+    /// `http.proxy` turns proxying off. A line to `https://` keeps the operator's proxy.
+    const NO_PROXY: [&str; 2] = ["-c", "http.proxy="];
+
+    /// What a line to a loopback relay is started with besides: every loopback host left out of
+    /// any proxy, also one a URL-specific `http.<url>.proxy` names, which the empty
+    /// `http.proxy` does not override ([`Self::NO_PROXY`]).
+    const LOOPBACK_NO_PROXY: [(&str, &str); 2] = [
+        ("no_proxy", "127.0.0.1,127.0.0.0/8,localhost,::1,[::1]"),
+        ("NO_PROXY", "127.0.0.1,127.0.0.0/8,localhost,::1,[::1]"),
+    ];
+
+    /// The environment of a line ([`Self::LOOPBACK_NO_PROXY`] for one to a loopback relay).
+    fn env(relayed: bool) -> &'static [(&'static str, &'static str)] {
+        if relayed {
+            &Self::LOOPBACK_NO_PROXY
+        } else {
+            &[]
+        }
     }
 
     /// The line that fetches `origin`'s trial branches into its remote-tracking refs.
@@ -3071,7 +3096,9 @@ impl TrialRoute {
     fn fetch(&self, tree: &Path) -> Result<()> {
         let (relayed, _) = Self::relayed(tree)?;
         let argv = Self::fetch_argv(relayed);
-        let exit = self.fetcher.run_keeping(tree, &argv, &[], Self::keeps)?;
+        let exit = self
+            .fetcher
+            .run_keeping(tree, &argv, Self::env(relayed), Self::keeps)?;
         Self::succeed(&argv, exit).map(|_| ())
     }
 
@@ -3082,7 +3109,9 @@ impl TrialRoute {
     fn create(&self, tree: &Path, trial: &str) -> Result<()> {
         let (_, relayed) = Self::relayed(tree)?;
         let argv = Self::push_argv(trial, relayed);
-        let exit = self.pusher.run_keeping(tree, &argv, &[], Self::keeps)?;
+        let exit = self
+            .pusher
+            .run_keeping(tree, &argv, Self::env(relayed), Self::keeps)?;
         let target = format!(":refs/heads/{trial}");
         let reported = exit.stdout.lines().find_map(|line| {
             let mut fields = line.split('\t');

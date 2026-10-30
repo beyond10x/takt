@@ -1491,7 +1491,12 @@ impl Process {
 
     /// [`Self::run_with`], the credentials `keep` admits left in the child's environment
     /// ([`without_credentials`]): for a line that goes under the operator's own login, as the
-    /// operator's git does with the SSH agent.
+    /// operator's git does with the SSH agent. Of the variables that point git elsewhere than
+    /// the tree, which takt's own git is started without, the child keeps only the
+    /// configuration the environment hands git, which takt reads a remote's URLs under too
+    /// ([`crate::git::remote_urls`]): a git under the child works on the repository at `tree`,
+    /// whatever `GIT_DIR` or `GIT_WORK_TREE` the caller's environment names, so its remote is
+    /// the one takt read.
     pub fn run_keeping(
         &self,
         tree: &Path,
@@ -1503,6 +1508,11 @@ impl Process {
             .split_first()
             .ok_or_else(|| anyhow!("an empty argument line"))?;
         let mut command = Command::new(program);
+        for name in crate::git::REDIRECTING_ENV {
+            if !crate::git::ENVIRONMENT_CONFIG.contains(&name) {
+                command.env_remove(name);
+            }
+        }
         command
             .args(args)
             .current_dir(tree)

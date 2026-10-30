@@ -4874,7 +4874,8 @@ fn check_base_url(url: &str) -> Result<bool> {
 }
 
 /// The host of a URL's `host[:port]`: a name of letters, digits, `-`, `.` and `_`, an IPv4
-/// address, or an IPv6 address in brackets, its brackets kept; the port, when given, digits.
+/// address, or an IPv6 address in brackets, its brackets kept; the port, when given, digits
+/// naming a port a URL can hold, at most 65535.
 pub(crate) fn host_of(host_port: &str) -> Option<&str> {
     let (host, port) = if host_port.starts_with('[') {
         let (host, after) = host_port.split_at(host_port.find(']')? + 1);
@@ -4894,7 +4895,11 @@ pub(crate) fn host_of(host_port: &str) -> Option<&str> {
     };
     match port.strip_prefix(':') {
         None if port.is_empty() => Some(host),
-        Some(digits) if !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()) => {
+        Some(digits)
+            if !digits.is_empty()
+                && digits.chars().all(|c| c.is_ascii_digit())
+                && digits.parse::<u16>().is_ok() =>
+        {
             Some(host)
         }
         _ => None,
