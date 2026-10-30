@@ -77,7 +77,7 @@ pushed there and stops `Unperformable (pr.opened)`, exit 7.
 
 What a trial needs that a plain run does not:
 
-- **A takt release later than 0.23.0.** It is the first that takes `--forge local` for a scenario
+- **takt 0.24.0 or later.** It is the first release that takes `--forge local` for a scenario
   run; `--harness-program` and the harness preflight are there since 0.15.1. The steps below
   install a release from its archive ([Install](./install.md)).
 - **The forge.** `--forge local`, and a run file naming the checks, `local_checks: [./check.sh]`.

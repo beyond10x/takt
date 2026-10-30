@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-30T02:41:37Z",
+  "actor": "human:timo",
+  "artifact": "story:story-delivery-3-is-the-default",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "task site-check at b1872bf3 (wave/46, merged as be894749), Chrome from Playwright's chromium-1243: 39 pages x 2 widths, the viewer at 3 more, /takt/no-such-page; 82 checks, 0 failed"
+  }
+}
