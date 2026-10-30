@@ -2,17 +2,18 @@
 format: aep.planning-md/3
 id: story:takt-carries-no-organisations-own-route
 kind: story
-status: active
+status: implemented
 title: takt carries no organisation's own delivery route
 summary: Remove --forge bot, the bot route of scenario run and the private-policy gates scan; a public agent drives no organisation's App
 tags:
 - priority:high
 relations:
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T03:08:03Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-30T03:08:03Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-30T09:40:58Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":5}}}
 ---
 # takt carries no organisation's own delivery route
 

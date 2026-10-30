@@ -1,15 +1,15 @@
 # Wave 47: takt carries no organisation's own route; git, the model and the forge through loopback relays
 
-Stage: **review fixed and confirmed, PR next**. Shape: one coordinator and implementor sub-agents in one
+Stage: **CI green at bfd9682a on PR 45; U1 and U3 implemented, merge next**. Shape: one coordinator and implementor sub-agents in one
 tree, on `wave/47` from be894749 (wave 46's merge).
 
 ## Units
 
 | unit | story | stage |
 |---|---|---|
-| U1 | story:takt-carries-no-organisations-own-route | committed (2c97598e, 28ef6621; review f730709e, f2715f57, 2ab5e9bf) |
+| U1 | story:takt-carries-no-organisations-own-route | implemented (2c97598e, 28ef6621; review f730709e, f2715f57, 2ab5e9bf; CI bfd9682a) |
 | U2 | story:git-and-model-through-loopback-relays | committed (7adb6758); Acceptance 2 and 4 wait for a Loom release |
-| U3 | story:connectors-forge-speaks-github-at-an-endpoint | committed (8839c7fb; review f730709e, 2ab5e9bf) |
+| U3 | story:connectors-forge-speaks-github-at-an-endpoint | implemented (8839c7fb; review f730709e, 2ab5e9bf; CI bfd9682a) |
 
 Ride-alongs: engineering-protocols 0.15.2 and Loom 0.51.0 (868335d4); one loopback check for the
 crate (98fe3396); the connectors forge on the Connectors 0.60.0 command line, in U3.
@@ -52,6 +52,18 @@ crate (98fe3396); the connectors forge on the Connectors 0.60.0 command line, in
   checks may be judged on a head that moved between two reads is filed as
   story:ci-checks-judge-the-head-ci-read-compared. Both reviewers confirmed at 2ab5e9bf, and
   `task check-static` is green at f2715f57.
+- PR 45's CI found four things the local runs did not:
+  - the macOS-only `LIVE` set lost its import with U1;
+  - CI's git 2.56 records a push to `origin`'s URL in `origin`'s remote-tracking refs, so three
+    scenario-run tests saw a `trial/0` they were meant not to know (6769c1c6, 4f014863);
+  - `protocols_builtin_adv1` pinned `story.delivery/1` to takt 0.12.0's bytes, which the
+    engineering-protocols 0.15.2 pin changes in `pr.open`'s description only (cbd74a16);
+  - U1's Acceptance 4 predicate matched two doc comments of an adversary test (bfd9682a).
+
+  Both reviewers confirmed at cbd74a16; bfd9682a changes two comments. Every check of PR 45
+  passed at bfd9682a, macOS included. U1 and U3 are implemented on its test_result records;
+  U2 stays active. story:scan-policy-outside-the-tree is archived, because the route it guarded
+  is gone.
 - After 0.24.0, wave 48 opens at once: the next Loom pin (U2's Acceptance 2 and 4), the
   connectors forge against a real served instance, and push and fetch through the Connectors git
   relay; 0.25.0 follows.

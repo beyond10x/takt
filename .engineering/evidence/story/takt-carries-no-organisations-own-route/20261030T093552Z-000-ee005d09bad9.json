@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T09:35:52Z",
+  "actor": "human:timo",
+  "artifact": "story:takt-carries-no-organisations-own-route",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "Acceptance 4 predicate on this tree at bfd9682a: its git grep half exits 1 (no match in crates, protocols, website/docs, examples, README.md, ess); its takt run --help half is the CI test forge_bot_is_refused_by_clap_and_no_help_names_it (forge_cli.rs). scripts/check-finding runs the predicate in a clone at the seed, where the grep half always matches, so it cannot judge a fix of this one",
+    "reference": "https://github.com/beyond10x/takt/commit/bfd9682afeb7167f59f3a3e306f07feb83b3f68b"
+  }
+}
