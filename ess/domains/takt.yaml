@@ -723,7 +723,7 @@ types:
       # It belongs to `forge: connectors`, which needs it.
       # read from: crates/takt/src/run_config.rs:267-271
       # read from: crates/takt/src/run_config.rs:1520-1530
-      # read from: crates/takt/src/forge/connectors.rs:387-400
+      # read from: crates/takt/src/forge/connectors.rs:424-437
       - name: forge_instance
         type: Optional<String>
       # The URL of the served Connectors instance `forge: connectors` calls instead of the
@@ -734,7 +734,7 @@ types:
       # read from: crates/takt/src/run_config.rs:272-275
       # read from: crates/takt/src/run_config.rs:320-322
       # read from: crates/takt/src/run_config.rs:1446-1457
-      # read from: crates/takt/src/forge/connectors.rs:402-435
+      # read from: crates/takt/src/forge/connectors.rs:439-472
       - name: forge_endpoint
         type: Optional<String>
       - name: transport
@@ -2429,7 +2429,12 @@ types:
   # and keeps the key.
   # `idempotency_conflict`, `approval_required` and `outcome_unknown` end the write naming the
   # code, and a merge answered `outcome_unknown` is read again before any further write, never
-  # called no merge. On github the merge target's tip is
+  # called no merge. Its key is kept in that file's `unknown`, and the next merge under it reads
+  # the pull request first: merged is the merge applied and none is sent; open and unmerged at the
+  # head the merge named is the merge not applied, sent under a fresh key at most once per
+  # process, the fresh key recorded beside the first; closed or at another head is no merge,
+  # naming what was read. An open answered `outcome_unknown` keeps its key. On github the merge
+  # target's tip is
   # `branch.get`'s `commit.sha` only when `origin`'s own branch, read through git, names the same
   # commit; any other answer, or no such branch, is refused. The check runs are read page by page
   # until as many as their `total_count` are read. The push goes to the project `origin` names
@@ -2450,21 +2455,21 @@ types:
   # holding each control character but a tab escaped (`\u{1b}`). It is named, never
   # defaulted to, and a scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/connectors.rs:12-19
-  # read from: crates/takt/src/forge/connectors.rs:111-120
-  # read from: crates/takt/src/forge/connectors.rs:520-554
-  # read from: crates/takt/src/forge/connectors.rs:842-858
-  # read from: crates/takt/src/forge/connectors.rs:952-957
-  # read from: crates/takt/src/forge/connectors.rs:1241-1293
-  # read from: crates/takt/src/forge/connectors.rs:1495-1509
-  # read from: crates/takt/src/forge/connectors.rs:1769-1772
-  # read from: crates/takt/src/forge/connectors.rs:1979-1996
-  # read from: crates/takt/src/forge/connectors.rs:169-190
-  # read from: crates/takt/src/forge/connectors.rs:610-621
-  # read from: crates/takt/src/forge/connectors.rs:1083-1138
-  # read from: crates/takt/src/forge/connectors.rs:200-201
-  # read from: crates/takt/src/forge/connectors.rs:213-320
-  # read from: crates/takt/src/forge/connectors.rs:712-716
-  # read from: crates/takt/src/forge/connectors.rs:1699-1745
+  # read from: crates/takt/src/forge/connectors.rs:115-124
+  # read from: crates/takt/src/forge/connectors.rs:557-591
+  # read from: crates/takt/src/forge/connectors.rs:883-899
+  # read from: crates/takt/src/forge/connectors.rs:993-998
+  # read from: crates/takt/src/forge/connectors.rs:1314-1413
+  # read from: crates/takt/src/forge/connectors.rs:1616-1630
+  # read from: crates/takt/src/forge/connectors.rs:1892-1895
+  # read from: crates/takt/src/forge/connectors.rs:2102-2119
+  # read from: crates/takt/src/forge/connectors.rs:173-194
+  # read from: crates/takt/src/forge/connectors.rs:647-658
+  # read from: crates/takt/src/forge/connectors.rs:1124-1210
+  # read from: crates/takt/src/forge/connectors.rs:204-205
+  # read from: crates/takt/src/forge/connectors.rs:218-357
+  # read from: crates/takt/src/forge/connectors.rs:752-756
+  # read from: crates/takt/src/forge/connectors.rs:1822-1868
   # read from: crates/takt/src/forge.rs:1568-1572
   # read from: crates/takt/src/forge/relay.rs:24-29
   # read from: crates/takt/src/forge/relay.rs:101-112
