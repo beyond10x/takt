@@ -4,8 +4,8 @@
 //! record with result `open`; `ci.read` writes one `ci_result` record from what the forge
 //! reports about the checks, and nothing while they are pending. Every record is about
 //! `implementation` at the pushed revision and names its validator; the model never produces
-//! evidence. The bot-route adapter is tested for the argument lines it would run only: a
-//! recording runner stands in for `b10x-gates`, and nothing leaves the machine.
+//! evidence. Each adapter is tested for the argument lines it would run only: a recording
+//! runner stands in for its program, and nothing leaves the machine.
 
 #[path = "support/own_home.rs"]
 mod own_home;
@@ -21,8 +21,8 @@ use takt::case::{Branch, current};
 use takt::evidence::Record;
 use takt::forge::gitlab::{Glab, encoded, project_of};
 use takt::forge::{
-    BotRoute, Checks, Exit, Forge, Head, LOGIN_LOCATIONS, Memory, Outgoing, PullRequest,
-    PullRequestState, PullRequestView, Runner, repository_of, without_userinfo,
+    Checks, Exit, Forge, Head, LOGIN_LOCATIONS, Memory, Outgoing, PullRequest, PullRequestState,
+    PullRequestView, Runner, repository_of, without_userinfo,
 };
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::run::{
@@ -571,292 +571,6 @@ fn a_discarded_case_leaves_no_directory_and_no_branch() {
     assert!(!tree.join(".takt/cases").exists());
 }
 
-/// The head an empty `view` of [`Recording`] reports the pull request at.
-const RECORDED_HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
-
-/// A runner that records every argument line it is given instead of running it, and answers
-/// what the real programs would: a response file with the pull request's number for an API
-/// write, and for an API read (`GET`) the pull request (`view`, or an open one at
-/// [`RECORDED_HEAD`] when it is empty), the check runs on its head (`checks`) or its combined
-/// status (`status`).
-struct Recording {
-    lines: RefCell<Vec<String>>,
-    view: &'static str,
-    checks: &'static str,
-    status: &'static str,
-}
-
-impl Recording {
-    fn new(view: &'static str, checks: &'static str) -> Self {
-        Self {
-            lines: RefCell::new(Vec::new()),
-            view,
-            checks,
-            status: r#"{"state":"pending","total_count":0,"statuses":[]}"#,
-        }
-    }
-
-    fn with_status(mut self, status: &'static str) -> Self {
-        self.status = status;
-        self
-    }
-}
-
-/// An open pull request's response, at `head`, from `takt/c1` into `main`.
-fn open_at(head: &str) -> String {
-    format!(
-        r#"{{"state":"open","merged":false,"head":{{"ref":"takt/c1","sha":"{head}"}},"base":{{"ref":"main"}}}}"#
-    )
-}
-
-impl Runner for Recording {
-    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-    /// dropped.
-    fn run_env(
-        &self,
-        tree: &std::path::Path,
-        argv: &[String],
-        _: &[(&str, &str)],
-    ) -> anyhow::Result<takt::forge::Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        self.lines.borrow_mut().push(argv.join(" "));
-        let option = |name: &str| {
-            argv.iter()
-                .position(|a| a == name)
-                .map(|i| argv[i + 1].clone())
-        };
-        if argv.get(1).map(String::as_str) == Some("api") {
-            let output = option("--output").expect("--output");
-            let path = option("--path").expect("--path");
-            let response = if option("--method").as_deref() != Some("GET") {
-                r#"{"number": 7, "state": "open"}"#.to_owned()
-            } else if path.contains("/pulls/") {
-                if self.view.is_empty() {
-                    open_at(RECORDED_HEAD)
-                } else {
-                    self.view.to_owned()
-                }
-            } else if path.contains("/check-runs") {
-                self.checks.to_owned()
-            } else if path.contains("/status") {
-                self.status.to_owned()
-            } else {
-                anyhow::bail!("no response for {path}");
-            };
-            fs::write(output, response)?;
-        }
-        Ok(Exit {
-            code: Some(0),
-            stdout: String::new(),
-            stderr: String::new(),
-        })
-    }
-}
-
-/// The bot-route adapter runs exactly these argument lines, in this order, and nothing else:
-/// the push and the API write through `b10x-gates`, the pull-request body through `scan-text`
-/// before it leaves the machine, and the reads through `b10x-gates api --method GET`, each
-/// response written to a file of its own (`OUT` below). No token appears in any of them, and
-/// no `gh`.
-#[test]
-fn the_bot_route_adapter_runs_these_argument_lines() {
-    let tree = scratch("argv");
-    let dir = tree.join("out");
-    git(&tree, &["branch", "takt/c1"]);
-    let c1 = git(&tree, &["rev-parse", "takt/c1"]);
-    let recording = Rc::new(Recording::new(
-        r#"{"state":"open","merged":false,"head":{"ref":"takt/c1","sha":"0123456789abcdef0123456789abcdef01234567"},"base":{"ref":"trunk"}}"#,
-        r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"skipped"}]}"#,
-    ));
-    struct Shared(Rc<Recording>);
-    impl Runner for Shared {
-        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-        /// dropped.
-        fn run_env(
-            &self,
-            tree: &std::path::Path,
-            argv: &[String],
-            _: &[(&str, &str)],
-        ) -> anyhow::Result<takt::forge::Exit> {
-            self.run(tree, argv)
-        }
-
-        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-            self.0.run(tree, argv)
-        }
-    }
-    let forge = BotRoute::new(
-        "owner/repo",
-        Some(PathBuf::from("/policies/policy.yaml")),
-        Box::new(Shared(recording.clone())),
-    );
-    forge.push(&tree, "takt/c1").expect("pushes");
-    let request = PullRequest {
-        branch: "takt/c1".to_owned(),
-        base: "main".to_owned(),
-        title: "deliver the story".to_owned(),
-        body: "the body".to_owned(),
-    };
-    let number = forge
-        .open_pull_request(&tree, &dir, &request)
-        .expect("opens");
-    assert_eq!(number, 7);
-    assert_eq!(
-        forge.pull_request(&tree, number).expect("reads"),
-        PullRequestView {
-            state: PullRequestState::Open,
-            head: Head {
-                branch: "takt/c1".to_owned(),
-                sha: RECORDED_HEAD.to_owned(),
-            },
-            base: "trunk".to_owned(),
-        }
-    );
-    assert_eq!(forge.checks(&tree, number).expect("reads"), Checks::Pass);
-    let input = dir.join("pull-request.request.json");
-    let output = dir.join("pull-request.response.json");
-    let lines: Vec<String> = recording
-        .lines
-        .borrow()
-        .iter()
-        .map(|line| {
-            if !line.contains(" --method GET ") {
-                return line.clone();
-            }
-            let mut words: Vec<&str> = line.split(' ').collect();
-            let at = words
-                .iter()
-                .position(|w| *w == "--output")
-                .expect("--output");
-            words[at + 1] = "OUT";
-            words.join(" ")
-        })
-        .collect();
-    let read = |path: &str| {
-        format!(
-            "b10x-gates api --method GET --path {path} --output OUT --repository owner/repo --policy /policies/policy.yaml"
-        )
-    };
-    assert_eq!(
-        lines.as_slice(),
-        [
-            format!(
-                "b10x-gates bot -- push https://github.com/owner/repo.git {c1}:refs/heads/takt/c1 --no-follow-tags --recurse-submodules=no"
-            ),
-            format!(
-                "b10x-gates scan-text --repository owner/repo --policy /policies/policy.yaml {} {}",
-                input.display(),
-                dir.join("pull-request.published.txt").display()
-            ),
-            format!(
-                "b10x-gates api --method POST --path /repos/owner/repo/pulls --input {} --output {} --repository owner/repo --policy /policies/policy.yaml",
-                input.display(),
-                output.display()
-            ),
-            read("/repos/owner/repo/pulls/7"),
-            read("/repos/owner/repo/pulls/7"),
-            read(&format!(
-                "/repos/owner/repo/commits/{RECORDED_HEAD}/check-runs?per_page=100"
-            )),
-            read(&format!(
-                "/repos/owner/repo/commits/{RECORDED_HEAD}/status?per_page=100"
-            )),
-        ]
-    );
-    let sent: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&input).expect("the request")).expect("json");
-    assert_eq!(sent["head"], "takt/c1", "{sent}");
-    assert_eq!(sent["base"], "main", "{sent}");
-    assert_eq!(sent["title"], "deliver the story", "{sent}");
-    assert_eq!(sent["body"], "the body", "{sent}");
-}
-
-/// What the API reports maps onto the three states and the three check results; a reply the
-/// adapter cannot read is an error, never a record.
-#[test]
-fn the_bot_route_adapter_reads_states_and_checks_from_the_api() {
-    let tree = scratch("api-reads");
-    let read = |view: &'static str, checks: &'static str| {
-        let forge = BotRoute::new("owner/repo", None, Box::new(Recording::new(view, checks)));
-        (forge.pull_request(&tree, 3), forge.checks(&tree, 3))
-    };
-    let (state, checks) = read(
-        r#"{"state":"closed","merged":true,"head":{"ref":"takt/c3","sha":"89abcdef0123456789abcdef0123456789abcdef"},"base":{"ref":"main"}}"#,
-        r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"in_progress","conclusion":null}]}"#,
-    );
-    let view = state.expect("reads");
-    assert_eq!(view.state, PullRequestState::Merged);
-    assert_eq!(view.head.branch, "takt/c3");
-    assert_eq!(view.head.sha, "89abcdef0123456789abcdef0123456789abcdef");
-    assert_eq!(checks.expect("reads"), Checks::Pending);
-    let (state, checks) = read(
-        r#"{"state":"closed","merged":false,"head":{"ref":"takt/c3","sha":"89abcdef0123456789abcdef0123456789abcdef"},"base":{"ref":"main"}}"#,
-        r#"{"total_count":3,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"failure"},{"status":"queued","conclusion":null}]}"#,
-    );
-    assert_eq!(state.expect("reads").state, PullRequestState::Closed);
-    assert_eq!(checks.expect("reads"), Checks::Fail);
-    let (_, checks) = read("", r#"{"total_count":0,"check_runs":[]}"#);
-    assert_eq!(checks.expect("reads"), Checks::Pending);
-    // A reply without the head is no reading: the validators check the head before they trust
-    // a number.
-    let (state, checks) = read(
-        r#"{"state":"open","merged":false,"base":{"ref":"main"}}"#,
-        r#"{"total_count":0,"check_runs":[]}"#,
-    );
-    let error = format!("{:#}", state.expect_err("no head"));
-    assert!(error.contains("/head/ref"), "{error}");
-    assert!(checks.is_err(), "no head, no checks read");
-    // A head that is no object id is not put into a path.
-    let (_, checks) = read(
-        r#"{"state":"open","merged":false,"head":{"ref":"takt/c3","sha":"../../x"},"base":{"ref":"main"}}"#,
-        r#"{"total_count":0,"check_runs":[]}"#,
-    );
-    let error = format!("{:#}", checks.expect_err("no object id"));
-    assert!(error.contains("no object id"), "{error}");
-    let (state, checks) = read("not json", "not json");
-    assert!(state.is_err());
-    assert!(checks.is_err());
-    // More check runs than one page lists is no reading of the first page.
-    let (_, checks) = read(
-        "",
-        r#"{"total_count":101,"check_runs":[{"status":"completed","conclusion":"success"}]}"#,
-    );
-    let error = format!("{:#}", checks.expect_err("a second page"));
-    assert!(
-        error.contains("counts 101 check_runs and lists 1"),
-        "{error}"
-    );
-    // A failing status fails whatever the check runs say.
-    let forge = BotRoute::new(
-        "owner/repo",
-        None,
-        Box::new(
-            Recording::new(
-                "",
-                r#"{"total_count":1,"check_runs":[{"status":"completed","conclusion":"success"}]}"#,
-            )
-            .with_status(r#"{"state":"failure","total_count":1,"statuses":[{"state":"failure"}]}"#),
-        ),
-    );
-    assert_eq!(forge.checks(&tree, 3).expect("reads"), Checks::Fail);
-}
-
-/// Without a policy file the adapter omits `--policy`; `b10x-gates` reads its own environment.
-#[test]
-fn the_bot_route_adapter_omits_the_policy_when_none_is_given() {
-    let forge = BotRoute::new("owner/repo", None, Box::new(Recording::new("", "")));
-    let line = forge
-        .open_argv(Path::new("in.json"), Path::new("out.json"))
-        .join(" ");
-    assert_eq!(
-        line,
-        "b10x-gates api --method POST --path /repos/owner/repo/pulls --input in.json --output out.json --repository owner/repo"
-    );
-}
-
 /// The `<owner>/<repo>` of an `origin` URL in the forms git writes them; a local path is none.
 #[test]
 fn the_repository_is_read_from_the_origin_url() {
@@ -877,7 +591,7 @@ fn the_repository_is_read_from_the_origin_url() {
         (origin.host.as_str(), origin.repository.as_str()),
         ("github.com", "owner/repo")
     );
-    // Another host is named as such: the bot route is not its forge.
+    // Another host is named as such.
     for url in [
         "git@gitlab.example.com:owner/repo.git",
         "https://gitlab.example.com/owner/repo.git",
@@ -959,8 +673,7 @@ impl Forge for AnyNumber {
 
 /// `pr.open` on a case opened from a detached `HEAD` has no base to open the pull request
 /// against and refuses; nothing may leave the machine before the refusal. A detached tree is
-/// what a CI checkout or `git checkout <sha>` leaves, and the bot route is the default forge
-/// whenever `origin` exists.
+/// what a CI checkout or `git checkout <sha>` leaves.
 #[test]
 fn adv_pr_open_on_a_detached_head_pushes_nothing_before_refusing() {
     let tree = scratch("adv-detached");
@@ -1374,155 +1087,6 @@ fn adv_a_closed_pull_request_at_a_second_revision_is_recorded_closed() {
     );
 }
 
-/// A runner whose `scan-text` refuses the request and records every line it is given.
-struct Refusing(RefCell<Vec<String>>);
-
-impl Runner for Refusing {
-    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-    /// dropped.
-    fn run_env(
-        &self,
-        tree: &std::path::Path,
-        argv: &[String],
-        _: &[(&str, &str)],
-    ) -> anyhow::Result<takt::forge::Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        self.0.borrow_mut().push(argv.join(" "));
-        let refused = argv.get(1).map(String::as_str) == Some("scan-text");
-        Ok(Exit {
-            code: Some(if refused { 1 } else { 0 }),
-            stdout: String::new(),
-            stderr: if refused {
-                "a private rule".to_owned()
-            } else {
-                String::new()
-            },
-        })
-    }
-}
-
-/// A request `scan-text` refuses never reaches the API: the open is an error naming the scan,
-/// and the API line is not run.
-#[test]
-fn adv_a_request_scan_text_refuses_never_reaches_the_api() {
-    let tree = scratch("adv-scan");
-    let refusing = Rc::new(Refusing(RefCell::new(Vec::new())));
-    struct Shared(Rc<Refusing>);
-    impl Runner for Shared {
-        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-        /// dropped.
-        fn run_env(
-            &self,
-            tree: &std::path::Path,
-            argv: &[String],
-            _: &[(&str, &str)],
-        ) -> anyhow::Result<takt::forge::Exit> {
-            self.run(tree, argv)
-        }
-
-        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-            self.0.run(tree, argv)
-        }
-    }
-    let forge = BotRoute::new("owner/repo", None, Box::new(Shared(refusing.clone())));
-    let request = PullRequest {
-        branch: "takt/c1".to_owned(),
-        base: "main".to_owned(),
-        title: "deliver the story".to_owned(),
-        body: "the body".to_owned(),
-    };
-    let error = format!(
-        "{:#}",
-        forge
-            .open_pull_request(&tree, &tree.join("out"), &request)
-            .expect_err("the scan refused")
-    );
-    assert!(error.contains("scan-text"), "{error}");
-    assert!(error.contains("a private rule"), "{error}");
-    let lines = refusing.0.borrow();
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(lines[0].starts_with("b10x-gates scan-text "), "{lines:?}");
-}
-
-/// An API reply without a `number` is an error, never a pull request numbered by default.
-#[test]
-fn adv_an_api_reply_without_a_number_is_an_error_not_a_pull_request() {
-    struct NoNumber;
-    impl Runner for NoNumber {
-        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-        /// dropped.
-        fn run_env(
-            &self,
-            tree: &std::path::Path,
-            argv: &[String],
-            _: &[(&str, &str)],
-        ) -> anyhow::Result<takt::forge::Exit> {
-            self.run(tree, argv)
-        }
-
-        fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-            if argv.get(1).map(String::as_str) == Some("api") {
-                let output = argv
-                    .iter()
-                    .position(|a| a == "--output")
-                    .map(|i| &argv[i + 1])
-                    .expect("--output");
-                fs::write(output, r#"{"message":"Validation Failed","errors":[]}"#)?;
-            }
-            Ok(Exit {
-                code: Some(0),
-                stdout: String::new(),
-                stderr: String::new(),
-            })
-        }
-    }
-    let tree = scratch("adv-no-number");
-    let forge = BotRoute::new("owner/repo", None, Box::new(NoNumber));
-    let request = PullRequest {
-        branch: "takt/c1".to_owned(),
-        base: "main".to_owned(),
-        title: "deliver the story".to_owned(),
-        body: "the body".to_owned(),
-    };
-    let error = format!(
-        "{:#}",
-        forge
-            .open_pull_request(&tree, &tree.join("out"), &request)
-            .expect_err("no number")
-    );
-    assert!(error.contains("number"), "{error}");
-}
-
-/// The conclusions the unit's cases do not reach: `cancelled` is a failure, and a conclusion
-/// or a status the adapter does not know is an error, never a reading.
-#[test]
-fn adv_a_cancelled_check_fails_and_an_unknown_conclusion_is_an_error() {
-    let tree = scratch("adv-buckets");
-    let read = |checks: &'static str| {
-        BotRoute::new("owner/repo", None, Box::new(Recording::new("", checks))).checks(&tree, 3)
-    };
-    assert_eq!(
-        read(r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"cancelled"}]}"#)
-            .expect("reads"),
-        Checks::Fail
-    );
-    let error = format!(
-        "{:#}",
-        read(r#"{"total_count":2,"check_runs":[{"status":"completed","conclusion":"success"},{"status":"completed","conclusion":"mystery"}]}"#)
-            .expect_err("unknown conclusion")
-    );
-    assert!(error.contains("mystery"), "{error}");
-    let error = format!(
-        "{:#}",
-        read(r#"{"total_count":1,"check_runs":[{"status":"sleeping","conclusion":null}]}"#)
-            .expect_err("unknown status")
-    );
-    assert!(error.contains("sleeping"), "{error}");
-}
-
 // Correction round 1 over story:forge-pull-request-evidence: the branch forks from its base,
 // and the forge's report of a pull request's head decides whether a number is trusted.
 
@@ -1706,8 +1270,8 @@ fn commit_gates(tree: &Path) {
 
 /// `pr.open` pushes the case's branch, `takt/<id>`: the branch the tree is on, the one `current`
 /// resolved the case from. It does not push the `name` field of a file the harness can write,
-/// because that field reaches `b10x-gates bot -- push <url> <name>` as given: a refspec there
-/// (`HEAD:main`, `:main`, `--all`) is what the bot credential then pushes.
+/// because that field would reach the push as given: a refspec there (`HEAD:main`, `:main`,
+/// `--all`) is what the forge's credential would then push.
 #[test]
 fn adv2_pr_open_pushes_the_case_branch_not_the_name_the_harness_wrote_into_branch_yaml() {
     let tree = scratch("adv2-repoint");
@@ -1854,51 +1418,6 @@ fn adv2_a_case_opened_over_a_leftover_case_branch_does_not_fork_from_its_commits
         &tip,
         "case directory gone",
     );
-}
-
-/// `BotRoute::for_tree` names the origin URL in its refusals. A checkout a CI runner leaves
-/// carries a credential in that URL; the credential must not appear in what the refusal says,
-/// which the binary prints.
-#[test]
-fn adv2_a_credential_in_the_origin_url_is_not_printed_by_the_bot_routes_refusal() {
-    for (name, url) in [
-        (
-            "elsewhere",
-            "https://ci-user:t0k3n-not-real@gitlab.example.com/owner/repo.git",
-        ),
-        ("no-owner", "https://ci-user:t0k3n-not-real@github.com/repo"),
-    ] {
-        let tree = scratch(&format!("adv2-cred-{name}"));
-        git(&tree, &["remote", "add", "origin", url]);
-        let error = format!(
-            "{:#}",
-            BotRoute::for_tree(&tree).expect_err("the bot route refuses this origin")
-        );
-        assert!(
-            !error.contains("t0k3n-not-real"),
-            "{name}: the refusal prints the credential: {error}"
-        );
-    }
-}
-
-/// A host name is case-insensitive: an origin written as `GitHub.com` is on github.com, and
-/// the bot route serves it.
-#[test]
-fn adv2_an_origin_host_written_in_upper_case_is_github() {
-    let tree = scratch("adv2-upper");
-    git(
-        &tree,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://GitHub.com/owner/repo.git",
-        ],
-    );
-    let forge = BotRoute::for_tree(&tree).unwrap_or_else(|error| {
-        panic!("GitHub.com is github.com, a host name being case-insensitive: {error:#}")
-    });
-    assert_eq!(forge.repository, "owner/repo");
 }
 
 /// A chain of cases, each opened over the previous one's branch: every case forks from the
@@ -2065,24 +1584,6 @@ fn adv2_a_dirty_tree_over_another_cases_branch_is_refused_before_the_case_is_wri
     assert!(first.dir.join("case.yaml").is_file());
 }
 
-/// A head no check has been reported for lists no check run and no status, and its combined
-/// state is `pending`; that is the state of every pull request in the seconds after its push,
-/// which is when `ci.read` first runs. The adapter reads it as pending, not as an error that
-/// ends the run.
-#[test]
-fn adv2_no_checks_reported_yet_is_pending_not_an_error() {
-    let tree = scratch("adv2-no-checks");
-    let forge = BotRoute::new(
-        "owner/repo",
-        None,
-        Box::new(Recording::new("", r#"{"total_count":0,"check_runs":[]}"#)),
-    );
-    let checks = forge.checks(&tree, 7).unwrap_or_else(|error| {
-        panic!("no checks reported yet is pending, not an error: {error:#}")
-    });
-    assert_eq!(checks, Checks::Pending);
-}
-
 // Correction round 2 over story:forge-pull-request-evidence: the refusal at open with a forge
 // and no base, what takt prints of a remote URL, and the branch name a file cannot change.
 
@@ -2202,297 +1703,8 @@ fn pr_open_sets_branch_yaml_right_when_its_name_was_rewritten() {
     assert_eq!(calls.last().map(String::as_str), Some("view #1"));
 }
 
-/// A runner that answers the dry-run fetch with the porcelain line for `main` at `tip`.
-struct Fetching {
-    lines: RefCell<Vec<String>>,
-    tip: String,
-}
-
-impl Runner for Fetching {
-    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        self.lines.borrow_mut().push(argv.join(" "));
-        Ok(Exit {
-            code: Some(0),
-            stdout: format!(
-                "  {} {} refs/remotes/origin/main\n",
-                "0".repeat(40),
-                self.tip
-            ),
-            stderr: String::new(),
-        })
-    }
-}
-
-/// D7: the bot route reports the target's tip through its dry-run fetch of the base branch,
-/// then fetches that commit into no ref, so the tree's repository holds it.
-#[test]
-fn the_bot_route_reports_the_target_tip_through_a_dry_run_fetch() {
-    let tree = scratch("bot-tip");
-    let tip = "a".repeat(40);
-    let runner = Rc::new(Fetching {
-        lines: RefCell::new(Vec::new()),
-        tip: tip.clone(),
-    });
-    struct Shared(Rc<Fetching>);
-    impl Runner for Shared {
-        fn run_env(
-            &self,
-            tree: &Path,
-            argv: &[String],
-            env: &[(&str, &str)],
-        ) -> anyhow::Result<Exit> {
-            self.0.run_env(tree, argv, env)
-        }
-        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-            self.0.run(tree, argv)
-        }
-    }
-    let forge = BotRoute::new("owner/repo", None, Box::new(Shared(runner.clone())));
-    let answered = forge.target_tip(&tree, "main").expect("a tip");
-    assert_eq!(answered, tip);
-    let lines = runner.lines.borrow();
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[0].contains("--dry-run"), "{lines:?}");
-    assert!(
-        lines[0].contains("refs/heads/main:refs/remotes/origin/main"),
-        "{lines:?}"
-    );
-    assert_eq!(
-        lines[1],
-        format!(
-            "b10x-gates bot -- fetch https://github.com/owner/repo.git {tip} --no-write-fetch-head --no-tags --recurse-submodules=no"
-        ),
-        "{lines:?}"
-    );
-}
-
-/// A runner that runs the bot route's lines as plain git against the bare repository `remote`
-/// in place of the repository's URL: the dry-run fetch answered from `git ls-remote`, which
-/// stores no object, as a dry run is documented to change nothing; every other line run as
-/// git. The environment is dropped: it allows HTTPS alone, and `remote` is a path.
-struct LocalRemote {
-    remote: PathBuf,
-    url: String,
-    lines: RefCell<Vec<String>>,
-}
-
-impl Runner for LocalRemote {
-    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        self.lines.borrow_mut().push(argv.join(" "));
-        let [bot, sub, dashes, rest @ ..] = argv else {
-            return Err(anyhow!("not a bot line: {argv:?}"));
-        };
-        assert_eq!([bot, sub, dashes], ["b10x-gates", "bot", "--"], "{argv:?}");
-        let args: Vec<String> = rest
-            .iter()
-            .map(|arg| {
-                if *arg == self.url {
-                    self.remote.display().to_string()
-                } else {
-                    arg.clone()
-                }
-            })
-            .collect();
-        if args.iter().any(|arg| arg == "--dry-run") {
-            let (source, target) = args[2].split_once(':').expect("a refspec");
-            let listed = git(&self.remote, &["ls-remote", ".", source]);
-            let new = listed.split_whitespace().next().expect("the branch");
-            return Ok(Exit {
-                code: Some(0),
-                stdout: format!("* {} {new} {target}\n", "0".repeat(40)),
-                stderr: String::new(),
-            });
-        }
-        let output = Command::new("git").args(&args).current_dir(tree).output()?;
-        Ok(Exit {
-            code: output.status.code(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
-    }
-}
-
-/// The merge target's tip newer than anything the tree's repository holds: the bot route
-/// reports it, and the tree then holds its commit, so the allow-list and the delegation record
-/// at it read; no ref of the tree has moved and no `FETCH_HEAD` is written.
-#[test]
-fn the_bot_route_brings_a_target_tip_newer_than_the_tree_into_no_ref() {
-    let tree = scratch("bot-newer");
-    let remote = scratch("bot-newer-remote");
-    fs::remove_dir_all(&*remote).expect("emptied");
-    git(
-        &tree,
-        &[
-            "clone",
-            "-q",
-            "--bare",
-            ".",
-            remote.to_str().expect("utf-8"),
-        ],
-    );
-    let newer = git(
-        &remote,
-        &["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "newer"],
-    );
-    git(&remote, &["update-ref", "refs/heads/main", &newer]);
-    let held = |at: &str| {
-        Command::new("git")
-            .args(["cat-file", "-e", &format!("{at}^{{commit}}")])
-            .current_dir(&*tree)
-            .status()
-            .expect("git runs")
-            .success()
-    };
-    assert!(!held(&newer), "the tree holds nothing of the newer tip yet");
-    let refs = git(&tree, &["for-each-ref"]);
-    let runner = Rc::new(LocalRemote {
-        remote: remote.to_path_buf(),
-        url: "https://github.com/owner/repo.git".to_owned(),
-        lines: RefCell::new(Vec::new()),
-    });
-    struct Shared(Rc<LocalRemote>);
-    impl Runner for Shared {
-        fn run_env(
-            &self,
-            tree: &Path,
-            argv: &[String],
-            env: &[(&str, &str)],
-        ) -> anyhow::Result<Exit> {
-            self.0.run_env(tree, argv, env)
-        }
-        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-            self.0.run(tree, argv)
-        }
-    }
-    let forge = BotRoute::new("owner/repo", None, Box::new(Shared(runner.clone())));
-    let answered = forge.target_tip(&tree, "main").expect("a tip");
-    assert_eq!(answered, newer);
-    assert!(
-        held(&newer),
-        "the tree holds the tip it was told: {:?}",
-        runner.lines.borrow()
-    );
-    assert_eq!(git(&tree, &["for-each-ref"]), refs, "no ref moved");
-    assert!(!tree.join(".git/FETCH_HEAD").exists(), "no FETCH_HEAD");
-}
-
-/// A runner that answers the dry-run fetch with `main` at `tip`, and the object fetch with
-/// `fetch_code`.
-struct Scripted {
-    tip: String,
-    fetch_code: i32,
-    lines: RefCell<Vec<String>>,
-}
-
-impl Runner for Scripted {
-    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        self.lines.borrow_mut().push(argv.join(" "));
-        if argv.iter().any(|arg| arg == "--dry-run") {
-            return Ok(Exit {
-                code: Some(0),
-                stdout: format!(
-                    "  {} {} refs/remotes/origin/main\n",
-                    "0".repeat(40),
-                    self.tip
-                ),
-                stderr: String::new(),
-            });
-        }
-        Ok(Exit {
-            code: Some(self.fetch_code),
-            stdout: String::new(),
-            stderr: "fatal: remote error: upload-pack: not our ref".to_owned(),
-        })
-    }
-}
-
-/// A bot route over `runner`, shared so the test reads its lines.
-fn scripted(runner: &Rc<Scripted>) -> BotRoute {
-    struct Shared(Rc<Scripted>);
-    impl Runner for Shared {
-        fn run_env(
-            &self,
-            tree: &Path,
-            argv: &[String],
-            env: &[(&str, &str)],
-        ) -> anyhow::Result<Exit> {
-            self.0.run_env(tree, argv, env)
-        }
-        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-            self.0.run(tree, argv)
-        }
-    }
-    BotRoute::new("owner/repo", None, Box::new(Shared(runner.clone())))
-}
-
-/// The bot route's answer for the target's tip is a full lowercase object id, never a name
-/// or an expression git would resolve; anything else is refused before any object is fetched.
-#[test]
-fn the_bot_route_refuses_a_target_tip_that_is_no_object_id() {
-    let tree = scratch("bot-no-id");
-    for tip in [
-        "abc1234".to_owned(),
-        "main".to_owned(),
-        "refs/heads/main".to_owned(),
-        "HEAD".to_owned(),
-        "g".repeat(40),
-        "a".repeat(39),
-        "a".repeat(41),
-        "a".repeat(63),
-        "A".repeat(40),
-        format!("{}^{{tree}}", "a".repeat(40)),
-        format!("-{}", "a".repeat(39)),
-        format!("{}~1", "a".repeat(38)),
-    ] {
-        let runner = Rc::new(Scripted {
-            tip: tip.clone(),
-            fetch_code: 0,
-            lines: RefCell::new(Vec::new()),
-        });
-        let error = scripted(&runner)
-            .target_tip(&tree, "main")
-            .expect_err(&format!("{tip} is refused"));
-        assert!(
-            format!("{error:#}").contains("which is no object id"),
-            "{tip}: {error:#}"
-        );
-        assert_eq!(runner.lines.borrow().len(), 1, "{tip}: nothing fetched");
-    }
-}
-
-/// An object fetch that fails is the error: the target's tip is not held, so nothing is read
-/// at it and nothing is merged.
-#[test]
-fn the_bot_route_reports_no_target_tip_when_the_object_fetch_fails() {
-    let tree = scratch("bot-fetch-fails");
-    let runner = Rc::new(Scripted {
-        tip: "a".repeat(40),
-        fetch_code: 128,
-        lines: RefCell::new(Vec::new()),
-    });
-    let error = scripted(&runner)
-        .target_tip(&tree, "main")
-        .expect_err("a failed fetch is the error");
-    let shown = format!("{error:#}");
-    assert!(shown.contains("--no-write-fetch-head"), "{shown}");
-    assert!(shown.contains("not our ref"), "{shown}");
-    assert_eq!(runner.lines.borrow().len(), 2);
-}
-
 // story:gitlab-forge: the adapter over `glab` for a repository on a GitLab host. A recording
-// runner stands in for `glab`, the HTTPS push and fetch and `b10x-gates scan-text`; nothing
+// runner stands in for `glab` and the HTTPS push and fetch; nothing
 // leaves the machine.
 
 /// What a program the double stands in for answers: `code`, `stdout`, `stderr`.
@@ -2533,12 +1745,12 @@ impl Runner for GlabLines {
     }
 }
 
-/// The adapter over `group/sub/repo` on `gitlab.example` with the policy `policy.yaml`, every
+/// The adapter over `group/sub/repo` on `gitlab.example` under a declared `scan: none`, every
 /// line answered by `answer`; the lines it ran are read from the second.
 fn glab_over(answer: impl Fn(&str) -> anyhow::Result<Exit> + 'static) -> (Glab, Rc<GlabLines>) {
     glab_under(
-        Scan::Gates {
-            policy: Some(PathBuf::from("policy.yaml")),
+        Scan::None {
+            declared_in: PathBuf::from("/config/agent.yaml"),
         },
         answer,
     )
@@ -2577,9 +1789,7 @@ fn glab_under(
 }
 
 /// The adapter runs exactly these argument lines, in this order: the push over HTTPS under
-/// `glab`'s credential helper alone, the base read through `glab api` for the scan, the scan of
-/// the push and of the merge request through `b10x-gates scan-text` under the project, the merge
-/// request opened, read twice (state, then head pipeline) and merged through `glab api` on the
+/// `glab`'s credential helper alone, the merge request opened, read twice (state, then head pipeline) and merged through `glab api` on the
 /// percent-encoded project, and the target's tip read and fetched into no ref. The push and the
 /// fetch run over HTTPS alone; every `glab` line names the host; no token is in any of them.
 #[test]
@@ -2663,28 +1873,6 @@ fn the_gitlab_adapter_runs_these_argument_lines() {
             https.clone(),
         ),
         (
-            format!("{api} {project}/repository/branches/main"),
-            Vec::new(),
-        ),
-        (
-            format!(
-                "b10x-gates scan-text --repository group/sub/repo --policy policy.yaml {} {} {} {}",
-                request_file.display(),
-                published.display(),
-                dir.join("push.messages.txt").display(),
-                dir.join("push.files.txt").display()
-            ),
-            Vec::new(),
-        ),
-        (
-            format!(
-                "b10x-gates scan-text --repository group/sub/repo --policy policy.yaml {} {}",
-                request_file.display(),
-                published.display()
-            ),
-            Vec::new(),
-        ),
-        (
             format!(
                 "{api} --method POST {json} {project}/merge_requests --input {}",
                 request_file.display()
@@ -2744,25 +1932,18 @@ fn the_gitlab_adapter_runs_these_argument_lines() {
             .expect("the merge response is kept")
             .contains("merged")
     );
-    // The project holds `main` as the tracking ref says: only the case's commit is scanned.
-    let messages = fs::read_to_string(dir.join("push.messages.txt")).expect("the messages");
-    assert!(messages.contains(&format!("commit {c1}")), "{messages}");
-    assert!(!messages.contains(&format!("commit {main}")), "{messages}");
 }
 
-/// story:scan-and-forge-are-adapters, Acceptance 5: the gitlab adapter scans what it publishes
-/// through the run's scan adapter. Under `gates` the push and the merge request pass the same
-/// two `b10x-gates scan-text` lines under the project and the policy as before, and the commit
-/// identity a third; under a declared `none` no `b10x-gates` line runs and no text is written
-/// for a scan, the push, the merge request and its merge go through `glab` as under `gates`,
-/// and the commit identity is not scanned, naming the declaration.
+/// story:scan-and-forge-are-adapters, Acceptance 5: the gitlab adapter publishes under the run's
+/// scan adapter. Under a declared `none` no text is written for a scan, the push, the merge
+/// request and its merge go through `glab`, and the commit identity is not scanned, naming the
+/// declaration; with no adapter declared nothing it would publish passes, no merge request is
+/// opened, and the commit identity is not scanned either.
 #[test]
 fn the_gitlab_adapter_scans_through_the_runs_scan_adapter() {
     let declared = PathBuf::from("/config/agent.yaml");
     for scan in [
-        Scan::Gates {
-            policy: Some(PathBuf::from("policy.yaml")),
-        },
+        Scan::Unset,
         Scan::None {
             declared_in: declared.clone(),
         },
@@ -2800,74 +1981,69 @@ fn the_gitlab_adapter_scans_through_the_runs_scan_adapter() {
             title: "deliver the story".to_owned(),
             body: "the body".to_owned(),
         };
-        forge
-            .scan_outgoing(
-                &tree,
-                &dir,
-                &Outgoing {
-                    branch: "takt/c1",
-                    base: "main",
-                    head: &c1,
-                    request: Some(&request),
-                },
-            )
-            .expect("scans");
+        let outgoing = Outgoing {
+            branch: "takt/c1",
+            base: "main",
+            head: &c1,
+            request: Some(&request),
+        };
+        let identity = takt::git::CommitIdentity::takt();
+        let ran = || -> Vec<String> {
+            lines
+                .lines
+                .borrow()
+                .iter()
+                .map(|(line, _)| line.clone())
+                .collect()
+        };
+        let glab = |what: &str| ran().iter().filter(|line| line.contains(what)).count();
+        if let Scan::Unset = scan {
+            let refused = format!(
+                "{:#}",
+                forge
+                    .scan_outgoing(&tree, &dir, &outgoing)
+                    .expect_err("not scanned is never passed")
+            );
+            assert!(
+                refused.contains("was not scanned") && refused.contains("nothing was pushed"),
+                "{name}: {refused}"
+            );
+            forge
+                .open_pull_request(&tree, &dir, &request)
+                .expect_err("nothing is opened unscanned");
+            assert_eq!(glab("--method POST"), 0, "{name}: {:?}", ran());
+            let scanned = forge
+                .scan_identity(&tree, &dir.join("identity"), &identity)
+                .expect("an answer");
+            let takt::forge::IdentityScan::NotScanned(why) = &scanned;
+            assert!(why.contains("no scan adapter is declared"), "{name}: {why}");
+            continue;
+        }
+        forge.scan_outgoing(&tree, &dir, &outgoing).expect("scans");
         forge.push(&tree, "takt/c1").expect("pushes");
         let number = forge
             .open_pull_request(&tree, &dir, &request)
             .expect("opens");
         assert_eq!(number, 7, "{name}");
         forge.merge(&tree, &dir, number, &c1).expect("merges");
-        let identity = takt::git::CommitIdentity::takt();
         let scanned = forge
             .scan_identity(&tree, &dir.join("identity"), &identity)
             .expect("an answer");
-        let ran: Vec<String> = lines
-            .lines
-            .borrow()
-            .iter()
-            .map(|(line, _)| line.clone())
-            .collect();
-        let gates: Vec<&String> = ran
-            .iter()
-            .filter(|line| line.starts_with("b10x-gates"))
-            .collect();
-        let glab = |what: &str| ran.iter().filter(|line| line.contains(what)).count();
-        assert_eq!(glab(" push https://gitlab.example/"), 1, "{name}: {ran:?}");
-        assert_eq!(glab("--method POST"), 1, "{name}: {ran:?}");
-        assert_eq!(glab("--method PUT"), 1, "{name}: {ran:?}");
-        match &scan {
-            Scan::Gates { .. } => {
-                let scope = "b10x-gates scan-text --repository group/sub/repo --policy policy.yaml";
-                assert_eq!(gates.len(), 3, "{name}: {ran:?}");
-                assert!(
-                    gates.iter().all(|line| line.starts_with(scope)),
-                    "{name}: {gates:?}"
-                );
-                assert!(
-                    gates[0].ends_with("push.files.txt") && gates[1].ends_with(Glab::PUBLISHED),
-                    "{name}: {gates:?}"
-                );
-                assert_eq!(scanned, takt::forge::IdentityScan::Passed, "{name}");
-                assert!(dir.join("push.files.txt").exists(), "{name}");
-            }
-            Scan::None { .. } => {
-                assert!(gates.is_empty(), "{name}: no gates line: {gates:?}");
-                assert!(
-                    !ran.iter().any(|line| line.contains("scan-text")),
-                    "{name}: {ran:?}"
-                );
-                assert!(!dir.join("push.files.txt").exists(), "{name}");
-                assert!(!dir.join("push.messages.txt").exists(), "{name}");
-                let takt::forge::IdentityScan::NotScanned(why) = &scanned else {
-                    panic!("{name}: not scanned, not {scanned:?}");
-                };
-                assert!(
-                    why.contains("scan: none") && why.contains(&declared.display().to_string()),
-                    "{name}: {why}"
-                );
-            }
-        }
+        assert_eq!(
+            glab(" push https://gitlab.example/"),
+            1,
+            "{name}: {:?}",
+            ran()
+        );
+        assert_eq!(glab("--method POST"), 1, "{name}: {:?}", ran());
+        assert_eq!(glab("--method PUT"), 1, "{name}: {:?}", ran());
+        assert!(!dir.join("push.files.txt").exists(), "{name}");
+        assert!(!dir.join("push.messages.txt").exists(), "{name}");
+        let takt::forge::IdentityScan::NotScanned(why) = &scanned;
+        assert!(
+            why.contains("scan: none") && why.contains(&declared.display().to_string()),
+            "{name}: {why}"
+        );
     }
 }
 
@@ -3053,7 +2229,7 @@ fn the_project_is_read_from_the_origin_url() {
     let glab = Glab::new(
         host,
         project,
-        Scan::Gates { policy: None },
+        Scan::Unset,
         Box::new(GlabLines {
             lines: RefCell::new(Vec::new()),
             answer: Box::new(|_| Ok(exit(0, "", ""))),
@@ -3115,7 +2291,7 @@ fn an_https_origin_keeps_its_port() {
             self.0.run_env(tree, argv, env)
         }
     }
-    let glab = Glab::for_tree_through(&tree, &Scan::from_env(), Box::new(Shared(lines.clone())))
+    let glab = Glab::for_tree_through(&tree, &Scan::Unset, Box::new(Shared(lines.clone())))
         .expect("logged in");
     assert_eq!(glab.host, "gitlab.example:8443");
     assert_eq!(
@@ -3141,31 +2317,12 @@ fn an_https_origin_keeps_its_port() {
         )],
         "{ran:?}"
     );
-    drop(ran);
-    // github.com on its HTTPS port is still the bot route's host.
-    git(
-        &tree,
-        &[
-            "remote",
-            "set-url",
-            "origin",
-            "https://github.com:443/owner/repo.git",
-        ],
-    );
-    let asked = lines.lines.borrow().len();
-    let error = format!(
-        "{:#}",
-        Glab::for_tree_through(&tree, &Scan::from_env(), Box::new(Shared(lines.clone())))
-            .expect_err("github.com is the bot route's")
-    );
-    assert!(error.contains("--forge bot"), "{error}");
-    assert_eq!(lines.lines.borrow().len(), asked, "glab was not asked");
 }
 
 /// `glab auth status --hostname <host>` decides whether the adapter is made: one that exits 1,
 /// or a `glab` that cannot be run, is an error naming `glab`, the host and what it said. An
-/// origin on github.com is refused before `glab` runs, naming the bot route, and a credential in
-/// the origin URL is not printed.
+/// origin that names no project is refused before `glab` runs, and a credential in the origin
+/// URL is not printed.
 #[test]
 fn the_gitlab_adapter_needs_glab_logged_in_to_the_host() {
     let tree = scratch("glab-login");
@@ -3214,15 +2371,15 @@ fn the_gitlab_adapter_needs_glab_logged_in_to_the_host() {
             "remote",
             "add",
             "origin",
-            "https://ci:t0k3n-not-real@github.com/owner/repo.git",
+            "https://ci:t0k3n-not-real@gitlab.example/repo.git",
         ],
     );
     let error = format!(
         "{:#}",
-        Glab::for_tree(&tree, &Scan::from_env()).expect_err("github.com is the bot route's")
+        Glab::for_tree(&tree, &Scan::Unset).expect_err("an origin of one segment names no project")
     );
     assert!(
-        error.contains("bot route") && error.contains("--forge bot"),
+        error.contains("names no <namespace>/<project>") && error.contains("--forge none"),
         "{error}"
     );
     assert!(!error.contains("t0k3n"), "{error}");
@@ -3411,16 +2568,12 @@ fn a_failed_glab_api_is_an_error_naming_the_line_and_the_status() {
     let tree = scratch("glab-failed");
     let dir = tree.join("out");
     let api = "glab api --hostname gitlab.example projects/group%2Fsub%2Frepo";
-    let (forge, _) = glab_over(|line| {
-        Ok(if line.starts_with("b10x-gates ") {
-            exit(0, "", "")
-        } else {
-            exit(
-                1,
-                r#"{"message":"401 Unauthorized"}"#,
-                "glab: 401 Unauthorized (HTTP 401)\n",
-            )
-        })
+    let (forge, _) = glab_over(|_| {
+        Ok(exit(
+            1,
+            r#"{"message":"401 Unauthorized"}"#,
+            "glab: 401 Unauthorized (HTTP 401)\n",
+        ))
     });
     let checks = forge.checks(&tree, 7).map(|_| ());
     let view = forge.pull_request(&tree, 7).map(|_| ());
@@ -3450,9 +2603,7 @@ fn a_failed_glab_api_is_an_error_naming_the_line_and_the_status() {
         body: "b".to_owned(),
     };
     let (forge, _) = glab_over(|line| {
-        Ok(if line.starts_with("b10x-gates ") {
-            exit(0, "", "")
-        } else if line.contains("--method POST") {
+        Ok(if line.contains("--method POST") {
             exit(
                 1,
                 r#"{"message":["Another open merge request already exists for this source branch: !6"]}"#,

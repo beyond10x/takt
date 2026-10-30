@@ -143,7 +143,6 @@ fn a_session_step_starts_with_auto_memory_off() {
         )
         .env("XDG_STATE_HOME", &state)
         .env_remove("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let said = format!(

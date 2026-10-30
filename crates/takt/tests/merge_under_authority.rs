@@ -20,9 +20,7 @@ use std::rc::Rc;
 use anyhow::anyhow;
 use takt::case::{AUTHORITY_FILE, Approval, Authority, Branch, CaseDir, Grant, grant};
 use takt::evidence::Record;
-use takt::forge::{
-    BotRoute, Checks, Exit, Forge, Head, Memory, PullRequest, PullRequestState, Runner,
-};
+use takt::forge::{Checks, Forge, Head, Memory, PullRequest, PullRequestState};
 use takt::frontier::{Aep, Frontier, Story, Take, Unit, approve};
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrMerged, PrOpen, Validator};
@@ -782,107 +780,6 @@ fn the_double_merges_only_the_head_it_was_pushed() {
         memory.pull_request(&tree, number).expect("reports").state,
         PullRequestState::Merged
     );
-}
-
-/// A runner that records every line and answers the merge API call with the response given.
-struct Recording {
-    lines: RefCell<Vec<String>>,
-    response: &'static str,
-}
-
-impl Runner for Recording {
-    /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-    /// dropped.
-    fn run_env(
-        &self,
-        tree: &std::path::Path,
-        argv: &[String],
-        _: &[(&str, &str)],
-    ) -> anyhow::Result<takt::forge::Exit> {
-        self.run(tree, argv)
-    }
-
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        self.lines.borrow_mut().push(argv.join(" "));
-        if argv.get(1).map(String::as_str) == Some("api") {
-            let output = argv
-                .iter()
-                .position(|a| a == "--output")
-                .map(|i| &argv[i + 1])
-                .expect("--output");
-            fs::write(output, self.response)?;
-        }
-        Ok(Exit {
-            code: Some(0),
-            stdout: String::new(),
-            stderr: String::new(),
-        })
-    }
-}
-
-/// The bot route merges through `b10x-gates api`, a PUT on the pull request's merge resource
-/// with the head to match in a JSON file and the response in another, and runs nothing else;
-/// no token appears on the line. A response that does not say `merged` is an error.
-#[test]
-fn the_bot_route_adapter_merges_through_the_api_with_the_head_to_match() {
-    let tree = scratch("argv");
-    let dir = tree.join("out");
-    let recording = Rc::new(Recording {
-        lines: RefCell::new(Vec::new()),
-        response: r#"{"sha":"abc123","merged":true,"message":"Pull Request successfully merged"}"#,
-    });
-    struct Shared(Rc<Recording>);
-    impl Runner for Shared {
-        /// Runs the line as [`Runner::run`] does; the double starts no process, so `env` is
-        /// dropped.
-        fn run_env(
-            &self,
-            tree: &std::path::Path,
-            argv: &[String],
-            _: &[(&str, &str)],
-        ) -> anyhow::Result<takt::forge::Exit> {
-            self.run(tree, argv)
-        }
-
-        fn run(&self, tree: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-            self.0.run(tree, argv)
-        }
-    }
-    let forge = BotRoute::new(
-        "owner/repo",
-        Some(PathBuf::from("/policies/policy.yaml")),
-        Box::new(Shared(recording.clone())),
-    );
-    forge.merge(&tree, &dir, 7, "abc123").expect("merges");
-    let input = dir.join(BotRoute::MERGE_REQUEST);
-    let output = dir.join(BotRoute::MERGE_RESPONSE);
-    assert_eq!(
-        recording.lines.borrow().as_slice(),
-        [format!(
-            "b10x-gates api --method PUT --path /repos/owner/repo/pulls/7/merge --input {} --output {} --repository owner/repo --policy /policies/policy.yaml",
-            input.display(),
-            output.display()
-        )]
-    );
-    let sent: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&input).expect("the request")).expect("json");
-    assert_eq!(sent, serde_json::json!({"sha": "abc123"}), "{sent}");
-
-    let refusing = BotRoute::new(
-        "owner/repo",
-        None,
-        Box::new(Recording {
-            lines: RefCell::new(Vec::new()),
-            response: r#"{"message":"Head branch was modified. Review and try the merge again.","merged":false}"#,
-        }),
-    );
-    let error = format!(
-        "{:#}",
-        refusing
-            .merge(&tree, &tree.join("out2"), 7, "abc123")
-            .expect_err("not merged")
-    );
-    assert!(error.contains("Head branch was modified"), "{error}");
 }
 
 /// The status the store lists `id` at.

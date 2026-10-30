@@ -1,7 +1,7 @@
 //! A run's configuration file, `takt run --config <FILE>` and `takt scenario run --config
 //! <FILE>`: the story, the loop's budget, the harness, its model, endpoint file and token
 //! variable, the forge, the test command, the state directory, whether the run goes on past
-//! a red base and its scan adapter (`scan`, `gates` or `none`, set nowhere else), read from
+//! a red base and its scan adapter (`scan`, `none`, set nowhere else), read from
 //! one file so a run started in a container takes them from a mounted file. The file is TOML
 //! (`.toml`) or YAML (`.yaml`, `.yml`), the same fields in either; a YAML file whose `format`
 //! is `loom.agent/1` is the agent document Loom mounts for a `LoomAgent` at
@@ -238,8 +238,8 @@ pub struct RunConfig {
     /// The `commit` section: `style`, `trailer` and `types`, each a `--commit-*` flag's, checked
     /// when the file is read ([`crate::commit_style::Settings::check`]).
     pub commit: Option<crate::commit_style::Section>,
-    /// The run's scan adapter, `gates` or `none` ([`crate::scan::Scan`]): the one field no
-    /// flag sets, so a run is unscanned only where its file says so. Not set, it is `gates`.
+    /// The run's scan adapter, `none` ([`crate::scan::Scan`]): the one field no flag sets, so
+    /// a run is unscanned only where its file says so. Not set, it is `unset`.
     pub scan: Option<crate::scan::ScanName>,
     /// The model routes: an `llm.routes/1` document written as a mapping, or `{path: <file>}`
     /// read beside the file. Kept as written; [`RunConfig::read`] has llm validate it.
@@ -264,9 +264,15 @@ pub struct RunConfig {
     /// [`RunConfig::read`], never read from the file.
     #[serde(skip)]
     pub protocol_settings: ProtocolSettings,
-    /// The instance `forge: connectors` invokes `connectors operations` on, one plain word of
-    /// letters, digits, `.`, `_` and `-`; checked when the file is read.
+    /// The connector `forge: connectors` calls and, after one `/`, its instance:
+    /// `<connector>[/<instance>]`, the connector `gitlab` or `github`, the instance a plain word
+    /// of letters, digits, `.`, `_` and `-`; checked when the file is read
+    /// ([`crate::forge::connectors::target_of`]).
     pub forge_instance: Option<String>,
+    /// The URL of the served Connectors instance `forge: connectors` calls instead of the
+    /// `connectors` program: `https://`, or `http://` to a loopback host alone; checked when
+    /// the file is read ([`crate::forge::connectors::check_endpoint`]), a refusal exits 2.
+    pub forge_endpoint: Option<String>,
     /// The `forge_commands` section, the argument lists `forge: command` runs.
     pub forge_commands: Option<ForgeCommands>,
     /// The argument list `forge: local` runs as the checks on a request's head, without a shell,
@@ -291,6 +297,8 @@ pub struct ForgeSettings {
     pub local_checks: Option<Vec<String>>,
     /// `forge_instance`.
     pub instance: Option<String>,
+    /// `forge_endpoint`.
+    pub endpoint: Option<String>,
     /// `transport`.
     pub transport: Option<Transport>,
     /// `credential`.
@@ -309,9 +317,14 @@ impl ForgeSettings {
                 "`forge_instance` is set, and it belongs to `forge: connectors`, which this run does not use; nothing was opened"
             ));
         }
+        if self.endpoint.is_some() && forge != Some("connectors") {
+            return Err(anyhow!(
+                "`forge_endpoint` is set, and it belongs to `forge: connectors`, which this run does not use; nothing was opened"
+            ));
+        }
         if forge == Some("connectors") && self.instance.is_none() {
             return Err(anyhow!(
-                "`forge: connectors` invokes `connectors operations` on the instance of `forge_instance` in the run file, and there is none; nothing was opened"
+                "`forge: connectors` calls the connector `forge_instance` names in the run file, and there is none; nothing was opened"
             ));
         }
         if self.commands.is_some() && forge != Some("command") {
@@ -359,6 +372,7 @@ impl RunConfig {
             commands: self.forge_commands.clone(),
             local_checks: self.local_checks.clone(),
             instance: self.forge_instance.clone(),
+            endpoint: self.forge_endpoint.clone(),
             transport: self.transport,
             credential: self.credential.clone(),
         }
@@ -794,7 +808,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `gates` or `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -865,29 +879,42 @@ where
     <serde_yaml_ng::Value as serde::Deserialize>::deserialize(deserializer).map(Some)
 }
 
-/// The refusal of a run file whose `tokens` is no whole number above zero, at the line it is
-/// written on, repeating nothing written there. A budget that does not read is an argument that
-/// does not parse, as `--tokens x` is: `takt run` exits 2 on it, before any case opens.
+/// The refusal of a run file member whose value does not read as an argument, at the line it is
+/// written on, repeating nothing written there: a `tokens` that is no whole number above zero,
+/// as `--tokens x` is, and a `forge_endpoint` that is no URL the forge calls. `takt run` exits 2
+/// on it, before any case opens.
 #[derive(Debug)]
-pub struct TokensRefused {
+pub struct MemberRefused {
     /// The run file.
     pub path: PathBuf,
-    /// The line `tokens` is written on, from 1.
+    /// The line the member is written on, from 1.
     pub line: usize,
+    /// The member.
+    pub member: &'static str,
+    /// The rule its value breaks, worded after the member's name.
+    pub rule: &'static str,
 }
 
-impl std::fmt::Display for TokensRefused {
+/// [`MemberRefused`] by the name `takt run` matches it under.
+pub type TokensRefused = MemberRefused;
+
+/// The rule a `tokens` that is no whole number above zero breaks.
+const TOKENS_RULE: &str = "is a whole number above zero, the tokens the run stops at";
+
+impl std::fmt::Display for MemberRefused {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "the run configuration file {} is refused at line {}: `tokens` is a whole number above zero, the tokens the run stops at",
+            "the run configuration file {} is refused at line {}: `{}` {}",
             self.path.display(),
-            self.line
+            self.line,
+            self.member,
+            self.rule
         )
     }
 }
 
-impl std::error::Error for TokensRefused {}
+impl std::error::Error for MemberRefused {}
 
 /// Whether `key` is a name takt or Loom declares: one the shape text quotes, a member of a
 /// `loom.agent/1` document, or `takt`. Only such a key is named in a refusal; the comparison is
@@ -1407,12 +1434,41 @@ impl RunConfig {
             match member.as_u64().filter(|tokens| *tokens > 0) {
                 Some(tokens) => config.tokens = Some(tokens),
                 None => {
-                    return Err(anyhow::Error::new(TokensRefused {
+                    return Err(anyhow::Error::new(MemberRefused {
                         path: path.to_owned(),
                         line: locate(text, extension == Some("toml"), &["tokens"]).unwrap_or(1),
+                        member: "tokens",
+                        rule: TOKENS_RULE,
                     }));
                 }
             }
+        }
+        if let Some(endpoint) = &config.forge_endpoint
+            && let Err(rule) = crate::forge::connectors::check_endpoint(endpoint)
+        {
+            let toml = extension == Some("toml");
+            return Err(anyhow::Error::new(MemberRefused {
+                path: path.to_owned(),
+                line: locate(text, toml, &["forge_endpoint"])
+                    .or_else(|| locate(text, toml, &["takt", "forge_endpoint"]))
+                    .unwrap_or(1),
+                member: "forge_endpoint",
+                rule,
+            }));
+        }
+        if let Some(forge) = &config.forge
+            && !crate::forge::FORGES.contains(&forge.as_str())
+        {
+            let toml = extension == Some("toml");
+            let line = locate(text, toml, &["forge"])
+                .or_else(|| locate(text, toml, &["takt", "forge"]))
+                .unwrap_or(1);
+            return Err(anyhow!(
+                "the run configuration file {} is refused at line {line}: `forge` is {}, not `{}`",
+                path.display(),
+                forge_names(),
+                forge.escape_debug()
+            ));
         }
         if let Some(records) = &config.records
             && crate::case::Records::named(records).is_none()
@@ -1462,10 +1518,14 @@ impl RunConfig {
             ));
         }
         if let Some(instance) = &config.forge_instance
-            && !crate::forge::connectors::is_instance_name(instance)
+            && crate::forge::connectors::target_of(instance).is_none()
         {
+            let toml = extension == Some("toml");
+            let line = locate(text, toml, &["forge_instance"])
+                .or_else(|| locate(text, toml, &["takt", "forge_instance"]))
+                .unwrap_or(1);
             return Err(anyhow!(
-                "the run configuration file {} is refused: `forge_instance` is one word of letters, digits, `.`, `_` and `-`, not starting with `-`",
+                "the run configuration file {} is refused at line {line}: `forge_instance` is `<connector>` or `<connector>/<instance>`, the connector gitlab or github, the instance a word of letters, digits, `.`, `_` and `-`, not starting with `-`",
                 path.display()
             ));
         }
@@ -1665,6 +1725,15 @@ impl ProtocolSettings {
         }
         Ok(settings)
     }
+}
+
+/// The forges a run may name ([`crate::forge::FORGES`]) as a refusal lists them:
+/// `none, local, gitlab, command or connectors`.
+fn forge_names() -> String {
+    let (last, rest) = crate::forge::FORGES
+        .split_last()
+        .expect("takt has at least one forge");
+    format!("{} or {last}", rest.join(", "))
 }
 
 /// The 1-based line a member of the file is written on, `keys` the path from the top of the
@@ -2084,11 +2153,11 @@ mod tests {
         }
     }
 
-    /// story:scan-and-forge-are-adapters: `scan` names the run's scan adapter, `gates` or
-    /// `none`, in either format; any other value is refused naming the file and the line, never
-    /// the value.
+    /// story:scan-and-forge-are-adapters: `scan` names the run's scan adapter, `none`, in either
+    /// format; any other value, `gates` too, is refused naming the file and the line, never the
+    /// value.
     #[test]
-    fn scan_names_gates_or_none_and_any_other_value_is_refused_at_its_line() {
+    fn scan_names_none_and_any_other_value_is_refused_at_its_line() {
         use crate::scan::ScanName;
         let path = scratch("scan-none", "iterations = 1\nscan = \"none\"\n");
         assert_eq!(
@@ -2098,11 +2167,11 @@ mod tests {
         let path = scratch_named(
             "scan-loom",
             "agent.yaml",
-            "format: loom.agent/1\ntakt:\n  scan: gates\n",
+            "format: loom.agent/1\ntakt:\n  scan: none\n",
         );
         assert_eq!(
             RunConfig::read(&path).expect("read").scan,
-            Some(ScanName::Gates)
+            Some(ScanName::None)
         );
         for (name, file, text, line) in [
             (
@@ -2117,12 +2186,13 @@ mod tests {
                 "iterations: 1\nhours: 1\nscan: MARKER-scan\n",
                 3,
             ),
+            ("scan-gates", "run.yaml", "iterations: 1\nscan: gates\n", 2),
         ] {
             let path = scratch_named(name, file, text);
             let error = format!("{:#}", RunConfig::read(&path).expect_err(name));
             assert!(error.contains(&path.display().to_string()), "{error}");
             assert!(error.contains(&format!("line {line}")), "{error}");
-            assert!(error.contains("`scan`, `gates` or `none`"), "{error}");
+            assert!(error.contains("`scan`, `none`"), "{error}");
             assert!(!error.contains("MARKER"), "{error}");
         }
     }

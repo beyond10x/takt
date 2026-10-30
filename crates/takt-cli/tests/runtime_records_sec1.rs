@@ -3,9 +3,6 @@
 //! story:the-state-directory-holds-every-host-record (how a refused state directory is named).
 //! Nothing reaches a model or a network.
 
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
-
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -71,7 +68,6 @@ fn repository(name: &str, files: &[(&str, &str)]) -> (Scratch, PathBuf) {
 fn takt(args: &[OsString]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -224,44 +220,26 @@ fn a_refused_state_directory_is_named_with_its_control_characters_escaped() {
     );
 }
 
-/// A run given a state directory keeps its identity scan's text under that directory
-/// (story:the-state-directory-holds-every-host-record), so it needs neither `HOME` nor
-/// `XDG_STATE_HOME`. The bot route's scan runs `b10x-gates`, here a double on the program path
-/// that passes and records what it was given to scan; the scratch directory is removed after.
-#[cfg(unix)]
+/// A run through a forge given a state directory reads its commit identity at open under that
+/// directory (story:the-state-directory-holds-every-host-record), so it needs neither `HOME`
+/// nor `XDG_STATE_HOME`. The forge is `local`, its hub a bare repository beside the tree; it
+/// scans no identity, and the scan's directory is left with nothing in it.
 #[test]
 fn a_state_directory_holds_the_identity_scan_without_a_home() {
-    use std::os::unix::fs::PermissionsExt;
-
     let (scratch, repo) = repository("identity-scan", &[("tests/run.sh", "#!/bin/sh\nexit 0\n")]);
     git(
+        &scratch.0,
+        &["init", "-q", "--bare", "-b", "main", "hub.git"],
+    );
+    let hub = scratch.0.join("hub.git");
+    git(
         &repo,
-        &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/example/fixture.git",
-        ],
+        &["remote", "add", "origin", hub.to_str().expect("utf-8")],
     );
-    let bin = scratch.0.join("bin");
-    fs::create_dir_all(&bin).expect("a bin directory");
-    let calls = scratch.0.join("calls.txt");
-    let double = bin.join("b10x-gates");
-    fs::write(
-        &double,
-        format!(
-            "#!/bin/sh\necho \"$*\" >> \"{}\"\nexit 0\n",
-            calls.display()
-        ),
-    )
-    .expect("the gates double");
-    fs::set_permissions(&double, fs::Permissions::from_mode(0o755)).expect("executable");
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let config = scratch.0.join("run.yaml");
+    fs::write(&config, "local_checks: [\"true\"]\n").expect("the run file");
     let state = scratch.0.join("state");
-    let path = format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").unwrap_or_default()
-    );
     let args: Vec<OsString> = [
         "run",
         "--repo",
@@ -273,7 +251,9 @@ fn a_state_directory_holds_the_identity_scan_without_a_home() {
         "--harness",
         "none",
         "--forge",
-        "bot",
+        "local",
+        "--config",
+        config.to_str().expect("utf-8"),
         "--commit-identity",
         "takt <takt@localhost>",
         "--iterations",
@@ -288,25 +268,26 @@ fn a_state_directory_holds_the_identity_scan_without_a_home() {
     .collect();
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(&args)
-        .env("B10X_GATES_POLICY", stand_in_policy::path())
         .env_remove("HOME")
         .env_remove("XDG_STATE_HOME")
-        .env("PATH", &path)
         .output()
         .expect("takt runs");
     let out = String::from_utf8_lossy(&output.stdout).into_owned();
     let err = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
+        out.contains("forge: local ("),
+        "the run goes through the forge\nstdout {out}\nstderr {err}"
+    );
+    assert!(
+        out.contains("commit identity: takt <takt@localhost> from --commit-identity not scanned"),
+        "the identity is read at open\nstdout {out}\nstderr {err}"
+    );
+    assert!(
         out.contains("step 1:"),
         "the run opens and takes its first step without a home directory\nstdout {out}\nstderr {err}"
     );
-    let scanned = fs::read_to_string(&calls).unwrap_or_default();
     assert!(
-        scanned.contains(&format!("{}/identity-scans/", state.display())),
-        "the identity scan's text is kept under the state directory\nscanned {scanned:?}\nstdout {out}\nstderr {err}"
-    );
-    assert!(
-        fs::read_dir(state.join("identity-scans")).is_ok_and(|mut dirs| dirs.next().is_none()),
-        "the identity scan's directory is removed after the scan\nstdout {out}\nstderr {err}"
+        !fs::read_dir(state.join("identity-scans")).is_ok_and(|mut dirs| dirs.next().is_some()),
+        "nothing of the identity's read is left under the state directory\nstdout {out}\nstderr {err}"
     );
 }

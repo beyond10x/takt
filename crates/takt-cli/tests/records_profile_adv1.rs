@@ -89,7 +89,6 @@ impl World {
             .args(["--iterations", "2", "--test-cmd", "true"])
             .env("PATH", self.path())
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
-            .env_remove("B10X_GATES_POLICY")
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .output()
             .expect("takt runs")
@@ -282,7 +281,6 @@ fn replay_of_a_trial_runs_step_dropped_by_a_later_default_run_names_the_profile(
         ])
         .env("PATH", world.path())
         .env("XDG_STATE_HOME", world.0.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt replay runs");
     let said = text(&replay);
@@ -337,7 +335,6 @@ fn a_resumed_scenario_case_keeps_every_decision() {
             .args(["--iterations", "2", "--test-cmd", "true"])
             .env("PATH", &path)
             .env("XDG_STATE_HOME", outer.join("xdg-state"))
-            .env_remove("B10X_GATES_POLICY")
             .output()
             .expect("takt runs")
     };

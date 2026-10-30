@@ -127,7 +127,6 @@ mod state_dir_holds_host_records {
                     ),
                 )
                 .env("XDG_STATE_HOME", self.xdg())
-                .env_remove("B10X_GATES_POLICY")
                 .env_remove("DBUS_SESSION_BUS_ADDRESS")
                 .output()
                 .expect("takt runs")

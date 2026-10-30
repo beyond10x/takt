@@ -131,9 +131,6 @@ impl World {
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
-            // A harness run opens only under a policy or a declared `scan: none`
-            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
-            .env("B10X_GATES_POLICY", self.0.join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .envs(env.iter().copied())
             .output()
@@ -205,7 +202,7 @@ fn run_help_names_config() {
 fn the_file_sets_harness_budget_forge_model_and_endpoint() {
     let world = World::new("all");
     let config = world.config(
-        "iterations = 0\nharness = \"harness\"\nmodel = \"run-model\"\nendpoint_file = \"endpoint.toml\"\nforge = \"none\"\ntest_cmd = \"true\"\n",
+        "iterations = 0\nharness = \"harness\"\nscan = \"none\"\nmodel = \"run-model\"\nendpoint_file = \"endpoint.toml\"\nforge = \"none\"\ntest_cmd = \"true\"\n",
     );
     let output = world.run(&config, &[]);
     assert_eq!(output.status.code(), Some(3), "{}", text(&output));
@@ -229,7 +226,7 @@ fn the_file_sets_harness_budget_forge_model_and_endpoint() {
 fn a_flag_wins_over_the_file() {
     let world = World::new("flag-wins");
     let config = world.config(
-        "iterations = 5\nharness = \"harness\"\nendpoint_file = \"endpoint.toml\"\nforge = \"none\"\n",
+        "iterations = 5\nharness = \"harness\"\nscan = \"none\"\nendpoint_file = \"endpoint.toml\"\nforge = \"none\"\n",
     );
     let output = world.run(&config, &["--iterations", "0", "--model", "flag-model"]);
     assert_eq!(output.status.code(), Some(3), "{}", text(&output));
@@ -277,16 +274,21 @@ fn an_hour_budget_from_the_file_is_checked() {
     assert!(!world.cases().exists(), "no case was opened");
 }
 
-/// The forge comes from the file: `forge = "bot"` on a repository with no `origin` is refused
-/// naming the bot forge, where the default would have been `none`.
+/// The forge comes from the file: `forge = "local"` on a repository with no `origin` is refused
+/// naming the local forge's hub, where the default would have been `none`.
 #[test]
 fn the_forge_comes_from_the_file() {
     let world = World::new("forge");
-    let config = world.config("forge = \"bot\"\nharness = \"none\"\niterations = 0\n");
+    let config = world.config(
+        "forge = \"local\"\nlocal_checks = [\"true\"]\nharness = \"none\"\niterations = 0\n",
+    );
     let output = world.run(&config, &[]);
     let all = text(&output);
     assert_eq!(output.status.code(), Some(1), "{all}");
-    assert!(all.contains("the forge `bot`"), "{all}");
+    assert!(
+        all.contains("--forge local merges into the bare repository the tree's origin remote names, and the tree has no origin"),
+        "{all}"
+    );
     assert!(!world.cases().exists(), "no case was opened");
 }
 
@@ -346,7 +348,7 @@ fn a_yaml_file_sets_the_run_as_toml_does() {
         let world = World::new(&format!("yaml-{name}"));
         let config = world.config_named(
             name,
-            "iterations: 0\nharness: harness\nmodel: run-model\nendpoint_file: endpoint.toml\nforge: none\ntest_cmd: \"true\"\n",
+            "iterations: 0\nharness: harness\nscan: none\nmodel: run-model\nendpoint_file: endpoint.toml\nforge: none\ntest_cmd: \"true\"\n",
         );
         let output = world.run(&config, &[]);
         assert_eq!(output.status.code(), Some(3), "{name}: {}", text(&output));
@@ -367,7 +369,7 @@ fn a_loom_agent_documents_takt_member_sets_the_run() {
     let config = world.config_named(
         "agent.yaml",
         &format!(
-            "{LOOM_AGENT}takt:\n  iterations: 0\n  harness: harness\n  model: run-model\n  endpoint_file: endpoint.toml\n  forge: none\n  test_cmd: \"true\"\n"
+            "{LOOM_AGENT}takt:\n  iterations: 0\n  harness: harness\n  scan: none\n  model: run-model\n  endpoint_file: endpoint.toml\n  forge: none\n  test_cmd: \"true\"\n"
         ),
     );
     let output = world.run(&config, &[]);

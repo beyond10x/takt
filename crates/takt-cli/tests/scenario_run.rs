@@ -1,11 +1,11 @@
 //! `takt scenario run`: each run of a scenario starts from a fresh base branch `trial/<n>`, cut
-//! from the scenario's seed commit, pushed through the bot route and checked out before the case
-//! opens, so the case's pull request targets that branch and the store on it shows the scenario's
-//! story `proposed` again; no hand reset between runs. The bot route's programs and the harness
-//! are doubles on the program path; nothing reaches a network or a model.
-
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
+//! from the scenario's seed commit, created on the checkout's `origin` with the operator's own
+//! git (a push whose lease lets it only create the branch) and checked out before the case
+//! opens, so the case's pull request targets that branch and the store on it shows the
+//! scenario's story `proposed` again; no hand reset between runs. `origin` is a bare repository
+//! on this machine; where a pull request is opened it is the local forge's hub (`--forge local`).
+//! The harness is a double on the program path, and so is `ssh` where `origin` is reached over
+//! it; nothing reaches a network or a model.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -89,15 +89,16 @@ fn executable(bin: &Path, name: &str, text: &str) {
     }
 }
 
-/// One scratch world: the repository at `repo` with an `origin` on github.com, the doubles of
-/// the bot route and the harness in `bin`, their state in `state`.
+/// One scratch world: the repository at `repo`, its `origin` the bare repository `remote`, the
+/// doubles in `bin`, their state in `state`.
 struct World {
     _scratch: Scratch,
+    outer: PathBuf,
     repo: PathBuf,
     bin: PathBuf,
     state: PathBuf,
-    /// The bare repository the bot route double fetches from and pushes into, standing in for
-    /// the scratch repository on its host.
+    /// The bare repository `origin` names, standing in for the scratch repository's remote, and
+    /// the local forge's hub where a run opens a pull request.
     remote: PathBuf,
     /// The seed commit: the fixture store with its one story `proposed`.
     seed: String,
@@ -105,7 +106,8 @@ struct World {
 
 /// The scratch repository: the seed commit holds the fixture store with `story:ready-one`
 /// `proposed`, a manifest and a gates document; `main` moves on past it with the scenario
-/// declaration, so a base cut from `main` instead of the seed is told apart.
+/// declaration, so a base cut from `main` instead of the seed is told apart. Its `origin` is a
+/// bare repository by its path, outside the tree, with no ref yet.
 fn world(name: &str) -> World {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("scenario-run-{}-{name}", std::process::id()));
@@ -125,21 +127,22 @@ fn world(name: &str) -> World {
         &format!("[scenario \"1\"]\n\tstory = story:ready-one\n\tseed = {seed}\n"),
     );
     configure_identity(&repo);
-    git(
-        &repo,
-        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
-    );
-    let bin = outer.join("stub-bin");
-    let state = outer.join("forge");
-    fs::create_dir_all(&state).expect("a state directory");
     let remote = outer.join("remote.git");
     git(
         &outer,
         &["init", "-q", "-b", "main", "--bare", "remote.git"],
     );
-    doubles(&bin, &state, &remote);
+    git(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().expect("utf-8")],
+    );
+    let bin = outer.join("stub-bin");
+    let state = outer.join("state");
+    fs::create_dir_all(&state).expect("a state directory");
+    doubles(&bin, &state);
     World {
-        _scratch: Scratch(outer),
+        _scratch: Scratch(outer.clone()),
+        outer,
         repo,
         bin,
         state,
@@ -149,15 +152,15 @@ fn world(name: &str) -> World {
 }
 
 /// The identity the scratch repository configures for takt's commits.
-const IDENTITY: &str = "b10x-bot[bot] <316511680+b10x-bot[bot]@users.noreply.github.com>";
+const IDENTITY: &str = "Test Bot <bot@example.invalid>";
 
 /// Commits `.engineering/commit-identity.conf` naming [`IDENTITY`] on the branch the tree is on:
-/// a scenario run reads it at `--declared-on`, and through the bot route needs it.
+/// a scenario run reads it at `--declared-on`, and under a forge needs it.
 fn configure_identity(repo: &Path) {
     let file = ".engineering/commit-identity.conf";
     fs::write(
         repo.join(file),
-        "[identity]\n\tname = b10x-bot[bot]\n\temail = 316511680+b10x-bot[bot]@users.noreply.github.com\n",
+        "[identity]\n\tname = Test Bot\n\temail = bot@example.invalid\n",
     )
     .expect("the identity is written");
     git(repo, &["add", file]);
@@ -174,113 +177,45 @@ fn declare(repo: &Path, text: &str) {
     git(repo, &["commit", "-q", "-m", "declare the scenarios"]);
 }
 
-/// The doubles in `bin`, their state in `state`. Every `b10x-gates` line is logged to
-/// `state/calls`. `b10x-gates bot -- fetch <remote> <refspec>` records the prompt settings, the
-/// SSH agent socket, its standard input, `GIT_ASKPASS` and `GIT_ALLOW_PROTOCOL` in
-/// `state/fetch-env`, then runs a real `git fetch` of
-/// the refspec from the bare `remote` (standing in for the HTTPS server, so without the
-/// HTTPS-only transport takt sets for the route's own git), or does nothing when `state/no-fetch` exists, sleeps 45 s
-/// and fails when `state/hang-fetch` exists, standing in for a fetch waiting on a prompt, and
-/// fails at once with git's access-rights message when `state/refuse-fetch` exists; `b10x-gates bot
-/// -- push [options] <remote> <spec>` appends its spec and its `GIT_ALLOW_PROTOCOL` to
-/// `state/push-env`, runs a real `git push` of the spec into `remote` (again standing in for the
-/// HTTPS server, so without the HTTPS-only transport) with every
-/// option takt gave (`--porcelain`, `--force-with-lease`), its report on stdout as git prints it,
-/// keeps the commit pushed per branch (`pushed-<branch, / as _>`), or exits 1 when
-/// `state/refuse-push` exists; `scan-text` passes;
-/// `api --method POST` keeps the request as `pr-<k>.json` and answers pull request `k`,
-/// counting from 1; `api --method GET` reports the pull request open with the head it was opened
-/// for, at the commit last pushed for it, and one check run, passing. `claude` appends a
-/// line to `work.txt` and answers `implementation.edit`, or, once an approval is offered,
-/// answers `repository.merge`, or, once its `work.txt` exists and `change.handover` is offered,
-/// takes it, changing nothing.
-fn doubles(bin: &Path, state: &Path, remote: &Path) {
+/// The doubles in `bin`, their state in `state`. `ssh`, which the operator's git starts for an
+/// `origin` over SSH, appends its arguments, `SSH_AUTH_SOCK`, `GIT_TERMINAL_PROMPT` and
+/// `GIT_ASKPASS` to `state/ssh`, one line each and a `--` line after them; then it sleeps 45 s
+/// and fails when `state/hang-ssh` exists, standing in for a connection waiting on a prompt
+/// (and with `state/orphan-ssh` first starts a `sleep` in a session of its own, its pid in
+/// `state/orphan.pid`),
+/// fails at once with ssh's refusal when `state/refuse-ssh` exists, and else runs the command
+/// git gave it (`git-upload-pack '<path>'` or `git-receive-pack '<path>'`) on this machine.
+/// `claude` appends a line to `work.txt` and answers `implementation.edit`, or, once an
+/// approval is offered, answers `repository.merge`, or, once its `work.txt` exists and
+/// `change.handover` is offered, takes it, changing nothing.
+fn doubles(bin: &Path, state: &Path) {
     fs::create_dir_all(bin).expect("a stub directory");
     let state = state.display().to_string();
-    let remote = remote.display().to_string();
     executable(
         bin,
-        "b10x-gates",
+        "ssh",
         &format!(
             r#"#!/bin/sh
 state='{state}'
-remote='{remote}'
-echo "$*" >> "$state/calls"
-case "$1" in
-  bot)
-    shift 2
-    verb="$1"; shift
-    options=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        -*) options="$options $1"; shift ;;
-        *) break ;;
-      esac
-    done
-    spec="$2"
-    case "$verb" in
-      fetch)
-        {{
-          printf 'GIT_TERMINAL_PROMPT=%s\n' "${{GIT_TERMINAL_PROMPT-unset}}"
-          printf 'GIT_SSH_COMMAND=%s\n' "${{GIT_SSH_COMMAND-unset}}"
-          printf 'SSH_AUTH_SOCK=%s\n' "${{SSH_AUTH_SOCK-unset}}"
-          if [ /dev/stdin -ef /dev/null ]; then stdin=/dev/null; else stdin=$(readlink /proc/self/fd/0 2>/dev/null || echo 'not /dev/null'); fi
-          printf 'stdin=%s\n' "$stdin"
-          printf 'GIT_ASKPASS=%s\n' "${{GIT_ASKPASS-unset}}"
-          printf 'GIT_ALLOW_PROTOCOL=%s\n' "${{GIT_ALLOW_PROTOCOL-unset}}"
-        }} > "$state/fetch-env"
-        if [ -e "$state/hang-fetch" ]; then sleep 45; exit 1; fi
-        if [ -e "$state/refuse-fetch" ]; then
-          echo "git@github.com: Permission denied (publickey)." >&2
-          echo "fatal: Could not read from remote repository." >&2
-          echo "Please make sure you have the correct access rights" >&2
-          exit 1
-        fi
-        if [ -e "$state/no-fetch" ]; then exit 0; fi
-        env -u GIT_ALLOW_PROTOCOL git fetch -q "$remote" "$spec"; exit $? ;;
-      push)
-        printf '%s GIT_ALLOW_PROTOCOL=%s\n' "$spec" "${{GIT_ALLOW_PROTOCOL-unset}}" >> "$state/push-env"
-        if [ -e "$state/refuse-push" ]; then echo "refused by the double" >&2; exit 1; fi
-        branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
-        if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
-        git rev-parse "$revision" > "$state/pushed-$(printf '%s' "$branch" | tr / _)" || exit 1
-        env -u GIT_ALLOW_PROTOCOL git push $options "$remote" "$spec" 2>/dev/null; exit $? ;;
-    esac ;;
-  scan-text) exit 0 ;;
-  api)
-    method=''; path=''; input=''; output=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --method) method="$2"; shift ;;
-        --path) path="$2"; shift ;;
-        --input) input="$2"; shift ;;
-        --output) output="$2"; shift ;;
-      esac
-      shift
-    done
-    if [ "$method" = POST ]; then
-      k=$(( $(ls "$state" | grep -c '^pr-.*\.json$') + 1 ))
-      cp "$input" "$state/pr-$k.json"
-      sed -n 's/.*"head": "\(.*\)".*/\1/p' "$input" > "$state/pr-$k.head"
-      printf '{{"number": %s}}' "$k" > "$output"
-      exit 0
-    fi
-    if [ "$method" = GET ]; then
-      case "$path" in
-        */pulls\?*) printf '[]' > "$output" ;;
-        */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
-        */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
-        *)
-          k="${{path##*/}}"
-          head=$(cat "$state/pr-$k.head")
-          oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
-          printf '{{"state":"open","merged":false,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$head" "$oid" > "$output" ;;
-      esac
-      exit 0
-    fi ;;
-esac
-echo "b10x-gates double: $*" >&2
-exit 2
+{{
+  printf 'args=%s\n' "$*"
+  printf 'SSH_AUTH_SOCK=%s\n' "${{SSH_AUTH_SOCK-unset}}"
+  printf 'GIT_TERMINAL_PROMPT=%s\n' "${{GIT_TERMINAL_PROMPT-unset}}"
+  printf 'GIT_ASKPASS=%s\n' "${{GIT_ASKPASS-unset}}"
+  printf -- '--\n'
+}} >> "$state/ssh"
+if [ -e "$state/hang-ssh" ]; then sleep 45; exit 255; fi
+if [ -e "$state/orphan-ssh" ]; then
+  setsid sleep 50 &
+  echo $! > "$state/orphan.pid"
+  sleep 45; exit 255
+fi
+if [ -e "$state/refuse-ssh" ]; then
+  echo "git@forge.invalid: Permission denied (publickey)." >&2
+  exit 255
+fi
+for command; do :; done
+exec sh -c "$command"
 "#
         ),
     );
@@ -302,8 +237,8 @@ printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","u
 }
 
 impl World {
-    /// Runs the built `takt` binary with `args` in this world: the doubles first on the program
-    /// path, a `b10x-gates` policy file they never read. The exit code, stdout and stderr.
+    /// Runs the built `takt` binary with `args` in this world, the doubles first on the program
+    /// path. The exit code, stdout and stderr.
     fn takt(&self, args: &[&str]) -> (i32, String, String) {
         self.takt_env(args, &[])
     }
@@ -314,7 +249,6 @@ impl World {
             .args(args)
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
             .envs(env.iter().copied())
-            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env(
                 "PATH",
                 format!(
@@ -348,35 +282,60 @@ impl World {
         self.takt(&args)
     }
 
-    /// The lines the `b10x-gates` double was run with, in order.
-    fn calls(&self) -> Vec<String> {
-        fs::read_to_string(self.state.join("calls"))
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_owned)
-            .collect()
+    /// The flags of a run through the local forge, its hub `origin`: `--forge local` and a run
+    /// file whose `local_checks` pass.
+    fn local(&self) -> Vec<String> {
+        let file = self.outer.join("local.yaml");
+        fs::write(&file, "local_checks: [\"true\"]\n").expect("the run file is written");
+        vec![
+            "--forge".to_owned(),
+            "local".to_owned(),
+            "--config".to_owned(),
+            file.to_str().expect("utf-8").to_owned(),
+        ]
     }
 
-    /// The commit the double holds as pushed for `branch`.
+    /// [`Self::scenario_run`] through the local forge ([`Self::local`]), `extra` last.
+    fn scenario_run_local(&self, scenario: &str, extra: &[&str]) -> (i32, String, String) {
+        let local = self.local();
+        let mut args: Vec<&str> = local.iter().map(String::as_str).collect();
+        args.extend_from_slice(extra);
+        self.scenario_run(scenario, &args)
+    }
+
+    /// The commit `origin` holds for `branch`; none when it holds no such branch.
     fn pushed(&self, branch: &str) -> Option<String> {
-        fs::read_to_string(
-            self.state
-                .join(format!("pushed-{}", branch.replace('/', "_"))),
-        )
-        .ok()
-        .map(|text| text.trim().to_owned())
+        let output = Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ])
+            .current_dir(&self.remote)
+            .output()
+            .expect("git runs");
+        output
+            .status
+            .success()
+            .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
     }
 
-    /// The field `name` of pull request request `k` the double was sent, read from takt's
-    /// pretty-printed JSON (`"name": "value"`, one field a line).
+    /// Every ref `origin` holds: empty when nothing was pushed to it.
+    fn remote_refs(&self) -> String {
+        git_out(&self.remote, &["for-each-ref"])
+    }
+
+    /// The field `name` of the local forge's request `k` in the hub,
+    /// `takt/requests/<k>.json`.
     fn request(&self, k: u32, name: &str) -> String {
-        let text = fs::read_to_string(self.state.join(format!("pr-{k}.json")))
-            .unwrap_or_else(|_| panic!("pull request {k} was opened"));
-        let key = format!("\"{name}\": \"");
-        text.lines()
-            .find_map(|line| line.trim().strip_prefix(&key))
-            .and_then(|rest| rest.strip_suffix("\",").or_else(|| rest.strip_suffix('"')))
-            .unwrap_or_else(|| panic!("pull request {k} has no {name}: {text}"))
+        let path = self.remote.join(format!("takt/requests/{k}.json"));
+        let text = fs::read_to_string(&path)
+            .unwrap_or_else(|_| panic!("request {k} was opened: no {}", path.display()));
+        let record: serde_json::Value = serde_json::from_str(&text).expect("a JSON record");
+        record[name]
+            .as_str()
+            .unwrap_or_else(|| panic!("request {k} has no {name}: {text}"))
             .to_owned()
     }
 
@@ -411,22 +370,63 @@ impl World {
             .expect("the story has a status")
             .to_owned()
     }
+
+    /// `origin`'s `trial/0` at `commit`, kept from a fetch (`uploadpack.hideRefs`) while a push
+    /// still sees it: another run's branch that landed after this run's fetch.
+    fn trial_0_hidden_from_the_fetch(&self, commit: &str) {
+        git(
+            &self.repo,
+            &[
+                "push",
+                "-q",
+                self.remote.to_str().expect("utf-8"),
+                &format!("{commit}:refs/heads/trial/0"),
+            ],
+        );
+        git(
+            &self.remote,
+            &["config", "uploadpack.hideRefs", "refs/heads/trial"],
+        );
+        // A git that records a push to `origin`'s URL in `origin`'s remote-tracking refs would
+        // tell the run of `trial/0` without a fetch; the run is to learn of it only by the push.
+        git(
+            &self.repo,
+            &["update-ref", "-d", "refs/remotes/origin/trial/0"],
+        );
+        assert_eq!(
+            git_out(&self.repo, &["ls-remote", "origin", "refs/heads/trial/*"]),
+            "",
+            "uploadpack.hideRefs does not hide trial/0 from a fetch with this git"
+        );
+        assert_eq!(
+            git_out(
+                &self.repo,
+                &[
+                    "for-each-ref",
+                    "refs/remotes/origin/trial",
+                    "refs/heads/trial"
+                ]
+            ),
+            "",
+            "the checkout knows a trial branch before the run"
+        );
+    }
 }
 
 /// The story's acceptance: two scenario 1 runs in a row, with no command between them, each
-/// start with the story `proposed` on a fresh `trial/<n>` cut from the seed, pushed through the
-/// bot route before the case opens, and each opens its pull request against its own
-/// `trial/<n>`; the second resumes nothing of the first.
+/// start with the story `proposed` on a fresh `trial/<n>` cut from the seed, created on `origin`
+/// before the case opens, and each opens its pull request (the local forge's request in the
+/// hub `origin` is) against its own `trial/<n>`; the second resumes nothing of the first.
 #[test]
 fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_trial_branch() {
     let world = world("two-runs");
     let seed8 = &world.seed[..8];
 
-    let (code, out, err) = world.scenario_run("1", &[]);
+    let (code, out, err) = world.scenario_run_local("1", &[]);
     assert_eq!(code, 4, "stdout {out} stderr {err}");
     assert!(
         out.contains(&format!(
-            "scenario 1: story:ready-one proposed on trial/0 at {seed8}, pushed through bot"
+            "scenario 1: story:ready-one proposed on trial/0 at {seed8}, pushed to origin, forge: local"
         )),
         "stdout {out} stderr {err}"
     );
@@ -441,41 +441,20 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
         "stdout {out} stderr {err}"
     );
     assert_eq!(world.request(1, "base"), "trial/0");
-    assert_eq!(world.request(1, "head"), "takt/scenario-1-trial-0");
+    assert_eq!(world.request(1, "branch"), "takt/scenario-1-trial-0");
     assert_eq!(
         world.pushed("trial/0").as_deref(),
         Some(world.seed.as_str())
-    );
-    // The remote's trial branches are fetched, then the commit identity is scanned at open, then
-    // the base is pushed, before anything else. The scan's path names the process, so it is matched
-    // by its start and its end.
-    let calls = world.calls();
-    assert_eq!(calls.first(), Some(&FETCH_TRIALS.to_owned()), "{calls:?}");
-    assert!(
-        calls.get(1).is_some_and(
-            |call| call.starts_with("scan-text --repository owner/repo ")
-                && call.ends_with("/commit-identity.txt")
-        ),
-        "the commit identity is scanned right after the fetch: {calls:?}"
-    );
-    assert_eq!(
-        calls.get(2),
-        Some(&"bot -- push --porcelain --force-with-lease=refs/heads/trial/0: origin refs/heads/trial/0:refs/heads/trial/0".to_owned()),
-        "the base is pushed right after the scan: {calls:?}"
-    );
-    assert_eq!(
-        git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
-        world.seed
     );
 
     // Nothing between the runs: the tree is clean outside the cases directory.
     assert_eq!(world.changed_outside_cases(), "");
 
-    let (code, out, err) = world.scenario_run("1", &[]);
+    let (code, out, err) = world.scenario_run_local("1", &[]);
     assert_eq!(code, 4, "stdout {out} stderr {err}");
     assert!(
         out.contains(&format!(
-            "scenario 1: story:ready-one proposed on trial/1 at {seed8}, pushed through bot"
+            "scenario 1: story:ready-one proposed on trial/1 at {seed8}, pushed to origin, forge: local"
         )),
         "stdout {out} stderr {err}"
     );
@@ -490,7 +469,7 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
         "stdout {out} stderr {err}"
     );
     assert_eq!(world.request(2, "base"), "trial/1");
-    assert_eq!(world.request(2, "head"), "takt/scenario-1-trial-1");
+    assert_eq!(world.request(2, "branch"), "takt/scenario-1-trial-1");
     assert_eq!(
         world.pushed("trial/1").as_deref(),
         Some(world.seed.as_str())
@@ -515,10 +494,74 @@ fn two_scenario_runs_in_a_row_each_open_their_pull_request_against_their_own_tri
     assert_eq!(world.changed_outside_cases(), "");
 }
 
+/// story:takt-carries-no-organisations-own-route, acceptance 3: with a program path of the
+/// system's directories and `aep` alone, so no organisation's delivery program is on it, a
+/// scenario run against a bare `origin` creates `trial/0` there at the seed and runs the
+/// scenario's case; a second run creates `trial/1`.
+#[test]
+fn a_scenario_run_creates_its_trial_base_on_a_bare_origin_with_only_git_and_aep() {
+    let world = world("system-path");
+    let aep = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("aep"))
+        .find(|path| path.is_file())
+        .expect("aep on the program path, as CI installs it");
+    let only = world.outer.join("only-bin");
+    fs::create_dir_all(&only).expect("a directory");
+    std::os::unix::fs::symlink(&aep, only.join("aep")).expect("a link to aep");
+    let path = format!("{}:/usr/bin:/bin", only.display());
+    let repo = world.repo.to_str().expect("utf-8");
+    let seed8 = &world.seed[..8];
+    for n in [0, 1] {
+        let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+            .args([
+                "scenario",
+                "run",
+                "--repo",
+                repo,
+                "1",
+                "--harness",
+                "none",
+                "--iterations",
+                "0",
+                "--test-cmd",
+                "true",
+            ])
+            .env("PATH", &path)
+            .env("XDG_STATE_HOME", world.state.join("xdg-state"))
+            .output()
+            .expect("takt runs");
+        let out = String::from_utf8_lossy(&output.stdout);
+        let err = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(3), "stdout {out} stderr {err}");
+        assert!(
+            out.contains(&format!(
+                "scenario 1: story:ready-one proposed on trial/{n} at {seed8}, pushed to origin, no forge"
+            )),
+            "stdout {out} stderr {err}"
+        );
+        assert!(
+            out.contains(&format!("case scenario-1-trial-{n} on story.delivery/1")),
+            "stdout {out} stderr {err}"
+        );
+        assert_eq!(
+            world.pushed(&format!("trial/{n}")).as_deref(),
+            Some(world.seed.as_str())
+        );
+        assert!(
+            world
+                .repo
+                .join(format!(".takt/cases/scenario-1-trial-{n}/events.jsonl"))
+                .is_file(),
+            "stdout {out}"
+        );
+        git(&world.repo, &["checkout", "-q", "main"]);
+    }
+}
+
 /// story:takt-commits-with-the-repositorys-identity: a trial's commits, the take and the
 /// harness's edits, carry the identity `--declared-on` configures as author and committer, over
 /// the operator's identity variables in takt's environment and the operator's `author.*` and
-/// `committer.*` configuration; and so do the commits the bot route pushed.
+/// `committer.*` configuration; and so do the commits the forge pushed to its hub.
 #[test]
 fn a_trials_commits_carry_the_identity_the_declaring_revision_configures() {
     let world = world("identity");
@@ -528,8 +571,11 @@ fn a_trials_commits_carry_the_identity_the_declaring_revision_configures() {
         &["config", "committer.email", "committer@example.invalid"],
     );
     let repo = world.repo.to_str().expect("utf-8");
+    let local = world.local();
+    let mut args = vec!["scenario", "run", "--repo", repo, "1", "--test-cmd", "true"];
+    args.extend(local.iter().map(String::as_str));
     let (code, out, err) = world.takt_env(
-        &["scenario", "run", "--repo", repo, "1", "--test-cmd", "true"],
+        &args,
         &[
             ("GIT_AUTHOR_NAME", "Env Author"),
             ("GIT_AUTHOR_EMAIL", "env-author@example.invalid"),
@@ -540,7 +586,7 @@ fn a_trials_commits_carry_the_identity_the_declaring_revision_configures() {
     let said = format!("stdout {out} stderr {err}");
     assert_eq!(code, 4, "{said}");
     let range = "refs/heads/trial/0..refs/heads/takt/scenario-1-trial-0";
-    for (place, tree) in [("the checkout", &world.repo), ("the remote", &world.remote)] {
+    for (place, tree) in [("the checkout", &world.repo), ("the hub", &world.remote)] {
         let commits = git_out(
             tree,
             &["log", "--format=%s|%an <%ae>|%cn <%ce>", range, "--"],
@@ -579,26 +625,32 @@ fn a_dirty_tree_is_refused_and_left_as_it_is() {
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert!(world.trial_branches().is_empty());
-    assert!(world.calls().is_empty(), "{:?}", world.calls());
+    assert_eq!(world.remote_refs(), "");
     assert!(!world.repo.join(".takt/cases").exists());
 }
 
-/// A push the bot route refuses ends the run before any case is opened: the trial branch it
-/// cut is removed again and the tree is back where it was.
+/// A push `origin` refuses (here its `pre-receive` hook declines it) ends the run before any
+/// case is opened: the refusal names the trial branch and git's report of it, the trial branch
+/// it cut is removed again and the tree is back where it was.
 #[test]
 fn a_refused_push_leaves_no_trial_branch_and_the_tree_where_it_was() {
     let world = world("refused-push");
-    fs::write(world.state.join("refuse-push"), "").expect("the double refuses");
+    executable(
+        &world.remote.join("hooks"),
+        "pre-receive",
+        "#!/bin/sh\necho 'refused by the hook' >&2\nexit 1\n",
+    );
     let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
 
     let (code, out, err) = world.scenario_run("1", &[]);
     assert_eq!(code, 1, "stdout {out} stderr {err}");
-    assert!(err.contains("trial/0"), "stderr {err}");
-    assert!(err.contains("refused by the double"), "stderr {err}");
+    assert!(err.contains("trial/0 was not created"), "stderr {err}");
+    assert!(err.contains("pre-receive hook declined"), "stderr {err}");
     assert!(world.trial_branches().is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
     assert_eq!(world.changed_outside_cases(), "");
+    assert_eq!(world.remote_refs(), "");
     assert!(!world.repo.join(".takt/cases").exists());
 }
 
@@ -622,12 +674,16 @@ fn the_next_trial_follows_the_highest_trial_branch_local_or_remote() {
     );
     assert_eq!(git_out(&world.repo, &["rev-parse", "trial/7"]), world.seed);
     assert_eq!(
+        world.pushed("trial/7").as_deref(),
+        Some(world.seed.as_str())
+    );
+    assert_eq!(
         git_out(&world.repo, &["branch", "--show-current"]),
         "takt/scenario-1-trial-7"
     );
 }
 
-/// A run through the bot route in a checkout that holds a trial number a run without it took,
+/// A run on `origin` in a checkout that holds a trial number a run under `--forge none` took,
 /// 22 digits (a 14-digit instant and an 8-digit nonce, past `u64`), takes that number plus one:
 /// counted, not refused as too large.
 #[test]
@@ -654,9 +710,9 @@ fn the_next_trial_follows_a_22_digit_trial_number() {
     );
 }
 
-/// The top of the range a trial number is counted in, `u128` since a trial number without the
-/// bot route is 22 digits: a trial branch at the top has no number after it, and one past the
-/// top does not parse. Each is refused in one line naming it, after the fetch and before
+/// The top of the range a trial number is counted in, `u128` since a trial number under
+/// `--forge none` is 22 digits: a trial branch at the top has no number after it, and one past
+/// the top does not parse. Each is refused in one line naming it, after the fetch and before
 /// anything is cut or pushed: never wrapped to a number in use, never a panic.
 #[test]
 fn a_trial_number_at_the_top_of_u128_is_refused_not_wrapped() {
@@ -686,14 +742,7 @@ fn a_trial_number_at_the_top_of_u128_is_refused_not_wrapped() {
             std::slice::from_ref(&branch),
             "{number}"
         );
-        assert!(
-            !world
-                .calls()
-                .iter()
-                .any(|call| call.starts_with("bot -- push")),
-            "{:?}",
-            world.calls()
-        );
+        assert_eq!(world.remote_refs(), "", "{number}");
         git(&world.repo, &["branch", "-D", &branch]);
     }
 }
@@ -708,7 +757,7 @@ fn an_undeclared_scenario_is_refused_before_anything_changes() {
     assert!(err.contains("scenario 2"), "stderr {err}");
     assert!(err.contains(SCENARIOS), "stderr {err}");
     assert!(world.trial_branches().is_empty());
-    assert!(world.calls().is_empty(), "{:?}", world.calls());
+    assert_eq!(world.remote_refs(), "");
 }
 
 /// A declaration with a key takt does not read is refused: a misspelt `seed` is never a
@@ -727,7 +776,7 @@ fn a_declaration_with_an_unknown_key_is_refused() {
     assert_eq!(code, 1, "stdout {out} stderr {err}");
     assert!(err.contains("sead"), "stderr {err}");
     assert!(world.trial_branches().is_empty());
-    assert!(world.calls().is_empty(), "{:?}", world.calls());
+    assert_eq!(world.remote_refs(), "");
 }
 
 /// A seed whose store does not show the scenario's story `proposed` is no known starting state:
@@ -771,31 +820,35 @@ fn a_seed_whose_story_is_not_proposed_is_refused_before_the_push() {
     assert!(err.contains("story:ready-one"), "stderr {err}");
     assert!(err.contains("active"), "stderr {err}");
     assert!(world.trial_branches().is_empty());
-    assert_eq!(world.calls(), [FETCH_TRIALS], "nothing but the fetch");
-    assert!(git_out(&world.remote, &["for-each-ref"]).is_empty());
+    assert_eq!(world.remote_refs(), "", "nothing was pushed");
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
 }
 
-/// The line that fetches the remote's trial branches through the bot route: from the remote's
-/// HTTPS URL, whatever form `origin` has, so it goes under the bot route's HTTPS credential
-/// and never needs the user's SSH agent.
-const FETCH_TRIALS: &str = "bot -- fetch https://github.com/owner/repo.git +refs/heads/trial/*:refs/remotes/origin/trial/*";
-
-/// The story's acceptance, the route half: in a clone whose `origin` is an SSH URL, with the
-/// user's SSH agent loaded and a prompt allowed in takt's own environment, the trial fetch
-/// names the remote's HTTPS URL, and its child gets no agent socket, no git prompt, SSH in
-/// batch mode, standard input from `/dev/null`, an empty `GIT_ASKPASS` and HTTPS as the one
-/// transport git may use; the run proceeds to cut `trial/0`. The push of the case's branch by
-/// `pr.open` is held to HTTPS as the fetch is; the push that creates `trial/0` is not, yet.
+/// The fetch and the push reach `origin` as the operator's git does, here over SSH: with the
+/// operator's SSH agent socket kept, and neither able to wait on a prompt (git's terminal
+/// prompt off, an empty `GIT_ASKPASS`, SSH in batch mode), whatever takt's own environment
+/// allows; the run creates `trial/0` there.
 #[test]
-fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
-    let world = world("https-fetch");
+fn the_trial_fetch_and_push_go_through_the_operators_ssh_and_never_prompt() {
+    let world = world("ssh");
+    let url = format!("ssh://git@forge.invalid{}", world.remote.display());
+    git(&world.repo, &["remote", "set-url", "origin", &url]);
     let agent = world.state.join("agent.sock");
     let agent = agent.to_str().expect("utf-8");
     let repo = world.repo.to_str().expect("utf-8");
     let (code, out, err) = world.takt_env(
-        &["scenario", "run", "--repo", repo, "1", "--test-cmd", "true"],
+        &[
+            "scenario",
+            "run",
+            "--repo",
+            repo,
+            "1",
+            "--test-cmd",
+            "true",
+            "--iterations",
+            "0",
+        ],
         &[
             ("SSH_AUTH_SOCK", agent),
             ("GIT_TERMINAL_PROMPT", "1"),
@@ -803,89 +856,68 @@ fn the_trial_fetch_goes_over_https_with_no_user_credential_and_no_prompt() {
             ("GIT_ASKPASS", "/user/askpass"),
         ],
     );
-    let pushed = fs::read_to_string(world.state.join("push-env")).expect("a push ran");
-    let (case, trial): (Vec<&str>, Vec<&str>) = pushed
-        .lines()
-        .partition(|line| line.starts_with("takt/") || line.contains(":refs/heads/takt/"));
-    assert!(
-        !case.is_empty()
-            && case
-                .iter()
-                .all(|line| line.ends_with(" GIT_ALLOW_PROTOCOL=https")),
-        "the case's branch pushed over another transport than HTTPS: {pushed}"
-    );
-    assert!(
-        !trial.is_empty()
-            && trial
-                .iter()
-                .all(|line| line.ends_with(" GIT_ALLOW_PROTOCOL=unset")),
-        "the trial push: {pushed}"
-    );
-    let seen = fs::read_to_string(world.state.join("fetch-env")).expect("the fetch ran");
-    assert_eq!(
-        (
-            world.calls().first().cloned(),
-            seen.lines().collect::<Vec<_>>()
-        ),
-        (
-            Some(FETCH_TRIALS.to_owned()),
-            vec![
-                "GIT_TERMINAL_PROMPT=0",
-                "GIT_SSH_COMMAND=ssh -o BatchMode=yes",
-                "SSH_AUTH_SOCK=unset",
-                "stdin=/dev/null",
-                "GIT_ASKPASS=",
-                "GIT_ALLOW_PROTOCOL=https",
-            ]
-        ),
-        "the fetch line and what its child was started with"
-    );
-    assert_eq!(code, 4, "stdout {out} stderr {err}");
+    assert_eq!(code, 3, "stdout {out} stderr {err}");
     assert!(
         out.contains("scenario 1: story:ready-one proposed on trial/0 at "),
         "stdout {out} stderr {err}"
     );
-}
-
-/// `origin` in each form git writes for a repository on github.com, SSH or HTTPS, with or
-/// without `.git`: the trial fetch names the one HTTPS URL. A fetch that cannot authenticate
-/// fails at once, the refusal naming that URL and git's reason, with nothing changed.
-#[test]
-fn every_origin_form_fetches_from_the_one_https_url_and_a_refusal_changes_nothing() {
-    let world = world("origin-forms");
-    fs::write(world.state.join("refuse-fetch"), "").expect("the double refuses the fetch");
-    let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
-    for origin in [
-        "git@github.com:owner/repo.git",
-        "ssh://git@github.com/owner/repo.git",
-        "https://github.com/owner/repo.git",
-        "https://github.com/owner/repo",
-    ] {
-        git(&world.repo, &["remote", "set-url", "origin", origin]);
-        let _ = fs::remove_file(world.state.join("calls"));
-        let (code, out, err) = world.scenario_run("1", &[]);
-        assert_eq!(code, 1, "origin {origin}: stdout {out} stderr {err}");
-        assert_eq!(world.calls(), [FETCH_TRIALS], "origin {origin}");
+    assert_eq!(
+        world.pushed("trial/0").as_deref(),
+        Some(world.seed.as_str())
+    );
+    let seen = fs::read_to_string(world.state.join("ssh")).expect("ssh ran");
+    let calls: Vec<&str> = seen.split("--\n").filter(|call| !call.is_empty()).collect();
+    assert_eq!(calls.len(), 2, "a fetch and a push: {seen}");
+    for (call, pack) in calls.iter().zip(["git-upload-pack", "git-receive-pack"]) {
+        let lines: Vec<&str> = call.lines().collect();
         assert!(
-            err.contains("fetch the remote's trial branches; nothing was changed")
-                && err.contains("https://github.com/owner/repo.git")
-                && err.contains("Please make sure you have the correct access rights"),
-            "origin {origin}: stderr {err}"
+            lines[0].contains("-o BatchMode=yes") && lines[0].contains(pack),
+            "{call}"
         );
-        assert!(world.trial_branches().is_empty(), "origin {origin}");
-        assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
-        assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
-        assert!(!world.repo.join(".takt/cases").exists());
+        assert_eq!(
+            &lines[1..],
+            [
+                format!("SSH_AUTH_SOCK={agent}").as_str(),
+                "GIT_TERMINAL_PROMPT=0",
+                "GIT_ASKPASS=",
+            ],
+            "{call}"
+        );
     }
 }
 
+/// A fetch that cannot reach `origin` fails at once, the refusal naming `origin` and git's
+/// reason, with nothing changed.
+#[test]
+fn a_trial_fetch_origin_refuses_changes_nothing() {
+    let world = world("refused-fetch");
+    let url = format!("ssh://git@forge.invalid{}", world.remote.display());
+    git(&world.repo, &["remote", "set-url", "origin", &url]);
+    fs::write(world.state.join("refuse-ssh"), "").expect("ssh refuses");
+    let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = world.scenario_run("1", &[]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("fetch the trial branches of origin; nothing was changed")
+            && err.contains("Permission denied (publickey)"),
+        "stderr {err}"
+    );
+    assert!(world.trial_branches().is_empty());
+    assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
+    assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
+    assert_eq!(world.remote_refs(), "");
+    assert!(!world.repo.join(".takt/cases").exists());
+}
+
 /// A fetch that does not end, standing in for one waiting on a prompt no one answers, is
-/// killed within 30 s, not the forge's five minutes; the refusal names the remote and that it
-/// timed out, and nothing is changed.
+/// killed within 30 s, not the forge's five minutes; the refusal says that it timed out, and
+/// nothing is changed.
 #[test]
 fn a_trial_fetch_that_does_not_end_is_killed_within_30_s() {
     let world = world("hung-fetch");
-    fs::write(world.state.join("hang-fetch"), "").expect("the double hangs the fetch");
+    let url = format!("ssh://git@forge.invalid{}", world.remote.display());
+    git(&world.repo, &["remote", "set-url", "origin", &url]);
+    fs::write(world.state.join("hang-ssh"), "").expect("ssh hangs");
     let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
     let started = std::time::Instant::now();
     let (code, out, err) = world.scenario_run("1", &[]);
@@ -896,14 +928,51 @@ fn a_trial_fetch_that_does_not_end_is_killed_within_30_s() {
     );
     assert_eq!(code, 1, "stdout {out} stderr {err}");
     assert!(
-        err.contains("https://github.com/owner/repo.git") && err.contains("timed out after 30.0 s"),
+        err.contains("fetch the trial branches of origin")
+            && err.contains("timed out after 30.0 s"),
         "stderr {err}"
     );
-    assert_eq!(world.calls(), [FETCH_TRIALS]);
     assert!(world.trial_branches().is_empty());
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
     assert!(!world.repo.join(".takt/cases").exists());
+}
+
+/// The 30 s bound leaves nothing behind: a process the fetch started in a session of its own,
+/// outside its process group, is gone when takt has answered.
+#[test]
+fn a_timed_out_trial_fetch_leaves_no_process_behind() {
+    let world = world("orphan");
+    let url = format!("ssh://git@forge.invalid{}", world.remote.display());
+    git(&world.repo, &["remote", "set-url", "origin", &url]);
+    fs::write(world.state.join("orphan-ssh"), "").expect("ssh hangs");
+    let started = std::time::Instant::now();
+    let (code, out, err) = world.scenario_run("1", &[]);
+    let took = started.elapsed();
+    let pid = fs::read_to_string(world.state.join("orphan.pid"))
+        .expect("the double started its orphan")
+        .trim()
+        .to_owned();
+    // Listed by `ps`, not a zombie, and still the double's `sleep`.
+    let alive = Command::new("ps")
+        .args(["-o", "stat=,args=", "-p", &pid])
+        .output()
+        .is_ok_and(|output| {
+            let listed = String::from_utf8_lossy(&output.stdout);
+            let listed = listed.trim();
+            output.status.success()
+                && !listed.starts_with('Z')
+                && listed
+                    .split_once(char::is_whitespace)
+                    .is_some_and(|(_, args)| args.trim_start().starts_with("sleep"))
+        });
+    if alive {
+        let _ = Command::new("kill").args(["-9", &pid]).status();
+    }
+    assert!(!alive, "sleep {pid} outlived takt: stderr {err}");
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(took < std::time::Duration::from_secs(35), "took {took:?}");
+    assert!(err.contains("timed out after 30.0 s"), "stderr {err}");
 }
 
 /// The remote already holds `trial/0`, pushed by a run from another checkout that this one
@@ -921,7 +990,7 @@ fn a_trial_branch_only_the_remote_holds_is_fetched_and_not_reused() {
             &format!("{}:refs/heads/trial/0", world.seed),
         ],
     );
-    let (code, out, err) = world.scenario_run("1", &[]);
+    let (code, out, err) = world.scenario_run_local("1", &[]);
     assert_eq!(code, 4, "stdout {out} stderr {err}");
     assert!(
         out.contains("scenario 1: story:ready-one proposed on trial/1 at "),
@@ -936,22 +1005,13 @@ fn a_trial_branch_only_the_remote_holds_is_fetched_and_not_reused() {
 }
 
 /// The fetch alone is not relied on: when the remote holds the trial branch the checkout chose
-/// (here the fetch brought nothing), the push reports it up to date rather than new, and the
-/// run is refused before any case opens; the branch it cut is removed, the tree back on `main`,
-/// the remote's branch as it was.
+/// (here hidden from the fetch), the push reports it up to date rather than new, and the run is
+/// refused before any case opens; the branch it cut is removed, the tree back on `main`, the
+/// remote's branch as it was.
 #[test]
 fn a_push_that_finds_the_trial_branch_already_there_is_refused() {
     let world = world("up-to-date");
-    git(
-        &world.repo,
-        &[
-            "push",
-            "-q",
-            world.remote.to_str().expect("utf-8"),
-            &format!("{}:refs/heads/trial/0", world.seed),
-        ],
-    );
-    fs::write(world.state.join("no-fetch"), "").expect("the double fetches nothing");
+    world.trial_0_hidden_from_the_fetch(&world.seed);
     let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
 
     let (code, out, err) = world.scenario_run("1", &[]);
@@ -964,13 +1024,13 @@ fn a_push_that_finds_the_trial_branch_already_there_is_refused() {
     assert_eq!(git_out(&world.repo, &["rev-parse", "HEAD"]), head);
     assert!(!world.repo.join(".takt/cases").exists());
     assert_eq!(
-        git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
-        world.seed
+        world.pushed("trial/0").as_deref(),
+        Some(world.seed.as_str())
     );
 }
 
 /// The push may only create the trial branch. Another run's `trial/0` lands on the remote
-/// after this run's fetch (here the fetch brings nothing) at an ancestor of this run's seed: an
+/// after this run's fetch (here hidden from the fetch) at an ancestor of this run's seed: an
 /// unforced push would fast-forward it under that run's pull request. The lease
 /// (`--force-with-lease=refs/heads/trial/0:`, the branch must not exist) makes the push
 /// rejected instead; the run is refused, the remote's `trial/0` stays where the other run put
@@ -983,21 +1043,12 @@ fn a_trial_branch_at_an_ancestor_of_the_seed_is_not_moved_by_the_push() {
         &world.repo,
         &format!("[scenario \"2\"]\n\tstory = story:ready-one\n\tseed = {later}\n"),
     );
-    git(
-        &world.repo,
-        &[
-            "push",
-            "-q",
-            world.remote.to_str().expect("utf-8"),
-            &format!("{}:refs/heads/trial/0", world.seed),
-        ],
-    );
-    fs::write(world.state.join("no-fetch"), "").expect("the double fetches nothing");
+    world.trial_0_hidden_from_the_fetch(&world.seed);
 
     let (code, out, err) = world.scenario_run("2", &["--iterations", "0"]);
     assert_eq!(
-        git_out(&world.remote, &["rev-parse", "refs/heads/trial/0"]),
-        world.seed,
+        world.pushed("trial/0").as_deref(),
+        Some(world.seed.as_str()),
         "the remote's trial/0 was moved: exit {code}, stdout {out} stderr {err}"
     );
     assert_eq!(code, 1, "stdout {out} stderr {err}");
@@ -1026,15 +1077,7 @@ fn a_seed_whose_story_waits_on_a_dependency_is_refused_before_the_push() {
     assert!(err.contains("story:waits-one"), "stderr {err}");
     assert!(err.contains("story:draft-dep"), "stderr {err}");
     assert!(world.trial_branches().is_empty());
-    assert!(
-        !world
-            .calls()
-            .iter()
-            .any(|call| call.starts_with("bot -- push")),
-        "{:?}",
-        world.calls()
-    );
-    assert!(git_out(&world.remote, &["for-each-ref"]).is_empty());
+    assert_eq!(world.remote_refs(), "", "nothing was pushed");
     assert_eq!(git_out(&world.repo, &["branch", "--show-current"]), "main");
 }
 
@@ -1075,8 +1118,8 @@ enum Started {
     AtOnceInOwnPidNamespaces,
 }
 
-/// Five scenario runs of scenario 1, each from its own fresh clone of one origin and without
-/// the bot route (the origin is a path, no forge), started as `started` says; asserts five
+/// Five scenario runs of scenario 1, each from its own fresh clone of one origin and under
+/// `--forge none`, so nothing is fetched or pushed, started as `started` says; asserts five
 /// distinct trial numbers, all digits, and five distinct case ids, and that, gathered into one
 /// repository, `takt scorecard --save` takes all five cases.
 fn five_clones_one_scorecard(name: &str, started: Started) {
@@ -1141,8 +1184,9 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
                 "1",
                 "--test-cmd",
                 "true",
-            ])
-            .env("B10X_GATES_POLICY", stand_in_policy::path());
+                "--forge",
+                "none",
+            ]);
         command
     };
     let outputs: Vec<std::process::Output> = match started {
@@ -1249,7 +1293,7 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
 }
 
 /// story:trial-numbers-are-unique-across-checkouts: five scenario runs, one after another, each
-/// from its own fresh clone of one origin and without the bot route, get five distinct trial
+/// from its own fresh clone of one origin and under `--forge none`, get five distinct trial
 /// numbers and case ids, and one scorecard takes all five.
 #[test]
 fn five_runs_from_five_fresh_clones_get_five_trial_numbers_and_one_scorecard_takes_all() {

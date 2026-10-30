@@ -75,8 +75,9 @@ Every path is one unless `.engineering/judge-allow.yaml` at the merge target lis
 
 ### Forge
 
-Where a change leaves your machine as a pull request: `gitlab`, `bot` (github.com through
-beyond10x's GitHub App), `local` (a bare repository on this machine) or `none`. Without
+Where a change leaves your machine as a pull request: `gitlab`, `command` (the run file's
+`forge_commands`), `connectors` (a Connectors instance), `local` (a bare repository on this
+machine) or `none`. Without
 `--forge`, takt picks one from `origin`. [Configuration](../reference/configuration.md#the-forge).
 
 ### Confinement

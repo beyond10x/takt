@@ -110,7 +110,6 @@ fn a_claude_that_sleeps_past_the_hour_budget_is_killed_and_the_run_exits_on_hour
             ),
         )
         .env("XDG_STATE_HOME", outer.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let elapsed = started.elapsed();

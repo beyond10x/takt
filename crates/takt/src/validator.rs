@@ -24,7 +24,7 @@ use loom_sdk::{CanonGovernor, EffectPort, LoopContext, LoopEnd, run_until_blocke
 use crate::case::{BRANCH_FILE, Branch, CaseFiles, current};
 use crate::confinement::Command;
 use crate::evidence::{Record, uuid_from};
-use crate::forge::{BotRoute, Checks, Forge, Limits, PullRequest, PullRequestState};
+use crate::forge::{self, Checks, Forge, Limits, PullRequest, PullRequestState};
 use crate::git::Mirror;
 use crate::protocol::LoadedProtocol;
 
@@ -4040,19 +4040,16 @@ impl Validator for PrOpen {
         "implementation"
     }
 
-    /// The case's `branch.yaml`, and what the bot route keeps of the request it sent, the text it
-    /// scanned as published, the commit messages and files it scanned before the push and the
-    /// response it read.
+    /// The case's `branch.yaml`, and what the forge keeps of the request it sent, its title and
+    /// body as published and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
             PathBuf::from(BRANCH_FILE),
-            artifacts.join(BotRoute::REQUEST),
-            artifacts.join(BotRoute::RESPONSE),
-            artifacts.join(BotRoute::PUBLISHED),
+            artifacts.join(forge::REQUEST),
+            artifacts.join(forge::RESPONSE),
+            artifacts.join(forge::PUBLISHED),
             artifacts.join(crate::forge::command::CommandForge::BODY),
-            artifacts.join(BotRoute::MESSAGES),
-            artifacts.join(BotRoute::FILES),
         ]
     }
 
@@ -5247,17 +5244,14 @@ impl Validator for PrMerged {
         "implementation"
     }
 
-    /// The case's `branch.yaml`, when takt's riders are pushed before the merge, the commit
-    /// messages and files the bot route scanned before that push, and what it keeps of the merge
-    /// request it sent and the response it read.
+    /// The case's `branch.yaml`, when takt's riders are pushed before the merge, and what the
+    /// forge keeps of the merge request it sent and the response it read.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
             PathBuf::from(BRANCH_FILE),
-            artifacts.join(BotRoute::MESSAGES),
-            artifacts.join(BotRoute::FILES),
-            artifacts.join(BotRoute::MERGE_REQUEST),
-            artifacts.join(BotRoute::MERGE_RESPONSE),
+            artifacts.join(forge::MERGE_REQUEST),
+            artifacts.join(forge::MERGE_RESPONSE),
         ]
     }
 

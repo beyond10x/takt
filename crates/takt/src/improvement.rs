@@ -1130,17 +1130,8 @@ impl Validator for ScorecardCompare {
 /// trusted, as everything else under no forge is: whoever moves it decides what is merged.
 #[derive(Clone)]
 pub enum Mainline {
-    /// The forge's `main`, read through [`Forge::target_tip`] when the turn reads it, of a
-    /// forge that names no repository (a test's double).
+    /// The forge's `main`, read through [`Forge::target_tip`] when the turn reads it.
     Forge(Rc<dyn Forge>),
-    /// The `main` of `repository` (`<owner>/<repo>`), read through `forge`'s
-    /// [`Forge::target_tip`]: the bot route's, which reads the repository its `origin` names.
-    Repository {
-        /// The forge that reads it.
-        forge: Rc<dyn Forge>,
-        /// The repository it reads `main` from.
-        repository: String,
-    },
     /// The case repository's `refs/heads/main`.
     Local,
 }
@@ -1153,32 +1144,13 @@ impl std::fmt::Debug for Mainline {
 
 impl Mainline {
     /// The mainline of the forge `forge`, as a turn records it when it opens
-    /// ([`crate::case::FORGE_FILE`]): `none` the local `main`, `bot` the bot route's report of
-    /// `main` for `tree` ([`crate::forge::BotRoute::for_tree`]), from the repository `origin`
-    /// names now, which must be the one recorded beside it when one is (a file that names `bot`
-    /// alone, written before turns recorded a repository, takes `origin`'s); refused naming both
-    /// otherwise. Any other name, or `none` with a repository, is refused.
-    pub fn recorded(tree: &Path, forge: &crate::case::TurnForge) -> Result<Self> {
+    /// ([`crate::case::FORGE_FILE`]): `none` the local `main`. Any other name, or `none` with a
+    /// repository, is refused: no forge takt has reads a turn's mainline at a grant.
+    pub fn recorded(forge: &crate::case::TurnForge) -> Result<Self> {
         match (forge.name.as_str(), forge.repository.as_deref()) {
             ("none", None) => Ok(Self::Local),
-            ("bot", recorded) => {
-                let bot = crate::forge::BotRoute::for_tree(tree)?;
-                if let Some(recorded) = recorded
-                    && recorded != bot.repository
-                {
-                    bail!(
-                        "the turn recorded the forge `bot` on {recorded} when it opened, and the origin remote now names {}; a turn reads the mainline from the repository it opened on, so point the origin remote at {recorded} again",
-                        bot.repository
-                    );
-                }
-                let repository = bot.repository.clone();
-                Ok(Self::Repository {
-                    forge: Rc::new(bot),
-                    repository,
-                })
-            }
             _ => bail!(
-                "the turn records the forge `{}`, which takt does not read the mainline through: bot <owner>/<repo> or none",
+                "the turn records the forge `{}`, which takt does not read the mainline through: none",
                 forge.to_string().escape_debug()
             ),
         }
@@ -1188,17 +1160,17 @@ impl Mainline {
     #[must_use]
     pub fn forge(&self) -> String {
         match self {
-            Self::Forge(forge) | Self::Repository { forge, .. } => forge.name().to_owned(),
+            Self::Forge(forge) => forge.name().to_owned(),
             Self::Local => "none".to_owned(),
         }
     }
 
-    /// The repository `main` is read from, `<owner>/<repo>`; none for the local `main` and a
-    /// forge that names none.
+    /// The repository `main` is read from: none, for the local `main` and for every forge takt
+    /// has, none of which names one. A grant that records one was read through a forge takt no
+    /// longer has, and holds no merge read here ([`grant_repository_refusal`]).
     #[must_use]
     pub fn repository(&self) -> Option<&str> {
         match self {
-            Self::Repository { repository, .. } => Some(repository),
             Self::Forge(_) | Self::Local => None,
         }
     }
@@ -1221,9 +1193,6 @@ impl Mainline {
         let main = crate::promotion::MAINLINE;
         match self {
             Self::Forge(forge) => format!("{main} (forge: {})", forge.name()),
-            Self::Repository { forge, repository } => {
-                format!("{main} of {repository} (forge: {})", forge.name())
-            }
             Self::Local => format!("the local {main}"),
         }
     }
@@ -1232,14 +1201,12 @@ impl Mainline {
     pub fn tip(&self, tree: &Path) -> Result<String> {
         let main = crate::promotion::MAINLINE;
         let tip = match self {
-            Self::Forge(forge) | Self::Repository { forge, .. } => {
-                forge.target_tip(tree, main).with_context(|| {
-                    format!(
-                        "read the tip of {main}, the mainline, through the forge {}",
-                        forge.name()
-                    )
-                })?
-            }
+            Self::Forge(forge) => forge.target_tip(tree, main).with_context(|| {
+                format!(
+                    "read the tip of {main}, the mainline, through the forge {}",
+                    forge.name()
+                )
+            })?,
             Self::Local => crate::git::run(
                 tree,
                 &[
@@ -1492,8 +1459,8 @@ fn merged_before_grant(
 /// authorise recording a merge read from `mainline`: the grant read the mainline's tip from
 /// another repository than the one `mainline` reads now
 /// ([`crate::case::MainlineTip::repository`], [`Mainline::repository`]), the local `main`
-/// counting as no repository, so a grant given before grants recorded a repository holds no
-/// merge read through the bot route. Named both; none when they are the same, and none for a
+/// counting as no repository, so a grant that recorded a repository holds no merge read from
+/// the local `main`. Named both; none when they are the same, and none for a
 /// grant that records no tip, which [`merged_before_grant`] refuses. `held` says whether the
 /// mainline holds the candidate now, read only for a grant that records no repository: a grant
 /// given again would then come after the merge, and authorise none.

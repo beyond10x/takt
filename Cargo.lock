@@ -166,6 +166,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "b10x-assertion-providers"
+version = "0.15.2"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.15.2#1deb2ca88273931ef8f1a6dc44f85cc567d5fa26"
+dependencies = [
+ "clap",
+ "jsonschema 0.33.0",
+ "libc",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "b10x-canon"
 version = "0.8.0"
 source = "git+https://github.com/beyond10x/canon?tag=0.8.0#cf171757878af943105132f686ff8c46170f8a77"
@@ -183,7 +197,19 @@ version = "0.14.0"
 source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.14.0#9a30403d42f69fd2e07a20dc57c8c520d57fbb4d"
 dependencies = [
  "b10x-canon",
- "b10x-canon-engineering-assertions",
+ "b10x-canon-engineering-assertions 0.14.0",
+ "clap",
+ "serde",
+ "serde_yaml_ng",
+]
+
+[[package]]
+name = "b10x-canon-engineering"
+version = "0.15.2"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.15.2#1deb2ca88273931ef8f1a6dc44f85cc567d5fa26"
+dependencies = [
+ "b10x-canon",
+ "b10x-canon-engineering-assertions 0.15.2",
  "clap",
  "serde",
  "serde_yaml_ng",
@@ -195,7 +221,23 @@ version = "0.14.0"
 source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.14.0#9a30403d42f69fd2e07a20dc57c8c520d57fbb4d"
 dependencies = [
  "anyhow",
- "b10x-assertion-providers",
+ "b10x-assertion-providers 0.14.0",
+ "b10x-canon-expr",
+ "clap",
+ "rustix",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "b10x-canon-engineering-assertions"
+version = "0.15.2"
+source = "git+https://github.com/beyond10x/engineering-protocols?tag=0.15.2#1deb2ca88273931ef8f1a6dc44f85cc567d5fa26"
+dependencies = [
+ "anyhow",
+ "b10x-assertion-providers 0.15.2",
  "b10x-canon-expr",
  "clap",
  "rustix",
@@ -404,16 +446,16 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-commission"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "commission",
 ]
 
 [[package]]
 name = "b10x-loom-connectors"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "b10x-loom-commission",
  "connectors-client",
@@ -425,8 +467,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-executor"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "b10x-llm-core",
  "b10x-loom-commission",
@@ -441,11 +483,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-governor"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "b10x-canon",
- "b10x-canon-engineering",
+ "b10x-canon-engineering 0.14.0",
  "b10x-loom-commission",
  "b10x-loom-executor",
  "b10x-loom-protocols",
@@ -456,18 +498,18 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-intake-references"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "b10x-loom-intake-router"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
- "b10x-canon-engineering",
+ "b10x-canon-engineering 0.14.0",
  "b10x-llm-core",
  "b10x-llm-tool-call",
  "b10x-loom-protocols",
@@ -476,10 +518,10 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-intake-slice"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
- "b10x-canon-engineering",
+ "b10x-canon-engineering 0.14.0",
  "b10x-llm-core",
  "b10x-llm-routing",
  "b10x-llm-tool-call",
@@ -506,11 +548,11 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-protocols"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "b10x-canon",
- "b10x-canon-engineering",
+ "b10x-canon-engineering 0.14.0",
  "intake",
  "serde_json",
  "sha2 0.10.9",
@@ -520,8 +562,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-sdk"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "b10x-llm-core",
  "b10x-llm-credentials",
@@ -546,8 +588,8 @@ dependencies = [
 
 [[package]]
 name = "b10x-loom-session-executor"
-version = "0.50.1"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+version = "0.51.0"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 dependencies = [
  "b10x-loom-commission",
  "loom",
@@ -665,8 +707,8 @@ version = "0.23.0"
 dependencies = [
  "anyhow",
  "b10x-canon",
- "b10x-canon-engineering",
- "b10x-canon-engineering-assertions",
+ "b10x-canon-engineering 0.15.2",
+ "b10x-canon-engineering-assertions 0.15.2",
  "b10x-canon-expr",
  "b10x-loom-sdk",
  "b10x-substrate-host 0.14.0 (git+https://github.com/beyond10x/substrate?tag=0.14.0)",
@@ -694,8 +736,8 @@ name = "b10x-takt-cli"
 version = "0.23.0"
 dependencies = [
  "anyhow",
- "b10x-canon-engineering",
- "b10x-canon-engineering-assertions",
+ "b10x-canon-engineering 0.15.2",
+ "b10x-canon-engineering-assertions 0.15.2",
  "b10x-takt",
  "clap",
  "libc",
@@ -1010,7 +1052,7 @@ dependencies = [
 [[package]]
 name = "commission"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 
 [[package]]
 name = "connectors-client"
@@ -2706,7 +2748,7 @@ dependencies = [
 [[package]]
 name = "intake"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 
 [[package]]
 name = "ipnet"
@@ -3196,7 +3238,7 @@ dependencies = [
 [[package]]
 name = "loom"
 version = "1.0.0"
-source = "git+https://github.com/beyond10x/loom?tag=0.50.1#586489285ee87610709d747a1032868b15b9f228"
+source = "git+https://github.com/beyond10x/loom?tag=0.51.0#ca9b10bf28de0656271eed866ed07f8d38ad2558"
 
 [[package]]
 name = "lru-slab"

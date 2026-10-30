@@ -25,7 +25,6 @@ use anyhow::{Context as _, Result, anyhow, bail};
 use crate::case::Decision;
 use crate::harness::{ChangeSoFar, ClaudeCode, Harness, StepContext};
 use crate::protocol::LoadedProtocol;
-use crate::scan::gates::ChangeScan;
 
 /// The format of a replay's record, `replay.json`.
 pub const FORMAT: &str = "takt-replay/1";
@@ -467,8 +466,7 @@ pub fn rebuilt_prompt_line(
 /// ([`crate::run::change_so_far_for`], under the case's intent): the `base_commit` of the case's
 /// `branch.yaml` in `case_dir`,
 /// the paths the `effect` lines of its record up to the step name, the diff to `revision`, the
-/// revision the step started at, in the repository of `tree`, under the scan the environment
-/// names ([`ChangeScan::from_env`]), as a run under the same environment scans it. What a run
+/// revision the step started at, in the repository of `tree`, as a run reads it. What a run
 /// would print of a change it could not show is not printed: the prompt says it is not shown.
 fn change_of(start: &Start, case_dir: &Path, tree: &Path, revision: &str) -> Result<ChangeSoFar> {
     let record = || {
@@ -483,7 +481,6 @@ fn change_of(start: &Start, case_dir: &Path, tree: &Path, revision: &str) -> Res
         case_dir,
         record,
         (Some(revision), Some(&start.intent)),
-        ChangeScan::from_env().as_ref(),
         &mut std::io::sink(),
     )
 }

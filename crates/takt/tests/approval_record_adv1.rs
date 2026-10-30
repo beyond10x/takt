@@ -294,7 +294,7 @@ impl Forge for Real {
     fn push(&self, tree: &Path, branch: &str) -> anyhow::Result<()> {
         self.memory.push(tree, branch)?;
         if self.fail_next_push.replace(false) {
-            bail!("b10x-gates bot -- push exited on a signal: the child outlived its time limit");
+            bail!("git push exited on a signal: the child outlived its time limit");
         }
         Ok(())
     }
@@ -302,7 +302,7 @@ impl Forge for Real {
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> anyhow::Result<()> {
         self.memory.push_revision(tree, branch, revision)?;
         if self.fail_next_push.replace(false) {
-            bail!("b10x-gates bot -- push exited on a signal: the child outlived its time limit");
+            bail!("git push exited on a signal: the child outlived its time limit");
         }
         Ok(())
     }
@@ -336,7 +336,7 @@ impl Forge for Real {
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
         if self.require_checks && !self.green.borrow().iter().any(|green| green == head) {
             bail!(
-                "b10x-gates api --method PUT --path /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"takt / task check\" is expected"
+                "PUT /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"takt / task check\" is expected"
             );
         }
         self.memory.merge(tree, dir, number, head)
@@ -406,7 +406,7 @@ fn adv1_an_approve_subject_commit_rewriting_the_story_does_not_reach_the_base() 
 
 /// Retry after a partial write. `repository.merge` pushes the approval's commit and records the
 /// head pushed only once the push returned. A push the forge applied and then reported failed
-/// (the bot route's child killed at its time limit after the remote updated) leaves the forge's
+/// (the push's child killed at its time limit after the remote updated) leaves the forge's
 /// head at the approval's commit and `branch.yaml` at the revision; every later run then finds
 /// the forge's head differing from the head pushed and merges nothing, and nothing in the run
 /// pushes again. The case can never be merged.

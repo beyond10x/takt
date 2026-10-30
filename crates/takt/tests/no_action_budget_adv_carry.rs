@@ -107,7 +107,6 @@ fn a_third_try_that_spends_the_step_budget_stops_on_the_budget() {
         gate: None,
     };
     let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
-    run.scan_change_with(None);
     run.continue_past_red_base();
     let mut out = Vec::new();
     let stop = run.run(&mut out);

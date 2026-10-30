@@ -121,9 +121,9 @@ order, it holds:
    `implementation.edit`, a list follows of where each failing test's assertion is,
    `- <test> at <file>:<line>[:<col>]`, read from the runner's output, with the ask to follow the
    calls from each assertion to the behaviour the intent names and change every function on that
-   path. From 0.20.0 paths under the tree are written relative to it, and a line the secret scan
-   refuses is withheld on its own, counted in the block's heading; before, one refused line
-   withheld the whole block.
+   path. From 0.20.0 paths under the tree are written relative to it. A line of a credential's
+   shape is left out. Up to 0.23.0 a line the secret scan refused was also withheld, counted in
+   the block's heading; the scanner is gone since.
 2. **The intent**, and the files of the story's `## Scope`: attached as `@<path>` for Claude
    Code, or named as given in full for Codex. From 0.20.0 a Codex step is given each file once.
    It is not given the `AGENTS.md` Codex loads itself from the session's copy, and a step whose
@@ -135,12 +135,12 @@ order, it holds:
    status at this revision. From 0.19.0 each line also names the gate's commands,
    ``Runs `<command>`.``, read from `.engineering/assertions-project.yaml` at the case's base:
    a command belongs to a gate when one of the gate's assertions names it. The commands are left out when
-   one has a credential's shape or the block does not pass the secret scan.
+   one has a credential's shape (up to 0.23.0, also when the block did not pass the secret scan).
 5. **The failed gates.** After a red gate, `The last gate run failed`: for each failed gate, the
    lines its command printed that name what failed, fenced as data, and that a file the failed
    gates' output names is part of this change even outside the story's Scope. From 0.19.0 paths
-   under the tree are written relative to it, and a line the secret scan refuses is withheld on
-   its own; the gate's heading says how many lines were withheld.
+   under the tree are written relative to it. Up to 0.23.0 a line the secret scan refused was
+   withheld on its own, the gate's heading saying how many.
 6. **Where the gate stands.** From 0.19.0, when the gate failed at an earlier revision and has not
    run at this one, one line says so: `The gate last failed at <revision> on <gates>; it has not
    run at this revision; it runs after <actions>.`

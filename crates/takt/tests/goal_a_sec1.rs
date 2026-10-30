@@ -2,7 +2,7 @@
 //! the invariants an unattended run in a pod rests on when it merges to `main` with no person's
 //! step. Each case drives the code the wave ships and states the invariant it checks; a red case
 //! is a gap between the contract (`AGENTS.md` § Rules, story:an-unattended-run-merges-under-a-
-//! delegated-grant, story:bot-forge-reads-through-the-app) and the implementation.
+//! delegated-grant) and the implementation.
 
 #[path = "support/own_home.rs"]
 mod own_home;
@@ -17,8 +17,7 @@ use anyhow::anyhow;
 use takt::case::{Authority, AuthorityDecision, Grant};
 use takt::evidence::Record;
 use takt::forge::{
-    BotRoute, Checks, Exit, Forge, Memory, MergeMessage, Outgoing, Process, PullRequest,
-    PullRequestView, Runner,
+    Checks, Forge, Memory, MergeMessage, Outgoing, Process, PullRequest, PullRequestView, Runner,
 };
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrMerged, PrOpen, Validator};
@@ -714,11 +713,8 @@ const GH_TOKENS: [&str; 4] = [
     "GITHUB_ENTERPRISE_TOKEN",
 ];
 
-/// No forge program reads a GitHub token since the bot forge reads through `b10x-gates api`
-/// (story:bot-forge-reads-through-the-app): `b10x-gates bot` and `api` write under the App, and
-/// the GitLab forge's `glab` under its own login. A forge child started by [`Process`] receives
-/// none of them; `bot_route_reads` (`forge.rs:580-585`) still lets all four through. Run in a
-/// child of this binary whose environment holds the four tokens.
+/// No forge program takt starts reads a GitHub token: a forge child started by [`Process`]
+/// receives none of the four. Run in a child of this binary whose environment holds them.
 #[test]
 fn inv5_forge_children_receive_no_github_token() {
     const MARK: &str = "TAKT_GOAL_A_SEC1_CHILD";
@@ -767,86 +763,4 @@ fn inv5_forge_children_receive_no_github_token() {
         leaked.is_empty(),
         "a forge child received {leaked:?}, which no forge program reads"
     );
-}
-
-// ---------------------------------------------------------------------------------------------
-// Invariant 6: the read directory under temp_dir().
-// ---------------------------------------------------------------------------------------------
-
-/// What `--output`'s directory was when the line ran: its path, its mode, whether it was a
-/// real directory (not a link) owned by this user.
-type SeenDir = (PathBuf, u32, bool);
-
-/// Answers a read by failing (`fail`) or by writing a response that is no JSON.
-struct BadRead {
-    fail: bool,
-    seen: Rc<RefCell<Vec<SeenDir>>>,
-}
-
-impl Runner for BadRead {
-    fn run(&self, _: &Path, argv: &[String]) -> anyhow::Result<Exit> {
-        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
-        let at = argv
-            .iter()
-            .position(|a| a == "--output")
-            .ok_or_else(|| anyhow!("no --output in {argv:?}"))?;
-        let output = PathBuf::from(&argv[at + 1]);
-        let dir = output.parent().expect("a directory").to_path_buf();
-        let meta = fs::symlink_metadata(&dir)?;
-        let own = meta.is_dir() && meta.uid() == fs::metadata(env!("CARGO_TARGET_TMPDIR"))?.uid();
-        self.seen
-            .borrow_mut()
-            .push((dir, meta.permissions().mode() & 0o7777, own));
-        if self.fail {
-            return Ok(Exit {
-                code: Some(1),
-                stdout: String::new(),
-                stderr: "b10x-gates: 502 Bad Gateway\n".to_owned(),
-            });
-        }
-        fs::write(&output, "<html>not json</html>")?;
-        Ok(Exit {
-            code: Some(0),
-            stdout: String::new(),
-            stderr: String::new(),
-        })
-    }
-
-    fn run_env(&self, tree: &Path, argv: &[String], _: &[(&str, &str)]) -> anyhow::Result<Exit> {
-        self.run(tree, argv)
-    }
-}
-
-/// A read that fails, or whose response is no JSON, is an error, and its directory, made new
-/// and `0700` as a real directory, is gone after it, as after a read that succeeds.
-#[test]
-fn inv6_a_read_that_fails_removes_its_private_directory() {
-    for fail in [true, false] {
-        let seen = Rc::new(RefCell::new(Vec::new()));
-        let forge = BotRoute::new(
-            "owner/repo",
-            None,
-            Box::new(BadRead {
-                fail,
-                seen: Rc::clone(&seen),
-            }),
-        );
-        let error = forge
-            .pull_request(Path::new(env!("CARGO_TARGET_TMPDIR")), 7)
-            .expect_err("no reading");
-        let seen = seen.borrow();
-        assert_eq!(seen.len(), 1, "fail={fail}: {seen:?} ({error:#})");
-        let (dir, mode, own) = &seen[0];
-        assert_eq!(*mode, 0o700, "fail={fail}: {}", dir.display());
-        assert!(
-            *own,
-            "fail={fail}: {} is a real directory of ours",
-            dir.display()
-        );
-        assert!(
-            !dir.exists(),
-            "fail={fail}: {} is left behind after {error:#}",
-            dir.display()
-        );
-    }
 }

@@ -98,6 +98,10 @@ impl World {
 
     /// [`Self::run`] from the working directory `cwd`, else the test's own.
     fn run_in(&self, cwd: Option<&Path>, args: &[&str]) -> Output {
+        // A harness run opens only under a declared `scan: none`
+        // (story:scan-and-forge-are-adapters); no step here reaches a scan.
+        let scan = self.outer().join("scan-none.yaml");
+        fs::write(&scan, "scan: none\n").expect("a run configuration file");
         let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
@@ -113,6 +117,7 @@ impl World {
                 "none",
             ])
             .args(args)
+            .args(["--config", scan.to_str().expect("utf-8")])
             .env("HOME", self.home())
             .env(
                 "PATH",
@@ -125,9 +130,6 @@ impl World {
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
-            // A harness run opens only under a policy or a declared `scan: none`
-            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
-            .env("B10X_GATES_POLICY", self.outer().join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .output()
             .expect("takt runs")

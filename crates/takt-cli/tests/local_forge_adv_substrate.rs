@@ -92,7 +92,6 @@ fn local_checks_substrate_cannot_run_are_refused_before_a_case_opens() {
             "--config",
             config.to_str().expect("utf-8"),
         ])
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let (out, err) = (
@@ -192,7 +191,6 @@ fn cargo_local_checks_run_under_substrate_to_the_gate() {
     let takt = |args: &[&str]| {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(args)
-            .env_remove("B10X_GATES_POLICY")
             .output()
             .expect("takt runs");
         (

@@ -283,7 +283,7 @@ at any time.
 
 ## 4. With a forge
 
-With `--forge bot`, `--forge gitlab` or `--forge local`, the steps go on from `change.read`:
+With `--forge gitlab`, `--forge command`, `--forge connectors` or `--forge local`, the steps go on from `change.read`:
 
 1. `pr.open` pushes the case's branch and opens the pull request.
 2. `ci.read` reads its checks, waiting while they run. A run whose budget ends while it waits
@@ -439,8 +439,8 @@ Above that revision only takt's own records may ride to the base: one approval p
 `test_result` and the move to `implemented`. A case that is not yet stopped for the grant is
 refused ([Approve a capability](./approve-a-capability.md)).
 
-To deliver a known story on a GitHub repository, as takt's own trials do, see
-[A trial on a GitHub repository](./scenario-run.md#a-trial-on-a-github-repository).
+To deliver a known story through a hub on this machine, as takt's own trials do, see
+[A trial of todo-app-example](./scenario-run.md#a-trial-of-todo-app-example).
 
 ## Bounds and resuming after a stop
 

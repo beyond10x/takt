@@ -390,7 +390,7 @@ fn change_of(tree: &Path, base: &str, paths: &[&str]) -> ChangeSoFar {
     .expect("a branch record");
     let effect = serde_json::json!({"event": "effect", "revision": "r", "paths": paths});
     let mut out = Vec::new();
-    takt::run::change_so_far(tree, &case, || Ok(vec![effect]), None, None, &mut out)
+    takt::run::change_so_far(tree, &case, || Ok(vec![effect]), None, &mut out)
         .expect("a change so far")
 }
 

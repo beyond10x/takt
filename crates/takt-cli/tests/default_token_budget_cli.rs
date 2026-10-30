@@ -106,7 +106,6 @@ fn run(repo: &Path, bin: &Path, extra: &[&str]) -> Output {
             "XDG_STATE_HOME",
             repo.parent().expect("the scratch").join("xdg-state"),
         )
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs")
 }

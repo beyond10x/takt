@@ -1,8 +1,8 @@
-//! Security review of story:scan-and-forge-are-adapters, invariant 2: under every scan adapter
-//! the in-process check for the shape of a credential reads what a Codex or b10x-harness session
-//! proposes before the edit effect, so a credential such a session read outside its copy never
-//! reaches the tree, the case record or what the forge publishes. Under a declared `scan: none`
-//! that check is the only one. A proposal carries its files' paths as well as their content;
+//! Security review of story:scan-and-forge-are-adapters, invariant 2: with a scan declared or
+//! not, the in-process check for the shape of a credential reads what a Codex or b10x-harness
+//! session proposes before the edit effect, so a credential such a session read outside its copy
+//! never reaches the tree, the case record or what the forge publishes; it is the only check of
+//! what is proposed. A proposal carries its files' paths as well as their content;
 //! these cases propose a file whose path holds a GitHub token's shape and check that it is
 //! refused before the edit effect, as the same text in the file's content or the summary is
 //! (`under_a_declared_scan_none_a_credential_is_still_refused` in `harness_parity.rs`).
@@ -14,7 +14,6 @@
 mod own_home;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -25,7 +24,6 @@ use loom_sdk::session::{CredentialSource, Endpoint, Kind};
 use takt::harness::SessionHarness;
 use takt::run::credential_shape;
 use takt::scan::Scan;
-use takt::scan::gates::ChangeScan;
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -209,18 +207,6 @@ fn harness(kind: Kind, writes: Vec<(String, String)>) -> SessionHarness {
     })
 }
 
-/// A stand-in for `b10x-gates` beside `tree` that passes whatever it is given.
-fn passing_scan(tree: &Path) -> ChangeScan {
-    let dir = tree.with_file_name("scanner-pass");
-    fs::create_dir_all(&dir).expect("the scanner's directory");
-    let policy = dir.join("policy.json");
-    fs::write(&policy, "{}\n").expect("a policy");
-    let program = dir.join("b10x-gates");
-    fs::write(&program, "#!/bin/sh\nexit 0\n").expect("a scanner");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
-    ChangeScan { program, policy }
-}
-
 /// Every file of `HEAD`'s tree and the working tree whose path holds `needle`.
 fn paths_holding(tree: &Path, needle: &str) -> Vec<String> {
     let mut found: Vec<String> = git(tree, &["ls-tree", "-r", "--name-only", "HEAD"])
@@ -306,12 +292,8 @@ fn under_a_declared_scan_none_a_credential_in_a_proposed_path_is_refused() {
     });
 }
 
-/// The same proposal under `gates` with a scan that passes what it is given, as a gates policy
-/// with no rule for a GitHub token's shape does (`CREDENTIAL_SHAPES`: "the gates policy's scan,
-/// which holds no rule for them"): the in-process check is again what must refuse it.
+/// The same proposal with no scan declared: the in-process check is again what must refuse it.
 #[test]
-fn under_gates_with_a_passing_scan_a_credential_in_a_proposed_path_is_refused() {
-    a_credential_in_a_proposed_path_is_refused("gates", |run, tree| {
-        run.scan_change_with(Some(passing_scan(tree)));
-    });
+fn with_no_scan_declared_a_credential_in_a_proposed_path_is_refused() {
+    a_credential_in_a_proposed_path_is_refused("unset", |_, _| {});
 }

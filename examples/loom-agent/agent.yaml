@@ -6,6 +6,7 @@ agent:
 takt:
   hours: 1
   harness: harness
+  scan: none
   endpoint_file: endpoint.toml
   forge: none
   test_cmd: cargo test --quiet --locked

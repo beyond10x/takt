@@ -1,11 +1,10 @@
 //! Second adversarial pass of wave 40's fix round (U3): the replacement of a judge-surface grant
 //! that records no repository (`prepare_grant`, crates/takt/src/case.rs). The helpers below are
-//! copied from `w40_adv_turn_pin.rs`; the cases are at the end of the file.
+//! copied from `self_improvement_cli.rs`; the case is at the end of the file. The cases whose
+//! grant read a named repository's `main` went with the forge that read one: no forge takt has
+//! names a repository, and a grant recording one is read in the library's own tests.
 
 #![allow(dead_code)]
-
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -448,7 +447,6 @@ fn run_as(
         .env("XDG_CACHE_HOME", &world.cache)
         .env("CARGO_INSTALL_ROOT", decoy(world))
         .envs(env.iter().copied())
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -533,7 +531,6 @@ fn takt_in(world: &World, args: &[&str]) -> (i32, String, String) {
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
         .env("CARGO_INSTALL_ROOT", decoy(world))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -543,208 +540,19 @@ fn takt_in(world: &World, args: &[&str]) -> (i32, String, String) {
     )
 }
 
-/// `takt` run in `world` with `args` alone, the run's state and cache given, and `PATH` set to
-/// `path` when some, with a `b10x-gates` policy file the stand-in never reads
-/// ([`stand_in_policy::path`]); no policy otherwise.
-fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, String, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
-    command
+/// `takt` run in `world` with `args` alone, the run's state and cache given.
+fn takt_alone(world: &World, args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
         .env("CARGO_INSTALL_ROOT", decoy(world))
-        .env_remove("B10X_GATES_POLICY");
-    if let Some(path) = path {
-        command
-            .env("PATH", path)
-            .env("B10X_GATES_POLICY", stand_in_policy::path());
-    }
-    let output = command.output().expect("takt runs");
+        .output()
+        .expect("takt runs");
     (
         output.status.code().expect("an exit code"),
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
-}
-
-/// A stand-in for the bot route, `b10x-gates` on `PATH`: its dry-run fetch of `main` answers,
-/// per repository (`acme/one`, `acme/two`), the commit named by `tip-<repo>` beside it, and every
-/// other line (the object fetch, the identity's scan) succeeds, the commits being already local.
-/// The `PATH` that finds it first.
-fn bot_stand_in(world: &World) -> PathBuf {
-    let bin = world.repo.parent().expect("a parent").join("bot-bin");
-    executable(
-        &bin.join("b10x-gates"),
-        "#!/bin/sh\nu=$(printf '%s\\n' \"$@\" | grep '^https://' | head -n 1)\ncase \"$*\" in *--dry-run*) printf '* %s %s refs/remotes/origin/main\\n' 0000000000000000000000000000000000000000 \"$(cat \"$(dirname \"$0\")/tip-$(basename \"$u\" .git)\")\";; esac\nexit 0\n",
-    );
-    write(&bin.join("tip-one"), &format!("{}\n", world.baseline));
-    PathBuf::from(format!(
-        "{}:{}",
-        bin.display(),
-        std::env::var("PATH").expect("a PATH")
-    ))
-}
-
-/// Points the stand-in's `acme/two` at `tip`.
-fn tip_of_two(path: &Path, tip: &str) {
-    let path = path.to_str().expect("utf-8");
-    let bin = Path::new(path.split(':').next().expect("the stand-in's directory"));
-    write(&bin.join("tip-two"), &format!("{tip}\n"));
-}
-
-/// A turn whose candidate touches a judge surface, opened by `takt run` through the bot route on
-/// `origin` `https://github.com/acme/one.git`, at the gate of its judge-surface merge; and the
-/// `PATH` of the bot route's stand-in ([`bot_stand_in`]), `acme/one`'s `main` at the baseline.
-fn bot_turn_at_the_gate(name: &str) -> (World, PathBuf) {
-    let world = world_with(
-        name,
-        &Setup {
-            touches: Some(("tools/judge.sh", "#!/bin/sh\nexit 0\n")),
-            ..Setup::plain(true, false)
-        },
-    );
-    git(
-        &world.repo,
-        &["remote", "add", "origin", "https://github.com/acme/one.git"],
-    );
-    let path = bot_stand_in(&world);
-    let finding = format!("finding={FINDING}");
-    let candidate = format!("candidate={}", world.candidate);
-    let (code, out, err) = takt_on_path(
-        &world,
-        &[
-            "run",
-            "--intent",
-            "the probe no longer shows the defect",
-            "--repo",
-            world.repo.to_str().expect("utf-8"),
-            "--protocol",
-            PROTOCOL,
-            "--install-root",
-            world.install.to_str().expect("utf-8"),
-            "--case-id",
-            "turn-1",
-            "--harness",
-            "none",
-            "--forge",
-            "bot",
-            "--commit-identity",
-            "Probe <probe@example.com>",
-            "--test-cmd",
-            "true",
-            "--iterations",
-            "6",
-            "--scenarios",
-            world.scenarios.to_str().expect("utf-8"),
-            "--input",
-            &finding,
-            "--input",
-            &candidate,
-        ],
-        Some(&path),
-    );
-    assert_eq!(code, 4, "{out}\n{err}");
-    assert!(
-        out.contains("candidate.merge_judge_surface"),
-        "{out}\n{err}"
-    );
-    (world, path)
-}
-
-/// `takt run --case turn-1` through the bot route, on `PATH` `path`.
-fn bot_resume(world: &World, path: &Path) -> (i32, String, String) {
-    takt_on_path(
-        world,
-        &[
-            "run",
-            "--case",
-            "turn-1",
-            "--repo",
-            world.repo.to_str().expect("utf-8"),
-            "--harness",
-            "none",
-            "--forge",
-            "bot",
-            "--test-cmd",
-            "true",
-            "--scenarios",
-            world.scenarios.to_str().expect("utf-8"),
-            "--hours",
-            "0.001",
-        ],
-        Some(path),
-    )
-}
-
-/// The owner's `takt approve` of the turn's judge-surface merge, on `PATH` `path`.
-fn bot_approve(world: &World, path: &Path) -> (i32, String, String) {
-    takt_on_path(
-        world,
-        &[
-            "approve",
-            "--repo",
-            world.repo.to_str().expect("utf-8"),
-            "turn-1",
-            "repository.merge.judge_surface",
-            "--by",
-            "human:owner",
-        ],
-        Some(path),
-    )
-}
-
-/// The names of the files in the turn's evidence directory, sorted.
-fn evidence_files(world: &World) -> Vec<String> {
-    let mut names: Vec<String> = fs::read_dir(world.repo.join(".takt/cases/turn-1/evidence"))
-        .expect("the evidence directory reads")
-        .map(|entry| {
-            entry
-                .expect("an entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    names.sort();
-    names
-}
-
-/// Turns `turn-1`'s case into one written before this change: its `forge` file names `bot`
-/// alone, and its judge-surface grant records the tip and no `mainline_repository`.
-fn as_before_the_change(world: &World) {
-    let case = world.repo.join(".takt/cases/turn-1");
-    fs::write(case.join("forge"), "bot\n").expect("written");
-    let authority = fs::read_to_string(case.join("authority.yaml")).expect("the authority");
-    assert!(
-        authority.contains("mainline_repository: acme/one"),
-        "{authority}"
-    );
-    let legacy: String = authority
-        .lines()
-        .filter(|line| !line.trim_start().starts_with("mainline_repository:"))
-        .map(|line| format!("{line}\n"))
-        .collect();
-    fs::write(case.join("authority.yaml"), legacy).expect("written");
-}
-
-/// A merge of the candidate onto the baseline, made now (after the grant).
-fn merge_after_the_grant(world: &World) -> String {
-    let tree = git(
-        &world.repo,
-        &["rev-parse", &format!("{}^{{tree}}", world.candidate)],
-    );
-    git(
-        &world.repo,
-        &[
-            "commit-tree",
-            &tree,
-            "-p",
-            &world.baseline,
-            "-p",
-            &world.candidate,
-            "-m",
-            "the candidate, merged after the grant",
-        ],
     )
 }
 
@@ -753,26 +561,9 @@ fn authority_of(world: &World) -> PathBuf {
     world.repo.join(".takt/cases/turn-1/authority.yaml")
 }
 
-/// `text` without its lines whose key is one of `keys`.
-fn without(text: &str, keys: &[&str]) -> String {
-    text.lines()
-        .filter(|line| {
-            !keys
-                .iter()
-                .any(|key| line.trim_start().starts_with(&format!("{key}:")))
-        })
-        .map(|line| format!("{line}\n"))
-        .collect()
-}
-
-/// `takt approve` of `capability` on the turn by `by`, on `PATH` `path` when some.
-fn approve_as(
-    world: &World,
-    capability: &str,
-    by: &str,
-    path: Option<&Path>,
-) -> (i32, String, String) {
-    takt_on_path(
+/// `takt approve` of `capability` on the turn by `by`.
+fn approve_as(world: &World, capability: &str, by: &str) -> (i32, String, String) {
+    takt_alone(
         world,
         &[
             "approve",
@@ -783,79 +574,20 @@ fn approve_as(
             "--by",
             by,
         ],
-        path,
     )
 }
 
 /// Writes `written` as the turn's `authority.yaml`; the next approve of `capability` must be
 /// refused with "already decides" and leave the file as written.
-fn refused_and_untouched(world: &World, path: Option<&Path>, capability: &str, written: &str) {
+fn refused_and_untouched(world: &World, capability: &str, written: &str) {
     fs::write(authority_of(world), written).expect("written");
-    let (code, out, err) = approve_as(world, capability, "human:owner", path);
+    let (code, out, err) = approve_as(world, capability, "human:owner");
     assert_eq!(code, 1, "{out}\n{err}");
     assert!(err.contains("already decides"), "{out}\n{err}");
     assert_eq!(
         fs::read_to_string(authority_of(world)).expect("the authority"),
         written
     );
-}
-
-/// The directory of the bot route's stand-in, the first entry of `path`.
-fn stand_in_dir(path: &Path) -> PathBuf {
-    PathBuf::from(
-        path.to_str()
-            .expect("utf-8")
-            .split(':')
-            .next()
-            .expect("a dir"),
-    )
-}
-
-/// A denial that records a tip and no repository is never replaced: a denial applies at every
-/// revision, and only a grant is replaced.
-#[test]
-fn w40_adv2_a_denial_recording_no_repository_is_not_replaced() {
-    let (world, path) = bot_turn_at_the_gate("adv2-denied");
-    let (code, out, err) = bot_approve(&world, &path);
-    assert_eq!(code, 0, "{out}\n{err}");
-    let granted = fs::read_to_string(authority_of(&world)).expect("the authority");
-    let denied = without(&granted, &["mainline_repository"])
-        .replace("decision: granted", "decision: denied");
-    assert!(denied.contains("decision: denied"), "{denied}");
-    refused_and_untouched(
-        &world,
-        Some(&path),
-        "repository.merge.judge_surface",
-        &denied,
-    );
-}
-
-/// A grant that records no repository beside a denial of the same capability is not replaced:
-/// the denial is the decision read first.
-#[test]
-fn w40_adv2_a_grant_recording_no_repository_beside_a_denial_is_not_replaced() {
-    let (world, path) = bot_turn_at_the_gate("adv2-beside-denial");
-    let (code, out, err) = bot_approve(&world, &path);
-    assert_eq!(code, 0, "{out}\n{err}");
-    let granted = fs::read_to_string(authority_of(&world)).expect("the authority");
-    let legacy = without(&granted, &["mainline_repository"]);
-    let both = format!(
-        "{legacy}{}",
-        legacy.replace("decision: granted", "decision: denied")
-    );
-    refused_and_untouched(&world, Some(&path), "repository.merge.judge_surface", &both);
-}
-
-/// A grant at the revision that records no tip at all is not replaced (only a tip without a
-/// repository is).
-#[test]
-fn w40_adv2_a_grant_recording_no_tip_is_not_replaced() {
-    let (world, path) = bot_turn_at_the_gate("adv2-no-tip");
-    let (code, out, err) = bot_approve(&world, &path);
-    assert_eq!(code, 0, "{out}\n{err}");
-    let granted = fs::read_to_string(authority_of(&world)).expect("the authority");
-    let bare = without(&granted, &["mainline_tip", "mainline_repository"]);
-    refused_and_untouched(&world, Some(&path), "repository.merge.judge_surface", &bare);
 }
 
 /// A turn's grant of another capability (`repository.merge`, a candidate that touches no judge
@@ -866,117 +598,10 @@ fn w40_adv2_a_non_judge_surface_grant_is_not_replaced() {
     let (code, out, err) = run(&world, &opening(&world));
     assert_eq!(code, 4, "{out}\n{err}");
     assert!(out.contains("candidate.merge"), "{out}\n{err}");
-    let (code, out, err) = approve_as(&world, "repository.merge", "human:owner", None);
+    let (code, out, err) = approve_as(&world, "repository.merge", "human:owner");
     assert_eq!(code, 0, "{out}\n{err}");
     let granted = fs::read_to_string(authority_of(&world)).expect("the authority");
     assert!(!granted.contains("mainline_tip"), "{granted}");
     let tipped = format!("{granted}  mainline_tip: {}\n", world.baseline);
-    refused_and_untouched(&world, None, "repository.merge", &tipped);
-}
-
-/// The replacement takes the grant's instant before it reads the tip: the bot route's stand-in
-/// notes when it is asked for `main` and answers two seconds later; the new grant's
-/// `granted_at` is not after the moment the tip was asked for.
-#[test]
-fn w40_adv2_a_replacing_grant_takes_its_time_before_the_tip() {
-    /// Seconds since the epoch of a time as takt writes it, `YYYY-MM-DDTHH:MM:SSZ`, read here
-    /// rather than by `date -d`, which macOS's `date` does not take.
-    fn epoch_of(at: &str) -> u64 {
-        let field = |range: std::ops::Range<usize>| -> i64 {
-            at.get(range)
-                .and_then(|text| text.parse().ok())
-                .unwrap_or_else(|| panic!("a time as takt writes it: {at}"))
-        };
-        assert!(at.len() == 20 && at.ends_with('Z'), "a UTC time: {at}");
-        let (year, month, day) = (field(0..4), field(5..7), field(8..10));
-        let y = if month <= 2 { year - 1 } else { year };
-        let era = y.div_euclid(400);
-        let of_era = y - era * 400;
-        let of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day - 1;
-        let of_cycle = of_era * 365 + of_era / 4 - of_era / 100 + of_year;
-        let days = era * 146_097 + of_cycle - 719_468;
-        u64::try_from(days * 86_400 + field(11..13) * 3_600 + field(14..16) * 60 + field(17..19))
-            .expect("after the epoch")
-    }
-    assert_eq!(epoch_of("1970-01-01T00:00:00Z"), 0);
-    assert_eq!(epoch_of("2000-03-01T01:02:03Z"), 951_872_523);
-
-    let (world, path) = bot_turn_at_the_gate("adv2-time");
-    let (code, out, err) = bot_approve(&world, &path);
-    assert_eq!(code, 0, "{out}\n{err}");
-    as_before_the_change(&world);
-    let bin = stand_in_dir(&path);
-    executable(
-        &bin.join("b10x-gates"),
-        "#!/bin/sh\nu=$(printf '%s\\n' \"$@\" | grep '^https://' | head -n 1)\ncase \"$*\" in *--dry-run*) date -u +%s >> \"$(dirname \"$0\")/read-at\"; sleep 2; printf '* %s %s refs/remotes/origin/main\\n' 0000000000000000000000000000000000000000 \"$(cat \"$(dirname \"$0\")/tip-$(basename \"$u\" .git)\")\";; esac\nexit 0\n",
-    );
-    let (code, out, err) = bot_approve(&world, &path);
-    assert_eq!(code, 0, "{out}\n{err}");
-    let authority = fs::read_to_string(authority_of(&world)).expect("the authority");
-    assert!(
-        authority.contains("mainline_repository: acme/one"),
-        "{authority}"
-    );
-    let granted_at = authority
-        .lines()
-        .find_map(|line| line.trim_start().strip_prefix("granted_at:"))
-        .expect("a granted_at")
-        .trim()
-        .trim_matches(['\'', '"'])
-        .to_owned();
-    let granted = epoch_of(&granted_at);
-    let read_at: u64 = fs::read_to_string(bin.join("read-at"))
-        .expect("the tip was read")
-        .lines()
-        .next()
-        .expect("a line")
-        .parse()
-        .expect("an epoch");
-    assert!(
-        granted <= read_at,
-        "granted_at {granted_at} ({granted}) is after the tip was asked for ({read_at})"
-    );
-}
-
-/// The adversary's own world (a legacy grant; `acme/one`'s `main` then holds the candidate by a
-/// merge made after that grant): the refusal names "grant it again" as its remedy, and the new
-/// grant reads `main` already holding the candidate, so the resume refuses it again as a merge
-/// made before the grant. A remedy the refusal names must not end at a second refusal no grant
-/// can lift; no merge is recorded either way.
-#[test]
-fn w40_adv2_the_remedy_grant_it_again_does_not_end_at_a_merge_made_before_the_grant() {
-    let (world, path) = bot_turn_at_the_gate("adv2-dead-end");
-    let (code, out, err) = bot_approve(&world, &path);
-    assert_eq!(code, 0, "{out}\n{err}");
-    as_before_the_change(&world);
-    let bin = stand_in_dir(&path);
-    write(
-        &bin.join("tip-one"),
-        &format!("{}\n", merge_after_the_grant(&world)),
-    );
-    let (_, first, err) = bot_resume(&world, &path);
-    assert!(first.contains("records no repository"), "{first}\n{err}");
-    if first.contains("grant it again") {
-        let (code, out, err) = bot_approve(&world, &path);
-        assert_eq!(code, 0, "{out}\n{err}");
-        let (_, second, err) = bot_resume(&world, &path);
-        assert!(
-            records(&world.repo)
-                .iter()
-                .all(|record| field(record, "kind") != "merge_observation"),
-            "{second}\n{err}"
-        );
-        let refusals = |text: &str| {
-            text.lines()
-                .filter(|line| line.contains("granted, but"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        assert!(
-            !second.contains("a grant authorises no merge made before it"),
-            "the first refusal said `grant it again`; the grant given then is refused as one given after the merge:\nfirst: {}\nsecond: {}",
-            refusals(&first),
-            refusals(&second)
-        );
-    }
+    refused_and_untouched(&world, "repository.merge", &tipped);
 }

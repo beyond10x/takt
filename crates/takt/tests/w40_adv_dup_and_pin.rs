@@ -4,7 +4,6 @@
 //! `mainline_repository`, and the `forge` file).
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use takt::run_config::RunConfig;
 
@@ -129,15 +128,6 @@ fn w40_adv_a_plain_key_ending_in_a_colon_is_found_at_its_line() {
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
 
-fn git(tree: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(tree)
-        .output()
-        .expect("git runs");
-    assert!(output.status.success(), "git {args:?}");
-}
-
 /// `authority.yaml` keeps a tip YAML would read as a number, written by takt and read back,
 /// and as a person writes it unquoted; a file without `mainline_repository` reads as no
 /// repository; a repository with no tip is no tip.
@@ -205,47 +195,4 @@ fn w40_adv_authority_keeps_number_like_tips_and_old_files_read() {
         .expect("reads")
         .expect("held");
     assert_eq!(read.decisions[0].mainline_tip, None);
-}
-
-/// The repository a turn recorded is compared with the one `origin` names as written: another
-/// case of the same GitHub repository, a path with more segments that ends in it, are compared
-/// as strings; a case variant is refused (fail closed), a spelling the bot route reads to the
-/// same `<owner>/<repo>` is not.
-#[test]
-fn w40_adv_the_recorded_repository_against_origin_spellings() {
-    let tree = dir("origin-spellings");
-    git(&tree, &["init", "-q", "-b", "main"]);
-    git(
-        &tree,
-        &["remote", "add", "origin", "https://github.com/acme/one.git"],
-    );
-    let recorded = takt::case::TurnForge {
-        name: "bot".to_owned(),
-        repository: Some("acme/one".to_owned()),
-    };
-    let mut wrong = Vec::new();
-    for (url, admitted) in [
-        ("https://github.com/acme/one.git", true),
-        ("https://github.com/acme/one/", true),
-        ("git@github.com:acme/one.git", true),
-        ("ssh://git@github.com:22/acme/one.git", true),
-        ("https://user:secret@github.com/acme/one.git", true),
-        ("https://github.com/ACME/one.git", false),
-        ("https://github.com/acme/two.git", false),
-        ("https://gitlab.com/acme/one.git", false),
-    ] {
-        git(&tree, &["remote", "set-url", "origin", url]);
-        let got = takt::improvement::Mainline::recorded(&tree, &recorded);
-        if got.is_ok() != admitted {
-            wrong.push(format!("{url}: admitted {}", got.is_ok()));
-        }
-        if let Err(error) = got
-            && format!("{error:#}").contains("secret")
-        {
-            wrong.push(format!(
-                "{url}: the refusal echoes the credential: {error:#}"
-            ));
-        }
-    }
-    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

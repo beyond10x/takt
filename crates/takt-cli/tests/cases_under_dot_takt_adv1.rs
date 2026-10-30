@@ -70,7 +70,6 @@ fn repository(name: &str, files: &[(&str, &str)]) -> (Scratch, PathBuf) {
 fn takt(args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (

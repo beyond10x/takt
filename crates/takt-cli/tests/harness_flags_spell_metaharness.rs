@@ -156,7 +156,6 @@ impl World {
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("B10X_GATES_POLICY")
             .env_remove("ANTHROPIC_API_KEY")
             .output()
             .expect("takt runs")
@@ -291,7 +290,6 @@ fn scenario_run_refuses_a_flag_not_carried_yet_before_anything_opens() {
         .arg(world.repo())
         .args(["1", "--max-budget-usd", "2"])
         .env("XDG_STATE_HOME", world.0.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let said = world.assert_refused(&output);

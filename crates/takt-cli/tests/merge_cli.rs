@@ -2,9 +2,6 @@
 //! case completed, and a run with no harness on a case that holds everything but the grant.
 //! Adversary pass 1 over story:merge-under-authority.
 
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
-
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -155,101 +152,35 @@ fn the_run_after_a_story_case_completed_does_not_resume_it() {
     );
 }
 
-/// Writes `name` into `bin`, executable, with `text`.
-fn executable(bin: &Path, name: &str, text: &str) {
-    let path = bin.join(name);
-    fs::write(&path, text).expect("the stub is written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
+/// A scratch directory beside `repo`, `<repo>-forge`, holding a bare hub `hub.git` with
+/// `repo`'s `main`, named by `repo`'s `origin`, and a run file `run.yaml` whose forge is `local`
+/// with `true` as its checks: the directory, the hub and the run file. Nothing reaches a network.
+fn local_hub(repo: &Path) -> (Scratch, PathBuf, PathBuf) {
+    let outer = PathBuf::from(format!("{}-forge", repo.display()));
+    if outer.exists() {
+        fs::remove_dir_all(&outer).expect("a stale hub is removed");
     }
-}
-
-/// A double of the bot route's program in `<dir>/stub-bin`, its state in `<dir>/forge`:
-/// `b10x-gates bot -- push <remote> <branch>` (or `<revision>:refs/heads/<branch>`) keeps the branch and the commit pushed,
-/// `b10x-gates bot -- fetch <url> <refspec> --dry-run …` reports the local branch as the repository's,
-/// `scan-text` passes, `api --method POST` opens pull request #7, `api --method PUT` merges it
-/// and counts the merge; `api --method GET` reports the pull request's state with the pushed
-/// head, one check run, passing, and no status. Nothing reaches a network.
-fn forge_double(dir: &Path) -> (PathBuf, PathBuf) {
-    let bin = dir.join("stub-bin");
-    let state = dir.join("forge");
-    fs::create_dir_all(&bin).expect("a stub directory");
-    fs::create_dir_all(&state).expect("a state directory");
-    let state_text = state.display().to_string();
-    executable(
-        &bin,
-        "b10x-gates",
-        &format!(
-            r#"#!/bin/sh
-state='{state_text}'
-case "$1" in
-  bot)
-    if [ "$3" = fetch ]; then
-      printf '  %s %s %s\n' 0000000000000000000000000000000000000000 "$(git rev-parse "${{5%%:*}}")" "${{5#*:}}"
-      exit 0
-    fi
-    spec="$5"; branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
-    if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
-    printf '%s' "$branch" > "$state/branch"
-    git rev-parse "$revision" > "$state/pushed" || exit 1
-    exit 0 ;;
-  scan-text) exit 0 ;;
-  api)
-    method=''; path=''; output=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --method) method="$2"; shift ;;
-        --path) path="$2"; shift ;;
-        --output) output="$2"; shift ;;
-      esac
-      shift
-    done
-    case "$method" in
-      POST) printf 'OPEN' > "$state/state"; printf '{{"number": 7}}' > "$output"; exit 0 ;;
-      PUT) printf 'MERGED' > "$state/state"; echo merged >> "$state/merges"; printf '{{"merged": true}}' > "$output"; exit 0 ;;
-      GET)
-        case "$path" in
-          */pulls\?*) printf '[]' > "$output" ;;
-          */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
-          */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
-          *) s=$(cat "$state/state"); st=open; merged=false
-             case "$s" in MERGED) st=closed; merged=true ;; CLOSED) st=closed ;; esac
-             printf '{{"state":"%s","merged":%s,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$st" "$merged" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")" > "$output" ;;
-        esac
-        exit 0 ;;
-    esac ;;
-esac
-echo "b10x-gates double: $*" >&2
-exit 2
-"#
-        ),
+    fs::create_dir_all(&outer).expect("a directory");
+    let hub = outer.join("hub.git");
+    git(
+        repo,
+        &[
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            hub.to_str().expect("utf-8"),
+        ],
     );
-    (bin, state)
-}
-
-/// Runs the built `takt` binary with `args`, `bin` first on the program path and a
-/// `b10x-gates` policy file the double never reads: the exit code, stdout and stderr.
-fn takt_through(bin: &Path, args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
-        .args(args)
-        .env("B10X_GATES_POLICY", stand_in_policy::path())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .output()
-        .expect("takt runs");
-    (
-        output.status.code().expect("an exit code"),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    )
+    git(
+        repo,
+        &["remote", "add", "origin", hub.to_str().expect("utf-8")],
+    );
+    git(repo, &["push", "-q", "origin", "main"]);
+    let config = outer.join("run.yaml");
+    fs::write(&config, "forge: local\nlocal_checks: [\"true\"]\n").expect("the run file");
+    (Scratch(outer), hub, config)
 }
 
 /// `git <args>` in `tree`; its standard output, trimmed.
@@ -264,26 +195,18 @@ fn git_out(tree: &Path, args: &[&str]) -> String {
 }
 
 /// The whole delivery through the binary, on the default protocol for a store story and the
-/// bot route as the default forge for a github.com origin, the route's programs a double: a
-/// plain run takes the ready story; the operator commits the work on the case's branch; the
-/// next plain run resumes the case, runs the tests and the gate, opens the pull request, reads
-/// its checks and stops at the gate, exit 4; `takt approve` grants the merge, records it on the
-/// story and commits that record on the case's branch; the next plain run resumes the case on a
-/// clean tree at the revision the grant was given at and merges the pull request through the
-/// forge, once, and the case completes, exit 0.
+/// local forge, whose hub is a bare repository on this machine: a plain run takes the ready
+/// story; the operator commits the work on the case's branch; the next plain run resumes the
+/// case, runs the tests and the gate, opens the pull request, reads its checks and stops at the
+/// gate, exit 4; `takt approve` grants the merge, records it on the story and commits that
+/// record on the case's branch; the next plain run resumes the case on a clean tree at the
+/// revision the grant was given at and merges the pull request through the forge, once, and the
+/// case completes, exit 0.
 #[test]
 fn approve_then_the_resumed_run_merges() {
     let repo = repository("one-ready", "approve-merge");
-    git(
-        &repo,
-        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
-    );
-    let outer = PathBuf::from(format!("{}-forge", repo.display()));
-    if outer.exists() {
-        fs::remove_dir_all(&outer).expect("a stale double is removed");
-    }
-    let _double = Scratch(outer.clone());
-    let (bin, state) = forge_double(&outer);
+    let (_forge, hub, config) = local_hub(&repo);
+    let start = git_out(&hub, &["rev-parse", "refs/heads/main"]);
     let path = repo.to_str().expect("utf-8");
     let run = [
         "run",
@@ -295,17 +218,19 @@ fn approve_then_the_resumed_run_merges() {
         "true",
         "--protocol",
         "story.delivery/1",
+        "--config",
+        config.to_str().expect("utf-8"),
     ];
     let mut first = run.to_vec();
     first.extend(["--iterations", "0"]);
-    let (code, out, err) = takt_through(&bin, &first);
+    let (code, out, err) = takt(&first);
     assert_eq!(code, 3, "stdout {out} stderr {err}");
     assert!(
         out.contains("frontier: took story:ready-one"),
         "stdout {out} stderr {err}"
     );
     assert!(out.contains(" on story.delivery/1 in "), "{out}");
-    assert!(out.contains("forge: bot (owner/repo)"), "{out}");
+    assert!(out.contains("forge: local ("), "{out}");
     let id = git_out(&repo, &["branch", "--show-current"])
         .strip_prefix("takt/")
         .expect("the tree is on the case's branch")
@@ -316,7 +241,7 @@ fn approve_then_the_resumed_run_merges() {
     git(&repo, &["commit", "-q", "-m", "the work"]);
     let worked = git_out(&repo, &["rev-parse", "HEAD"]);
 
-    let (code, out, err) = takt_through(&bin, &run);
+    let (code, out, err) = takt(&run);
     assert_eq!(code, 4, "stdout {out} stderr {err}");
     assert!(
         out.contains(&format!(
@@ -333,23 +258,21 @@ fn approve_then_the_resumed_run_merges() {
     ] {
         assert!(out.contains(line), "{line}: stdout {out} stderr {err}");
     }
-    assert!(
-        !state.join("merges").exists(),
+    assert_eq!(
+        git_out(&hub, &["rev-parse", "refs/heads/main"]),
+        start,
         "nothing merged before the grant"
     );
 
-    let (code, out, err) = takt_through(
-        &bin,
-        &[
-            "approve",
-            "--repo",
-            path,
-            &id,
-            "repository.merge",
-            "--by",
-            "human:operator",
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "approve",
+        "--repo",
+        path,
+        &id,
+        "repository.merge",
+        "--by",
+        "human:operator",
+    ]);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert_eq!(
         git_out(&repo, &["log", "-1", "--format=%s"]),
@@ -364,7 +287,7 @@ fn approve_then_the_resumed_run_merges() {
         ""
     );
 
-    let (code, out, err) = takt_through(&bin, &run);
+    let (code, out, err) = takt(&run);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert!(
         out.contains(&format!(
@@ -375,7 +298,7 @@ fn approve_then_the_resumed_run_merges() {
     assert!(!out.contains("refused"), "stdout {out} stderr {err}");
     assert!(
         out.contains(&format!(
-            "merged pull request #7 at {} through bot: merged",
+            "merged pull request #1 at {} through local: merged",
             &worked[..8]
         )),
         "stdout {out} stderr {err}"
@@ -389,8 +312,11 @@ fn approve_then_the_resumed_run_merges() {
         "stdout {out} stderr {err}"
     );
     assert_eq!(
-        fs::read_to_string(state.join("merges")).expect("the double merged"),
-        "merged\n",
+        git_out(
+            &hub,
+            &["rev-list", "--merges", "--count", &format!("{start}..main")]
+        ),
+        "1",
         "merged once"
     );
     assert_eq!(

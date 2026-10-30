@@ -23,8 +23,8 @@ cd takt
 docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.23.0 .
 ```
 
-The image carries takt, `aep`, `b10x-harness` 0.22.0, `ess`, `b10x-gates` (the `gates` scan
-adapter's program and the `bot` [forge](/docs/concepts/glossary#forge)'s) and a Rust toolchain with `clippy` and `rustfmt`. The
+The image carries takt, `aep`, `b10x-harness` 0.22.0, `ess` and a Rust toolchain with `clippy`
+and `rustfmt`. The
 toolchain is owned by root and cannot be written by the run, so
 neither a step nor a test can change the tools the gates trust. takt runs under `tini`, not as
 PID 1, so `docker stop` or a pod's stop ends it on SIGTERM rather than SIGKILL.
@@ -42,6 +42,7 @@ agent:
 takt:
   hours: 1
   harness: harness
+  scan: none
   endpoint_file: endpoint.toml
   forge: none
   test_cmd: cargo test --quiet --locked
@@ -59,11 +60,9 @@ env = "LLM_API_KEY"
 ```
 
 The image holds b10x-harness and no other [harness](/docs/concepts/glossary#harness), and no `glab`: `harness: harness`
-(or `none`) and `forge: none` are the settings this page's runs used. The `bot` forge reads
-through `b10x-gates`, which the image ships, and no longer needs `gh` (since 0.23.0); it
-needs a policy file as well ([What it cannot do](../reference/container-image.md#what-it-cannot-do)), and
-no run of the image through it is recorded. A test in the repository reads
-both files through takt's own readers, so they stay valid.
+(or `none`) and `forge: none` are the settings this page's runs used
+([What it cannot do](../reference/container-image.md#what-it-cannot-do)). A test in the
+repository reads both files through takt's own readers, so they stay valid.
 
 ## 3. Put the repository on a volume
 
@@ -92,12 +91,9 @@ docker run --rm \
 ```
 
 Arguments after the final `takt` reach `takt run`, so `--story <ID>` or `--harness none` go there.
-An edit by b10x-harness also needs a [scan adapter](../reference/configuration.md#the-scan):
-`scan: none` declared in `/config/agent.yaml`, or, under the default `gates`, `B10X_GATES_POLICY`
-naming a `b10x-gates` policy file in the container. `b10x-gates` reads it only when uid 10001 owns
-the file and its directory, the file
-has no group or other bits and the directory is not group- or other-writable; a bind mount keeps
-the host's owner. This page's runs used `--harness none` and no policy, on a takt 0.14.0 image.
+A b10x-harness run also needs a [scan adapter](../reference/configuration.md#the-scan) declared:
+`scan: none` in `/config/agent.yaml`, as the example has it. This page's runs used
+`--harness none`, on a takt 0.14.0 image.
 The two pieces that are not the image's default are:
 
 1. **seccomp and AppArmor unconfined.**

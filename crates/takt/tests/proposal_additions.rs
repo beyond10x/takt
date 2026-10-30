@@ -2,8 +2,7 @@
 //! hold text of the shape of a credential (a design that quotes a private key's first line); an
 //! edit elsewhere in that file adds none, and is admitted. What it adds is read with the lines
 //! around it, so a shape assembled from a line the file held and lines the edit adds is still
-//! refused; a new file, or one whose old content is no text, is read whole. The run's scan reads
-//! the same text.
+//! refused; a new file, or one whose old content is no text, is read whole.
 //!
 //! The helpers are copies of `proposal_path_sec1.rs`'s: metaharness's scripted Codex session, no
 //! vendor process, no credential, no network. Every key and token here is fake, and built at run
@@ -13,7 +12,6 @@
 mod own_home;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -24,7 +22,6 @@ use loom_sdk::session::{CredentialSource, Kind};
 use takt::harness::SessionHarness;
 use takt::run::credential_shape;
 use takt::scan::Scan;
-use takt::scan::gates::ChangeScan;
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -33,8 +30,6 @@ const FIXED: &str = "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
 const CODEX_PIN: &str = "0.153.4";
 const ALNUM: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const NOTES: &str = "notes/keys.md";
-/// What the stand-in scanner of [`marker_scan`] refuses.
-const MARKER: &str = "SCANNER-REFUSES-THIS";
 
 fn git(tree: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -227,31 +222,12 @@ fn harness(writes: Vec<(String, String)>) -> SessionHarness {
     })
 }
 
-/// A stand-in for `b10x-gates` beside `tree` that refuses a text holding [`MARKER`] and passes
-/// any other.
-fn marker_scan(tree: &Path) -> ChangeScan {
-    let dir = tree.with_file_name("scanner-marker");
-    fs::create_dir_all(&dir).expect("the scanner's directory");
-    let policy = dir.join("policy.json");
-    fs::write(&policy, "{}\n").expect("a policy");
-    let program = dir.join("b10x-gates");
-    fs::write(
-        &program,
-        format!("#!/bin/sh\nfor file; do :; done\n! grep -q {MARKER} \"$file\"\n"),
-    )
-    .expect("a scanner");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
-    ChangeScan { program, policy }
-}
-
 /// How the run of a session proposing the fix and `writes` ended on a tree whose [`NOTES`] are
-/// `notes`, under a declared `scan: none`, or under `gates` with [`marker_scan`] when `scanned`;
-/// with the notes as the tree holds them after.
+/// `notes`, under a declared `scan: none`; with the notes as the tree holds them after.
 fn proposing(
     name: &str,
     notes: &[u8],
     writes: Vec<(String, String)>,
-    scanned: bool,
 ) -> (std::io::Result<Stop>, String, Vec<u8>) {
     let scratch = repository(name, notes);
     let tree = scratch.tree();
@@ -260,13 +236,9 @@ fn proposing(
     let session = harness(writes);
     let validators = validators();
     let mut run = Run::open(&tree, options(name), &session, &validators).expect("opens");
-    if scanned {
-        run.scan_change_with(Some(marker_scan(&tree)));
-    } else {
-        run.scan_with(Scan::None {
-            declared_in: tree.with_file_name("run.toml"),
-        });
-    }
+    run.scan_with(Scan::None {
+        declared_in: tree.with_file_name("run.toml"),
+    });
     run.continue_past_red_base();
     let mut out = Vec::new();
     let stop = run.run(&mut out);
@@ -308,7 +280,6 @@ fn an_edit_far_from_a_shape_the_file_held_is_admitted() {
         "far",
         notes().as_bytes(),
         vec![(NOTES.to_owned(), edited.clone())],
-        false,
     );
     assert!(
         !matches!(stop, Ok(Stop::StepRefused(_))),
@@ -325,7 +296,6 @@ fn a_private_key_added_to_a_file_that_quotes_one_is_refused() {
         "added-key",
         notes().as_bytes(),
         vec![(NOTES.to_owned(), edited)],
-        false,
     );
     let why = refusal(&stop, &said);
     assert!(
@@ -348,12 +318,7 @@ fn a_key_s_body_added_after_a_first_line_the_file_held_is_refused() {
         body_and_end(),
         far()
     );
-    let (stop, said, after) = proposing(
-        "body",
-        held.as_bytes(),
-        vec![(NOTES.to_owned(), edited)],
-        false,
-    );
+    let (stop, said, after) = proposing("body", held.as_bytes(), vec![(NOTES.to_owned(), edited)]);
     let why = refusal(&stop, &said);
     assert!(why.contains("(private-key)"), "{why}");
     assert_eq!(String::from_utf8_lossy(&after), held);
@@ -378,7 +343,6 @@ fn a_first_line_assembled_across_an_unchanged_empty_line_is_refused() {
         "assembled",
         held.as_bytes(),
         vec![(NOTES.to_owned(), edited)],
-        false,
     );
     let why = refusal(&stop, &said);
     assert!(why.contains("(private-key)"), "{why}");
@@ -403,7 +367,6 @@ fn a_first_line_assembled_across_an_unchanged_empty_line_is_refused() {
         "assembled-after",
         held.as_bytes(),
         vec![(NOTES.to_owned(), edited)],
-        false,
     );
     let why = refusal(&stop, &said);
     assert!(why.contains("(private-key)"), "{why}");
@@ -419,7 +382,6 @@ fn a_token_added_far_from_a_shape_the_file_held_is_refused_for_its_own() {
         "token",
         notes().as_bytes(),
         vec![(NOTES.to_owned(), edited)],
-        false,
     );
     let why = refusal(&stop, &said);
     assert!(
@@ -440,7 +402,6 @@ fn a_new_file_is_read_whole() {
         "new",
         notes().as_bytes(),
         vec![("notes/new.md".to_owned(), new)],
-        false,
     );
     let why = refusal(&stop, &said);
     assert!(
@@ -461,46 +422,8 @@ fn a_file_whose_old_content_is_no_text_is_read_whole() {
         "binary no more\n{}",
         notes().replace("the status: draft", "the status: final")
     );
-    let (stop, said, after) = proposing("binary", &held, vec![(NOTES.to_owned(), edited)], false);
+    let (stop, said, after) = proposing("binary", &held, vec![(NOTES.to_owned(), edited)]);
     let why = refusal(&stop, &said);
     assert!(why.contains("(private-key)"), "{why}");
     assert_eq!(after, held);
-}
-
-/// The run's scan reads the same text: a file holding what the scan refuses, edited far from
-/// it, passes; the same text added is refused by the scan.
-#[test]
-fn the_scan_reads_what_the_edit_adds() {
-    let held = format!(
-        "# Notes\nthe marker: {MARKER}\n{}the status: draft\n",
-        far()
-    );
-    let edited = held.replace("the status: draft", "the status: final");
-    let (stop, said, after) = proposing(
-        "scan-far",
-        held.as_bytes(),
-        vec![(NOTES.to_owned(), edited.clone())],
-        true,
-    );
-    assert!(
-        !matches!(stop, Ok(Stop::StepRefused(_))),
-        "an edit that adds nothing the scan refuses was refused: {stop:?}\n{said}"
-    );
-    assert_eq!(String::from_utf8_lossy(&after), edited, "{said}");
-
-    let added = format!("{held}the marker again: {MARKER}\n");
-    let (stop, said, after) = proposing(
-        "scan-added",
-        held.as_bytes(),
-        vec![(NOTES.to_owned(), added)],
-        true,
-    );
-    let why = refusal(&stop, &said);
-    assert!(
-        why.contains(&format!(
-            "proposes {NOTES}, which did not pass the secret scan"
-        )),
-        "{why}"
-    );
-    assert_eq!(String::from_utf8_lossy(&after), held);
 }

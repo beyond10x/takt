@@ -1,10 +1,10 @@
 //! story:scan-and-forge-are-adapters at the binary's edge: the scan a proposal passes is a named
-//! adapter, `gates` unless the run configuration declares `scan: none`. A harness whose session
-//! may read outside its copy (`codex`, `harness`) under `gates` with no policy is refused before
-//! its case opens; a declared `none` opens it and says so; `none` with a policy set, and a value
-//! that names no adapter, are refused. These runs reach no network and start no harness: HOME is
-//! a scratch directory, every run stops before its first step, and a `codex` and a
-//! `b10x-harness` double on the program path record whether they were started.
+//! adapter, `unset` unless the run configuration declares `scan: none`. A harness whose session
+//! may read outside its copy (`codex`, `harness`) under `unset` is refused before its case
+//! opens; a declared `none` opens it and says so; a value that names no adapter, `gates` among
+//! them, is refused. These runs reach no network and start no harness: HOME is a scratch
+//! directory, every run stops before its first step, and a `codex` and a `b10x-harness` double
+//! on the program path record whether they were started.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -13,9 +13,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-
-/// The variable the `gates` scan adapter reads its policy from.
-const POLICY_VAR: &str = takt::scan::gates::POLICY_VAR;
 
 fn git(tree: &Path, args: &[&str]) {
     let status = Command::new("git")
@@ -98,11 +95,9 @@ impl World {
     }
 
     /// `takt run` on the repository with an intent, no forge and `args`, HOME the scratch one,
-    /// the doubles first on the program path, no session bus, and the gates policy `policy`
-    /// when one is given, else none.
-    fn run(&self, args: &[&str], policy: Option<&Path>) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
-        command
+    /// the doubles first on the program path, no session bus.
+    fn run(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_takt"))
             .args([
                 "run",
                 "--repo",
@@ -127,12 +122,9 @@ impl World {
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .env_remove("XDG_RUNTIME_DIR")
-            .env_remove("ANTHROPIC_API_KEY");
-        match policy {
-            Some(policy) => command.env(POLICY_VAR, policy),
-            None => command.env_remove(POLICY_VAR),
-        };
-        command.output().expect("takt runs")
+            .env_remove("ANTHROPIC_API_KEY")
+            .output()
+            .expect("takt runs")
     }
 
     /// The `opened` lines of the one case record.
@@ -195,21 +187,20 @@ fn outside_readers() -> Vec<(&'static str, Vec<&'static str>)> {
     vec![("codex", vec!["--harness", "codex"]), ("harness", harness)]
 }
 
-/// Acceptance 1: `--harness codex` and `--harness harness` with no gates policy and no
-/// declaration are refused before the case opens, exit 1, the refusal naming the scan adapter
-/// `gates`, the policy's variable and `scan: none` in `--config`; no case directory is written
-/// and no harness is started. A Claude Code run, whose session reads only inside its copy,
-/// opens as before.
+/// Acceptance 1: `--harness codex` and `--harness harness` with no declaration are refused
+/// before the case opens, exit 1, the refusal saying no scan adapter is declared and naming
+/// `scan: none` in `--config`; no case directory is written and no harness is started. A Claude
+/// Code run, whose session reads only inside its copy, opens as before, its adapter `unset`.
 #[test]
-fn an_outside_reader_without_a_policy_or_a_declaration_is_refused_before_its_case_opens() {
+fn an_outside_reader_without_a_declaration_is_refused_before_its_case_opens() {
     for (name, flags) in outside_readers() {
         let world = World::new(&format!("refused-{name}"));
         let mut args = flags.clone();
         args.extend(["--iterations", "1"]);
-        let output = world.run(&args, None);
+        let output = world.run(&args);
         let (stdout, stderr) = text(&output);
         assert_eq!(output.status.code(), Some(1), "{name}: {stdout}\n{stderr}");
-        for named in ["`gates`", POLICY_VAR, "`scan: none`", "--config"] {
+        for named in ["no scan adapter is declared", "`scan: none`", "--config"] {
             assert!(
                 stderr.contains(named),
                 "{name}: the refusal names {named}: {stderr}"
@@ -224,10 +215,10 @@ fn an_outside_reader_without_a_policy_or_a_declaration_is_refused_before_its_cas
         assert!(!stdout.contains("case "), "{name}: {stdout}");
     }
     let world = World::new("claude-opens");
-    let output = world.run(&["--harness", "claude", "--iterations", "0"], None);
+    let output = world.run(&["--harness", "claude", "--iterations", "0"]);
     let (stdout, stderr) = text(&output);
     assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
-    assert_eq!(world.opened()[0]["scan"], "gates", "{stdout}");
+    assert_eq!(world.opened()[0]["scan"], "unset", "{stdout}");
 }
 
 /// Acceptance 2: the same runs with `scan: none` in their `--config` file, TOML or a
@@ -251,7 +242,7 @@ fn a_declared_scan_none_opens_the_case_and_says_so_before_the_first_step() {
             let mut args = flags.clone();
             args.extend(["--iterations", "0", "--config"]);
             args.push(config.to_str().expect("utf-8"));
-            let output = world.run(&args, None);
+            let output = world.run(&args);
             let (stdout, stderr) = text(&output);
             assert_eq!(output.status.code(), Some(3), "{label}: {stdout}\n{stderr}");
             let said = format!("scan: none (declared in {})", config.display());
@@ -292,40 +283,10 @@ fn a_declared_scan_none_opens_the_case_and_says_so_before_the_first_step() {
     }
 }
 
-/// Acceptance 3: `scan: none` declared while the gates policy is set is refused before the case
-/// opens, exit 1, naming both: one adapter per run.
-#[test]
-fn a_declared_scan_none_with_a_policy_set_is_refused_before_its_case_opens() {
-    for (name, flags) in [
-        ("codex", vec!["--harness", "codex"]),
-        ("claude", vec!["--harness", "claude"]),
-    ] {
-        let world = World::new(&format!("both-{name}"));
-        let config = world.config("run.toml", "scan = \"none\"\n");
-        let policy = world.config_dir().join("policy.json");
-        fs::write(&policy, "{}\n").expect("a policy file");
-        let mut args = flags;
-        args.extend(["--iterations", "0", "--config"]);
-        args.push(config.to_str().expect("utf-8"));
-        let output = world.run(&args, Some(&policy));
-        let (stdout, stderr) = text(&output);
-        assert_eq!(output.status.code(), Some(1), "{name}: {stdout}\n{stderr}");
-        for named in [
-            POLICY_VAR,
-            "`scan: none`",
-            &config.display().to_string(),
-            "nothing was opened",
-        ] {
-            assert!(stderr.contains(named), "{name}: {named}: {stderr}");
-        }
-        assert!(!world.cases().exists(), "{name}: no case directory");
-        assert!(!world.started().exists(), "{name}: no harness was started");
-    }
-}
-
 /// Acceptance 4: `scan` with a value that names no adapter is refused before the case opens,
 /// naming the file and the line and repeating no value, as any other bad field is; in TOML, in
-/// YAML and in a `loom.agent/1` document.
+/// YAML and in a `loom.agent/1` document. `gates` names no adapter either: takt has no scan
+/// that reads an organisation's private policy.
 #[test]
 fn a_scan_that_names_no_adapter_is_refused_naming_the_file_and_the_line() {
     for (form, file, text_of, line) in [
@@ -350,15 +311,12 @@ fn a_scan_that_names_no_adapter_is_refused_naming_the_file_and_the_line() {
     ] {
         let world = World::new(&format!("bad-{form}"));
         let config = world.config(file, text_of);
-        let output = world.run(
-            &[
-                "--harness",
-                "claude",
-                "--config",
-                config.to_str().expect("utf-8"),
-            ],
-            None,
-        );
+        let output = world.run(&[
+            "--harness",
+            "claude",
+            "--config",
+            config.to_str().expect("utf-8"),
+        ]);
         let (stdout, stderr) = text(&output);
         assert_eq!(output.status.code(), Some(1), "{form}: {stdout}\n{stderr}");
         assert!(
@@ -378,19 +336,20 @@ fn a_scan_that_names_no_adapter_is_refused_naming_the_file_and_the_line() {
     }
     let world = World::new("gates-declared");
     let config = world.config("run.toml", "scan = \"gates\"\n");
-    let output = world.run(
-        &[
-            "--harness",
-            "claude",
-            "--iterations",
-            "0",
-            "--config",
-            config.to_str().expect("utf-8"),
-        ],
-        None,
-    );
+    let output = world.run(&[
+        "--harness",
+        "claude",
+        "--iterations",
+        "0",
+        "--config",
+        config.to_str().expect("utf-8"),
+    ]);
     let (stdout, stderr) = text(&output);
-    assert_eq!(output.status.code(), Some(3), "{stdout}\n{stderr}");
-    assert!(!stdout.contains("scan: none"), "{stdout}");
-    assert_eq!(world.opened()[0]["scan"], "gates");
+    assert_eq!(output.status.code(), Some(1), "{stdout}\n{stderr}");
+    assert!(
+        stderr.contains(&config.display().to_string()) && stderr.contains("line 1"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("`scan`, `none`"), "{stderr}");
+    assert!(!world.cases().exists(), "no case directory");
 }

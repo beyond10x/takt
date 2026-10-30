@@ -2,9 +2,9 @@
 //! the case has made so far, fenced as data after the obligations and before the offered
 //! actions: the diff from the case's `base_commit` to `HEAD` over the paths its accepted steps
 //! committed, read with no configured code; a line that says no change has been made yet; a
-//! line that says the change is not known for a case with no `base_commit`; or, past the bound
-//! or when the scan does not pass, a line that says it is not shown. No live `claude` runs: the
-//! harness program is a script that keeps each prompt it is given.
+//! line that says the change is not known for a case with no `base_commit`; or, past the bound,
+//! a line that says it is not shown. No live `claude` runs: the harness program is a script
+//! that keeps each prompt it is given.
 
 #[path = "support/own_home.rs"]
 mod own_home;
@@ -16,7 +16,6 @@ use std::process::Command;
 
 use takt::case::Branch;
 use takt::harness::ClaudeCode;
-use takt::scan::gates::ChangeScan;
 use takt::validator::Validator;
 use takt::{Run, RunOptions};
 
@@ -143,15 +142,8 @@ const APPEND: &str = r#"mkdir -p tests
 echo "committed-by-call-$n" >> tests/work.txt"#;
 
 /// Runs a case `id` opened (`resume` false) or resumed on `tree` for `iterations` steps with
-/// `harness`, the run's scan of the change so far `scan`; the run's output.
-fn run_case(
-    tree: &Path,
-    id: &str,
-    iterations: u64,
-    harness: &ClaudeCode,
-    resume: bool,
-    scan: Option<ChangeScan>,
-) -> String {
+/// `harness`; the run's output.
+fn run_case(tree: &Path, id: &str, iterations: u64, harness: &ClaudeCode, resume: bool) -> String {
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run = if resume {
         Run::resume(tree, options(id, iterations), id, harness, &validators)
@@ -159,7 +151,6 @@ fn run_case(
     } else {
         Run::open(tree, options(id, iterations), harness, &validators).expect("the case opens")
     };
-    run.scan_change_with(scan);
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();
@@ -233,7 +224,7 @@ fn the_next_prompt_holds_the_committed_line_fenced_and_the_first_says_none_yet()
         r#"mkdir -p tests
 echo "committed-by-call-$n with a run of five: \`\`\`\`\` and on" >> tests/work.txt"#,
     );
-    let text = run_case(&tree, "fenced", 2, &harness, false, None);
+    let text = run_case(&tree, "fenced", 2, &harness, false);
     let first = prompt(&scripts, 1);
     let first_block = block(&first);
     assert!(
@@ -278,13 +269,13 @@ fn a_case_without_a_base_commit_is_told_the_change_is_not_known() {
     let tree = repository("unknown-tree", &[]);
     let scripts = directory("unknown-scripts");
     let harness = fake_claude(&scripts, APPEND);
-    run_case(&tree, "unknown", 1, &harness, false, None);
+    run_case(&tree, "unknown", 1, &harness, false);
     let dir = tree.join(".takt/cases/unknown");
     let mut branch = Branch::read(&dir).expect("the branch record");
     assert!(branch.base_commit.is_some(), "the case recorded its base");
     branch.base_commit = None;
     branch.write(&dir).expect("written");
-    let text = run_case(&tree, "unknown", 1, &harness, true, None);
+    let text = run_case(&tree, "unknown", 1, &harness, true);
     let resumed = prompt(&scripts, 2);
     let shown = block(&resumed);
     assert!(
@@ -308,7 +299,7 @@ fn a_change_past_the_bound_is_not_shown_and_its_size_is() {
 i=0
 while [ $i -lt 300 ]; do echo "a long line of the large change, number $i, with words" >> tests/large.txt; i=$((i + 1)); done"#,
     );
-    let text = run_case(&tree, "large", 2, &harness, false, None);
+    let text = run_case(&tree, "large", 2, &harness, false);
     // Each call appends the same 300 lines: what the first step committed, which the second
     // step's prompt is about, is half the file after the run.
     let large = fs::metadata(tree.join("tests/large.txt"))
@@ -362,7 +353,7 @@ fn a_configured_external_diff_and_color_change_nothing_in_the_block() {
             }
         }
         let harness = fake_claude(&scripts, APPEND);
-        let text = run_case(&tree, name, 2, &harness, false, None);
+        let text = run_case(&tree, name, 2, &harness, false);
         assert!(
             !scripts.join("external-ran").exists(),
             "no external diff ran\n{text}"
@@ -397,7 +388,7 @@ fn a_nul_past_byte_8000_does_not_stop_the_next_step() {
     let tree = repository("nul-tree", &[("tests/data.txt", &data)]);
     let scripts = directory("nul-scripts");
     let harness = fake_claude(&scripts, r#"echo "after-the-nul-$n" >> tests/data.txt"#);
-    let text = run_case(&tree, "nul", 2, &harness, false, None);
+    let text = run_case(&tree, "nul", 2, &harness, false);
     let calls = fs::read_to_string(scripts.join("calls")).expect("the calls");
     assert_eq!(calls.trim(), "2", "the second step ran\n{text}");
     let second = prompt(&scripts, 2);
@@ -430,11 +421,11 @@ fn a_commit_no_accepted_step_made_stays_out_of_the_block() {
     let tree = repository("other-tree", &[]);
     let scripts = directory("other-scripts");
     let harness = fake_claude(&scripts, APPEND);
-    run_case(&tree, "other", 1, &harness, false, None);
+    run_case(&tree, "other", 1, &harness, false);
     fs::write(tree.join("notes.txt"), "a-line-no-step-committed\n").expect("a file");
     git(&tree, &["add", "notes.txt"]);
     git(&tree, &["commit", "-q", "-m", "by hand"]);
-    let text = run_case(&tree, "other", 1, &harness, true, None);
+    let text = run_case(&tree, "other", 1, &harness, true);
     let resumed = prompt(&scripts, 2);
     let shown = block(&resumed);
     assert!(
@@ -445,70 +436,6 @@ fn a_commit_no_accepted_step_made_stays_out_of_the_block() {
         !shown.contains("a-line-no-step-committed") && !shown.contains("notes.txt"),
         "the commit by hand stays out: {shown}"
     );
-}
-
-/// Acceptance: with a policy, the diff passes the scan before a prompt shows it. A scan that
-/// refuses and a scan that cannot run (the program not there) both give "not shown", never the
-/// diff; a scan that passes shows it, and was given the policy and the diff.
-#[test]
-fn with_a_policy_a_scan_that_refuses_or_cannot_run_gives_not_shown() {
-    let scripts = directory("scan-scripts");
-    let policy = scripts.join("policy.toml");
-    fs::write(&policy, "a policy\n").expect("a policy");
-    let passes = script(
-        &scripts,
-        "passes",
-        &format!(
-            "printf '%s\\n' \"$@\" > '{0}/passes-args'\nfor last; do :; done\ncat \"$last\" > '{0}/passes-scanned'\nexit 0",
-            scripts.display()
-        ),
-    );
-    let refuses = script(&scripts, "refuses", "echo refused >&2\nexit 1");
-    let absent = scripts.join("no-such-program");
-    for (name, program, shown) in [
-        ("passes", passes, true),
-        ("refuses", refuses, false),
-        ("absent", absent, false),
-    ] {
-        let tree = repository(&format!("scan-{name}-tree"), &[]);
-        let calls = directory(&format!("scan-{name}-calls"));
-        let harness = fake_claude(&calls, APPEND);
-        let scan = ChangeScan {
-            program: program.clone(),
-            policy: policy.clone(),
-        };
-        let text = run_case(&tree, name, 2, &harness, false, Some(scan));
-        let second = prompt(&calls, 2);
-        let block = block(&second);
-        if shown {
-            assert!(
-                block.contains("+committed-by-call-1"),
-                "{name}: shown: {block}\n{text}"
-            );
-            let args = fs::read_to_string(scripts.join("passes-args")).expect("the scan's args");
-            let args: Vec<&str> = args.lines().collect();
-            assert!(
-                args.first() == Some(&"scan-text")
-                    && args
-                        .windows(2)
-                        .any(|pair| pair == ["--policy", &policy.display().to_string()]),
-                "{name}: scan-text under the policy: {args:?}"
-            );
-            let scanned =
-                fs::read_to_string(scripts.join("passes-scanned")).expect("what was scanned");
-            assert!(
-                scanned.contains("+committed-by-call-1"),
-                "{name}: the diff was scanned: {scanned}"
-            );
-        } else {
-            assert!(
-                block.contains("not shown")
-                    && !block.contains("committed-by-call-1")
-                    && !block.contains("```"),
-                "{name}: not shown: {block}\n{text}"
-            );
-        }
-    }
 }
 
 /// `count` numbered lines, `<word> line <n>`.
@@ -568,7 +495,7 @@ const BOTH_IN_SCOPE: &str =
     "show the change so far\n\n## Scope\n\n- `app.py`\n- `tests/test_app.py`\n";
 
 /// Opens a case `id` on `tree` under [`EDIT`] (written to `scripts`) with the intent
-/// [`BOTH_IN_SCOPE`] and runs 2 steps with `harness`, the change so far unscanned; the run's
+/// [`BOTH_IN_SCOPE`] and runs 2 steps with `harness`; the run's
 /// output.
 fn run_edits(tree: &Path, scripts: &Path, id: &str, harness: &ClaudeCode) -> String {
     run_edits_for(tree, scripts, id, harness, BOTH_IN_SCOPE)
@@ -593,7 +520,6 @@ fn run_edits_for(
     };
     let validators: Vec<Box<dyn Validator>> = Vec::new();
     let mut run = Run::open(tree, options, harness, &validators).expect("the case opens");
-    run.scan_change_with(None);
     let mut out = Vec::new();
     let stop = run.run(&mut out);
     let text = String::from_utf8_lossy(&out).into_owned();

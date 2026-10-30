@@ -73,7 +73,7 @@ fn repository(fixture: &str, name: &str) -> (Scratch, PathBuf) {
 
 fn takt(path: Option<&Path>, args: &[&str]) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
-    command.args(args).env_remove("B10X_GATES_POLICY");
+    command.args(args);
     if let Some(path) = path {
         command.env(
             "PATH",

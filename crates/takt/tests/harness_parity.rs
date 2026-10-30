@@ -22,7 +22,6 @@ use loom_sdk::session::{CredentialSource, Endpoint, Kind};
 use takt::harness::{Harness, SessionHarness};
 use takt::run::{CREDENTIAL_SHAPES, PROPOSAL_NOT_RECORDED, credential_shape};
 use takt::scan::Scan;
-use takt::scan::gates::ChangeScan;
 use takt::validator::{TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
@@ -356,29 +355,32 @@ fn harness_saying(
     (harness, seen)
 }
 
-/// The run of `harness` on `tree` for `iterations` steps under a gates scan that passes what it
-/// is given ([`scanner`] `pass`): its stop and what it printed.
+/// The run of `harness` on `tree` for `iterations` steps under the scan adapter `none`, declared
+/// in a file beside `tree`: its stop and what it printed.
 fn run(
     tree: &Path,
     id: &str,
     iterations: u64,
     harness: &dyn Harness,
 ) -> (anyhow::Result<Stop>, String) {
-    let scan = scanner(tree, "pass");
-    run_scanned(tree, id, iterations, harness, Some(scan))
+    run_declaring(tree, id, iterations, harness, true)
 }
 
-/// [`run`] under the gates scan `scan`, or none.
-fn run_scanned(
+/// [`run`] with the scan adapter `none` declared when `declared`, else with no scan declared.
+fn run_declaring(
     tree: &Path,
     id: &str,
     iterations: u64,
     harness: &dyn Harness,
-    scan: Option<ChangeScan>,
+    declared: bool,
 ) -> (anyhow::Result<Stop>, String) {
     let validators = validators();
     let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
-    run.scan_change_with(scan);
+    if declared {
+        run.scan_with(Scan::None {
+            declared_in: tree.with_file_name("run.toml"),
+        });
+    }
     // story:a-run-keeps-every-decision-only-on-a-trial: the parity compares every decision the
     // case holds, so the run keeps every one, as a `--records trial` run does.
     run.keep_records(takt::case::Records::Trial);
@@ -386,56 +388,6 @@ fn run_scanned(
     run.continue_past_red_base();
     let stop = run.run(&mut out);
     (stop, String::from_utf8_lossy(&out).into_owned())
-}
-
-/// [`run`] under the scan adapter `none`, declared in a file beside `tree`.
-fn run_declared_none(
-    tree: &Path,
-    id: &str,
-    iterations: u64,
-    harness: &dyn Harness,
-) -> (anyhow::Result<Stop>, String) {
-    let validators = validators();
-    let mut run = Run::open(tree, options(id, iterations), harness, &validators).expect("opens");
-    run.scan_with(Scan::None {
-        declared_in: tree.with_file_name("run.toml"),
-    });
-    let mut out = Vec::new();
-    run.continue_past_red_base();
-    let stop = run.run(&mut out);
-    (stop, String::from_utf8_lossy(&out).into_owned())
-}
-
-/// The text a fake gates policy refuses: [`scanner`] `policy` exits 1 on a file holding it.
-const POLICY_MARK: &str = "POLICY-RULE-MATCHED";
-
-/// A stand-in for `b10x-gates` beside `tree` (outside it), run as `scan-text --repo <tree>
-/// --policy <policy> <file>...`: `pass` exits 0; `policy` appends each scanned file to `log`
-/// and exits 1 when one holds [`POLICY_MARK`], as a policy rule's match does; `missing` names a
-/// program that is not there, a scan that cannot run.
-fn scanner(tree: &Path, kind: &str) -> ChangeScan {
-    let dir = tree.with_file_name(format!("scanner-{kind}"));
-    fs::create_dir_all(&dir).expect("the scanner's directory");
-    let policy = dir.join("policy.json");
-    fs::write(&policy, "{}\n").expect("a policy");
-    let body = match kind {
-        "pass" => "exit 0".to_owned(),
-        "policy" => format!(
-            "for f; do case \"$f\" in /*) if [ -f \"$f\" ]; then cat \"$f\" >> '{log}'; if grep -q {POLICY_MARK} \"$f\"; then exit 1; fi; fi;; esac; done\nexit 0",
-            log = dir.join("log").display()
-        ),
-        "missing" => {
-            return ChangeScan {
-                program: dir.join("not-there"),
-                policy,
-            };
-        }
-        other => panic!("no scanner {other}"),
-    };
-    let program = dir.join("b10x-gates");
-    fs::write(&program, format!("#!/bin/sh\n{body}\n")).expect("a scanner");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
-    ChangeScan { program, policy }
 }
 
 /// The case directory of `id` in `tree`.
@@ -1010,6 +962,25 @@ fn every_credential_shape_takt_lists_matches_its_fake() {
             "token-field",
             format!("\"refresh_token\": \"{}9\"", filler(78, 40, ALNUM)),
         ),
+        (
+            "aws-access-key-id",
+            ["AWS_ACCESS_KEY_ID=", "AKIA", "Z7Q3EGXN2MBV4KPL"].concat(),
+        ),
+        (
+            "aws-secret-access-key",
+            format!("aws_secret_access_key = {}9", filler(81, 39, ALNUM)),
+        ),
+        (
+            "authorization-header",
+            format!("> Authorization: Bearer {}9", filler(82, 39, ALNUM)),
+        ),
+        (
+            "url-password",
+            format!(
+                "https://user:{}9@example.com/o/r.git",
+                filler(83, 15, ALNUM)
+            ),
+        ),
     ];
     for shape in CREDENTIAL_SHAPES {
         assert!(
@@ -1030,6 +1001,11 @@ fn every_credential_shape_takt_lists_matches_its_fake() {
         "# The OAuth access_token and refresh_token are read from the login file.\n",
         "-----BEGIN PUBLIC KEY-----\nAAAA\n-----END PUBLIC KEY-----\n",
         "risk-assessment-of-the-whole-repository-in-bytes-per-file",
+        "request.header(\"Authorization\", format!(\"Bearer {token}\"));\n",
+        "curl -H \"Authorization: Bearer $TOKEN\" https://example.com/\n",
+        "let url = format!(\"https://{user}:{password}@{host}/\");\n",
+        "DATABASE_URL=postgres://postgres:postgres@localhost/app\n",
+        "const REGION: &str = \"ASIA_PACIFIC\";\n",
     ] {
         assert_eq!(credential_shape(clean), None, "{clean}");
     }
@@ -1037,8 +1013,8 @@ fn every_credential_shape_takt_lists_matches_its_fake() {
 
 /// F-A1, layer 1: a session of any kind that read a login of the user's (Codex's, Claude
 /// Code's, gh's, each fake) and proposes it, in a file or in its summary, is refused before the
-/// edit effect under a gates policy that passes it, as the repository's own policy does (it holds
-/// no rule for these shapes; takt's own list of credential shapes refuses them): the tree and
+/// edit effect under a declared `scan: none` (takt's own list of credential shapes refuses
+/// them): the tree and
 /// `HEAD` as they were, the file named, the step's summary in the record the fixed line, and the
 /// credential nowhere in what the run printed, its refusal or its record.
 #[test]
@@ -1097,120 +1073,37 @@ fn a_planted_credential_is_refused_under_every_kind() {
     }
 }
 
-/// F-A1, layer 1: under every kind a proposal the gates policy refuses (a file, or the summary,
-/// holding what a rule matches) and one whose scan cannot run are refused before the edit
-/// effect, naming the file and never what matched, the tree unchanged and the summary not
-/// recorded. With no policy set, a Codex or b10x-harness proposal is refused (not scanned is no
-/// pass) and a Claude Code one is applied as before.
+/// With no scan declared, a Codex or b10x-harness proposal is refused before the edit effect
+/// (not scanned is no pass), the tree unchanged and the summary not recorded; a Claude Code one
+/// is applied as before.
 #[test]
-fn a_policy_refusal_or_a_scan_that_cannot_run_refuses_the_proposal() {
-    let marked = format!("{FIXED}// {POLICY_MARK}\n");
-    let marked_summary = format!("made add add {POLICY_MARK}");
+fn with_no_scan_declared_a_proposal_is_refused_as_not_scanned() {
     for kind in KINDS {
-        let unset = (kind != Kind::Claude).then_some("not scanned");
-        for (case, scan, file, summary, refused) in [
-            (
-                "file",
-                Some("policy"),
-                marked.as_str(),
-                "scripted",
-                Some("src/lib.rs"),
-            ),
-            (
-                "summary",
-                Some("policy"),
-                FIXED,
-                marked_summary.as_str(),
-                Some("summary"),
-            ),
-            (
-                "missing",
-                Some("missing"),
-                FIXED,
-                "scripted",
-                Some("could not run"),
-            ),
-            ("unset", None, FIXED, "scripted", unset),
-        ] {
-            let name = format!("policy-{}-{case}", kind.as_str());
-            let scratch = repository(&name);
-            let tree = scratch.tree();
-            let before = work(&tree);
-            let writes = [("src/lib.rs", file)];
-            let script = Script {
-                writes: &writes,
-                summary,
-                ..Script::fixing()
-            };
-            let (harness, _) = harness(kind, &script);
-            let id = "parity-policy";
-            let scan = scan.map(|scan| scanner(&tree, scan));
-            let (stop, said) = run_scanned(&tree, id, 2, &harness, scan);
-            let Some(named) = refused else {
-                assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
-                assert_eq!(
-                    fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
-                    FIXED,
-                    "{name}: applied as before\n{said}"
-                );
-                continue;
-            };
-            let Ok(Stop::StepRefused(why)) = &stop else {
-                panic!("{name}: refused, not {stop:?}\n{said}");
-            };
-            assert!(said.contains("before the edit effect"), "{name}: {why}");
-            assert!(
-                why.contains(named),
-                "{name}: the refusal names {named}: {why}"
-            );
-            let record =
-                fs::read_to_string(case_dir(&tree, id).join("events.jsonl")).expect("events");
-            for (what, text) in [("output", &said), ("refusal", why), ("record", &record)] {
-                assert!(
-                    !text.contains(POLICY_MARK),
-                    "{name}: what the rule matched is in the run's {what}"
-                );
-            }
-            assert_eq!(work(&tree), before, "{name}: the tree is unchanged\n{said}");
-            let steps = harness_steps(&tree, id);
-            assert_eq!(steps.len(), 1, "{name}\n{said}");
-            assert_eq!(steps[0]["summary"], PROPOSAL_NOT_RECORDED, "{name}");
-        }
-    }
-}
-
-/// F-A1, layer 1: a clean proposal passes the gates scan under every kind and is applied; the
-/// scan was given its file's content and the session's summary.
-#[test]
-fn a_clean_proposal_passes_the_scan_under_every_kind() {
-    for kind in KINDS {
-        let name = format!("clean-{}", kind.as_str());
+        let name = format!("unset-{}", kind.as_str());
         let scratch = repository(&name);
         let tree = scratch.tree();
-        let scan = scanner(&tree, "policy");
-        let log = scan.program.with_file_name("log");
-        let script = Script {
-            summary: "made add add",
-            ..Script::fixing()
+        let before = work(&tree);
+        let (harness, _) = harness(kind, &Script::fixing());
+        let id = "parity-unset";
+        let (stop, said) = run_declaring(&tree, id, 2, &harness, false);
+        if kind == Kind::Claude {
+            assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
+            assert_eq!(
+                fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
+                FIXED,
+                "{name}: applied as before\n{said}"
+            );
+            continue;
+        }
+        let Ok(Stop::StepRefused(why)) = &stop else {
+            panic!("{name}: refused, not {stop:?}\n{said}");
         };
-        let (harness, _) = harness(kind, &script);
-        let id = "parity-clean";
-        let (stop, said) = run_scanned(&tree, id, 2, &harness, Some(scan));
-        assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
-        assert_eq!(
-            fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
-            FIXED,
-            "{name}\n{said}"
-        );
-        let scanned = fs::read_to_string(&log).expect("the scan ran");
-        assert!(scanned.contains(FIXED), "{name}: the file was scanned");
-        assert!(
-            scanned.contains("made add add"),
-            "{name}: the summary was scanned"
-        );
+        assert!(said.contains("before the edit effect"), "{name}: {why}");
+        assert!(why.contains("not scanned"), "{name}: {why}");
+        assert_eq!(work(&tree), before, "{name}: the tree is unchanged\n{said}");
         let steps = harness_steps(&tree, id);
-        let recorded = steps[0]["summary"].as_str().expect("a summary");
-        assert!(recorded.starts_with("made add add"), "{name}: {recorded}");
+        assert_eq!(steps.len(), 1, "{name}\n{said}");
+        assert_eq!(steps[0]["summary"], PROPOSAL_NOT_RECORDED, "{name}");
     }
 }
 
@@ -1232,7 +1125,7 @@ fn under_a_declared_scan_none_a_credential_is_still_refused() {
         };
         let (clean, _) = harness(kind, &script);
         let id = "parity-none-clean";
-        let (stop, said) = run_declared_none(&tree, id, 2, &clean);
+        let (stop, said) = run(&tree, id, 2, &clean);
         assert!(stop.is_ok(), "{name}: {stop:?}\n{said}");
         assert_eq!(
             fs::read_to_string(tree.join("src/lib.rs")).expect("the file"),
@@ -1266,7 +1159,7 @@ fn under_a_declared_scan_none_a_credential_is_still_refused() {
                 };
                 let (harness, _) = harness(kind, &script);
                 let id = "parity-none-planted";
-                let (stop, said) = run_declared_none(&tree, id, 2, &harness);
+                let (stop, said) = run(&tree, id, 2, &harness);
                 let Ok(Stop::StepRefused(why)) = &stop else {
                     panic!("{name}: refused, not {stop:?}\n{said}");
                 };

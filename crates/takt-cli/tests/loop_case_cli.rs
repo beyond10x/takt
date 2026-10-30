@@ -135,7 +135,6 @@ fn run(repo: &Path, value: Option<&str>) -> (i32, String, String) {
     }
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(&args)
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     (
@@ -348,7 +347,6 @@ fn a_definitions_object_an_earlier_test_command_planted_is_refused() {
             "--iterations",
             "3",
         ])
-        .env_remove("B10X_GATES_POLICY")
         .output()
         .expect("takt runs");
     let earlier = String::from_utf8_lossy(&output.stdout).into_owned();
@@ -532,7 +530,6 @@ fn run_bounded(
             "--input",
             &input,
         ])
-        .env_remove("B10X_GATES_POLICY")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()

@@ -1,5 +1,5 @@
 //! The few git reads and writes the kernel makes in a worktree, without a shell. A push goes
-//! through the forge ([`crate::forge`]), under the bot route's credential, never through here.
+//! through the forge ([`crate::forge`]), never through here.
 //!
 //! What a run commits or discards is only ever its own: a case opens on a clean tree
 //! ([`uncommitted`]), a judgement step is measured against a [`Checkpoint`] taken before it, an
@@ -50,7 +50,7 @@ const NO_CONFIGURED_CODE: [&str; 18] = [
 /// change how it reads a path, its configuration or its history (`GIT_TEST_COMMIT_GRAPH`
 /// writes a commit-graph after every commit, `GIT_GRAFT_FILE` gives commits the parents a file
 /// names, `GIT_SHALLOW_FILE` cuts the history where a file says); none reaches a git takt runs.
-const REDIRECTING_ENV: [&str; 15] = [
+pub(crate) const REDIRECTING_ENV: [&str; 15] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
     "GIT_COMMON_DIR",
@@ -159,112 +159,6 @@ pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<St
         );
     }
     Ok(Some(String::from_utf8_lossy(&kept).into_owned()))
-}
-
-/// One object [`read_objects`] read: its id, its type and its bytes as the repository holds
-/// them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Object {
-    /// The object's id.
-    pub id: String,
-    /// Its type: `commit`, `tree`, `blob` or `tag`.
-    pub kind: String,
-    /// Its bytes, raw.
-    pub bytes: Vec<u8>,
-}
-
-/// Reads the objects `ids` in `tree` through one `git cat-file --batch`, raw and without
-/// replacement objects (`GIT_NO_REPLACE_OBJECTS`), in the order given; `None` as soon as what
-/// git prints for them passes `limit` bytes: git is killed then and nothing more is read. An id
-/// git does not hold, or a git that exits non-zero, is an error.
-pub fn read_objects(tree: &Path, ids: &[String], limit: usize) -> Result<Option<Vec<Object>>> {
-    use std::io::{BufRead as _, BufReader, Read as _};
-    let mut child = command(tree, &["cat-file", "--batch"])?
-        .env("GIT_NO_REPLACE_OBJECTS", "1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
-    let mut input: Vec<u8> = Vec::new();
-    for id in ids {
-        input.extend_from_slice(id.as_bytes());
-        input.push(b'\n');
-    }
-    let writer = child.stdin.take().map(|mut stdin| {
-        std::thread::spawn(move || {
-            let _ = stdin.write_all(&input);
-        })
-    });
-    let stderr = child.stderr.take().map(|mut stream| {
-        std::thread::spawn(move || {
-            let mut said = Vec::new();
-            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
-            let _ = std::io::copy(&mut stream, &mut std::io::sink());
-            said
-        })
-    });
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| anyhow!("git cat-file --batch gave no output stream"))?;
-    let mut out = BufReader::new(stdout);
-    let answer = (|| -> Result<Option<Vec<Object>>> {
-        let mut objects = Vec::with_capacity(ids.len());
-        let mut total = 0usize;
-        for id in ids {
-            let mut header = Vec::new();
-            out.read_until(b'\n', &mut header)
-                .context("read git cat-file --batch")?;
-            let header = String::from_utf8_lossy(&header).trim_end().to_owned();
-            let fields: Vec<&str> = header.split(' ').collect();
-            let [found, kind, size] = fields[..] else {
-                bail!("git cat-file --batch answered {header:?} for {id}");
-            };
-            let size: usize = size
-                .parse()
-                .with_context(|| format!("git cat-file --batch answered {header:?}"))?;
-            total = total.saturating_add(header.len() + 1).saturating_add(size);
-            if total > limit {
-                return Ok(None);
-            }
-            let mut bytes = vec![0; size];
-            out.read_exact(&mut bytes)
-                .context("read git cat-file --batch")?;
-            let mut end = [0_u8; 1];
-            out.read_exact(&mut end)
-                .context("read git cat-file --batch")?;
-            objects.push(Object {
-                id: found.to_owned(),
-                kind: kind.to_owned(),
-                bytes,
-            });
-        }
-        Ok(Some(objects))
-    })();
-    drop(out);
-    if !matches!(answer, Ok(Some(_))) {
-        let _ = child.kill();
-    }
-    let status = child
-        .wait()
-        .with_context(|| format!("run git cat-file --batch in {}", tree.display()))?;
-    if let Some(writer) = writer {
-        let _ = writer.join();
-    }
-    let said = stderr
-        .and_then(|reader| reader.join().ok())
-        .unwrap_or_default();
-    let objects = answer?;
-    if objects.is_some() && !status.success() {
-        bail!(
-            "git cat-file --batch in {} exited {}: {}",
-            tree.display(),
-            status,
-            String::from_utf8_lossy(&said).trim()
-        );
-    }
-    Ok(objects)
 }
 
 /// The `git <args>` [`output`] and [`run_bounded`] run in `tree`, set up as every git takt runs
@@ -794,9 +688,165 @@ pub fn leave_branch(tree: &Path, branch: &str, target: Option<&str>) -> Result<(
     Ok(())
 }
 
-/// The URL of `remote`; an error when the tree has no such remote.
+/// The variables that hand git configuration through the environment and that every other git
+/// takt runs is started without ([`REDIRECTING_ENV`]); `GIT_CONFIG_COUNT` brings its
+/// `GIT_CONFIG_KEY_<n>` and `GIT_CONFIG_VALUE_<n>` with it. A forge's git, which fetches and
+/// pushes a remote, reads them as the operator's git does ([`crate::forge::Process`]), so a
+/// remote's URLs are read under them too ([`remote_url`], [`remote_urls`]): a rewrite
+/// (`url.<base>.insteadOf`) they hand git is read before the fetch, as the fetch reads it.
+pub(crate) const ENVIRONMENT_CONFIG: [&str; 2] = ["GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT"];
+
+/// What of [`ENVIRONMENT_CONFIG`] takt's environment holds, each by its name; an error when one
+/// is not UTF-8.
+fn environment_config() -> Result<Vec<(&'static str, String)>> {
+    ENVIRONMENT_CONFIG
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+        .map(|(name, value)| {
+            value
+                .into_string()
+                .map(|value| (name, value))
+                .map_err(|_| anyhow!("{name} is not UTF-8; no remote URL was read"))
+        })
+        .collect()
+}
+
+/// The trimmed standard output of `git <args>` in `tree` read under the configuration the
+/// environment hands git ([`environment_config`]), as a remote's own git reads it.
+fn run_as_remote_git(tree: &Path, args: &[&str]) -> Result<String> {
+    let stdout = bytes_as_remote_git(tree, args)?;
+    Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+}
+
+/// The standard output of `git <args>` in `tree`, byte for byte, read under the configuration
+/// the environment hands git ([`environment_config`]), as a fetch or a push of this tree reads
+/// it: for `config --list -z` before a line whose URL a rewrite could change.
+pub fn bytes_as_remote_git(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    let config = environment_config()?;
+    let env: Vec<(&str, &str)> = config
+        .iter()
+        .map(|(name, value)| (*name, value.as_str()))
+        .collect();
+    raw_with(tree, args, None, &env)
+}
+
+/// The URL of `remote`, `insteadOf` applied as the environment's configuration and the
+/// repository's give it ([`ENVIRONMENT_CONFIG`]); an error when the tree has no such remote.
 pub fn remote_url(tree: &Path, remote: &str) -> Result<String> {
-    run(tree, &["remote", "get-url", remote])
+    run_as_remote_git(tree, &["remote", "get-url", remote])
+}
+
+/// Every URL git reaches `remote` at, as git reads them, the environment's configuration
+/// included ([`ENVIRONMENT_CONFIG`]): a fetch's (`url`, `insteadOf` applied), then each a push
+/// goes to (`pushurl`, else `url` with `pushInsteadOf` applied). A remote whose
+/// `remote.<name>.vcs` names a remote helper is reached through it, so each of its URLs is
+/// answered in git's `<helper>::<address>` form ([`remote_transport`]). An error when the tree
+/// has no such remote.
+pub fn remote_urls(tree: &Path, remote: &str) -> Result<(Vec<String>, Vec<String>)> {
+    let vcs = run_as_remote_git(tree, &["config", "--get", &format!("remote.{remote}.vcs")])
+        .ok()
+        .filter(|vcs| !vcs.is_empty());
+    let lines = |args: &[&str]| -> Result<Vec<String>> {
+        Ok(run_as_remote_git(tree, args)?
+            .lines()
+            .map(|url| match &vcs {
+                Some(vcs) => format!("{vcs}::{url}"),
+                None => url.to_owned(),
+            })
+            .collect())
+    };
+    Ok((
+        lines(&["remote", "get-url", "--all", remote])?,
+        lines(&["remote", "get-url", "--push", "--all", remote])?,
+    ))
+}
+
+/// The remote helper and the address of `url` when it is in git's `<helper>::<address>` form
+/// (`http::http://example.com/r.git`): a letter, then letters, digits, `+`, `.` or `-`, then
+/// `::`, as git reads it before any scheme.
+fn helper_form(url: &str) -> Option<(&str, &str)> {
+    let (helper, address) = url.split_once("::")?;
+    let mut chars = helper.chars();
+    (chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || "+.-".contains(c)))
+    .then_some((helper, address))
+}
+
+/// How git reaches a remote URL for a fetch or a push ([`remote_transport`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteTransport {
+    /// `https://`.
+    Https,
+    /// `http://` to a loopback host (`localhost`, `127.0.0.0/8`, `[::1]`): a relay on this
+    /// machine, or in this pod, that holds whatever credential the remote takes, so takt holds
+    /// none and nothing crosses the network in the clear. A line to it follows no redirect
+    /// ([`NO_REDIRECT`]), so a relay cannot send the fetch or the push on to another host.
+    LoopbackHttp,
+    /// Any other: SSH, a path on this machine, `file://`, `git://`.
+    Other,
+}
+
+impl RemoteTransport {
+    /// What `GIT_ALLOW_PROTOCOL` lists for a line held to HTTPS that goes to a remote of this
+    /// transport: `https`, and `http` beside it for a loopback relay alone.
+    #[must_use]
+    pub fn allowed_protocols(self) -> &'static str {
+        match self {
+            Self::LoopbackHttp => "http:https",
+            Self::Https | Self::Other => "https",
+        }
+    }
+}
+
+/// What a fetch or a push to a loopback relay is given on git's command line: follow no
+/// redirect, not even the first request's (`http.followRedirects` is `initial` by default).
+pub const NO_REDIRECT: [&str; 2] = ["-c", "http.followRedirects=false"];
+
+/// How git reaches `url` ([`RemoteTransport`]). An `http://` or `ftp://` URL whose host is no
+/// loopback host (`crate::harness::loopback`) is refused, naming it without its userinfo, which
+/// may hold a password: what git sends there, and any credential with it, would cross the
+/// network in the clear. A URL in git's `<helper>::<address>` form is read by its address when
+/// the helper is git's own `http`, `https`, `ftp` or `ftps`, which fetch the address as a URL
+/// (one without a scheme over plain `http://`, as curl takes it); any other helper is
+/// [`RemoteTransport::Other`].
+pub fn remote_transport(url: &str) -> Result<RemoteTransport> {
+    if let Some((helper, address)) = helper_form(url) {
+        if !["http", "https", "ftp", "ftps"]
+            .iter()
+            .any(|curl| helper.eq_ignore_ascii_case(curl))
+        {
+            return Ok(RemoteTransport::Other);
+        }
+        return if address.contains("://") {
+            remote_transport(address)
+        } else {
+            remote_transport(&format!("http://{address}"))
+        };
+    }
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return Ok(RemoteTransport::Other);
+    };
+    if scheme.eq_ignore_ascii_case("https") {
+        return Ok(RemoteTransport::Https);
+    }
+    let ftp = scheme.eq_ignore_ascii_case("ftp");
+    if !scheme.eq_ignore_ascii_case("http") && !ftp {
+        return Ok(RemoteTransport::Other);
+    }
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    match crate::harness::host_of(host_port) {
+        Some(host) if crate::harness::loopback(host) && ftp => Ok(RemoteTransport::Other),
+        Some(host) if crate::harness::loopback(host) => Ok(RemoteTransport::LoopbackHttp),
+        host => bail!(
+            "the remote URL {} is `{}://` to {}, no loopback host (`localhost`, `127.0.0.0/8`, `::1`): what git sends there would cross the network in the clear; give `https://`, or `http://` to a relay on a loopback host",
+            crate::forge::without_userinfo(url),
+            scheme.to_ascii_lowercase(),
+            host.unwrap_or("no host takt reads")
+        ),
+    }
 }
 
 /// The full names of the refs under each prefix of `prefixes` (`refs/heads/trial/`), in ref
@@ -1048,7 +1098,7 @@ pub const COMMIT_IDENTITY_FILE: &str = ".engineering/commit-identity.conf";
 /// each exactly as git records it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitIdentity {
-    /// The name, `b10x-bot[bot]`.
+    /// The name, `release-bot[bot]` for one.
     pub name: String,
     /// The email, without its angle brackets.
     pub email: String,

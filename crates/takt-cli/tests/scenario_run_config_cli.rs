@@ -9,6 +9,7 @@
 mod own_home;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -115,7 +116,6 @@ impl World {
             .args(["--test-cmd", "true"])
             .args(args)
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
-            .env_remove("B10X_GATES_POLICY")
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
             .output()
             .expect("takt runs")
@@ -224,22 +224,56 @@ fn a_story_in_the_file_is_refused_naming_the_file_and_the_key() {
     assert_eq!(world.branches(), branches, "no trial branch was cut");
 }
 
-/// story:scan-and-forge-are-adapters: a scenario run scans with `gates` only, so a file that
-/// declares `scan: none` is refused before anything is cut or opened, exit 1, naming the file and
-/// `scan: none`; `scan: gates` is read as any other field.
+/// story:scan-and-forge-are-adapters: a scenario run takes the scan adapter its file declares,
+/// as `takt run` does. `--harness codex`, whose session may read outside its copy, is refused
+/// before anything is cut or opened when the file declares no adapter, exit 1, naming
+/// `scan: none`; with `scan: none` declared the trial is cut and its case opens, the declaration
+/// said in one line, and under `--iterations 0` the session never starts.
 #[test]
-fn a_declared_scan_none_is_refused_for_a_scenario_run() {
+fn a_scenario_run_takes_the_scan_adapter_its_file_declares() {
     let world = World::new("scan-none");
-    let config = world.config(
-        "run.toml",
-        "iterations = 0\nharness = \"none\"\nforge = \"none\"\nscan = \"none\"\n",
-    );
+    let program = world.0.join("codex-double");
+    let started = world.0.join("started");
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo double; exit 0; fi\ntouch '{}'\nexit 1\n",
+            started.display()
+        ),
+    )
+    .expect("a double");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
+    let flags = [
+        "--harness",
+        "codex",
+        "--harness-program",
+        program.to_str().expect("utf-8"),
+        "--forge",
+        "none",
+        "--iterations",
+        "0",
+    ];
+
+    let undeclared = world.config("plain.toml", "hours = 1\n");
     let branches = world.branches();
-    let output = world.run(&config, &[]);
+    let output = world.run(&undeclared, &flags);
     let said = text(&output);
     assert_eq!(output.status.code(), Some(1), "{said}");
-    assert!(said.contains(&config.display().to_string()), "{said}");
-    assert!(said.contains("`scan: none`"), "{said}");
+    assert!(
+        said.contains("no scan adapter is declared") && said.contains("`scan: none`"),
+        "{said}"
+    );
     assert!(world.cases().is_empty(), "no case was opened");
     assert_eq!(world.branches(), branches, "no trial branch was cut");
+
+    let declared = world.config("run.toml", "scan = \"none\"\n");
+    let output = world.run(&declared, &flags);
+    let said = text(&output);
+    assert_eq!(output.status.code(), Some(3), "{said}");
+    assert!(
+        said.contains(&format!("scan: none (declared in {})", declared.display())),
+        "{said}"
+    );
+    assert_eq!(world.cases().len(), 1, "{said}");
+    assert!(!started.exists(), "the session was not started: {said}");
 }

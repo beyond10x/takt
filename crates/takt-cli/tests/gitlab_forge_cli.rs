@@ -1,7 +1,8 @@
 //! story:gitlab-forge at the binary's edge: a repository whose origin is on a GitLab host runs
-//! the delivery through `glab`. `glab`, `b10x-gates` and the HTTPS push are doubles on the
-//! program path (a `git` shim answers every line naming an `https://` URL and hands every other
-//! line to the real git), so nothing in these tests reaches a host.
+//! the delivery through `glab`. `glab` and the HTTPS push are doubles on the program path (a
+//! `git` shim answers every line naming an `https://` URL, and every fetch from or push to the
+//! remote `origin`, and hands every other line to the real git), so nothing in these tests
+//! reaches a host.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -132,9 +133,11 @@ fn real_git() -> PathBuf {
 /// merge_requests --input <file>` keeps the request and prints `{"iid": 7}`; `glab api ...
 /// merge_requests/7` prints the merge request with the pushed head and its head pipeline
 /// passing; `glab api ... repository/branches/main` prints the local `main`; `--method PUT`
-/// merges and counts the merge. `b10x-gates scan-text` passes. The `git` shim records, for a
-/// push to an `https://` URL, the URL, the branch and the revision, exits 0 for a fetch from
-/// one, and runs the real git for every other line. With `glab` false, no `glab` is written.
+/// merges and counts the merge. The `git` shim records, for a push to an `https://` URL, the
+/// URL, the branch and the revision, exits 0 for a fetch from one; records in
+/// `<state>/origin.lines` each fetch from and push to the remote `origin`, which fetches
+/// nothing and reports each pushed branch created; and runs the real git for every other line.
+/// With `glab` false, no `glab` is written.
 fn doubles(dir: &Path, glab: bool) -> (PathBuf, PathBuf) {
     let bin = dir.join("stub-bin");
     let state = dir.join("forge");
@@ -189,27 +192,24 @@ exit 2
     }
     executable(
         &bin,
-        "b10x-gates",
-        r#"#!/bin/sh
-if [ "$1" = scan-text ]; then exit 0; fi
-echo "b10x-gates double: $*" >&2
-exit 2
-"#,
-    );
-    executable(
-        &bin,
         "git",
         &format!(
             r#"#!/bin/sh
 state='{state_text}'
-url=''; verb=''; refspec=''
+url=''; verb=''; refspec=''; remote=''
 for arg in "$@"; do
   case "$arg" in
     https://*) url="$arg" ;;
+    origin) remote="$arg" ;;
     push|fetch) if [ -z "$url" ]; then verb="$arg"; fi ;;
     *:refs/heads/*) refspec="$arg" ;;
   esac
 done
+if [ -z "$url" ] && [ -n "$verb" ] && [ -n "$remote" ]; then
+  echo "$verb $remote $refspec" >> "$state/origin.lines"
+  if [ "$verb" = push ]; then printf 'To %s\n*\t%s\t[new branch]\nDone\n' "$remote" "$refspec"; fi
+  exit 0
+fi
 if [ -n "$url" ]; then
   echo "$verb $url $refspec" >> "$state/https.lines"
   if [ "$verb" = push ]; then
@@ -228,13 +228,12 @@ exec '{}' "$@"
 }
 
 /// Runs the built `takt` binary with `args`, `bin` first on a program path that holds no other
-/// `glab`, and no `b10x-gates` policy: the exit code, stdout and stderr.
+/// `glab`: the exit code, stdout and stderr.
 fn takt_through(bin: &Path, args: &[&str]) -> (i32, String, String) {
     let mut path = vec![bin.to_path_buf()];
     path.extend(path_without_glab());
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env_remove("B10X_GATES_POLICY")
         .env("PATH", std::env::join_paths(path).expect("a program path"))
         .output()
         .expect("takt runs");
@@ -313,9 +312,43 @@ fn without_a_glab_login_the_run_is_refused_before_its_first_step() {
     default.extend(["--iterations", "1"]);
     let (_, out, err) = takt_through(&bin, &default);
     assert!(
-        out.contains("forge: none (origin gitlab.example is not github.com, and glab is not logged in to it: ")
+        out.contains("forge: none (glab is not logged in to gitlab.example: ")
             && out.contains("has not been authenticated"),
         "stdout {out} stderr {err}"
+    );
+}
+
+/// `gitlab` publishes what the run makes, and nothing scans it: with no scan adapter declared
+/// the run is refused before its case opens, exit 1, naming the forge and `scan: none`, and
+/// nothing is fetched, pushed or opened.
+#[test]
+fn without_a_scan_declaration_a_gitlab_run_is_refused_before_its_case_opens() {
+    let (outer, repo) = repository("no-scan");
+    let (bin, state) = doubles(&outer.0.join("forge"), true);
+    let mut run = gitlab_run(repo.to_str().expect("utf-8"), "c1");
+    run.extend(["--iterations", "0"]);
+    let (code, out, err) = takt_through(&bin, &run);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    for named in [
+        "the forge gitlab publishes what the run makes",
+        "no scan adapter is declared",
+        "`scan: none`",
+        "--config",
+    ] {
+        assert!(err.contains(named), "{named}: stdout {out} stderr {err}");
+    }
+    assert!(
+        !repo.join(".takt/cases").exists(),
+        "no case opened: stdout {out} stderr {err}"
+    );
+    assert!(
+        !state.join("https.lines").exists(),
+        "nothing fetched or pushed: stdout {out} stderr {err}"
+    );
+    let glab = fs::read_to_string(state.join("glab.lines")).unwrap_or_default();
+    assert!(
+        glab.lines().all(|line| !line.contains("--method POST")),
+        "no merge request: {glab}"
     );
 }
 
@@ -323,12 +356,15 @@ fn without_a_glab_login_the_run_is_refused_before_its_first_step() {
 /// host that `glab` is logged in to: a plain run takes the ready story; the operator commits
 /// the work on the case's branch; the next run resumes it, runs the tests and the gate, pushes
 /// the case's commit to the project's HTTPS URL, opens one merge request, reads its head
-/// pipeline passing and stops at the merge's grant, exit 4, nothing merged.
+/// pipeline passing and stops at the merge's grant, exit 4, nothing merged. The forge publishes
+/// what the run makes, so the run file declares `scan: none`.
 #[test]
 fn a_gitlab_origin_delivers_through_glab_up_to_the_merge_grant() {
     let (outer, repo) = repository("deliver");
     let (bin, state) = doubles(&outer.0.join("forge"), true);
     let path = repo.to_str().expect("utf-8");
+    let config = outer.0.join("run.yaml");
+    fs::write(&config, "scan: none\n").expect("the run file");
     let run = [
         "run",
         "--repo",
@@ -339,6 +375,8 @@ fn a_gitlab_origin_delivers_through_glab_up_to_the_merge_grant() {
         "true",
         "--protocol",
         "story.delivery/1",
+        "--config",
+        config.to_str().expect("utf-8"),
     ];
     let mut first = run.to_vec();
     first.extend(["--iterations", "0"]);
@@ -451,7 +489,6 @@ fn scenario_through(bin: &Path, dir: &Path, repo: &Path, extra: &[&str]) -> (i32
         ])
         .args(extra)
         .env("XDG_STATE_HOME", dir.join("xdg-state"))
-        .env_remove("B10X_GATES_POLICY")
         .env("PATH", std::env::join_paths(path).expect("a program path"))
         .output()
         .expect("takt runs");
@@ -474,9 +511,9 @@ fn trial_branches(repo: &Path) -> String {
     )
 }
 
-/// A scenario's trial base `trial/<n>` is created on the remote only through the bot route, so
-/// `takt scenario run --forge gitlab` is refused before anything is cut or opened, exit 1,
-/// naming why; `glab`, logged in, is never asked.
+/// A scenario's pull request targets its trial base `trial/<n>`, which the scenario creates on
+/// `origin` itself, so `takt scenario run --forge gitlab` is refused before anything is
+/// fetched, cut or opened, exit 1, naming why; `glab`, logged in, is never asked.
 #[test]
 fn a_scenario_run_refuses_the_gitlab_forge_before_anything_opens() {
     let (outer, repo) = scenario_repository("scenario-gitlab");
@@ -486,7 +523,7 @@ fn a_scenario_run_refuses_the_gitlab_forge_before_anything_opens() {
     assert_eq!(code, 1, "stdout {out} stderr {err}");
     assert!(
         err.contains("--forge gitlab is not for a scenario run")
-            && err.contains("only through the bot route")
+            && err.contains("which the scenario creates on origin itself")
             && err.contains("nothing was changed"),
         "stdout {out} stderr {err}"
     );
@@ -501,29 +538,37 @@ fn a_scenario_run_refuses_the_gitlab_forge_before_anything_opens() {
         !state.join("glab.lines").exists(),
         "glab was asked: stdout {out} stderr {err}"
     );
+    assert!(
+        !state.join("origin.lines").exists(),
+        "origin was reached: stdout {out} stderr {err}"
+    );
 }
 
-/// Without `--forge`, a scenario run on an origin that is not on github.com gets no forge,
-/// even with `glab` logged in to the host, and says so in one line: the trial branch is cut
-/// locally and not pushed, and `glab` is never asked.
+/// Without `--forge`, a scenario run on an origin on a GitLab host gets no forge, even with
+/// `glab` logged in to the host: the operator's git fetches the trial branches from `origin`
+/// and creates the trial base there, the run goes on with no forge, and `glab` is never asked.
 #[test]
 fn a_scenario_run_on_a_gitlab_origin_defaults_to_no_forge() {
     let (outer, repo) = scenario_repository("scenario-default");
     let (bin, state) = doubles(&outer.0.join("forge"), true);
     let (_, out, err) = scenario_through(&bin, &outer.0, &repo, &[]);
     assert!(
-        out.contains(
-            "forge: none (origin gitlab.example is not github.com, and a scenario run creates its trial base only through the bot route)"
-        ),
-        "stdout {out} stderr {err}"
-    );
-    assert!(
-        out.contains("not pushed: no forge"),
+        out.contains("on trial/0 at ") && out.contains(", pushed to origin, no forge"),
         "stdout {out} stderr {err}"
     );
     assert!(!out.contains("forge: gitlab"), "stdout {out} stderr {err}");
-    assert!(
-        trial_branches(&repo).starts_with("trial/"),
+    assert_eq!(
+        trial_branches(&repo),
+        "trial/0",
+        "stdout {out} stderr {err}"
+    );
+    let reached = fs::read_to_string(state.join("origin.lines")).expect("origin was reached");
+    assert_eq!(
+        reached.lines().collect::<Vec<_>>(),
+        [
+            "fetch origin ",
+            "push origin refs/heads/trial/0:refs/heads/trial/0"
+        ],
         "stdout {out} stderr {err}"
     );
     assert!(
@@ -532,6 +577,6 @@ fn a_scenario_run_on_a_gitlab_origin_defaults_to_no_forge() {
     );
     assert!(
         !state.join("https.lines").exists(),
-        "nothing was pushed: stdout {out} stderr {err}"
+        "nothing was pushed to the project's URL: stdout {out} stderr {err}"
     );
 }

@@ -68,7 +68,6 @@ fn a_harness_flag_wins_over_the_readme_run_toml() {
         .env("XDG_STATE_HOME", scratch.0.join("xdg-state"))
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .env_remove("XDG_RUNTIME_DIR")
-        .env_remove("B10X_GATES_POLICY")
         .env_remove("ANTHROPIC_API_KEY")
         .output()
         .expect("takt runs");

@@ -122,8 +122,18 @@ impl World {
 
     /// `takt run` on the repository with `args` after the intent, HOME the scratch one, the
     /// runtime directory the scratch one, no session bus, and the variable set to `value` when
-    /// given.
+    /// given. A harness run opens only under a declared `scan: none`
+    /// (story:scan-and-forge-are-adapters), so without a `--config` of the case's own (which
+    /// [`config`] writes with the declaration) one that declares it is given. No step here
+    /// reaches a scan.
     fn run(&self, value: Option<&str>, args: &[&str]) -> Output {
+        let scan = self.outer().join("scan-none.yaml");
+        fs::write(&scan, "scan: none\n").expect("a run configuration file");
+        let declared: Vec<&str> = if args.contains(&"--config") {
+            Vec::new()
+        } else {
+            vec!["--config", scan.to_str().expect("utf-8")]
+        };
         let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
         command
             .args([
@@ -136,13 +146,11 @@ impl World {
                 "none",
             ])
             .args(args)
+            .args(declared)
             .env("HOME", self.home())
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
-            // A harness run opens only under a policy or a declared `scan: none`
-            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
-            .env("B10X_GATES_POLICY", self.outer().join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove(VARIABLE);
         if let Some(value) = value {
@@ -507,10 +515,12 @@ fn the_variable_reaches_no_child_and_the_staged_file_is_removed_after_the_run() 
 // story:run-configuration-names-the-story-and-token-variable: the run configuration file's
 // `endpoint_token_env` names the variable as `--endpoint-token-env` does.
 
-/// A run configuration file in the world, out of its repository, holding `text`.
+/// A run configuration file in the world, out of its repository, holding `text` and the
+/// declaration `scan = "none"` after it, under which a harness run opens
+/// (story:scan-and-forge-are-adapters).
 fn config(world: &World, text: &str) -> String {
     let path = world.outer().join("run.toml");
-    fs::write(&path, text).expect("a run configuration file");
+    fs::write(&path, format!("{text}scan = \"none\"\n")).expect("a run configuration file");
     path.to_str().expect("utf-8").to_owned()
 }
 

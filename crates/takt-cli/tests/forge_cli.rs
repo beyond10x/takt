@@ -1,5 +1,6 @@
-//! The `takt` binary's `--forge` default at its edge: an `origin` that is not a GitHub
-//! repository. Adversary pass 1 over story:forge-pull-request-evidence.
+//! The `takt` binary's `--forge` at its edge: its default for an `origin` on a host, the values
+//! it takes, and a run file's `forge`. Adversary pass 1 over story:forge-pull-request-evidence,
+//! and story:takt-carries-no-organisations-own-route.
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
@@ -137,23 +138,26 @@ fn takt_without_glab_login(outer: &Path, args: &[&str]) -> (i32, String, String)
     )
 }
 
-/// The bot route pushes and reads under a GitHub App: it is a GitHub forge. An
-/// `origin` on another host, or a `file://` URL, must not make it the default; `--forge none`
-/// by default or a refusal in one line are both acceptable, a run that would push and open
-/// there is not. Another host is the forge `gitlab`'s only while `glab` is logged in to it:
-/// without a login the run has no forge, and says why in one line.
+/// Without `--forge`, an `origin` on a host is the forge `gitlab`'s only while `glab` is
+/// logged in to it, whichever host it is: without a login the run has no forge, and says why in
+/// one line. A `file://` URL names no repository on a host and gets no forge either.
 #[test]
-fn a_non_github_origin_does_not_make_the_bot_route_the_default() {
+fn without_a_glab_login_an_origin_gets_no_forge_by_default() {
     for (name, url, line) in [
         (
             "gitlab-ssh",
             "git@gitlab.example.com:owner/repo.git",
-            "forge: none (origin gitlab.example.com is not github.com, and glab is not logged in to it: ",
+            "forge: none (glab is not logged in to gitlab.example.com: ",
         ),
         (
             "gitlab-https",
             "https://gitlab.example.com/owner/repo.git",
-            "forge: none (origin gitlab.example.com is not github.com, and glab is not logged in to it: ",
+            "forge: none (glab is not logged in to gitlab.example.com: ",
+        ),
+        (
+            "github",
+            "https://GitHub.com/owner/repo.git",
+            "forge: none (glab is not logged in to GitHub.com: ",
         ),
         (
             "file",
@@ -165,33 +169,26 @@ fn a_non_github_origin_does_not_make_the_bot_route_the_default() {
         let (code, out, err) =
             takt_without_glab_login(&outer, &run_args(repo.to_str().expect("utf-8"), name));
         assert!(
-            !out.contains("forge: bot"),
-            "origin {url}: the bot route is the default forge: exit {code} stdout {out} stderr {err}"
-        );
-        assert!(
             out.contains(line),
             "origin {url}: {line}: exit {code} stdout {out} stderr {err}"
         );
     }
 }
 
-// Adversary pass 2 over story:forge-pull-request-evidence: the GitHub-only default and the
-// `--forge bot` refusal at the binary's edge.
-
-/// `--forge bot` on an origin the bot route refuses: the refusal is printed, and a credential
-/// the origin URL carries (what a CI runner's checkout leaves in `.git/config`) is not.
+/// `--forge gitlab` refused for want of a login: the refusal is printed, and a credential the
+/// origin URL carries (what a CI runner's checkout leaves in `.git/config`) is not.
 #[test]
-fn adv2_the_forge_bot_refusal_does_not_print_the_origin_credential() {
-    let (_outer, repo) = repository(
+fn the_forge_refusal_does_not_print_the_origin_credential() {
+    let (outer, repo) = repository(
         "credential",
         "https://ci-user:t0k3n-not-real@gitlab.example.com/owner/repo.git",
     );
     let mut args = run_args(repo.to_str().expect("utf-8"), "credential");
-    args.extend(["--forge", "bot"]);
-    let (code, out, err) = takt(&args);
+    args.extend(["--forge", "gitlab"]);
+    let (code, out, err) = takt_without_glab_login(&outer, &args);
     assert_ne!(
         code, 0,
-        "the bot route was not refused: stdout {out} stderr {err}"
+        "the forge gitlab was not refused: stdout {out} stderr {err}"
     );
     assert!(
         !out.contains("t0k3n-not-real") && !err.contains("t0k3n-not-real"),
@@ -199,51 +196,92 @@ fn adv2_the_forge_bot_refusal_does_not_print_the_origin_credential() {
     );
 }
 
-/// A host name is case-insensitive: without `--forge`, an origin written as `GitHub.com` gets
-/// the bot route by default, as `github.com` does.
+/// Whether `text` holds `word` as a whole word, as `grep -w` reads one: not inside a longer run
+/// of letters, digits and `_`.
+fn holds_word(text: &str, word: &str) -> bool {
+    text.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .any(|token| token == word)
+}
+
+/// story:takt-carries-no-organisations-own-route, acceptance 1: `--forge` offers `none`,
+/// `local`, `gitlab`, `command` and `connectors`, and `bot` is no value of it: clap refuses it,
+/// exit 2, for `takt run` and `takt scenario run` alike, and neither's help names a `bot`.
 #[test]
-fn adv2_an_origin_host_written_in_upper_case_gets_the_bot_route_by_default() {
-    let (outer, repo) = repository("upper", "https://GitHub.com/owner/repo.git");
-    // The bot route is reachable (story:forge-preflight): a `b10x-gates` double that passes
-    // the commit identity's scan and answers nothing else, and a policy file.
-    let bin = outer.join("stub-bin");
-    fs::create_dir_all(&bin).expect("a stub directory");
-    let gates = bin.join("b10x-gates");
-    fs::write(
-        &gates,
-        "#!/bin/sh\n[ \"$1\" = scan-text ] && exit 0\necho \"b10x-gates double: $*\" >&2\nexit 2\n",
-    )
-    .expect("the double is written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&gates, fs::Permissions::from_mode(0o755)).expect("executable");
+fn forge_bot_is_refused_by_clap_and_no_help_names_it() {
+    let (_outer, repo) = repository("forge-bot", "https://github.com/owner/repo.git");
+    let repo = repo.to_str().expect("utf-8");
+    let mut run = run_args(repo, "forge-bot");
+    run.extend(["--forge", "bot"]);
+    let scenario = vec![
+        "scenario",
+        "run",
+        "--repo",
+        repo,
+        "any",
+        "--declared-on",
+        "HEAD",
+        "--harness",
+        "none",
+        "--forge",
+        "bot",
+    ];
+    for args in [run, scenario] {
+        let (code, out, err) = takt(&args);
+        assert_eq!(code, 2, "{args:?}: stdout {out} stderr {err}");
+        assert!(
+            err.contains("invalid value 'bot' for '--forge <FORGE>'"),
+            "{args:?}: stderr {err}"
+        );
+        for value in ["none", "local", "gitlab", "command", "connectors"] {
+            assert!(err.contains(value), "{args:?}: {value} not offered: {err}");
+        }
     }
-    let policy = outer.join("policy.json");
-    fs::write(&policy, "{}\n").expect("a policy file");
-    // At 0600, as b10x-gates loads a policy.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&policy, fs::Permissions::from_mode(0o600)).expect("mode 0600");
+    for args in [&["run", "--help"][..], &["scenario", "run", "--help"][..]] {
+        let (code, out, err) = takt(args);
+        assert_eq!(code, 0, "{args:?}: stdout {out} stderr {err}");
+        assert!(!holds_word(&out, "bot"), "{args:?} names a bot: {out}");
+        assert!(
+            out.contains("[possible values: none, local, gitlab, command, connectors]"),
+            "{args:?}: {out}"
+        );
     }
-    let mut path = vec![bin];
-    path.extend(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    ));
-    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
-        .args(run_args(repo.to_str().expect("utf-8"), "upper"))
-        .env("PATH", std::env::join_paths(path).expect("a program path"))
-        .env("B10X_GATES_POLICY", &policy)
-        .output()
-        .expect("takt runs");
-    let (code, out, err) = (
-        output.status.code().expect("an exit code"),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-    );
-    assert!(
-        out.contains("forge: bot (owner/repo)"),
-        "GitHub.com is github.com: exit {code} stdout {out} stderr {err}"
-    );
+}
+
+/// story:takt-carries-no-organisations-own-route, acceptance 2: a run file whose `forge` is
+/// `bot` is refused when it is read, naming the file and the line, before any case opens: the
+/// tree stays on its branch, no case directory is made and no `forge:` line is printed.
+#[test]
+fn a_run_file_with_forge_bot_is_refused_at_its_line() {
+    for (name, text, line) in [
+        ("yaml", "harness: none\nforge: \"bot\"\n", 2),
+        ("toml", "harness = \"none\"\n\nforge = \"bot\"\n", 3),
+    ] {
+        let (outer, repo) = repository(&format!("run-file-{name}"), "https://github.com/o/r.git");
+        let file = outer.join(format!("run.{name}"));
+        fs::write(&file, text).expect("the run file is written");
+        let mut args = run_args(repo.to_str().expect("utf-8"), "run-file");
+        args.extend(["--config", file.to_str().expect("utf-8")]);
+        let (code, out, err) = takt_without_glab_login(&outer, &args);
+        assert_eq!(code, 1, "{name}: stdout {out} stderr {err}");
+        let expected = format!(
+            "the run configuration file {} is refused at line {line}: `forge` is none, local, gitlab, command or connectors, not `bot`",
+            file.display()
+        );
+        assert!(err.contains(&expected), "{name}: {expected}: stderr {err}");
+        assert!(!out.contains("forge:"), "{name}: stdout {out}");
+        assert!(
+            !repo.join(".takt").exists(),
+            "{name}: a case directory was made"
+        );
+        let output = Command::new("git")
+            .args(["branch", "--show-current"])
+            .current_dir(&repo)
+            .output()
+            .expect("git runs");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "main",
+            "{name}"
+        );
+    }
 }

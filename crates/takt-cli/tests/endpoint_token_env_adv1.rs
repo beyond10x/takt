@@ -85,7 +85,17 @@ impl World {
         self.outer().join("runtime")
     }
 
+    /// `takt run` with `args`; a harness run opens only under a declared `scan: none`
+    /// (story:scan-and-forge-are-adapters), so without a `--config` of the case's own one that
+    /// declares it is given. No step here reaches a scan.
     fn command(&self, args: &[&str]) -> Command {
+        let scan = self.outer().join("scan-none.yaml");
+        fs::write(&scan, "scan: none\n").expect("a run configuration file");
+        let declared: Vec<&str> = if args.contains(&"--config") {
+            Vec::new()
+        } else {
+            vec!["--config", scan.to_str().expect("utf-8")]
+        };
         let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
         command
             .args([
@@ -98,13 +108,11 @@ impl World {
                 "none",
             ])
             .args(args)
+            .args(declared)
             .env("HOME", self.home())
             .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
-            // A harness run opens only under a policy or a declared `scan: none`
-            // (story:scan-and-forge-are-adapters); no step here reaches a scan.
-            .env("B10X_GATES_POLICY", self.outer().join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .env(VARIABLE, MARKER);
         command
@@ -386,7 +394,7 @@ fn a_loom_agent_document_names_the_variable_through_its_endpoint_file() {
     let agent = world.outer().join("agent.yaml");
     fs::write(
         &agent,
-        "format: loom.agent/1\nagent: {id: a, name: A, brief: b}\ntakt:\n  harness: harness\n  endpoint_file: endpoint.toml\n  iterations: 3\n  test_cmd: sh probe.sh\n",
+        "format: loom.agent/1\nagent: {id: a, name: A, brief: b}\ntakt:\n  harness: harness\n  endpoint_file: endpoint.toml\n  iterations: 3\n  test_cmd: sh probe.sh\n  scan: none\n",
     )
     .expect("an agent document");
     let output = world

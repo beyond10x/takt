@@ -91,8 +91,8 @@ pub enum Event {
     /// case keep every decision, so their line says `trial` whatever was asked. Absent on a
     /// line written before it, which a reader reads as every decision kept.
     ///
-    /// The scan: the name of the run's scan adapter ([`crate::scan::Scan::name`]), `gates` or
-    /// `none`, the one every proposal and the change so far pass; absent on a line written
+    /// The scan: the name of the run's scan adapter ([`crate::scan::Scan::name`]), `unset` or
+    /// `none`, the one every proposal is judged under; absent on a line written
     /// before it, which a reader reads as "scan not recorded".
     ///
     /// Where the protocol was chosen from (`protocol_source`) and where each input's value came

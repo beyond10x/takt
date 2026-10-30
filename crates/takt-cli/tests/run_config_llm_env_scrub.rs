@@ -150,9 +150,6 @@ impl World {
             .env("XDG_STATE_HOME", self.0.join("xdg-state"))
             .env("XDG_RUNTIME_DIR", self.runtime())
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
-            // A harness run opens only under a policy or a declared `scan: none`; no step here
-            // reaches a scan.
-            .env("B10X_GATES_POLICY", self.0.join("gates-policy.json"))
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove(VARIABLE)
             .env_remove(COPY)
@@ -198,9 +195,10 @@ fn document(second: bool) -> serde_json::Value {
     document
 }
 
-/// A run file on the route `model` and the `llm` section `llm`.
+/// A run file on the route `model` and the `llm` section `llm`, declaring `scan: none`: a harness
+/// run opens only under a declared scan adapter.
 fn llm_file(model: &str, llm: &serde_json::Value) -> String {
-    format!("forge: none\nmodel: {model}\nllm: {llm}\n")
+    format!("forge: none\nscan: none\nmodel: {model}\nllm: {llm}\n")
 }
 
 fn text(output: &Output) -> (String, String) {

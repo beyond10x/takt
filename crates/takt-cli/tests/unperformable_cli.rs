@@ -128,7 +128,6 @@ impl World {
     fn takt(&self, args: &[&str]) -> (i32, String, String) {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(args)
-            .env_remove("B10X_GATES_POLICY")
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
             .env(
                 "PATH",
@@ -192,7 +191,7 @@ fn a_forge_none_scenario_run_stops_at_ahead_and_its_resume_calls_no_harness() {
     assert_eq!(code, 7, "stdout {out} stderr {err}");
     let calls = world.calls();
     assert!(calls >= 1, "the double handed the change over: {out}");
-    // Without the bot route the trial number is the instant and a nonce, so the case id is read
+    // Under `--forge none` the trial number is the instant and a nonce, so the case id is read
     // from the run's `case <id> on` line rather than assumed.
     let case = out
         .lines()

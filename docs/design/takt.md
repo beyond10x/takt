@@ -63,7 +63,7 @@ Each part of the loop and what performs it now:
 | perform | the composite effect (`TurnEffect`, Loom's `EffectPort`): the edit effect applies a proposal under the step guard; `ValidatorEffect` performs a validator's action, `ChoiceEffect` records a choice | `crates/takt/src/run.rs`, `crates/takt/src/validator.rs` |
 | observation | the session's `AgentSession` record, observed into `observations.json` through the governor | `crates/takt/src/run.rs`, `crates/takt/src/case.rs` |
 | validator | a validator (`TestsRun`, `GateRun`, `PrOpen`, `CiRead`, `PrMerged`, `ChangeRead`) turns an observation into a `canon-evidence/1` record, which reaches the case through the evidence port | `crates/takt/src/validator.rs` |
-| forge | the pull request, CI read and merge: through the repository's bot route (`BotRoute`) for an `origin` on github.com, or through `glab` (`Glab`) for one on a GitLab host, where the pull request is a merge request and its head pipeline is what `ci.read` reads | `crates/takt/src/forge.rs`, `crates/takt/src/forge/gitlab.rs` |
+| forge | the pull request, CI read and merge: through `glab` (`Glab`) for an `origin` on a GitLab host, where the pull request is a merge request and its head pipeline is what `ci.read` reads; through a Connectors instance (`connectors`), the run file's commands (`command`) or a bare repository on this machine (`local`) when named | `crates/takt/src/forge.rs`, `crates/takt/src/forge/*.rs` |
 | child process | a confinement adapter on Substrate's contract (`substrate_host::confinement`): `Unconfined`, the test command through Substrate's `local` adapter declared insecure, or `Substrate`, through the first of its `systemd` around `linux`, `linux` and `macos` adapters that serves it | `crates/takt/src/confinement.rs` |
 
 The hard rule: the model never produces evidence. A validator, a program, turns an observation
@@ -86,15 +86,15 @@ to the revision it observed. What the harness says is a trace.
 Traits in the library: `Harness` (the judgement actor; built: `SessionHarness` for Claude Code, Codex and
 b10x-harness, each through Loom's session executor), `Frontier` (the planning store; built: AEP), `Validator` (an
 evidence producer, each performing as a Commission effect), `Forge` (pull request, merge, release; built: all but
-release, through the repository's bot route, through `glab` on a GitLab host, and the in-memory double `Memory` the
-tests use), `Confinement` (built: `none` and `substrate`, which holds the test command only). The `Harness` trait is
+release, through `glab` on a GitLab host, a Connectors instance, the run file's commands, a bare repository on this
+machine, and the in-memory double `Memory` the tests use), `Confinement` (built: `none` and `substrate`, which holds the test command only). The `Harness` trait is
 still takt's own; story:takt-harness-trait-retired makes each harness a Loom `AgentExecutor`.
 
-`--forge` names the adapter: `bot`, `gitlab` or `none`. Not given, it follows `origin`: `bot` on github.com,
-`gitlab` on another host while `glab auth status --hostname <host>` exits 0, else `none`, with what glab said in
+`--forge` names the adapter: `gitlab`, `connectors`, `command`, `local` or `none`. Not given, it follows `origin`:
+`gitlab` on a host while `glab auth status --hostname <host>` exits 0, else `none`, with what glab said in
 one line. Through `gitlab`, git pushes the case's branch over HTTPS with `glab auth git-credential` as its one
 credential helper, `glab api` opens the merge request, reads its state and head pipeline and merges it under a
-grant, and takt holds no token. The merge request's files keep the bot route's `pull-request.*` names. A GitLab
+grant, and takt holds no token. The merge request's files keep the `pull-request.*` names. A GitLab
 repository's CI definition, `.gitlab-ci.yml` and `.gitlab/**` at the root, is on the judge surface beside `.github/**`
 (`GITLAB_CI`, `GITLAB_DIR`, `crates/takt/src/run.rs`), so a step that edits it is refused; a file outside both that an `include: local:` names is not.
 

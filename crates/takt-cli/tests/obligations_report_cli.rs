@@ -8,9 +8,6 @@
 //! failed there still names it, a code commit after the gate reads it `not yet run`, and a stop at
 //! the store commits does not hide the gate's table from a resume or from `takt report`.
 
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
-
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -241,7 +238,7 @@ fn git_out(tree: &Path, args: &[&str]) -> String {
 
 /// A committed copy of the `one-ready` store under `<scratch>/repo`, with the gates document
 /// [`MANIFEST_GATES`], a commit identity and, when `manifest`, the manifest the gate asks for;
-/// its origin is on github.com, so a run's forge is the bot route.
+/// its origin is the bare hub `<scratch>/hub.git`, holding its `main`, of the local forge.
 fn store_repository(name: &str, manifest: bool) -> (Dir, PathBuf) {
     let outer = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!(
         "obligations-report-cli-{}-{name}",
@@ -264,108 +261,30 @@ fn store_repository(name: &str, manifest: bool) -> (Dir, PathBuf) {
     git_out(&repo, &["init", "-q", "-b", "main"]);
     git_out(&repo, &["add", "-A"]);
     git_out(&repo, &["commit", "-q", "-m", "start"]);
+    git_out(&outer, &["init", "-q", "--bare", "-b", "main", "hub.git"]);
+    let hub = outer.join("hub.git");
     git_out(
         &repo,
-        &["remote", "add", "origin", "git@github.com:owner/repo.git"],
+        &["remote", "add", "origin", hub.to_str().expect("utf-8")],
     );
+    git_out(&repo, &["push", "-q", "origin", "main"]);
     (Dir(outer), repo)
 }
 
-/// Writes `name` into `bin`, executable, with `text`.
-fn executable(bin: &Path, name: &str, text: &str) {
-    let path = bin.join(name);
-    fs::write(&path, text).expect("the stub is written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
-    }
-}
-
-/// A double of the bot route's program in `<dir>/stub-bin`, its state in `<dir>/forge`:
-/// `b10x-gates bot -- push` keeps the branch and the commit pushed, `bot -- fetch` reports the
-/// local branch as the repository's, `scan-text` passes, `api --method POST` opens pull request
-/// #7 and `api --method PUT` merges it; `api --method GET` reports the pull request with the
-/// pushed head, and one check run, in progress while `<dir>/forge/pending` exists and passing
-/// otherwise. Nothing reaches a network.
-fn forge_double(dir: &Path) -> (PathBuf, PathBuf) {
-    let bin = dir.join("stub-bin");
-    let state = dir.join("forge");
-    fs::create_dir_all(&bin).expect("a stub directory");
-    fs::create_dir_all(&state).expect("a state directory");
-    let state_text = state.display().to_string();
-    executable(
-        &bin,
-        "b10x-gates",
-        &format!(
-            r#"#!/bin/sh
-state='{state_text}'
-case "$1" in
-  bot)
-    if [ "$3" = fetch ]; then
-      printf '  %s %s %s\n' 0000000000000000000000000000000000000000 "$(git rev-parse "${{5%%:*}}")" "${{5#*:}}"
-      exit 0
-    fi
-    spec="$5"; branch="${{spec#*:refs/heads/}}"; revision="${{spec%%:*}}"
-    if [ "$branch" = "$spec" ]; then revision="refs/heads/$spec"; fi
-    printf '%s' "$branch" > "$state/branch"
-    git rev-parse "$revision" > "$state/pushed" || exit 1
-    exit 0 ;;
-  scan-text) exit 0 ;;
-  api)
-    method=''; path=''; output=''
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --method) method="$2"; shift ;;
-        --path) path="$2"; shift ;;
-        --output) output="$2"; shift ;;
-      esac
-      shift
-    done
-    case "$method" in
-      POST) printf 'OPEN' > "$state/state"; printf '{{"number": 7}}' > "$output"; exit 0 ;;
-      PUT) printf 'MERGED' > "$state/state"; printf '{{"merged": true}}' > "$output"; exit 0 ;;
-      GET)
-        case "$path" in
-          */pulls\?*) printf '[]' > "$output" ;;
-          */check-runs*) if [ -e "$state/pending" ]; then printf '{{"total_count":1,"check_runs":[{{"status":"in_progress","conclusion":null}}]}}' > "$output"; else printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output"; fi ;;
-          */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
-          *) s=$(cat "$state/state"); st=open; merged=false
-             case "$s" in MERGED) st=closed; merged=true ;; CLOSED) st=closed ;; esac
-             printf '{{"state":"%s","merged":%s,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$st" "$merged" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")" > "$output" ;;
-        esac
-        exit 0 ;;
-    esac ;;
-esac
-echo "b10x-gates double: $*" >&2
-exit 2
-"#
+/// The run file of the local forge in `dir`, `run.yaml`: its checks pass unless the file
+/// `<dir>/checks-fail` exists. The run file and that flag's path.
+fn local_forge(dir: &Path) -> (PathBuf, PathBuf) {
+    let flag = dir.join("checks-fail");
+    let config = dir.join("run.yaml");
+    fs::write(
+        &config,
+        format!(
+            "forge: local\nlocal_checks: [\"sh\", \"-c\", \"test ! -e '{}'\"]\n",
+            flag.display()
         ),
-    );
-    (bin, state)
-}
-
-/// Runs the built `takt` binary with `args`, `bin` first on the program path and a
-/// `b10x-gates` policy file the double never reads: the exit code, stdout and stderr.
-fn takt_through(bin: &Path, args: &[&str]) -> (i32, String, String) {
-    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
-        .args(args)
-        .env("B10X_GATES_POLICY", stand_in_policy::path())
-        .env(
-            "PATH",
-            format!(
-                "{}:{}",
-                bin.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        )
-        .output()
-        .expect("takt runs");
-    (
-        output.status.code().expect("an exit code"),
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
     )
+    .expect("the run file");
+    (config, flag)
 }
 
 /// The `obligations:` lines of a run's output.
@@ -377,9 +296,9 @@ fn obligation_lines(out: &str) -> Vec<&str> {
 
 /// The status `takt report --case <case> --format json` gives the gate `id` in the case's last
 /// run, and the text report's row for it.
-fn reported(bin: &Path, case: &Path, id: &str) -> (String, String) {
+fn reported(case: &Path, id: &str) -> (String, String) {
     let case_arg = case.to_str().expect("utf-8");
-    let (code, out, err) = takt_through(bin, &["report", "--case", case_arg, "--format", "json"]);
+    let (code, out, err) = takt(&["report", "--case", case_arg, "--format", "json"]);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     let json: serde_json::Value = serde_json::from_str(&out).expect("one JSON document");
     let runs = json["runs"].as_array().expect("the runs");
@@ -391,7 +310,7 @@ fn reported(bin: &Path, case: &Path, id: &str) -> (String, String) {
         .and_then(|row| row["status"].as_str())
         .unwrap_or_else(|| panic!("{id} in the last run's obligations: {out}"))
         .to_owned();
-    let (code, text, err) = takt_through(bin, &["report", "--case", case_arg]);
+    let (code, text, err) = takt(&["report", "--case", case_arg]);
     assert_eq!(code, 0, "stdout {text} stderr {err}");
     let row = text
         .lines()
@@ -401,16 +320,16 @@ fn reported(bin: &Path, case: &Path, id: &str) -> (String, String) {
     (status, row)
 }
 
-/// A delivery of the `one-ready` story on `story.delivery/1` through the bot route's double, up
-/// to the grant: a run takes the story, the operator commits the work on the case's branch, the
+/// A delivery of the `one-ready` story on `story.delivery/1` through the local forge, up to
+/// the grant: a run takes the story, the operator commits the work on the case's branch, the
 /// next run runs the tests and the gate at that commit, opens the pull request, reads its checks
-/// and stops at the gate. The scratch tree, the repository, the double's programs and state, the
-/// case's id and the work's commit.
+/// and stops at the gate. The scratch tree, the repository, the forge's run file and
+/// the flag that fails its checks, the case's id and the work's commit.
 struct Delivery {
     _scratch: Dir,
     repo: PathBuf,
-    bin: PathBuf,
-    state: PathBuf,
+    config: PathBuf,
+    flag: PathBuf,
     id: String,
     worked: String,
 }
@@ -418,12 +337,12 @@ struct Delivery {
 impl Delivery {
     fn to_the_grant(name: &str) -> Delivery {
         let (scratch, repo) = store_repository(name, true);
-        let (bin, state) = forge_double(&scratch.join("double"));
+        let (config, flag) = local_forge(&scratch);
         let delivery = Delivery {
             _scratch: scratch,
             repo,
-            bin,
-            state,
+            config,
+            flag,
             id: String::new(),
             worked: String::new(),
         };
@@ -465,24 +384,23 @@ impl Delivery {
             "true",
             "--protocol",
             "story.delivery/1",
+            "--config",
+            self.config.to_str().expect("utf-8"),
         ];
         args.extend(extra);
-        takt_through(&self.bin, &args)
+        takt(&args)
     }
 
     fn approve(&self) {
-        let (code, out, err) = takt_through(
-            &self.bin,
-            &[
-                "approve",
-                "--repo",
-                self.repo.to_str().expect("utf-8"),
-                &self.id,
-                "repository.merge",
-                "--by",
-                "human:operator",
-            ],
-        );
+        let (code, out, err) = takt(&[
+            "approve",
+            "--repo",
+            self.repo.to_str().expect("utf-8"),
+            &self.id,
+            "repository.merge",
+            "--by",
+            "human:operator",
+        ]);
         assert_eq!(code, 0, "stdout {out} stderr {err}");
     }
 
@@ -522,7 +440,7 @@ fn an_accepted_run_reports_the_tested_revisions_obligations() {
         Vec::<&str>::new(),
         "the gate passed at the implementation revision: stdout {out}"
     );
-    let (status, row) = reported(&delivery.bin, &delivery.case(), "manifest");
+    let (status, row) = reported(&delivery.case(), "manifest");
     assert_eq!(status, "pass", "{row}");
     assert!(row.starts_with("| manifest | pass |"), "{row}");
 }
@@ -534,23 +452,19 @@ fn an_accepted_run_with_a_failed_gate_still_reports_it_open() {
     fs::write(&protocol, TESTS_AND_A_JUDGED_GATE).expect("the protocol");
     git_out(&repo, &["add", "-A"]);
     git_out(&repo, &["commit", "-q", "-m", "the protocol"]);
-    let bin = repo.join("no-such-bin");
-    let (code, out, err) = takt_through(
-        &bin,
-        &[
-            "run",
-            "--repo",
-            repo.to_str().expect("utf-8"),
-            "--harness",
-            "none",
-            "--forge",
-            "none",
-            "--test-cmd",
-            "true",
-            "--protocol",
-            protocol.to_str().expect("utf-8"),
-        ],
-    );
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        repo.to_str().expect("utf-8"),
+        "--harness",
+        "none",
+        "--forge",
+        "none",
+        "--test-cmd",
+        "true",
+        "--protocol",
+        protocol.to_str().expect("utf-8"),
+    ]);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert!(
         out.contains("stopped: Completed (accepted)"),
@@ -570,7 +484,7 @@ fn an_accepted_run_with_a_failed_gate_still_reports_it_open() {
         .strip_prefix("takt/")
         .expect("the tree is on the case's branch")
         .to_owned();
-    let (status, row) = reported(&bin, &repo.join(".takt/cases").join(id), "manifest");
+    let (status, row) = reported(&repo.join(".takt/cases").join(id), "manifest");
     assert_eq!(status, "fail", "{row}");
 }
 
@@ -589,7 +503,7 @@ fn a_code_change_after_the_gate_still_reads_not_yet_run() {
         ["obligations: 1 obligation open: manifest not yet run"],
         "a status the earlier revision earned does not carry over to changed code: stdout {out}"
     );
-    let (status, row) = reported(&delivery.bin, &delivery.case(), "manifest");
+    let (status, row) = reported(&delivery.case(), "manifest");
     assert_eq!(status, "not_yet_run", "{row}");
     assert!(row.starts_with("| manifest | not yet run |"), "{row}");
 }
@@ -598,18 +512,26 @@ fn a_code_change_after_the_gate_still_reads_not_yet_run() {
 fn a_stop_time_table_does_not_hide_the_gates_table() {
     let delivery = Delivery::to_the_grant("stop-at-store");
     delivery.approve();
-    // The checks on the head carrying takt's records are pending: the run records the story,
-    // pushes, and stops waiting at those store commits.
-    fs::write(delivery.state.join("pending"), "").expect("the flag");
+    // The checks on the head carrying takt's records fail: the run records the story, pushes,
+    // and stops at those store commits without merging.
+    fs::write(&delivery.flag, "").expect("the flag");
     let (code, out, err) = delivery.run(&[]);
-    assert_eq!(code, 6, "stdout {out} stderr {err}");
+    assert_ne!(code, 0, "stdout {out} stderr {err}");
+    assert!(
+        out.contains("through local: fail; nothing merged"),
+        "stdout {out} stderr {err}"
+    );
+    assert!(
+        !out.contains("merge_observation"),
+        "stdout {out} stderr {err}"
+    );
     assert!(
         git_out(&delivery.repo, &["log", "-1", "--format=%s"]).starts_with("takt: implemented "),
         "the run stops at takt's store commits: {out}"
     );
     assert_eq!(delivery.implementation(), delivery.worked, "{out}");
     assert_eq!(obligation_lines(&out), Vec::<&str>::new(), "stdout {out}");
-    let (status, row) = reported(&delivery.bin, &delivery.case(), "manifest");
+    let (status, row) = reported(&delivery.case(), "manifest");
     assert_eq!(status, "pass", "the stop's table: {row}");
 
     // A stop's table at the store commits, as takt recorded one before this story: the last
@@ -631,7 +553,7 @@ fn a_stop_time_table_does_not_hide_the_gates_table() {
         .expect("the table is recorded");
 
     // The resume reads the gate's status at the implementation revision.
-    fs::remove_file(delivery.state.join("pending")).expect("the flag goes");
+    fs::remove_file(&delivery.flag).expect("the flag goes");
     let (code, out, err) = delivery.run(&[]);
     assert_eq!(code, 0, "stdout {out} stderr {err}");
     assert!(
@@ -639,6 +561,6 @@ fn a_stop_time_table_does_not_hide_the_gates_table() {
         "stdout {out} stderr {err}"
     );
     assert_eq!(obligation_lines(&out), Vec::<&str>::new(), "stdout {out}");
-    let (status, row) = reported(&delivery.bin, &delivery.case(), "manifest");
+    let (status, row) = reported(&delivery.case(), "manifest");
     assert_eq!(status, "pass", "the resumed run's table: {row}");
 }

@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::anyhow;
 use takt::case::{Branch, current};
-use takt::forge::{BotRoute, Checks, Forge, Head, Limits, Memory, Process, PullRequest, Runner};
+use takt::forge::{Checks, Forge, Head, Limits, Memory, Process, PullRequest, Runner};
 
 use takt::frontier::Aep;
 use takt::harness::{ClaudeCode, Harness, StepContext, StepReport};
@@ -471,11 +471,10 @@ fn one_step(tree: &Path, id: &str, harness: &dyn Harness) -> (anyhow::Result<Sto
 }
 
 /// Run in a child test process given exactly `CREDENTIALS` (fake values), `PATH` and `HOME`:
-/// the test command, the harness and `aep` receive none of them; the forge's programs keep
-/// the GitHub ones the bot route reads and lose the rest. On macOS the child is given `TMPDIR`
-/// as well and the scripts lie under it: Seatbelt lets the test command write its tree, its
-/// git directory and its home only, so the script it runs records its environment in the
-/// tree's `.git`, and the others beside themselves.
+/// the test command, the harness, `aep` and the forge's programs receive none of them. On macOS
+/// the child is given `TMPDIR` as well and the scripts lie under it: Seatbelt lets the test
+/// command write its tree, its git directory and its home only, so the script it runs records
+/// its environment in the tree's `.git`, and the others beside themselves.
 #[test]
 fn children_receive_no_credential_they_do_not_need() {
     if std::env::var_os("TAKT_CONFINEMENT_CHILD").is_none() {
@@ -767,32 +766,6 @@ fn a_child_keeps_a_bounded_tail_of_its_output() {
     assert!(exit.success(), "{}", exit.stderr);
     assert!(exit.stdout.len() <= 1024, "{}", exit.stdout.len());
     assert!(exit.stdout.ends_with("x\nlast\n"), "{:?}", exit.stdout);
-}
-
-/// The reads of the pull request, the check runs on its head and its status name the
-/// repository, in the path and as `--repository`: what they read is never the one the tree's
-/// remotes say.
-#[test]
-fn the_forge_reads_name_the_repository() {
-    let forge = BotRoute::new("owner/repo", None, Box::new(Process::default()));
-    let output = Path::new("out.json");
-    let head = "0123456789abcdef0123456789abcdef01234567";
-    for argv in [
-        forge.view_argv(7, output),
-        forge.check_runs_argv(head, output),
-        forge.status_argv(head, output),
-    ] {
-        let option = |name: &str| {
-            argv.iter()
-                .position(|a| a == name)
-                .map(|i| argv[i + 1].as_str())
-        };
-        assert_eq!(option("--repository"), Some("owner/repo"), "{argv:?}");
-        assert!(
-            option("--path").is_some_and(|path| path.starts_with("/repos/owner/repo/")),
-            "{argv:?}"
-        );
-    }
 }
 
 /// `ci.read` reads nothing when the case's branch was last pushed at another revision, even

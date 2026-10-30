@@ -3,9 +3,6 @@
 //! refuses the pull request, the exit codes that tell the stops apart, and what `takt run
 //! --help` says about them.
 
-#[path = "../../takt/tests/support/stand_in_policy.rs"]
-mod stand_in_policy;
-
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -105,34 +102,17 @@ fn repository(fixture: Option<&str>, name: &str) -> (Scratch, PathBuf) {
     (Scratch(outer), repo)
 }
 
-/// Runs the built `takt` binary with `args`, `path` first on the program path when given, with a
-/// `b10x-gates` policy file the doubles never read ([`stand_in_policy::path`]) then and with no
-/// policy otherwise: the exit code, stdout and stderr.
-fn takt_with_path(path: Option<&Path>, args: &[&str]) -> (i32, String, String) {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
-    command.args(args).env_remove("B10X_GATES_POLICY");
-    if let Some(path) = path {
-        command
-            .env("B10X_GATES_POLICY", stand_in_policy::path())
-            .env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    path.display(),
-                    std::env::var("PATH").unwrap_or_default()
-                ),
-            );
-    }
-    let output = command.output().expect("takt runs");
+/// Runs the built `takt` binary with `args`: the exit code, stdout and stderr.
+fn takt(args: &[&str]) -> (i32, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(args)
+        .output()
+        .expect("takt runs");
     (
         output.status.code().expect("an exit code"),
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
-}
-
-fn takt(args: &[&str]) -> (i32, String, String) {
-    takt_with_path(None, args)
 }
 
 /// The status the store lists `id` at.
@@ -509,56 +489,33 @@ fn another_document_under_the_case_protocol_id_is_refused() {
     assert!(out.contains("case delivery on story.delivery/1"), "{out}");
 }
 
-/// A `b10x-gates` on the program path that pushes and scans without a word and refuses every
-/// API write the way the forge refused the trial's pull request; every line it is given is
-/// appended to `calls` beside it.
-fn refusing_gates(dir: &Path) -> PathBuf {
-    let bin = dir.join("stub-bin");
-    fs::create_dir_all(&bin).expect("a stub directory");
-    let script = r#"#!/bin/sh
-printf '%s\n' "$*" >> "$(dirname "$0")/calls"
-case "$1" in
-  bot|scan-text) exit 0 ;;
-  api)
-    case "$*" in
-      *"--method GET "*)
-        while [ $# -gt 0 ]; do [ "$1" = --output ] && printf '[]' > "$2"; shift; done
-        exit 0 ;;
-    esac
-    printf '%s\n' 'b10x-gates: GitHub operation failed (422 Unprocessable Entity): Validation Failed' >&2
-    exit 1
-    ;;
-  *)
-    printf 'unexpected: %s\n' "$*" >&2
-    exit 2
-    ;;
-esac
-"#;
-    let path = bin.join("b10x-gates");
-    fs::write(&path, script).expect("the stub is written");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("executable");
-    }
-    bin
-}
-
 /// A forge that refuses `open_pull_request`: the run ends with a `stopped: error:` line that
 /// names the refusal, on stdout like every other stop, and exits with the code `takt run
-/// --help` documents for it, which is none of the other stops' codes.
+/// --help` documents for it, which is none of the other stops' codes. The forge is `local`, its
+/// hub a bare repository beside the tree holding its `main`, where a file at `takt` leaves no
+/// room for the request's record: the branch is pushed, and the open is refused.
 #[test]
 fn a_forge_refusing_the_pull_request_stops_the_run_with_a_documented_code() {
     let (outer, repo) = repository(None, "forge-refusal");
+    let hub = outer.join("hub.git");
     git(
-        &repo,
+        &outer,
         &[
-            "remote",
-            "add",
-            "origin",
-            "https://github.com/owner/repo.git",
+            "init",
+            "-q",
+            "--bare",
+            "-b",
+            "main",
+            hub.to_str().expect("utf-8"),
         ],
     );
+    git(
+        &repo,
+        &["remote", "add", "origin", hub.to_str().expect("utf-8")],
+    );
+    git(&repo, &["push", "-q", "origin", "main"]);
+    let config = outer.join("run.yaml");
+    fs::write(&config, "forge: local\nlocal_checks: [\"true\"]\n").expect("the run file");
     let path = repo.to_str().expect("utf-8");
     let (code, out, err) = takt(&[
         "run",
@@ -588,35 +545,35 @@ fn a_forge_refusing_the_pull_request_stops_the_run_with_a_documented_code() {
     let mut case = CaseDir::resume(&repo, "refused").expect("the case reads back");
     case.set_revision("implementation", &head)
         .expect("the revision is recorded");
-    let bin = refusing_gates(&outer);
-    let (code, out, err) = takt_with_path(
-        Some(&bin),
+    fs::write(hub.join("takt"), "not a directory\n").expect("the hub's takt is a file");
+    let (code, out, err) = takt(&[
+        "run",
+        "--repo",
+        path,
+        "--case",
+        "refused",
+        "--harness",
+        "none",
+        "--test-cmd",
+        "true",
+        "--config",
+        config.to_str().expect("utf-8"),
+    ]);
+    assert!(out.contains("forge: local ("), "stdout {out} stderr {err}");
+    // The branch was pushed before the open, holding the implementation.
+    git(
+        &hub,
         &[
-            "run",
-            "--repo",
-            path,
-            "--case",
-            "refused",
-            "--harness",
-            "none",
-            "--test-cmd",
-            "true",
+            "merge-base",
+            "--is-ancestor",
+            &head,
+            "refs/heads/takt/refused",
         ],
-    );
-    let calls = fs::read_to_string(bin.join("calls")).unwrap_or_default();
-    assert!(
-        out.contains("forge: bot (owner/repo)"),
-        "stdout {out} stderr {err} calls {calls}"
-    );
-    assert!(
-        calls
-            .lines()
-            .any(|line| line.starts_with("api --method POST")),
-        "the pull request was asked for: stdout {out} stderr {err} calls {calls}"
     );
     let last = out.lines().last().unwrap_or_default();
     assert!(
-        last.starts_with("stopped: error: ") && last.contains("422 Unprocessable Entity"),
+        last.starts_with("stopped: error: ")
+            && last.contains("open the pull request for takt/refused through the forge local"),
         "the last line is the stop naming the refusal: stdout {out} stderr {err}"
     );
     assert_eq!(out.matches("stopped:").count(), 1, "{out}");
@@ -754,8 +711,8 @@ fn approval_required_and_completed_exit_with_different_documented_codes() {
     }
 }
 
-/// `takt run --help` says what the code does for `--forge` when it is not given: the bot route
-/// only for an `origin` on github.com, else none.
+/// `takt run --help` says what the code does for `--forge` when it is not given: `gitlab` only
+/// for an `origin` on a host `glab` is logged in to, else none.
 #[test]
 fn run_help_describes_the_forge_default_as_the_code_chooses_it() {
     let (code, help, err) = takt(&["run", "--help"]);
@@ -772,7 +729,7 @@ fn run_help_describes_the_forge_default_as_the_code_chooses_it() {
         .join(" ");
     assert!(
         forge.contains(
-            "Not given, `bot` when the repository's `origin` is a repository on github.com"
+            "Not given, `gitlab` when the repository's `origin` is on a host and `glab` is logged in to it; else `none`"
         ),
         "{forge}"
     );

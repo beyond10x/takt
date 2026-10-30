@@ -1,7 +1,7 @@
 //! The forge a run file configures by exact commands, `forge: command`: each action of the
 //! [`Forge`] seam is the argument list the file's `forge_commands` section names, run without a
 //! shell through the forge [`Runner`], so a title holding `;` or `$(...)` is one argument. The
-//! push stays takt's own, scanned push over HTTPS to the project the `origin` remote names: this
+//! push stays takt's own push over HTTPS to the project the `origin` remote names: this
 //! forge replaces the host's API calls and nothing before them. The merge target's tip is read
 //! through git, not through an entry ([`Forge::target_tip`]).
 //!
@@ -25,9 +25,9 @@ use regex::Regex;
 use crate::scan::Scan;
 
 use super::{
-    BotRoute, Checks, Exit, Failed, Forge, Head, IdentityScan, Outgoing, PullRequest,
-    PullRequestState, PullRequestView, Runner, Scanner, fresh, head_is_a_commit, held_by,
-    is_object_id, push_over_https, succeed, write_request,
+    Checks, Exit, Failed, Forge, Head, IdentityScan, MERGE_REQUEST, MERGE_RESPONSE, Outgoing,
+    PUSH_ENV, PullRequest, PullRequestState, PullRequestView, RESPONSE, Runner, fresh,
+    head_is_a_commit, is_object_id, may_publish, push_over_https, write_request,
 };
 
 /// An action of the forge and the entry of `forge_commands` that performs it.
@@ -337,7 +337,7 @@ impl ForgeCommands {
     }
 }
 
-/// The adapter over the commands of `forge_commands`. The push and the scan before it are the
+/// The adapter over the commands of `forge_commands`. The push and the scan adapter are the
 /// run's, to the project `origin` names.
 pub struct CommandForge {
     commands: ForgeCommands,
@@ -346,8 +346,6 @@ pub struct CommandForge {
     origin: Option<(String, String)>,
     /// The run's scan adapter.
     pub scan: Scan,
-    /// The most bytes of commit messages and files one scan before a push is given.
-    pub scan_limit: usize,
     runner: Box<dyn Runner>,
 }
 
@@ -369,7 +367,7 @@ impl CommandForge {
 
     /// Over `commands`, refused when the section is misshapen or lacks an entry the protocol's
     /// `actions` need, naming it; `state` is the directory each command's
-    /// standard error is kept in; the push and the scan go to the project `tree`'s `origin`
+    /// standard error is kept in; the push goes to the project `tree`'s `origin`
     /// names, none when it names none (the push is then refused). Every line runs through
     /// `runner`.
     pub fn for_tree(
@@ -392,29 +390,16 @@ impl CommandForge {
             state: state.into(),
             origin,
             scan,
-            scan_limit: BotRoute::SCAN_LIMIT,
             runner,
         })
     }
 
-    /// The project the push and the scan go to.
+    /// The project the push goes to.
     fn project(&self) -> Result<&(String, String)> {
         self.origin.as_ref().ok_or_else(|| {
             anyhow!(
                 "the forge command pushes to the project the origin remote names, and it names none; nothing was pushed"
             )
-        })
-    }
-
-    /// The scan before a push and a request: the run's scan adapter's.
-    fn scanner(&self) -> Result<Option<Scanner<'_>>> {
-        Ok(match &self.scan {
-            Scan::Gates { policy } => Some(Scanner {
-                runner: &*self.runner,
-                repository: &self.project()?.1,
-                policy: policy.as_deref(),
-            }),
-            Scan::None { .. } => None,
         })
     }
 
@@ -671,38 +656,22 @@ impl Forge for CommandForge {
         "command"
     }
 
-    /// The run's scan adapter over what pushing would publish and the request's title and body,
-    /// every commit of the head (this forge reads no base of the project's); under a declared
-    /// `none`, nothing is scanned.
-    fn scan_outgoing(&self, tree: &Path, dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
+    /// A head that is not a commit is refused under any adapter; then what pushing would publish
+    /// leaves the machine only under a declared `none` ([`may_publish`]).
+    fn scan_outgoing(&self, tree: &Path, _dir: &Path, outgoing: &Outgoing<'_>) -> Result<()> {
         head_is_a_commit(tree, outgoing.branch, outgoing.head)?;
-        let Some(scanner) = self.scanner()? else {
-            return Ok(());
-        };
-        let held = held_by(tree, "origin", outgoing.base, || Ok(None))?;
-        scanner.outgoing(
-            tree,
-            dir,
-            outgoing,
-            held.as_deref(),
-            self.scan_limit,
-            write_request,
-            "pull request",
-        )
+        may_publish(&self.scan, outgoing.branch)
     }
 
+    /// No scan reads the commit identity: [`IdentityScan::NotScanned`] naming why
+    /// ([`Scan::not_scanned`]), no line run.
     fn scan_identity(
         &self,
-        tree: &Path,
-        dir: &Path,
-        identity: &crate::git::CommitIdentity,
+        _tree: &Path,
+        _dir: &Path,
+        _identity: &crate::git::CommitIdentity,
     ) -> Result<IdentityScan> {
-        match self.scanner()? {
-            Some(scanner) => scanner.identity(tree, dir, identity, "the forge command"),
-            None => Ok(IdentityScan::NotScanned(
-                self.scan.not_scanned().unwrap_or_default(),
-            )),
-        }
+        Ok(IdentityScan::NotScanned(self.scan.not_scanned()))
     }
 
     fn push(&self, tree: &Path, branch: &str) -> Result<()> {
@@ -722,18 +691,10 @@ impl Forge for CommandForge {
     }
 
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
+        may_publish(&self.scan, &request.branch)?;
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let output = fresh(dir.join(BotRoute::RESPONSE))?;
-        let (input, published) = write_request(dir, request)?;
-        if let Some(scanner) = self.scanner()? {
-            succeed(&*self.runner, tree, &scanner.argv(&[&input, &published])).with_context(|| {
-                format!(
-                    "the pull request for {branch} did not pass scan-text over {} and was not opened; its title and description stayed on this machine, but the branch {branch} was pushed before this scan",
-                    published.display(),
-                    branch = request.branch
-                )
-            })?;
-        }
+        let output = fresh(dir.join(RESPONSE))?;
+        write_request(dir, request)?;
         let body = dir.join(Self::BODY);
         std::fs::write(&body, &request.body)
             .with_context(|| format!("write {}", body.display()))?;
@@ -794,7 +755,7 @@ impl Forge for CommandForge {
             .collect()
         };
         let run = |argv: &[String]| -> Result<Exit> {
-            let exit = self.runner.run_env(tree, argv, &BotRoute::PUSH_ENV)?;
+            let exit = self.runner.run_env(tree, argv, &PUSH_ENV)?;
             if exit.success() {
                 return Ok(exit);
             }
@@ -846,8 +807,8 @@ impl Forge for CommandForge {
 
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
         std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let input = dir.join(BotRoute::MERGE_REQUEST);
-        let output = fresh(dir.join(BotRoute::MERGE_RESPONSE))?;
+        let input = dir.join(MERGE_REQUEST);
+        let output = fresh(dir.join(MERGE_RESPONSE))?;
         let document = serde_json::json!({ "number": number, "sha": head });
         std::fs::write(&input, serde_json::to_vec_pretty(&document)?)
             .with_context(|| format!("write {}", input.display()))?;

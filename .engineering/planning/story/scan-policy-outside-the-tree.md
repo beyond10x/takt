@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scan-policy-outside-the-tree
 kind: story
-status: draft
+status: archived
 title: The bot route's scan policy cannot be written by a step
 tags:
 - finding
@@ -15,7 +15,9 @@ relations:
 - informed_by: story:validator-confinement
 - depends_on: story:forge-preflight
 - decomposes: epic:composable-agentic-work
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "archived", at: "2026-10-30T09:41:26Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
@@ -42,3 +44,10 @@ source: .engineering/planning/review-result/findings-hunt-33ab42c.md
 ## Acceptance
 
 In the predicate's run, the run exits 1 before the case opens and names the policy path as being under the tree. A `B10X_GATES_POLICY` that is absolute and outside the tree is passed on unchanged.
+
+## Archived
+
+Archived with wave 47: story:takt-carries-no-organisations-own-route removed the bot route, the
+`gates` scan adapter and every read of `B10X_GATES_POLICY`, so takt has no scan policy left that a
+step could write. The finding's rule, that nothing a model writes becomes a gate definition,
+stays with story:validator-confinement.

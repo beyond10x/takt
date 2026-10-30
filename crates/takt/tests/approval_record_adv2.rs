@@ -464,7 +464,7 @@ fn adv2_names_are_read_byte_for_byte_and_a_story_name_prefix_is_not_the_story() 
     );
 }
 
-/// The double, with a push that never reaches the forge on the first try: the bot route's child
+/// The double, with a push that never reaches the forge on the first try: the push's child
 /// failing before the remote moved.
 struct NeverReaches {
     memory: Rc<Memory>,
@@ -492,14 +492,14 @@ impl Forge for NeverReaches {
 
     fn push(&self, tree: &Path, branch: &str) -> anyhow::Result<()> {
         if self.fail_next_push.replace(false) {
-            bail!("b10x-gates bot -- push exited 128: could not read from the remote");
+            bail!("git push exited 128: could not read from the remote");
         }
         self.memory.push(tree, branch)
     }
 
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> anyhow::Result<()> {
         if self.fail_next_push.replace(false) {
-            bail!("b10x-gates bot -- push exited 128: could not read from the remote");
+            bail!("git push exited 128: could not read from the remote");
         }
         self.memory.push_revision(tree, branch, revision)
     }
@@ -659,7 +659,7 @@ impl Forge for PerHead {
     fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
         if self.require_checks && !self.passing.borrow().iter().any(|on| on == head) {
             bail!(
-                "b10x-gates api --method PUT --path /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"takt / task check\" is expected"
+                "PUT /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"takt / task check\" is expected"
             );
         }
         self.memory.merge(tree, dir, number, head)
