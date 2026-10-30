@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:bot-forge-reads-through-the-app
 kind: story
-status: active
+status: implemented
 title: The bot forge reads pull requests and checks through the App, not gh
 summary: a pod has no gh login; reads go through b10x-gates api GET
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:35:59Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T21:35:59Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-30T00:45:24Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: bot-forge-reads-through-the-app
 

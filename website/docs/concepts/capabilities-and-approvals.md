@@ -180,7 +180,7 @@ approval. When a condition fails, the run grants nothing and stops `ApprovalRequ
 before. With the evidence green and the delegation missing or refused, it first prints
 `not granted as agent:takt-delivery:` and the reason. Revoking is a later
 commit of the file that sets `revoked_at` on the entry; from then on that entry grants nothing.
-(Not in 0.22.1. Tests cover it against an in-memory forge; no recorded run has merged this way
+(Since 0.23.0. Tests cover it against an in-memory forge; no recorded run has merged this way
 yet.)
 
 ## A step that does more is refused

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T00:27:33Z",
+  "actor": "human:timo",
+  "artifact": "story:pr-open-not-idempotent-on-resume",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI check, task check (test-library) at abe73a71: b10x-takt tests/pr_open_after_a_lost_answer.rs: test result: ok. 5 passed; 0 failed; 0 ignored; tests/goal_a_adv1.rs: test result: ok. 5 passed; 0 failed; 0 ignored",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/40978367357/job/123812456325"
+  }
+}

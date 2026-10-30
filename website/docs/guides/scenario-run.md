@@ -40,8 +40,8 @@ admits only while the branch's tip is merged into the default branch.
 
 `takt scenario run` takes the same budget, harness, endpoint, forge and test flags as
 `takt run`, `--continue-past-red-base` among them. Its token budget has the same default: with
-neither `--tokens` nor the run file's `tokens`, it stops at 3,000,000 tokens, exit 3. (Not in
-0.22.1.)
+neither `--tokens` nor the run file's `tokens`, it stops at 3,000,000 tokens, exit 3. (Since
+0.23.0.)
 
 `takt scenario run --config <FILE>` reads the same run configuration file as `takt run`, and
 refuses a `story` in it, since the scenario names the story. (Not in 0.14.0.)

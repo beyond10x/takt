@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-run-stops-at-a-default-token-budget
 kind: story
-status: active
+status: implemented
 title: A run stops at 3,000,000 tokens unless it names another budget
 summary: an unattended run in a pod has a token bound even when nobody set one
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:22:42Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T21:22:42Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-30T00:45:23Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # Story: a-run-stops-at-a-default-token-budget
 

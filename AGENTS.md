@@ -86,7 +86,12 @@ by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
   provider's answer (`CaseAuthority`, `crates/takt/src/case.rs`): it reads `authority.yaml`
   when asked and allows a grant only at the case revision asked about and the revision of its
   subject it was given at. The one gate in Rust is the merge validator's, which merges only under
-  a grant of `repository.merge` at the case's revision; add no other.
+  a grant of `repository.merge` at the case's revision; add no other. takt writes such a grant
+  itself in one case only: as `agent:takt-delivery`, under a delegation of `repository.merge`
+  (and `repository.merge.judge_surface` for a judge-surface diff) in the target's
+  `.engineering/delegations.yaml` at the tip the forge reports, with `tests.pass`, `gate.green`
+  and `ci.green` at the revision (`Run::grant_delegated`, `crates/takt/src/run.rs`); the merge
+  reads the delegation again before it merges. Add no other path by which takt grants itself.
 - A judgement step offers the model only the actions the frontier admits; a step that does more is
   refused and reverted, not accepted.
 - Credentials never enter a harness's environment, its prompt or a case record.

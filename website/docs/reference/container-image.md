@@ -13,7 +13,7 @@ of this repository builds or pushes an image, and none is published: you build i
 loads your build.
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.22.1 .
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.23.0 .
 ```
 
 Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a [Loom](/docs/concepts/glossary#loom) agent:
@@ -124,7 +124,7 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
 - **One harness.** The image holds b10x-harness and no other: no Claude Code, no Codex. Set
   `harness: harness` (or `none`). The default, `claude`, is not there.
 - **No `glab`.** Set `forge: none`. The default follows `origin`, and `gitlab` needs `glab`. The
-  delivery stays a branch in `/workspace`. `bot` needs no `gh` from the release after 0.22.1:
+  delivery stays a branch in `/workspace`. `bot` needs no `gh` since 0.23.0:
   it reads through `b10x-gates api`, and the image ships `b10x-gates`. A `bot` run is refused
   before its case opens unless `B10X_GATES_POLICY` names a policy file the run's uid owns, a
   regular file, not a symbolic link, at mode 0600 or stricter, in a directory that uid owns and no other user can write. No run of the image through `bot` is recorded.

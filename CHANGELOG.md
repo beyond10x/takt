@@ -6,6 +6,8 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-10-30
+
 ### Added
 
 - A run that names no token budget stops at 3,000,000 tokens (exit 3); `takt scenario run` shares the default, and `--tokens` wins over the run file.
@@ -881,7 +883,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.22.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.23.0...HEAD
+[0.23.0]: https://github.com/beyond10x/takt/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/beyond10x/takt/compare/0.22.0...0.22.1
 [0.22.0]: https://github.com/beyond10x/takt/compare/0.21.0...0.22.0
 [0.21.0]: https://github.com/beyond10x/takt/compare/0.20.0...0.21.0

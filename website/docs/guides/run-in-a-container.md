@@ -18,9 +18,9 @@ image holds is in [Container image](../reference/container-image.md).
 No image is published, so build it from the tag:
 
 ```sh
-git clone --branch 0.22.1 https://github.com/beyond10x/takt
+git clone --branch 0.23.0 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.22.1 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.23.0 .
 ```
 
 The image carries takt, `aep`, `b10x-harness` 0.22.0, `ess`, `b10x-gates` (the `gates` scan
@@ -60,7 +60,7 @@ env = "LLM_API_KEY"
 
 The image holds b10x-harness and no other [harness](/docs/concepts/glossary#harness), and no `glab`: `harness: harness`
 (or `none`) and `forge: none` are the settings this page's runs used. The `bot` forge reads
-through `b10x-gates`, which the image ships, and no longer needs `gh` (0.22.1 still does); it
+through `b10x-gates`, which the image ships, and no longer needs `gh` (since 0.23.0); it
 needs a policy file as well ([What it cannot do](../reference/container-image.md#what-it-cannot-do)), and
 no run of the image through it is recorded. A test in the repository reads
 both files through takt's own readers, so they stay valid.
@@ -74,7 +74,7 @@ under another uid is refused by git as `dubious ownership`, so clone into a volu
 git -C my-repo bundle create ../my-repo.bundle main
 docker volume create takt-demo-ws
 docker run --rm -v "$PWD/my-repo.bundle:/src/my-repo.bundle:ro" -v takt-demo-ws:/workspace \
-  --entrypoint git takt:0.22.1 clone -q -b main /src/my-repo.bundle /workspace
+  --entrypoint git takt:0.23.0 clone -q -b main /src/my-repo.bundle /workspace
 ```
 
 A [story](/docs/concepts/glossary#story) run needs what [Run a story](./run-a-story.md#1-prepare-the-repository) lists, committed
@@ -87,7 +87,7 @@ docker run --rm \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   -e LLM_API_KEY \
   -v takt-demo-ws:/workspace -v "$PWD/config:/config:ro" \
-  --entrypoint tini takt:0.22.1 -- \
+  --entrypoint tini takt:0.23.0 -- \
   /bin/sh -c 'mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace --config /config/agent.yaml "$@"' takt
 ```
 

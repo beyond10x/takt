@@ -1,0 +1,55 @@
+---
+format: aep.planning-md/3
+id: story:git-and-model-through-loopback-relays
+kind: story
+status: draft
+title: Push, fetch and model calls go through loopback relays with no credential in takt
+summary: http to a loopback origin and a keyless loopback model endpoint
+relations:
+- decomposes: epic:composable-agentic-work
+- serves: vision:safe-agentic-coding
+revision: 1
+---
+# Story: git-and-model-through-loopback-relays
+
+## Outcome
+
+A run whose `origin` is `http://127.0.0.1:<p>/<owner>/<repo>.git` fetches and pushes through it,
+and a run whose model endpoint is `http://` to a loopback host runs with no credential: takt
+holds neither the forge's token nor the model's key.
+
+## Context
+
+In a pod with no secret in its container, a boundary container on loopback relays git
+smart-HTTP to a Connectors instance (`LOOM_BOUNDARY_GIT_URL`, `http://127.0.0.1:8403`), which
+checks the ref policy, the bot identity and the pre-push scan and pushes with the App's
+installation token; and relays model calls to the LLM gateway (`LOOM_BOUNDARY_MODEL_URL`,
+`http://127.0.0.1:8401/v1`).
+
+Today takt pins git to `GIT_ALLOW_PROTOCOL=https` (`crates/takt-cli/src/main.rs:2940`,
+`crates/takt/src/forge/bot.rs:98`), and a model endpoint needs a credential source
+(`crates/takt/src/harness.rs:4571`); an llm route of `auth: {kind: anonymous}` is not accepted.
+`http://` is already admitted for a loopback host only (`harness.rs:5047`, `loopback` at
+`:5085`).
+
+The pre-push scan runs on the Connectors instance in this mode, so the run's own scan of what it
+publishes is `none`, and says so in the case.
+
+Depends on the Connectors release with the git relay and the Loom release with `spec.boundary`.
+
+## Scope
+
+- `crates/takt-cli/src/main.rs`: `FETCH_ENV` admits `http` when `origin` is a loopback host (cited)
+- `crates/takt/src/forge/bot.rs`, `crates/takt/src/forge/connectors.rs`: the push env, the same rule (cited)
+- `crates/takt/src/harness.rs`: no credential for a loopback endpoint; an anonymous llm route accepted for loopback (cited)
+- new: `crates/takt/tests/loopback_relays.rs` (inferred)
+
+## Acceptance
+
+1. With `origin` `http://127.0.0.1:<p>/o/r.git` served by a local smart-HTTP stand-in, a run
+   fetches and pushes its branch; with `origin` `http://example.com/o/r.git` the run refuses the
+   fetch, naming the URL.
+2. `--harness harness --model-endpoint http://127.0.0.1:<p>/v1` with no credential flag starts its
+   session; the stand-in sees no `Authorization` and no `x-api-key` header.
+3. The same with `http://example.com/v1` is refused, as today.
+4. No variable of the harness's environment holds a value the stand-ins were given as a token.
