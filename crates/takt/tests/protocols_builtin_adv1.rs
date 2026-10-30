@@ -1,17 +1,21 @@
 //! Adversary pass 1 on story:protocols-are-engineering-protocols-built-ins: takt's three
 //! protocols are the engineering protocols' built-ins, byte for byte what takt 0.12.0 carried in
-//! `protocols/<name>/1.yaml`, under both spellings, and every built-in `takt protocols` lists
+//! `protocols/<name>/1.yaml` (story.delivery/1 save its forge-neutral `pr.open` description),
+//! under both spellings, and every built-in `takt protocols` lists
 //! resolves to a protocol whose own id is the listed name.
 
 use sha2::{Digest as _, Sha256};
 use takt::LoadedProtocol;
 
-/// The sha256 of `git show 0.12.0:protocols/<name>/1.yaml`, read from the tag on 2026-10-26.
+/// The sha256 of `git show 0.12.0:protocols/<name>/1.yaml`, read from the tag on 2026-10-26;
+/// story.delivery/1 is engineering-protocols 0.15.2's, whose `pr.open` description names the
+/// run's forge and no organisation's route (story:takt-carries-no-organisations-own-route), the
+/// one change from 0.12.0's file. Only an improvement turn is refused on a differing copy.
 const AT_0_12_0: [(&str, &str, &str); 3] = [
     (
         "story.delivery/1",
         "story-delivery/1",
-        "34c7d2d742f7002f68207e48dbfefbcf23d464112cca85e5e2510e7cd97a269c",
+        "f24e9c1f98c0e4c6ba4a88ad82696c68ac403655378ebc5af51c3c8a775f8e39",
     ),
     (
         "self.improvement/1",
