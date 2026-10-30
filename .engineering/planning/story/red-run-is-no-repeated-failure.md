@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:red-run-is-no-repeated-failure
 kind: story
-status: active
+status: implemented
 title: The red run a story's new test is meant to give counts toward a repeated failure
 tags:
 - finding
@@ -16,10 +16,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T21:21:41Z", actor: "human:timo", revision: 3, executor: "agent:planner"}
 - {from: "proposed", to: "active", at: "2026-10-28T21:21:42Z", actor: "human:timo", revision: 4, executor: "agent:developer"}
+- {from: "active", to: "implemented", at: "2026-10-29T21:30:15Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # The red run a story's new test is meant to give counts toward a repeated failure
 

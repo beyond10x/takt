@@ -5,6 +5,9 @@
 //! step leaves survive its undo; and the readers list a case under each root. The `claude` and
 //! the forge are doubles: nothing reaches a model or a network.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -230,10 +233,10 @@ fn delivery_repository(name: &str) -> (Scratch, PathBuf) {
     (Scratch(outer), repo)
 }
 
-/// The two programs of the bot route, in `<outer>/stub-bin`, their state in `<outer>/forge`:
+/// The program of the bot route, in `<outer>/stub-bin`, its state in `<outer>/forge`:
 /// `b10x-gates bot -- push` keeps the branch and the commit pushed, `api --method POST` opens
-/// pull request #7, `api --method PUT` merges it and counts the merge; `gh pr view` reports
-/// the pull request's state, `gh pr checks` one passing check. Nothing reaches a network.
+/// pull request #7, `api --method PUT` merges it and counts the merge; `api --method GET`
+/// reports the pull request's state and one passing check run. Nothing reaches a network.
 fn forge_double(outer: &Path) {
     let bin = outer.join("stub-bin");
     let state = outer.join("forge");
@@ -259,10 +262,11 @@ case "$1" in
     exit 0 ;;
   scan-text) exit 0 ;;
   api)
-    method=''; output=''
+    method=''; path=''; output=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --method) method="$2"; shift ;;
+        --path) path="$2"; shift ;;
         --output) output="$2"; shift ;;
       esac
       shift
@@ -270,6 +274,16 @@ case "$1" in
     case "$method" in
       POST) printf 'OPEN' > "$state/state"; printf '{{"number": 7}}' > "$output"; exit 0 ;;
       PUT) printf 'MERGED' > "$state/state"; echo merged >> "$state/merges"; printf '{{"merged": true}}' > "$output"; exit 0 ;;
+      GET)
+        case "$path" in
+          */pulls\?*) printf '[]' > "$output" ;;
+          */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
+          */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
+          *) s=$(cat "$state/state"); st=open; merged=false
+             case "$s" in MERGED) st=closed; merged=true ;; CLOSED) st=closed ;; esac
+             printf '{{"state":"%s","merged":%s,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$st" "$merged" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")" > "$output" ;;
+        esac
+        exit 0 ;;
     esac ;;
 esac
 echo "b10x-gates double: $*" >&2
@@ -277,29 +291,14 @@ exit 2
 "#
         ),
     );
-    executable(
-        &bin,
-        "gh",
-        &format!(
-            r#"#!/bin/sh
-state='{state_text}'
-case "$2" in
-  view) printf '{{"state":"%s","mergedAt":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}}' "$(cat "$state/state")" "$(cat "$state/branch")" "$(tr -d '\n' < "$state/pushed")"; exit 0 ;;
-  checks) printf '[{{"bucket":"pass"}}]'; exit 0 ;;
-esac
-echo "gh double: $*" >&2
-exit 2
-"#
-        ),
-    );
 }
 
-/// `takt` with `bin` first on the program path, the forge double's programs, and no
-/// `b10x-gates` policy: the exit code, stdout and stderr.
+/// `takt` with `bin` first on the program path, the forge double's programs, and a
+/// `b10x-gates` policy file the double never reads: the exit code, stdout and stderr.
 fn takt_through(bin: &Path, args: &[&str]) -> (i32, String, String) {
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(args)
-        .env_remove("B10X_GATES_POLICY")
+        .env("B10X_GATES_POLICY", stand_in_policy::path())
         .env(
             "PATH",
             format!(

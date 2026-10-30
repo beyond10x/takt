@@ -1200,6 +1200,47 @@ pub fn prepare_grant(
     // A run holds its case while it runs: a grant given meanwhile is refused, not written into
     // a case a judgement step is in flight on; and the grant holds the case until it is written.
     let held = Held::take(&dir, id)?;
+    let (authority, approval) = checked_grant(tree, &dir, id, capability, approver)?;
+    Ok(PendingGrant {
+        dir,
+        authority,
+        approval,
+        _held: held,
+    })
+}
+
+impl CaseDir {
+    /// Grants `capability` to this case as `approver` from inside the run that holds it, with
+    /// every check [`prepare_grant`] makes but the hold, which the run already has: written
+    /// into `authority.yaml` at the revision the case reached the gate at, exactly as `takt
+    /// approve` writes it, and answered. Refused, with nothing written, when the case is not
+    /// held. The run's grant as a delegated role ([`crate::run::DELIVERY_ROLE`]) and nothing
+    /// else writes through it; it records nothing in the planning store.
+    pub(crate) fn grant_while_held(&self, capability: &str, approver: &str) -> Result<Approval> {
+        if held_since(&self.dir)?.is_none() {
+            bail!(
+                "the case {} is not held by a run; a grant from inside one is refused, nothing written",
+                self.id
+            );
+        }
+        let (authority, approval) =
+            checked_grant(&self.tree, &self.dir, &self.id, capability, approver)?;
+        authority.write(&self.dir)?;
+        Ok(approval)
+    }
+}
+
+/// The checks of a grant of `capability` to the case `id` at `dir` under `tree` by `approver`
+/// ([`prepare_grant`]), the case held by the caller: the case's authority with the grant in
+/// it, not yet written, and what it grants.
+fn checked_grant(
+    tree: &Path,
+    dir: &Path,
+    id: &str,
+    capability: &str,
+    approver: &str,
+) -> Result<(Authority, Approval)> {
+    let dir = dir.to_path_buf();
     if capability.is_empty()
         || capability
             .chars()
@@ -1348,12 +1389,7 @@ pub fn prepare_grant(
         granted_at,
         revision,
     };
-    Ok(PendingGrant {
-        dir,
-        authority,
-        approval,
-        _held: held,
-    })
+    Ok((authority, approval))
 }
 
 /// Whether `decided` is a grant whose mainline tip records no repository it was read from
@@ -4513,6 +4549,47 @@ impl LatestStamp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A grant from inside a run ([`CaseDir::grant_while_held`]) is refused when the case's
+    /// `run.lock` is not there, and writes no `authority.yaml`; with the lock there, the refusal
+    /// is no longer the hold's.
+    #[test]
+    fn a_grant_while_held_is_refused_when_run_lock_is_missing() {
+        let tree = std::env::temp_dir().join(format!("takt-grant-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        let dir = tree.join(CASES_DIR).join("c1");
+        std::fs::create_dir_all(&dir).expect("the case's directory");
+        let case = CaseDir {
+            id: "c1".to_owned(),
+            dir: dir.clone(),
+            branch: "takt/c1".to_owned(),
+            tree: tree.clone(),
+            protocol: LoadedProtocol::builtin("story.delivery/1").expect("the protocol"),
+            doc: serde_yaml_ng::Value::Null,
+            written: 0,
+        };
+        assert!(!dir.join(LOCK_FILE).exists());
+        let refused = case
+            .grant_while_held("repository.merge", crate::run::DELIVERY_ROLE)
+            .expect_err("no run holds the case");
+        let refusal = format!("{refused:#}");
+        assert!(
+            refusal.contains("is not held by a run"),
+            "refused for another reason: {refusal}"
+        );
+        assert!(!dir.join(AUTHORITY_FILE).exists(), "{refusal}");
+
+        std::fs::write(dir.join(LOCK_FILE), "2026-10-30T00:00:00Z\n").expect("the lock");
+        let other = case
+            .grant_while_held("repository.merge", crate::run::DELIVERY_ROLE)
+            .map(|_| ())
+            .map_err(|error| format!("{error:#}"));
+        let _ = std::fs::remove_dir_all(&tree);
+        assert!(
+            !matches!(&other, Err(why) if why.contains("is not held by a run")),
+            "held, and still refused for the hold: {other:?}"
+        );
+    }
 
     /// story:a-run-keeps-every-decision-only-on-a-trial: an improvement case keeps every decision
     /// whatever is asked, a story's case keeps what is asked, and the names are the flag's.

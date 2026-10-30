@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:failed-gate-keeps-other-linter-shapes
 kind: story
-status: active
+status: implemented
 title: A failed gate drops failing lines of other linters' shapes, uncounted
 tags:
 - finding
@@ -18,10 +18,11 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: cited
   path: crates/takt/tests/failed_gate_lines.rs
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T21:15:41Z", actor: "human:timo", revision: 3, executor: "agent:planner"}
 - {from: "proposed", to: "active", at: "2026-10-28T21:15:42Z", actor: "human:timo", revision: 4, executor: "agent:developer"}
+- {from: "active", to: "implemented", at: "2026-10-29T21:30:13Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A failed gate drops failing lines of other linters' shapes, uncounted
 

@@ -152,6 +152,24 @@ pub trait Validator {
         let _ = (tree, case_dir);
         Ok(())
     }
+    /// Why the owner's record does not let the agent role `role` grant this validator's action
+    /// for the case in `tree` at `revision`, read where the validator reads whose grant it
+    /// takes; `None` when it does. The run asks before it writes a grant as that role itself
+    /// ([`crate::run::DELIVERY_ROLE`]); it grants nothing on any answer but `None`, and the
+    /// validator still checks the grant it then finds as it checks a person's. Nothing is
+    /// delegated by default.
+    fn delegation_refusal(
+        &self,
+        tree: &Path,
+        revision: &str,
+        role: &str,
+    ) -> Result<Option<String>> {
+        let _ = (tree, revision);
+        Ok(Some(format!(
+            "{} reads no delegation, so {role} grants nothing for it",
+            self.action()
+        )))
+    }
 }
 
 /// The most bytes [`failing_lines`] keeps of one failed check's output, 4 KiB, each kept line
@@ -3711,10 +3729,14 @@ fn above(revision: &str, head: &str) -> String {
 /// whose base branch (`refs/heads/<base>`, never a tag of its name) is not there, or whose
 /// branch has no commit beyond it but the take, pushes nothing and writes no record, the
 /// summary saying why. The title is the intent's first line, the body the intent and the claims
-/// that hold. Before every push the forge scans what it would publish
-/// ([`Forge::scan_outgoing`]): every commit of the head pushed the remote does not hold, with
-/// its author, committer, message and diff, and, when the pull request is opened, its title and
-/// body; a refused scan pushes nothing, opens nothing and writes no record.
+/// that hold. A case with no number reads the forge's open pull request for its branch into its
+/// base before it opens one ([`Forge::find_open_pull_request`]), and again after an open that
+/// failed: one there is taken and read, never opened again, so a run resumed after the open's
+/// answer was lost opens no second pull request; a read that fails opens nothing, and after a
+/// failed open with none there the failure stands. Before every push the forge scans what it
+/// would publish ([`Forge::scan_outgoing`]): every commit of the head pushed the remote does
+/// not hold, with its author, committer, message and diff, and, when the pull request is
+/// opened, its title and body; a refused scan pushes nothing, opens nothing and writes no record.
 pub struct PrOpen {
     /// The forge the push and the pull request go through.
     pub forge: Rc<dyn Forge>,
@@ -4166,52 +4188,101 @@ impl Validator for PrOpen {
             .with_context(|| format!("push {name} through the forge {forge}"))?;
         branch.pushed = Some(head.clone());
         let carried = above(revision, &head);
-        let mut waits = false;
-        let (state, summary) = match next {
-            Next::Read(number) => {
-                let view = self.forge.pull_request(tree, number).with_context(|| {
-                    format!("read pull request #{number} through the forge {forge}")
-                })?;
-                if view.head.branch == name && view.head.sha == head {
-                    (
-                        Some(view.state),
-                        format!(
-                            "{repaired}pushed {name} at {} through {forge}{carried}; pull request #{number} is {}",
-                            short(revision),
-                            view.state
-                        ),
-                    )
-                } else {
-                    // The case's branch at another commit: the forge has not moved the pull
-                    // request to the push yet. Another branch is not a lag, and not waited on.
-                    waits = view.head.branch == name;
-                    (
-                        None,
-                        format!(
-                            "{repaired}pushed {name} at {} through {forge}; pull request #{number} has the head {} at {}, not the case's branch at the revision; no record, the claim stays unknown",
-                            short(revision),
-                            view.head.branch,
-                            short(&view.head.sha)
-                        ),
-                    )
-                }
+        // Reads pull request `number`, which `how` says how the case came to hold: its state is
+        // recorded once the forge reports its head as the case's branch at the head pushed.
+        let read = |number: u64, how: &str| -> Result<(Option<PullRequestState>, String, bool)> {
+            let view = self.forge.pull_request(tree, number).with_context(|| {
+                format!("read pull request #{number} through the forge {forge}")
+            })?;
+            if view.head.branch == name && view.head.sha == head {
+                Ok((
+                    Some(view.state),
+                    format!(
+                        "{repaired}pushed {name} at {} through {forge}{carried}; {how}pull request #{number} is {}",
+                        short(revision),
+                        view.state
+                    ),
+                    false,
+                ))
+            } else {
+                // The case's branch at another commit: the forge has not moved the pull
+                // request to the push yet. Another branch is not a lag, and not waited on.
+                Ok((
+                    None,
+                    format!(
+                        "{repaired}pushed {name} at {} through {forge}; {how}pull request #{number} has the head {} at {}, not the case's branch at the revision; no record, the claim stays unknown",
+                        short(revision),
+                        view.head.branch,
+                        short(&view.head.sha)
+                    ),
+                    view.head.branch == name,
+                ))
             }
-            Next::Open(request) => {
-                let number = self
+        };
+        let (state, summary, waits) = match next {
+            Next::Read(number) => read(number, "")?,
+            // Read before the write: a run that opened the pull request and ended before its
+            // number was recorded (the answer lost, the process gone, the step put back) left
+            // the case with none and the forge with one. That one is taken and read, never
+            // opened again; a read that fails opens nothing.
+            Next::Open(request) => match self
+                .forge
+                .find_open_pull_request(tree, &name, &request.base)
+                .with_context(|| {
+                    format!(
+                        "read the open pull requests for {name} through the forge {forge} before opening one; nothing opened"
+                    )
+                })? {
+                Some(number) => {
+                    branch.pull_request = Some(number);
+                    read(
+                        number,
+                        &format!(
+                            "found open for {name} before opening one, the case holding no number: "
+                        ),
+                    )?
+                }
+                None => match self
                     .forge
                     .open_pull_request(tree, &dir.join("artifacts"), &request)
-                    .with_context(|| {
-                        format!("open the pull request for {name} through the forge {forge}")
-                    })?;
-                branch.pull_request = Some(number);
-                (
-                    Some(PullRequestState::Open),
-                    format!(
-                        "{repaired}pushed {name} at {} through {forge}{carried} and opened pull request #{number}: open",
-                        short(revision)
-                    ),
-                )
-            }
+                {
+                    Ok(number) => {
+                        branch.pull_request = Some(number);
+                        (
+                            Some(PullRequestState::Open),
+                            format!(
+                                "{repaired}pushed {name} at {} through {forge}{carried} and opened pull request #{number}: open",
+                                short(revision)
+                            ),
+                            false,
+                        )
+                    }
+                    // An open that failed may have opened it all the same, its answer lost:
+                    // the forge's open pull request for the case's branch is taken, and with
+                    // none the failure stands.
+                    Err(error) => {
+                        let error = error.context(format!(
+                            "open the pull request for {name} through the forge {forge}"
+                        ));
+                        let number = match self.forge.find_open_pull_request(
+                            tree,
+                            &name,
+                            &request.base,
+                        ) {
+                            Ok(Some(number)) => number,
+                            Ok(None) => return Err(error),
+                            Err(unread) => bail!(
+                                "{error:#}; nor could the open pull requests for {name} be read after it: {unread:#}"
+                            ),
+                        };
+                        branch.pull_request = Some(number);
+                        read(
+                            number,
+                            &format!("opening one failed, and found open for {name}: "),
+                        )?
+                    }
+                },
+            },
         };
         branch.write(&dir)?;
         let records = state
@@ -4479,12 +4550,15 @@ impl PrMerged {
 /// read at the merge target's tip as the forge reports it, never from the case's tree.
 pub const JUDGE_ALLOW: &str = ".engineering/judge-allow.yaml";
 
-/// The delegation record: the owner's delegations of a judge-surface merge grant to agent
-/// roles, each revocable, read at the merge target's tip like [`JUDGE_ALLOW`].
+/// The delegation record: the owner's delegations of a merge grant to agent roles, each
+/// revocable, read at the merge target's tip like [`JUDGE_ALLOW`]: of
+/// [`JUDGE_SURFACE_CAPABILITY`], which a role's grant of a judge-surface merge needs, and of
+/// `repository.merge` itself, under which a run grants the merge as a role
+/// ([`Validator::delegation_refusal`]).
 pub const DELEGATIONS: &str = ".engineering/delegations.yaml";
 
-/// The capability a delegation in [`DELEGATIONS`] gives: granting the merge of a change to a
-/// judge surface.
+/// The capability a delegation in [`DELEGATIONS`] gives for a judge surface: granting the merge
+/// of a change to one.
 pub const JUDGE_SURFACE_CAPABILITY: &str = "repository.merge.judge_surface";
 
 /// The files a change to which merges under the owner's grant alone, never a delegation's,
@@ -4555,18 +4629,38 @@ struct Delegation {
 }
 
 impl Delegation {
-    /// Whether it lets `approver` grant a judge-surface merge now: an owner's delegation of
-    /// [`JUDGE_SURFACE_CAPABILITY`] to exactly that role, saying when it was given, with no
-    /// revocation on record.
-    fn admits(&self, approver: &str) -> bool {
+    /// Whether it lets `approver` grant `capability` now: an owner's delegation of exactly that
+    /// capability to exactly that role, saying when it was given, with no revocation on record.
+    fn admits(&self, approver: &str, capability: &str) -> bool {
         !self.given_at.trim().is_empty()
             && self.owner.starts_with("human:")
             && crate::case::is_approver(&self.owner)
             && self.role.starts_with("agent:")
             && self.role == approver
-            && self.capability == JUDGE_SURFACE_CAPABILITY
+            && self.capability == capability
             && self.revoked_at.is_none()
     }
+}
+
+/// Whether [`DELEGATIONS`] at `tip`, read from `mirror`, records an unrevoked delegation of
+/// `capability` to `approver`: `Err` naming why nothing is delegated when the file is not there
+/// or does not read, which delegates nothing.
+fn delegated_at(
+    mirror: &Mirror,
+    tip: &str,
+    approver: &str,
+    capability: &str,
+) -> Result<std::result::Result<bool, String>> {
+    Ok(
+        match record_at::<DelegationRecord>(mirror, tip, DELEGATIONS)? {
+            None => Err(format!("{DELEGATIONS} is not there")),
+            Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
+            Some(Ok(record)) => Ok(record
+                .delegations
+                .iter()
+                .any(|delegation| delegation.admits(approver, capability))),
+        },
+    )
 }
 
 /// The file `path` at the commit `at` in the judge's copy, read as `T` without anchors or
@@ -4854,8 +4948,15 @@ impl PrMerged {
     /// tip, the revision and the base made through git's transport, each object hashed as it
     /// arrives, never this repository's store, where a step can overwrite one; a copy that does
     /// not arrive as its ids refuses the merge.
+    ///
+    /// With `delegated` given, a capability, the approver must besides be an agent role that
+    /// [`DELEGATIONS`] at the same tip records an unrevoked delegation of that capability to,
+    /// whatever the change: what [`Validator::delegation_refusal`] asks before the run grants
+    /// the merge as a role itself. The merge passes [`Self::ACTION`] for a grant by
+    /// [`crate::run::DELIVERY_ROLE`] and none for any other approver.
     #[expect(
         clippy::too_many_lines,
+        clippy::too_many_arguments,
         reason = "one decision, read in the order it refuses"
     )]
     fn judge_guard(
@@ -4866,6 +4967,7 @@ impl PrMerged {
         target: &str,
         revision: &str,
         approver: &str,
+        delegated: Option<&str>,
     ) -> Result<Option<String>> {
         let forge = self.forge.name();
         if branch.base.as_deref() != Some(target) {
@@ -4948,6 +5050,29 @@ impl PrMerged {
                 short(&at),
                 short(&tip)
             )));
+        }
+        // A grant the run gives as a role: the owner's delegation of the capability itself, at
+        // the tip judged below, whatever the change.
+        if let Some(capability) = delegated {
+            let typed = crate::case::is_approver(approver) && approver.starts_with("agent:");
+            let why = match delegated_at(&mirror, &tip, approver, capability)? {
+                _ if !typed => Some(format!(
+                    "`{}` is no agent role (agent:<role>) a delegation can name",
+                    approver.escape_debug()
+                )),
+                Ok(true) => None,
+                Ok(false) => Some(format!(
+                    "{DELEGATIONS} at {base} {} records no unrevoked delegation of {capability} to {approver}",
+                    short(&tip)
+                )),
+                Err(why) => Some(format!(
+                    "no delegation of {capability} to {approver} is on record at {base} {} ({why})",
+                    short(&tip)
+                )),
+            };
+            if why.is_some() {
+                return Ok(why);
+            }
         }
         let merged = mirror.merged_tree(&tip, revision)?;
         if !merged.conflicted.is_empty() {
@@ -5082,25 +5207,19 @@ pub(crate) fn approver_refusal(
             owner_only.join(" or ")
         )));
     }
-    let delegated = match record_at::<DelegationRecord>(mirror, tip, DELEGATIONS)? {
-        None => Err(format!("{DELEGATIONS} is not there")),
-        Some(Err(why)) => Err(format!("{why}; it delegates nothing")),
-        Some(Ok(record)) => Ok(record
-            .delegations
-            .iter()
-            .any(|delegation| delegation.admits(approver))),
-    };
-    Ok(match delegated {
-        Ok(true) => None,
-        Ok(false) => Some(format!(
-            "{approver} is not the owner, and {DELEGATIONS} at {base} {} records no unrevoked delegation of {JUDGE_SURFACE_CAPABILITY} to {approver}",
-            short(tip)
-        )),
-        Err(why) => Some(format!(
-            "{approver} is not the owner, and no delegation of {JUDGE_SURFACE_CAPABILITY} to it is on record at {base} {} ({why})",
-            short(tip)
-        )),
-    })
+    Ok(
+        match delegated_at(mirror, tip, approver, JUDGE_SURFACE_CAPABILITY)? {
+            Ok(true) => None,
+            Ok(false) => Some(format!(
+                "{approver} is not the owner, and {DELEGATIONS} at {base} {} records no unrevoked delegation of {JUDGE_SURFACE_CAPABILITY} to {approver}",
+                short(tip)
+            )),
+            Err(why) => Some(format!(
+                "{approver} is not the owner, and no delegation of {JUDGE_SURFACE_CAPABILITY} to it is on record at {base} {} ({why})",
+                short(tip)
+            )),
+        },
+    )
 }
 
 impl std::fmt::Debug for PrMerged {
@@ -5140,6 +5259,40 @@ impl Validator for PrMerged {
             artifacts.join(BotRoute::MERGE_REQUEST),
             artifacts.join(BotRoute::MERGE_RESPONSE),
         ]
+    }
+
+    /// Whether `role` may grant the merge of the case's pull request at `revision`: the owner's
+    /// unrevoked delegation of `repository.merge` to it in [`DELEGATIONS`] at the tip of the
+    /// case's base as the forge reports it ([`Forge::target_tip`]), and the judge guard the
+    /// merge itself applies passing for a grant by that role there, so a change to a judge
+    /// surface needs the delegation of [`JUDGE_SURFACE_CAPABILITY`] too and a change to a file
+    /// of [`OWNER_ONLY`] is refused. A case with no pull request or no base delegates nothing.
+    /// It reads the pull request not at all, merges nothing and writes nothing; the merge
+    /// judges the pull request's own base again.
+    fn delegation_refusal(
+        &self,
+        tree: &Path,
+        revision: &str,
+        role: &str,
+    ) -> Result<Option<String>> {
+        let dir = current(tree)?;
+        let branch = Branch::read(&dir)?;
+        // The target is the case's base: the merge reads the pull request's base again and
+        // judges it there, and merges into no other.
+        let (Some(_), Some(target)) = (branch.pull_request, branch.base.clone()) else {
+            return Ok(Some(
+                "the case has no pull request open on a base branch, so there is no merge target to read a delegation at".to_owned(),
+            ));
+        };
+        self.judge_guard(
+            tree,
+            &dir,
+            &branch,
+            &target,
+            revision,
+            role,
+            Some(Self::ACTION),
+        )
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
@@ -5237,8 +5390,12 @@ impl Validator for PrMerged {
                     .map_or("", |decision| decision.approver.as_str());
                 // The base judged: the merge goes into it or nowhere (R7).
                 let target = view.base.clone();
+                // A grant the run wrote as its own role holds only while the owner's delegation
+                // of the merge does: read again at the tip the merge goes into, so a delegation
+                // revoked after the grant was written merges nothing.
+                let delegated = (approver == crate::run::DELIVERY_ROLE).then_some(Self::ACTION);
                 if let Some(refusal) =
-                    self.judge_guard(tree, &dir, &branch, &target, revision, approver)?
+                    self.judge_guard(tree, &dir, &branch, &target, revision, approver, delegated)?
                 {
                     return Ok((
                         nothing(format!(

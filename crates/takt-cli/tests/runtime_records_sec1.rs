@@ -3,6 +3,9 @@
 //! story:the-state-directory-holds-every-host-record (how a refused state directory is named).
 //! Nothing reaches a model or a network.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -285,7 +288,7 @@ fn a_state_directory_holds_the_identity_scan_without_a_home() {
     .collect();
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(&args)
-        .env_remove("B10X_GATES_POLICY")
+        .env("B10X_GATES_POLICY", stand_in_policy::path())
         .env_remove("HOME")
         .env_remove("XDG_STATE_HOME")
         .env("PATH", &path)

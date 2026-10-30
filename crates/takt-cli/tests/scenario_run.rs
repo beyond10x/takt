@@ -4,6 +4,9 @@
 //! story `proposed` again; no hand reset between runs. The bot route's programs and the harness
 //! are doubles on the program path; nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -186,8 +189,8 @@ fn declare(repo: &Path, text: &str) {
 /// keeps the commit pushed per branch (`pushed-<branch, / as _>`), or exits 1 when
 /// `state/refuse-push` exists; `scan-text` passes;
 /// `api --method POST` keeps the request as `pr-<k>.json` and answers pull request `k`,
-/// counting from 1. `gh pr view` reports the pull request open with the head it was opened
-/// for, at the commit last pushed for it; `gh pr checks` one check, passing. `claude` appends a
+/// counting from 1; `api --method GET` reports the pull request open with the head it was opened
+/// for, at the commit last pushed for it, and one check run, passing. `claude` appends a
 /// line to `work.txt` and answers `implementation.edit`, or, once an approval is offered,
 /// answers `repository.merge`, or, once its `work.txt` exists and `change.handover` is offered,
 /// takes it, changing nothing.
@@ -245,10 +248,11 @@ case "$1" in
     esac ;;
   scan-text) exit 0 ;;
   api)
-    method=''; input=''; output=''
+    method=''; path=''; input=''; output=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --method) method="$2"; shift ;;
+        --path) path="$2"; shift ;;
         --input) input="$2"; shift ;;
         --output) output="$2"; shift ;;
       esac
@@ -260,28 +264,22 @@ case "$1" in
       sed -n 's/.*"head": "\(.*\)".*/\1/p' "$input" > "$state/pr-$k.head"
       printf '{{"number": %s}}' "$k" > "$output"
       exit 0
+    fi
+    if [ "$method" = GET ]; then
+      case "$path" in
+        */pulls\?*) printf '[]' > "$output" ;;
+        */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
+        */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
+        *)
+          k="${{path##*/}}"
+          head=$(cat "$state/pr-$k.head")
+          oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
+          printf '{{"state":"open","merged":false,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$head" "$oid" > "$output" ;;
+      esac
+      exit 0
     fi ;;
 esac
 echo "b10x-gates double: $*" >&2
-exit 2
-"#
-        ),
-    );
-    executable(
-        bin,
-        "gh",
-        &format!(
-            r#"#!/bin/sh
-state='{state}'
-case "$2" in
-  view)
-    head=$(cat "$state/pr-$3.head")
-    oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
-    printf '{{"state":"OPEN","mergedAt":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}}' "$head" "$oid"
-    exit 0 ;;
-  checks) printf '[{{"bucket":"pass"}}]'; exit 0 ;;
-esac
-echo "gh double: $*" >&2
 exit 2
 "#
         ),
@@ -305,7 +303,7 @@ printf '{"result":"{\\"action\\": \\"%s\\", \\"summary\\": \\"the double\\"}","u
 
 impl World {
     /// Runs the built `takt` binary with `args` in this world: the doubles first on the program
-    /// path, no `b10x-gates` policy. The exit code, stdout and stderr.
+    /// path, a `b10x-gates` policy file they never read. The exit code, stdout and stderr.
     fn takt(&self, args: &[&str]) -> (i32, String, String) {
         self.takt_env(args, &[])
     }
@@ -316,7 +314,7 @@ impl World {
             .args(args)
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
             .envs(env.iter().copied())
-            .env_remove("B10X_GATES_POLICY")
+            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env(
                 "PATH",
                 format!(
@@ -1144,7 +1142,7 @@ fn five_clones_one_scorecard(name: &str, started: Started) {
                 "--test-cmd",
                 "true",
             ])
-            .env_remove("B10X_GATES_POLICY");
+            .env("B10X_GATES_POLICY", stand_in_policy::path());
         command
     };
     let outputs: Vec<std::process::Output> = match started {

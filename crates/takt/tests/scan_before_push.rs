@@ -5,7 +5,7 @@
 //! nothing pushed, no pull request opened, nothing merged and no record written, and the refusal
 //! carries what the policy said, never the text it refused.
 //!
-//! A recording runner stands in for `b10x-gates` and `gh`: `scan-text` refuses a file that holds
+//! A recording runner stands in for `b10x-gates`: `scan-text` refuses a file that holds
 //! [`FORBIDDEN`], as a policy rule would, and says which file and line, never the text; every
 //! line is kept with what each file `scan-text` names held. Nothing leaves the machine.
 
@@ -129,10 +129,10 @@ struct Line {
     scanned: Vec<String>,
 }
 
-/// `b10x-gates` and `gh`: `scan-text` refuses a file holding [`FORBIDDEN`], or `also_forbidden`
+/// `b10x-gates`: `scan-text` refuses a file holding [`FORBIDDEN`], or `also_forbidden`
 /// when set, with the policy's own words (the file, the line and the rule), `bot -- push` passes and keeps the commit it
 /// pushed, or fails with `push_refusal` on stderr when that is set, `api` answers pull request
-/// #7, `gh pr view` reports it open with the head last pushed for the case's branch.
+/// #7, and its `GET` of the pull request reports it open with the head last pushed for the case's branch.
 #[derive(Default)]
 struct Gates {
     lines: RefCell<Vec<Line>>,
@@ -250,6 +250,36 @@ impl Runner for Gates {
                     exit(0, &format!("{flag} {held} {remote} {to}\n"), "")
                 }
             }
+            ["b10x-gates", "api", "--method", "GET", "--path", path, ..]
+                if path.starts_with("/repos/owner/repo/pulls/") =>
+            {
+                let output = argv
+                    .iter()
+                    .position(|a| a == "--output")
+                    .map(|i| &argv[i + 1])
+                    .expect("--output");
+                let (branch, sha) = self.pushed.borrow().clone().expect("a push before a view");
+                let view = serde_json::json!({
+                    "state": "open",
+                    "merged": false,
+                    "head": { "ref": branch, "sha": sha },
+                    "base": { "ref": "main" },
+                });
+                fs::write(output, view.to_string())?;
+                exit(0, "", "")
+            }
+            // The read of the open pull requests for a head before an open finds none.
+            ["b10x-gates", "api", "--method", "GET", "--path", path, ..]
+                if path.starts_with("/repos/owner/repo/pulls?") =>
+            {
+                let output = argv
+                    .iter()
+                    .position(|a| a == "--output")
+                    .map(|i| &argv[i + 1])
+                    .expect("--output");
+                fs::write(output, "[]")?;
+                exit(0, "", "")
+            }
             ["b10x-gates", "api", ..] => {
                 let output = argv
                     .iter()
@@ -258,17 +288,6 @@ impl Runner for Gates {
                     .expect("--output");
                 fs::write(output, r#"{"number": 7}"#)?;
                 exit(0, "", "")
-            }
-            ["gh", "pr", "view", ..] => {
-                let (branch, sha) = self.pushed.borrow().clone().expect("a push before a view");
-                let view = serde_json::json!({
-                    "state": "OPEN",
-                    "mergedAt": null,
-                    "headRefName": branch,
-                    "headRefOid": sha,
-                    "baseRefName": "main",
-                });
-                exit(0, &view.to_string(), "")
             }
             _ => exit(2, "", "the double does not know this line"),
         };

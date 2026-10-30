@@ -1,0 +1,8 @@
+{
+  "total_count": 3,
+  "check_runs": [
+    { "name": "check", "status": "completed", "conclusion": "success" },
+    { "name": "test", "status": "completed", "conclusion": "timed_out" },
+    { "name": "lint", "status": "in_progress", "conclusion": null }
+  ]
+}

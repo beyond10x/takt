@@ -14,6 +14,9 @@
 //! shell file or a program no gate command runs is judged by the gate, and one changing a script
 //! a gate command runs still stops it, naming the script.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -372,8 +375,8 @@ fn world_editing(name: &str, clippy_fails: bool, edit: &str) -> World {
 /// The forge's doubles and the harness's in `bin`. `b10x-gates bot -- push … <remote> <spec>`
 /// keeps the commit pushed per branch (`pushed-<branch, / as _>`) and pushes into the bare
 /// `remote`; `scan-text` passes; `api --method POST` keeps the request as `pr-<k>.json` and
-/// answers pull request `k`. `gh pr view` reports it open at the commit last pushed for its
-/// head; `gh pr checks` one check, passing. `claude` appends a line to `work.txt` and answers
+/// answers pull request `k`; `api --method GET` reports it open at the commit last pushed for
+/// its head, and one check run, passing. `claude` appends a line to `work.txt` and answers
 /// `implementation.edit`, takes `change.handover` once `work.txt` exists, and answers
 /// `repository.merge` once an approval is offered; with each line it adds, it runs `edit`.
 fn doubles(bin: &Path, state: &Path, remote: &Path, edit: &str) {
@@ -408,10 +411,11 @@ case "$1" in
     esac ;;
   scan-text) exit 0 ;;
   api)
-    method=''; input=''; output=''
+    method=''; path=''; input=''; output=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --method) method="$2"; shift ;;
+        --path) path="$2"; shift ;;
         --input) input="$2"; shift ;;
         --output) output="$2"; shift ;;
       esac
@@ -423,28 +427,22 @@ case "$1" in
       sed -n 's/.*"head": "\(.*\)".*/\1/p' "$input" > "$state/pr-$k.head"
       printf '{{"number": %s}}' "$k" > "$output"
       exit 0
+    fi
+    if [ "$method" = GET ]; then
+      case "$path" in
+        */pulls\?*) printf '[]' > "$output" ;;
+        */check-runs*) printf '{{"total_count":1,"check_runs":[{{"status":"completed","conclusion":"success"}}]}}' > "$output" ;;
+        */status*) printf '{{"state":"pending","total_count":0,"statuses":[]}}' > "$output" ;;
+        *)
+          k="${{path##*/}}"
+          head=$(cat "$state/pr-$k.head")
+          oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
+          printf '{{"state":"open","merged":false,"head":{{"ref":"%s","sha":"%s"}},"base":{{"ref":"main"}}}}' "$head" "$oid" > "$output" ;;
+      esac
+      exit 0
     fi ;;
 esac
 echo "b10x-gates double: $*" >&2
-exit 2
-"#
-        ),
-    );
-    executable(
-        bin,
-        "gh",
-        &format!(
-            r#"#!/bin/sh
-state='{state}'
-case "$2" in
-  view)
-    head=$(cat "$state/pr-$3.head")
-    oid=$(tr -d '\n' < "$state/pushed-$(printf '%s' "$head" | tr / _)")
-    printf '{{"state":"OPEN","mergedAt":null,"headRefName":"%s","headRefOid":"%s","baseRefName":"main"}}' "$head" "$oid"
-    exit 0 ;;
-  checks) printf '[{{"bucket":"pass"}}]'; exit 0 ;;
-esac
-echo "gh double: $*" >&2
 exit 2
 "#
         ),
@@ -509,7 +507,7 @@ impl World {
         args.extend_from_slice(extra);
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)
-            .env_remove("B10X_GATES_POLICY")
+            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env_remove("CARGO_TARGET_DIR")
             .env("HOME", self.outer.join("home"))
             .env("AEP_CACHE_DIR", aep_cache())

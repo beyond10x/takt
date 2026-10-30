@@ -123,8 +123,11 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
 
 - **One harness.** The image holds b10x-harness and no other: no Claude Code, no Codex. Set
   `harness: harness` (or `none`). The default, `claude`, is not there.
-- **No forge client.** No `gh` and no `glab`. Set `forge: none`. The default follows `origin`, and
-  `bot` and `gitlab` need those programs. The delivery stays a branch in `/workspace`.
+- **No `glab`.** Set `forge: none`. The default follows `origin`, and `gitlab` needs `glab`. The
+  delivery stays a branch in `/workspace`. `bot` needs no `gh` from the release after 0.22.1:
+  it reads through `b10x-gates api`, and the image ships `b10x-gates`. A `bot` run is refused
+  before its case opens unless `B10X_GATES_POLICY` names a policy file the run's uid owns, a
+  regular file, not a symbolic link, at mode 0600 or stricter, in a directory that uid owns and no other user can write. No run of the image through `bot` is recorded.
 - **Unconfined seccomp and AppArmor (unverified at 0.21.0).** This need was observed on takt
   0.13.1 and 0.14.0 and has not been measured again. Under the default `--confinement none` of
   0.13.1 the test command ran in a user and mount namespace of its own, which a container

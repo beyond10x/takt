@@ -3,6 +3,9 @@
 //! one double pushes for real into a bare repository standing in for the scratch repository's
 //! remote. Nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -174,10 +177,11 @@ case "$1" in
     esac ;;
   scan-text) exit 0 ;;
   api)
-    method=''; input=''; output=''
+    method=''; path=''; input=''; output=''
     while [ $# -gt 0 ]; do
       case "$1" in
         --method) method="$2"; shift ;;
+        --path) path="$2"; shift ;;
         --input) input="$2"; shift ;;
         --output) output="$2"; shift ;;
       esac
@@ -195,7 +199,6 @@ exit 2
 "#
         ),
     );
-    executable(bin, "gh", "#!/bin/sh\necho \"gh double: $*\" >&2\nexit 2\n");
     executable(
         bin,
         "claude",
@@ -223,7 +226,7 @@ impl World {
         let output = Command::new(env!("CARGO_BIN_EXE_takt"))
             .args(&args)
             .env("XDG_STATE_HOME", self.state.join("xdg-state"))
-            .env_remove("B10X_GATES_POLICY")
+            .env("B10X_GATES_POLICY", stand_in_policy::path())
             .env(
                 "PATH",
                 format!(

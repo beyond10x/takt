@@ -1,0 +1,8 @@
+{
+  "state": "failure",
+  "total_count": 2,
+  "statuses": [
+    { "context": "ci/external", "state": "success" },
+    { "context": "ci/other", "state": "error" }
+  ]
+}

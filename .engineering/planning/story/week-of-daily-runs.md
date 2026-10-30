@@ -13,6 +13,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - depends_on: story:confinement-seam
 - depends_on: story:scorecard-reader
+- depends_on: story:report-sums-cases
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs

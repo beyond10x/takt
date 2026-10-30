@@ -2,7 +2,7 @@
 //! scan never reads. Each case builds a tree whose push would publish a literal the stand-in
 //! policy forbids, and asserts what the story promises: nothing is pushed.
 //!
-//! A recording runner stands in for `b10x-gates` and `gh`, as in `scan_before_push.rs`. Its
+//! A recording runner stands in for `b10x-gates`, as in `scan_before_push.rs`. Its
 //! `scan-text` refuses a file holding [`FORBIDDEN`] on one line, or split across two lines the
 //! way the real scanner's wrapped rule still matches (an optional `-`, blanks, a line break,
 //! then blanks or `>|*#`), so a soft-wrapped paragraph is refused as `b10x-gates` refuses it.
@@ -194,6 +194,24 @@ impl Runner for Gates {
                 let held = git(tree, &["rev-parse", "--verify", to]);
                 exit(0, &format!("= {held} {held} {to}\n"), "")
             }
+            ["b10x-gates", "api", "--method", "GET", "--path", path, ..]
+                if path.starts_with("/repos/owner/repo/pulls/") =>
+            {
+                let output = argv
+                    .iter()
+                    .position(|a| a == "--output")
+                    .map(|i| &argv[i + 1])
+                    .expect("--output");
+                let (branch, sha) = self.pushed.borrow().clone().expect("a push before a view");
+                let view = serde_json::json!({
+                    "state": "open",
+                    "merged": false,
+                    "head": { "ref": branch, "sha": sha },
+                    "base": { "ref": "main" },
+                });
+                fs::write(output, view.to_string())?;
+                exit(0, "", "")
+            }
             ["b10x-gates", "api", ..] => {
                 let output = argv
                     .iter()
@@ -202,17 +220,6 @@ impl Runner for Gates {
                     .expect("--output");
                 fs::write(output, r#"{"number": 7}"#)?;
                 exit(0, "", "")
-            }
-            ["gh", "pr", "view", ..] => {
-                let (branch, sha) = self.pushed.borrow().clone().expect("a push before a view");
-                let view = serde_json::json!({
-                    "state": "OPEN",
-                    "mergedAt": null,
-                    "headRefName": branch,
-                    "headRefOid": sha,
-                    "baseRefName": "main",
-                });
-                exit(0, &view.to_string(), "")
             }
             _ => exit(2, "", "the double does not know this line"),
         };

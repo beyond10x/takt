@@ -1,0 +1,14 @@
+{
+  "number": 7,
+  "state": "open",
+  "merged": false,
+  "merged_at": null,
+  "head": {
+    "ref": "takt/c1",
+    "sha": "0123456789abcdef0123456789abcdef01234567"
+  },
+  "base": {
+    "ref": "main",
+    "sha": "89abcdef0123456789abcdef0123456789abcdef"
+  }
+}

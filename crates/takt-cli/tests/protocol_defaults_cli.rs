@@ -3,6 +3,9 @@
 //! refuses the pull request, the exit codes that tell the stops apart, and what `takt run
 //! --help` says about them.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -102,20 +105,23 @@ fn repository(fixture: Option<&str>, name: &str) -> (Scratch, PathBuf) {
     (Scratch(outer), repo)
 }
 
-/// Runs the built `takt` binary with `args`, `path` first on the program path when given: the
-/// exit code, stdout and stderr.
+/// Runs the built `takt` binary with `args`, `path` first on the program path when given, with a
+/// `b10x-gates` policy file the doubles never read ([`stand_in_policy::path`]) then and with no
+/// policy otherwise: the exit code, stdout and stderr.
 fn takt_with_path(path: Option<&Path>, args: &[&str]) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
     command.args(args).env_remove("B10X_GATES_POLICY");
     if let Some(path) = path {
-        command.env(
-            "PATH",
-            format!(
-                "{}:{}",
-                path.display(),
-                std::env::var("PATH").unwrap_or_default()
-            ),
-        );
+        command
+            .env("B10X_GATES_POLICY", stand_in_policy::path())
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    path.display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            );
     }
     let output = command.output().expect("takt runs");
     (
@@ -481,6 +487,11 @@ printf '%s\n' "$*" >> "$(dirname "$0")/calls"
 case "$1" in
   bot|scan-text) exit 0 ;;
   api)
+    case "$*" in
+      *"--method GET "*)
+        while [ $# -gt 0 ]; do [ "$1" = --output ] && printf '[]' > "$2"; shift; done
+        exit 0 ;;
+    esac
     printf '%s\n' 'b10x-gates: GitHub operation failed (422 Unprocessable Entity): Validation Failed' >&2
     exit 1
     ;;

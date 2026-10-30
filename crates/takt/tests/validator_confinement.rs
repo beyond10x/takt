@@ -30,7 +30,7 @@ use takt::{Run, RunOptions, Stop};
 /// The delivery protocol, the engineering protocols' built-in.
 const PROTOCOL: &str = "story.delivery/1";
 
-/// The credentials no child but the forge's receives, set in the child test process below.
+/// The credentials no child receives, the forge's included, set in the child test process below.
 const CREDENTIALS: [&str; 7] = [
     "GH_TOKEN",
     "GITHUB_TOKEN",
@@ -596,11 +596,7 @@ fn children_receive_no_credential_they_do_not_need() {
         .run(&store, &[gh.display().to_string()])
         .expect("runs");
     assert!(exit.success(), "{exit:?}");
-    leaked(
-        "the forge",
-        &names(&forge_names),
-        &["GH_TOKEN", "GITHUB_TOKEN"],
-    );
+    leaked("the forge", &names(&forge_names), &[]);
 }
 
 /// The harness child loads no project or user settings, hooks, plugins or MCP servers: its
@@ -773,16 +769,27 @@ fn a_child_keeps_a_bounded_tail_of_its_output() {
     assert!(exit.stdout.ends_with("x\nlast\n"), "{:?}", exit.stdout);
 }
 
-/// `gh pr view` and `gh pr checks` name the repository: what they read is never the one the
-/// tree's remotes say.
+/// The reads of the pull request, the check runs on its head and its status name the
+/// repository, in the path and as `--repository`: what they read is never the one the tree's
+/// remotes say.
 #[test]
 fn the_forge_reads_name_the_repository() {
     let forge = BotRoute::new("owner/repo", None, Box::new(Process::default()));
-    for argv in [forge.view_argv(7), forge.checks_argv(7)] {
-        let at = argv.iter().position(|a| a == "--repo");
-        assert_eq!(
-            at.map(|i| argv[i + 1].as_str()),
-            Some("owner/repo"),
+    let output = Path::new("out.json");
+    let head = "0123456789abcdef0123456789abcdef01234567";
+    for argv in [
+        forge.view_argv(7, output),
+        forge.check_runs_argv(head, output),
+        forge.status_argv(head, output),
+    ] {
+        let option = |name: &str| {
+            argv.iter()
+                .position(|a| a == name)
+                .map(|i| argv[i + 1].as_str())
+        };
+        assert_eq!(option("--repository"), Some("owner/repo"), "{argv:?}");
+        assert!(
+            option("--path").is_some_and(|path| path.starts_with("/repos/owner/repo/")),
             "{argv:?}"
         );
     }

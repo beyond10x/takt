@@ -10,7 +10,7 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-20T04:01:42Z", actor: "human:timo", revision: 3}
@@ -48,3 +48,12 @@ what. Comes from self-improvement work, so it carries `rsi`.
 3. An identity the scan passes opens the run as before; under `--forge none` no scan is run.
 4. No scan found (no policy) is reported as "not scanned", never as passed, and the run opens as
    it does today at `pr.open`.
+
+## Acceptance 4 is replaced
+
+story:forge-preflight refuses a `--forge bot` run whose `B10X_GATES_POLICY` names no policy file
+`b10x-gates` would load, with exit 1 before its case opens. Such a run no longer opens with its
+identity not scanned; `crates/takt-cli/tests/commit_identity_cli.rs`,
+`with_no_policy_a_run_through_the_bot_route_is_refused_before_its_case_opens`, holds the new
+behaviour, and `crates/takt/src/forge/bot.rs`, `no_policy_or_no_scanner_is_not_scanned`, still
+holds the library's "not scanned" answer for a run with no forge write.

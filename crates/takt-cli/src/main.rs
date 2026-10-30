@@ -750,7 +750,8 @@ struct RunArgs {
     #[arg(long)]
     install_root: Option<PathBuf>,
     /// A file of the run's configuration, TOML (`.toml`) or YAML (`.yaml`, `.yml`):
-    /// `story`, `iterations`, `hours`, `harness`, `model`, `endpoint_file` (a relative path
+    /// `story`, `iterations`, `hours`, `tokens` (a whole number above zero; another value exits
+    /// 2), `harness`, `model`, `endpoint_file` (a relative path
     /// read beside the file), `endpoint_token_env`, `forge`, `test_cmd`, `state_dir` (a
     /// relative path read beside the file), `continue_past_red_base` (a boolean) and `records`
     /// (`default` or `trial`), each the flag's of that name, and `scan`, which no flag sets: the
@@ -853,6 +854,9 @@ impl LoopArgs {
         }
         if unset("hours") && file.hours.is_some() {
             looping.hours = file.hours;
+        }
+        if let Some(tokens) = file.tokens.filter(|_| unset("tokens")) {
+            looping.tokens = tokens;
         }
         if unset("model") && unset("endpoint_model") && file.model.is_some() {
             looping.model = file.model;
@@ -1072,9 +1076,11 @@ struct LoopArgs {
     /// Stop after this many hours.
     #[arg(long)]
     hours: Option<f64>,
-    /// Stop once the harness reported this many tokens.
-    #[arg(long)]
-    tokens: Option<u64>,
+    /// Stop once the harness reported this many tokens, counted over this invocation and read
+    /// before every step, so a step under way runs to its end; the run stops `Tokens (<N>)`,
+    /// exit 3. Not given, the run file's `tokens`, else 3000000: no run goes unbounded.
+    #[arg(long, value_name = "N", default_value_t = DEFAULT_TOKENS)]
+    tokens: u64,
     /// Stop once the run's active time, its wall time less the time it waits on the forge
     /// between two reads, reaches this many seconds; read before every step, so a step under way
     /// runs to its end. The run stops `ActiveTime` naming the budget, the active time and the
@@ -1147,7 +1153,8 @@ struct LoopArgs {
     #[arg(long)]
     project: Option<PathBuf>,
     /// The forge: `bot` (the repository's bot route: `b10x-gates` pushes the case's branch,
-    /// opens its pull request and merges it, `gh` reads the pull request's state and checks),
+    /// opens its pull request, reads its state and checks and merges it; refused before any
+    /// case opens unless `b10x-gates` is on `PATH` and `B10X_GATES_POLICY` names a file),
     /// `gitlab` (a repository on a GitLab host: git pushes the case's branch over HTTPS under
     /// `glab`'s credential helper, `glab api` opens the merge request, reads its state and head
     /// pipeline and merges it; what it publishes passes the run's scan adapter first, under
@@ -1367,6 +1374,11 @@ impl Harness for NoHarness {
 const EXIT_DONE: u8 = 0;
 /// Exit 1: refused before the run, the reason on stderr (`main`).
 const EXIT_REFUSED: u8 = 1;
+/// Exit 2: the arguments do not parse, clap's own, and a run file's `tokens` that is no whole
+/// number above zero ([`takt::run_config::TokensRefused`]), as `--tokens x` does not parse.
+const EXIT_USAGE: u8 = 2;
+/// The token budget of a run that names none, by `--tokens` or its run file's `tokens`.
+const DEFAULT_TOKENS: u64 = 3_000_000;
 /// Exit 3: the run stopped on a budget, with nothing more it may do, or on the tests: red at the
 /// base, or failing the same tests again.
 const EXIT_STOPPED: u8 = 3;
@@ -1392,7 +1404,7 @@ const EXIT_DECLINED: u8 = 9;
 const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it; or stopped: SetupFailed (<name> exited <code>): a command of the run file's `setup` list did not end 0 when the case opened, before the red-base check and any model call; its output is kept under the state directory
-  2  the arguments do not parse
+  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero (the file and the line named), before any case opens
   3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
@@ -1406,7 +1418,7 @@ const EXIT_CODES: &str = "Exit codes:
 const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it
-  2  the arguments do not parse
+  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero (the file and the line named), before any case opens
   3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
@@ -1420,6 +1432,12 @@ fn main() -> ExitCode {
         Ok(cli) => cli,
         Err(error) => {
             eprintln!("takt: {error:#}");
+            if error
+                .downcast_ref::<takt::run_config::TokensRefused>()
+                .is_some()
+            {
+                return ExitCode::from(EXIT_USAGE);
+            }
             return ExitCode::from(EXIT_REFUSED);
         }
     };
@@ -2351,7 +2369,7 @@ impl LoopArgs {
             inputs,
             iterations: self.iterations,
             hours: self.hours,
-            tokens: self.tokens,
+            tokens: Some(self.tokens),
             case_id,
             gate: self.gate.clone(),
         }
@@ -3204,6 +3222,7 @@ fn forge_through(
 ) -> Result<Forged> {
     let bot = |repo: &Path| -> Result<Forged> {
         let bot = BotRoute::for_tree(repo)?;
+        bot.preflight()?;
         let line = format!(
             "forge: bot ({}); pr.open, ci.read and repository.merge go through the bot route",
             bot.repository
@@ -4897,32 +4916,6 @@ mod tests {
         );
     }
 
-    /// With an origin and no `--forge`, the bot route is the forge, named with the repository
-    /// its origin names; the run stops before anything would be pushed, on the gate it has no
-    /// gates document for, which comes ahead of its step budget.
-    #[test]
-    fn with_an_origin_the_default_forge_is_the_bot_route() {
-        let repo = gated_repository("forge-default-bot", None);
-        git(
-            &repo,
-            &["remote", "add", "origin", "git@github.com:owner/repo.git"],
-        );
-        let (code, out) = takt(&delivery_args(
-            repo.to_str().expect("utf-8"),
-            "default-bot",
-            &[
-                "--iterations",
-                "1",
-                "--commit-identity",
-                "Test Bot <bot@example.invalid>",
-            ],
-        ));
-        assert_eq!(code, 7, "{out}");
-        assert!(out.contains("forge: bot (owner/repo)"), "{out}");
-        assert!(out.contains("step 1: tests.run {}"), "{out}");
-        assert!(!out.contains("pr.open {}"), "nothing is pushed: {out}");
-    }
-
     #[test]
     fn forge_bot_without_an_origin_is_refused_before_the_run() {
         let repo = gated_repository("forge-bot-no-origin", None);
@@ -4935,7 +4928,7 @@ mod tests {
         assert!(!repo.join(".takt/cases").exists());
     }
 
-    /// The bot route pushes under a GitHub App and reads through `gh`: asked for on another
+    /// The bot route pushes and reads under a GitHub App: asked for on another
     /// host it is refused before any case is opened.
     #[test]
     fn forge_bot_on_a_non_github_origin_is_refused_before_the_run() {

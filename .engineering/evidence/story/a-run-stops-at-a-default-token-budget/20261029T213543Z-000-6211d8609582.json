@@ -1,0 +1,14 @@
+{
+  "at": "2026-10-29T21:35:43Z",
+  "actor": "human:timo",
+  "artifact": "story:a-run-stops-at-a-default-token-budget",
+  "kind": "story",
+  "revision": 6,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:goal-a-plan-parallel-round-1",
+    "review": "review-result:goal-a-plan-parallel-round-1",
+    "outcome": "fixed"
+  }
+}

@@ -426,6 +426,14 @@ pub const ACCEPTED: &str = "accepted";
 /// record attests the harness's choice, not an observation's outcome.
 pub const CHOICE_PRODUCER: &str = "takt.choice";
 
+/// The agent role a run grants the merge as when no person is present
+/// ([`Run::grant_delegated`]): only under the owner's unrevoked delegation to it on record.
+pub const DELIVERY_ROLE: &str = "agent:takt-delivery";
+
+/// The claims whose validator evidence at the revision a run's own grant of the merge rests
+/// on: the tests, the gate and continuous integration, each `true` at the case's revision.
+pub const DELEGATED_GRANT_CLAIMS: [&str; 3] = ["tests.pass", "gate.green", "ci.green"];
+
 /// The first eight characters of a revision, as the loop prints one.
 fn short(revision: &str) -> &str {
     revision.get(..8).unwrap_or(revision)
@@ -11239,6 +11247,55 @@ impl<'a> Run<'a> {
         recorded
     }
 
+    /// The grant of `repository.merge` a run gives itself as [`DELIVERY_ROLE`], with no person
+    /// present, when `decision` finds the merge approval-required and the case holds no grant
+    /// of it at its revision: only when every claim of [`DELEGATED_GRANT_CLAIMS`] is `true` in
+    /// that decision, which validator evidence at the revision alone decides, and the run's
+    /// merge validator finds the owner's unrevoked delegation to the role on record at the merge
+    /// target's tip ([`Validator::delegation_refusal`]). No harness is asked, and no model's
+    /// text or choice decides it. The grant goes into `authority.yaml` as `takt approve` writes
+    /// one ([`CaseDir::grant_while_held`]), naming the role at the revision; the merge validator
+    /// then reads it as it reads a person's and is the one gate on the merge, as before. Answers
+    /// whether it granted. A delegation refused, or one that cannot be read, grants nothing and
+    /// is printed, and the run stops at the gate as it would without it.
+    fn grant_delegated(&self, decision: &crate::Decision, out: &mut dyn Write) -> Result<bool> {
+        let action = crate::validator::PrMerged::ACTION;
+        if !decision.approval_required().iter().any(|a| a == action)
+            || self.case.grants(action)?
+            || !DELEGATED_GRANT_CLAIMS
+                .iter()
+                .all(|claim| decision.holds(claim))
+        {
+            return Ok(false);
+        }
+        let Some(validator) = self.validators.iter().find(|v| v.action() == action) else {
+            return Ok(false);
+        };
+        let Some(revision) = self.case.revision(validator.subject()) else {
+            return Ok(false);
+        };
+        let refusal = validator
+            .delegation_refusal(&self.tree, &revision, DELIVERY_ROLE)
+            .unwrap_or_else(|error| Some(format!("the delegation could not be read: {error:#}")));
+        if let Some(why) = refusal {
+            writeln!(
+                out,
+                "  not granted as {DELIVERY_ROLE}: {}",
+                why.replace('\n', " ")
+            )?;
+            return Ok(false);
+        }
+        let approval = self.case.grant_while_held(action, DELIVERY_ROLE)?;
+        writeln!(
+            out,
+            "  granted: {} at {} by {}, under the owner's delegation on record",
+            approval.capability,
+            short(&approval.revision),
+            approval.approver
+        )?;
+        Ok(true)
+    }
+
     /// Before the step for `action`: when the case holds the grant that authorises it
     /// ([`CaseDir::grants`]), a story's run given the store records the story there
     /// ([`Run::record_accepted`]), so the `test_result` and the move, the last, ride to the base
@@ -11474,14 +11531,17 @@ impl<'a> Run<'a> {
     /// reported nonetheless (a session the hermetic floor held back ran to its end): the run's
     /// count, and a harness step line carrying them, their components and what the harness
     /// reported of the call, with no action and [`UNPROPOSED_SUMMARY`]; the error or refusal the
-    /// run ends on says why. Nothing when the harness reported no tokens for the step. Written
+    /// run ends on says why. A session killed by the hour budget or ended in an error is charged
+    /// what it reported up to its end ([`crate::harness::claude_usage_so_far`]). One whose
+    /// session started and reported no tokens ([`Harness::last_tokens_unknown`]) has its line
+    /// with no count, its tokens unknown, never 0; nothing when no session started. Written
     /// after the step's change was put back, as every step line is.
     fn charge_unproposed(
         &mut self,
         events: &Events,
         transcript: Option<std::result::Result<String, String>>,
     ) -> Result<()> {
-        if self.harness.last_usage().is_none() {
+        if self.harness.last_usage().is_none() && !self.harness.last_tokens_unknown() {
             return Ok(());
         }
         self.charge_failed(events, transcript, UNPROPOSED_SUMMARY)
@@ -11490,19 +11550,19 @@ impl<'a> Run<'a> {
     /// Records try `tried` of a judgement step whose session ended without the line naming its
     /// action ([`Judgement::NoAction`]): a harness step line with no action and
     /// [`NO_ACTION_SUMMARY`], naming the try and the bound, charged the tokens its session
-    /// reported, as [`Run::charge_unproposed`] charges them. Nothing when the session reported
-    /// no tokens, as for any failed step: a harness step line without a count leaves the run's
-    /// tokens unknown to the scorecard, and one counting 0 would claim what nobody reported. Such
-    /// a try is still a step of the record, which its stop line counts and the next line's step
-    /// skips, with its transcript kept under its own step, and on the run's output. Written after
-    /// the step's change was put back.
+    /// reported, as [`Run::charge_unproposed`] charges them. A session that started and reported
+    /// no tokens has its line with no count, as for any failed step: the run's tokens are then
+    /// unknown to the scorecard, where a line counting 0, or none, would claim what nobody
+    /// reported; nothing when no session started. Such a try is a step of the record either way,
+    /// which its stop line counts and the next line's step skips, with its transcript kept under
+    /// its own step, and on the run's output. Written after the step's change was put back.
     fn charge_no_action(
         &mut self,
         events: &Events,
         transcript: Option<std::result::Result<String, String>>,
         tried: u32,
     ) -> Result<()> {
-        if self.harness.last_usage().is_none() {
+        if self.harness.last_usage().is_none() && !self.harness.last_tokens_unknown() {
             return Ok(());
         }
         let summary = format!("{NO_ACTION_SUMMARY} (try {tried} of {NO_ACTION_TRIES})");
@@ -11511,7 +11571,8 @@ impl<'a> Run<'a> {
 
     /// The harness step line of a step that failed and proposed nothing, with `summary`: the
     /// tokens its session reported, when it reported any, charged to the run and carried with
-    /// their components and what the harness reported of the call.
+    /// their components and what the harness reported of the call; no count when it reported
+    /// none, which the scorecard reads as unknown.
     fn charge_failed(
         &mut self,
         events: &Events,
@@ -12418,6 +12479,13 @@ impl<'a> Run<'a> {
             // A case with a legitimate outcome is not stepped: Commission's runtime ends the run
             // completed at once, before any check below.
             let open = decision.legitimate().is_empty();
+            // The merge approval-required: a run grants it itself as the delegated role, before
+            // any step and with no harness asked, when the owner's delegation and the
+            // validators' evidence at the revision allow it; the case is then evaluated again.
+            if open && self.grant_delegated(&decision, out)? {
+                last_idle = None;
+                continue;
+            }
             let admissible = decision.admissible();
             // The judgement actions: the admissible ones no validator owns, but none whose evidence
             // only a validator writes ([`Shape::for_harness`]). A harness that keeps nothing

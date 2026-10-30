@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-cli-suite-fits-its-ci-budget
 kind: story
-status: active
+status: implemented
 title: 'task check on CI finishes well inside its time limit again: the test binaries that slowed after wave 23 are found and made fast or split'
 summary: 'check.yml on 6ad32d3 cut at 30 min: summed test time 839 s at 0.6.0 vs 1433 s at wave 23; self_improvement_cli +199 s first'
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-21T08:13:39Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-21T08:13:39Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-10-29T21:30:01Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Story: the-cli-suite-fits-its-ci-budget
 

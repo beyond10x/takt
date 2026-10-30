@@ -78,8 +78,8 @@ fn copy_dir(from: &Path, to: &Path) {
     }
 }
 
-/// The stand-in for `gh` and `b10x-gates` under the bot route, as the unit's own case has it,
-/// and answering `gh pr checks` with one passing check.
+/// The stand-in for `b10x-gates` under the bot route, as the unit's own case has it, and
+/// answering the reads of the checks on the head with one passing check run and no status.
 struct Stand {
     branch: String,
     head: String,
@@ -99,19 +99,32 @@ impl Runner for Stand {
             stdout,
             stderr: String::new(),
         };
-        if line.starts_with(&format!("gh pr view {NUMBER} ")) {
-            let state = if self.merged.get() { "MERGED" } else { "OPEN" };
-            let view = serde_json::json!({
-                "state": state,
-                "mergedAt": null,
-                "headRefName": self.branch,
-                "headRefOid": self.head,
-                "baseRefName": "main",
-            });
-            return Ok(ok(view.to_string()));
-        }
-        if line.starts_with(&format!("gh pr checks {NUMBER} ")) {
-            return Ok(ok(r#"[{"bucket":"pass"}]"#.to_owned()));
+        if line.starts_with("b10x-gates api --method GET --path ") {
+            let merged = self.merged.get();
+            let response = if line.contains(&format!("--path /repos/owner/repo/pulls/{NUMBER} ")) {
+                serde_json::json!({
+                    "state": if merged { "closed" } else { "open" },
+                    "merged": merged,
+                    "head": { "ref": self.branch, "sha": self.head },
+                    "base": { "ref": "main" },
+                })
+            } else if line.contains("/check-runs") {
+                serde_json::json!({
+                    "total_count": 1,
+                    "check_runs": [{ "status": "completed", "conclusion": "success" }],
+                })
+            } else if line.contains("/status") {
+                serde_json::json!({ "state": "pending", "total_count": 0, "statuses": [] })
+            } else {
+                return Err(anyhow!("the stand-in reads no {line}"));
+            };
+            let output = argv
+                .iter()
+                .position(|a| a == "--output")
+                .map(|i| &argv[i + 1])
+                .expect("--output");
+            fs::write(output, response.to_string())?;
+            return Ok(ok(String::new()));
         }
         if line.contains("--dry-run") {
             return Ok(ok(format!(

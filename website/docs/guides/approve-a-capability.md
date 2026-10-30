@@ -18,6 +18,12 @@ stopped: ApprovalRequired (repository.merge); steps 2, tokens 0, case ~/takt-dem
 The exit code is 4. What a capability is, and why the model cannot grant one:
 [Capabilities and approvals](../concepts/capabilities-and-approvals.md).
 
+A run stops here unless the owner delegated the merge. When `.engineering/delegations.yaml` on
+the merge target delegates `repository.merge` to `agent:takt-delivery`, and the tests, the gate
+and CI are green at the revision, the run grants the merge itself and goes on without this guide.
+A change to a judge surface also needs `repository.merge.judge_surface` delegated:
+[A grant under the owner's delegation](../concepts/capabilities-and-approvals.md#a-grant-under-the-owners-delegation).
+
 ## 1. Grant it
 
 ```sh

@@ -1,0 +1,7 @@
+{
+  "state": "pending",
+  "total_count": 1,
+  "statuses": [
+    { "context": "ci/external", "state": "pending" }
+  ]
+}

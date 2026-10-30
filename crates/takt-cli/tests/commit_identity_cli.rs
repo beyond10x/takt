@@ -7,6 +7,9 @@
 //! commits with the identity its case was opened with. The harness is a double on the program
 //! path; nothing reaches a network or a model.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -103,8 +106,8 @@ fn copy_dir(from: &Path, to: &Path) {
 /// One scratch world: `repo`, a committed copy of the `one-ready` store with a manifest, a gates
 /// document, `identity` (the file's text) as `.engineering/commit-identity.conf` when given, and
 /// the operator's identity in its configuration; and `bin`, a `claude` double that appends to
-/// `work.txt` and answers `implementation.edit`, and `b10x-gates` and `gh` doubles that log each
-/// call and fail.
+/// `work.txt` and answers `implementation.edit`, and a `b10x-gates` double that logs each
+/// call and fails.
 struct World {
     _scratch: Scratch,
     repo: PathBuf,
@@ -140,17 +143,15 @@ fn world(name: &str, identity: Option<&str>) -> World {
         "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\necho \"the work\" >> work.txt\nprintf '{\"result\":\"{\\\\\"action\\\\\": \\\\\"implementation.edit\\\\\", \\\\\"summary\\\\\": \\\\\"the double\\\\\"}\",\"usage\":{\"input_tokens\":1}}'\n",
     )
     .expect("the double is written");
-    // The bot route's programs: each call logged and failed, so nothing reaches a network.
+    // The bot route's program: each call logged and failed, so nothing reaches a network.
     let calls = outer.join("route-calls");
     let route = format!(
         "#!/bin/sh\necho \"$0 $*\" >> '{}'\necho 'the route double refuses' >&2\nexit 1\n",
         calls.display()
     );
-    for name in ["b10x-gates", "gh"] {
-        fs::write(bin.join(name), &route).expect("the double is written");
-    }
+    fs::write(bin.join("b10x-gates"), &route).expect("the double is written");
     #[cfg(unix)]
-    for name in ["claude", "b10x-gates", "gh"] {
+    for name in ["claude", "b10x-gates"] {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).expect("executable");
     }
@@ -169,12 +170,25 @@ fn identity_file(name: &str, email: &str) -> String {
 
 impl World {
     /// The built `takt` with `args`, the doubles first on the program path, the operator's
-    /// identity variables ([`OPERATOR_ENV`]) in its environment: the exit code, stdout, stderr.
+    /// identity variables ([`OPERATOR_ENV`]) in its environment, and a `b10x-gates` policy file
+    /// the doubles never read ([`stand_in_policy::path`]) unless `args` give `--forge none`,
+    /// where no policy keeps the run's own scan adapter from calling the refusing double: the
+    /// exit code, stdout, stderr.
     fn takt(&self, args: &[&str]) -> (i32, String, String) {
-        let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        let forge_none = args.windows(2).any(|pair| pair == ["--forge", "none"]);
+        self.takt_under(args, (!forge_none).then_some(stand_in_policy::path()))
+    }
+
+    /// [`Self::takt`] with `B10X_GATES_POLICY` set to `policy`, or unset when none.
+    fn takt_under(&self, args: &[&str], policy: Option<&str>) -> (i32, String, String) {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
+        command.env_remove("B10X_GATES_POLICY");
+        if let Some(policy) = policy {
+            command.env("B10X_GATES_POLICY", policy);
+        }
+        let output = command
             .args(args)
             .envs(OPERATOR_ENV)
-            .env_remove("B10X_GATES_POLICY")
             .env("XDG_STATE_HOME", self.repo.with_file_name("xdg-state"))
             .env(
                 "PATH",
@@ -193,15 +207,24 @@ impl World {
         )
     }
 
-    /// `takt run --repo <repo> --test-cmd true`, `extra` after it.
+    /// `takt run --repo <repo> --test-cmd true`, `extra` after it, through [`Self::takt`].
     fn run(&self, extra: &[&str]) -> (i32, String, String) {
+        self.takt(&self.run_args(extra))
+    }
+
+    /// [`Self::run`] with no `B10X_GATES_POLICY` in takt's environment.
+    fn run_with_no_policy(&self, extra: &[&str]) -> (i32, String, String) {
+        self.takt_under(&self.run_args(extra), None)
+    }
+
+    fn run_args<'a>(&'a self, extra: &[&'a str]) -> Vec<&'a str> {
         let repo = self.repo.to_str().expect("utf-8");
         let mut args = vec!["run", "--repo", repo, "--test-cmd", "true"];
         if !extra.contains(&"--protocol") {
             args.extend(["--protocol", "story.delivery/1"]);
         }
         args.extend_from_slice(extra);
-        self.takt(&args)
+        args
     }
 
     /// Each commit since `main`, newest first, as `<subject>|<author>|<committer>`, each side
@@ -360,7 +383,7 @@ fn a_resume_commits_with_the_identity_the_case_was_opened_with() {
 /// A case opened with no identity under `--forge none` commits as takt's own; once the
 /// repository has an `origin` on github.com, a run that would resume it through the bot route,
 /// by `--case` or as the open case the frontier resumes, is refused before it resumes: exit 1,
-/// nothing committed, the bot route and `gh` never called, and the refusal says how to get past
+/// nothing committed, the bot route never called, and the refusal says how to get past
 /// the case: finish it with `--forge none`, or drop its branch and its directory.
 #[test]
 fn a_case_opened_with_no_identity_is_not_resumed_through_the_bot_route() {
@@ -524,11 +547,6 @@ const REFUSED: &str = "Refused Person <refused@example.invalid>";
 /// An identity the scan double passes.
 const PASSING: &str = "Release Bot <release@example.invalid>";
 
-/// What `b10x-gates` 0.1.21 says, exiting 1, when no policy file is given and its default one
-/// is not there.
-const NO_POLICY: &str =
-    "b10x-gates: protected file /var/empty/.config/b10x/gates/policy.json unavailable: not found";
-
 /// How the scan double words a refusal, as `b10x-gates scan-text` does after the path.
 const RULE_BROKEN: &str =
     "breaks 1 private rule(s): line 1 person-name; private details remain local";
@@ -536,18 +554,12 @@ const RULE_BROKEN: &str =
 impl World {
     /// Replaces the `b10x-gates` double with one whose `scan-text` appends every file it is
     /// given to `scanned` and refuses one holding [`REFUSED_NAME`] ([`RULE_BROKEN`]), passing the
-    /// rest; with `no_policy`, every `scan-text` says [`NO_POLICY`] and fails, scanning nothing.
-    /// Every call is logged as before; a `bot -- fetch` (the scenario run's read of the
+    /// rest. Every call is logged as before; a `bot -- fetch` (the scenario run's read of the
     /// remote's trial branches) passes, fetching nothing; every other line is refused.
-    fn scanning_gates(&self, no_policy: bool) {
+    fn scanning_gates(&self) {
         let scanned = self.scanned_path();
-        let policy = if no_policy {
-            format!("echo '{NO_POLICY}' >&2\nexit 1\n")
-        } else {
-            String::new()
-        };
         let script = format!(
-            "#!/bin/sh\necho \"$0 $*\" >> '{calls}'\nif [ \"$1 $3\" = \"bot fetch\" ]; then\n  exit 0\nfi\nif [ \"$1\" != scan-text ]; then\n  echo 'the route double refuses' >&2\n  exit 1\nfi\n{policy}for arg in \"$@\"; do\n  if [ -f \"$arg\" ]; then\n    cat \"$arg\" >> '{scanned}'\n    if grep -q '{REFUSED_NAME}' \"$arg\"; then\n      echo \"$arg {RULE_BROKEN}\" >&2\n      exit 1\n    fi\n  fi\ndone\necho \"$# file(s) carry no private rule\"\nexit 0\n",
+            "#!/bin/sh\necho \"$0 $*\" >> '{calls}'\nif [ \"$1 $3\" = \"bot fetch\" ]; then\n  exit 0\nfi\nif [ \"$1\" != scan-text ]; then\n  echo 'the route double refuses' >&2\n  exit 1\nfi\nfor arg in \"$@\"; do\n  if [ -f \"$arg\" ]; then\n    cat \"$arg\" >> '{scanned}'\n    if grep -q '{REFUSED_NAME}' \"$arg\"; then\n      echo \"$arg {RULE_BROKEN}\" >&2\n      exit 1\n    fi\n  fi\ndone\necho \"$# file(s) carry no private rule\"\nexit 0\n",
             calls = self.calls.display(),
             scanned = scanned.display(),
         );
@@ -672,7 +684,7 @@ fn a_run_through_the_bot_route_refuses_an_identity_the_scan_refuses_before_step_
     ] {
         let world = world(name, configured);
         world.with_origin();
-        world.scanning_gates(false);
+        world.scanning_gates();
         let start = git(&world.repo, &["rev-parse", "HEAD"]);
         let mut args = vec!["--harness", "claude", "--iterations", "3"];
         if let Some(flag) = flag {
@@ -711,7 +723,7 @@ fn a_scenario_run_through_the_bot_route_refuses_an_identity_the_scan_refuses() {
         let world = world(name, configured);
         world.declare_scenario();
         world.with_origin();
-        world.scanning_gates(false);
+        world.scanning_gates();
         let start = git(&world.repo, &["rev-parse", "HEAD"]);
         let mut args = Vec::new();
         if let Some(flag) = flag {
@@ -733,7 +745,7 @@ fn a_scenario_run_through_the_bot_route_refuses_an_identity_the_scan_refuses() {
 fn an_identity_the_scan_passes_opens_and_forge_none_scans_nothing() {
     let passing = world("scan-passes", None);
     passing.with_origin();
-    passing.scanning_gates(false);
+    passing.scanning_gates();
     let (_, out, err) = passing.run(&[
         "--harness",
         "none",
@@ -761,7 +773,7 @@ fn an_identity_the_scan_passes_opens_and_forge_none_scans_nothing() {
 
     let unscanned = world("scan-none", None);
     unscanned.with_origin();
-    unscanned.scanning_gates(false);
+    unscanned.scanning_gates();
     let (_, out, err) = unscanned.run(&[
         "--harness",
         "none",
@@ -778,14 +790,17 @@ fn an_identity_the_scan_passes_opens_and_forge_none_scans_nothing() {
     assert_eq!(unscanned.route_calls(), "", "{said}");
 }
 
-/// Acceptance 4: with no policy the scan cannot run; the run says "not scanned", never that the
-/// identity passed, and opens as it does today, its scan left to `pr.open`.
+/// Acceptance 4, as story:forge-preflight has it since: with no policy the scan cannot run, and a
+/// run through the bot route no longer opens with its identity "not scanned"; it is refused
+/// before its case opens, exit 1, naming `B10X_GATES_POLICY`, never saying the identity passed,
+/// nothing scanned and nothing committed.
 #[test]
-fn with_no_policy_the_identity_is_not_scanned_and_the_run_opens() {
+fn with_no_policy_a_run_through_the_bot_route_is_refused_before_its_case_opens() {
     let world = world("scan-no-policy", None);
     world.with_origin();
-    world.scanning_gates(true);
-    let (_, out, err) = world.run(&[
+    world.scanning_gates();
+    let start = git(&world.repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = world.run_with_no_policy(&[
         "--harness",
         "none",
         "--iterations",
@@ -794,11 +809,11 @@ fn with_no_policy_the_identity_is_not_scanned_and_the_run_opens() {
         REFUSED,
     ]);
     let said = format!("stdout {out} stderr {err}");
-    assert!(out.contains("frontier: took story:ready-one"), "{said}");
-    world.all_by(REFUSED, 1, &said);
-    let both = format!("{out}{err}");
-    assert!(both.contains("not scanned"), "{said}");
-    assert!(both.contains("unavailable: not found"), "{said}");
-    assert!(!both.contains("passed"), "{said}");
+    assert_eq!(code, 1, "{said}");
+    assert!(err.contains("B10X_GATES_POLICY"), "{said}");
+    assert!(!out.contains("frontier: took"), "{said}");
+    assert!(!format!("{out}{err}").contains("passed"), "{said}");
+    assert!(!world.repo.join(".takt/cases").exists(), "{said}");
+    assert_eq!(git(&world.repo, &["rev-parse", "HEAD"]), start, "{said}");
     assert_eq!(world.scanned(), "", "{said}");
 }

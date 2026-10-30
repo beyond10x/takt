@@ -19,6 +19,9 @@
 //! test's own: the promotion store under `XDG_STATE_HOME`, `check-finding`'s cache under
 //! `XDG_CACHE_HOME`; the scenario repository is a local checkout.
 
+#[path = "../../takt/tests/support/stand_in_policy.rs"]
+mod stand_in_policy;
+
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
@@ -817,12 +820,10 @@ fn a_turn_whose_mainline_tip_cannot_be_read_is_refused_at_open() {
 fn a_turn_whose_forge_cannot_report_the_tip_is_refused_at_open() {
     let world = world("route-down", true, false);
     let bin = world.repo.parent().expect("a parent").join("bin");
-    for program in ["b10x-gates", "gh"] {
-        executable(
-            &bin.join(program),
-            "#!/bin/sh\necho \"the route is down\" >&2\nexit 1\n",
-        );
-    }
+    executable(
+        &bin.join("b10x-gates"),
+        "#!/bin/sh\necho \"the route is down\" >&2\nexit 1\n",
+    );
     git(
         &world.repo,
         &[
@@ -868,7 +869,7 @@ fn a_turn_whose_forge_cannot_report_the_tip_is_refused_at_open() {
         .env("XDG_STATE_HOME", &world.state)
         .env("XDG_CACHE_HOME", &world.cache)
         .env("CARGO_INSTALL_ROOT", decoy(&world))
-        .env_remove("B10X_GATES_POLICY")
+        .env("B10X_GATES_POLICY", stand_in_policy::path())
         .output()
         .expect("takt runs");
     let ran = (
@@ -2512,7 +2513,8 @@ fn a_resumed_turn_on_another_protocol_document_is_refused() {
 }
 
 /// `takt` run in `world` with `args` alone, the run's state and cache given, and `PATH` set to
-/// `path` when some.
+/// `path` when some, with a `b10x-gates` policy file the stand-ins never read
+/// ([`stand_in_policy::path`]); no policy otherwise.
 fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, String, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
     command
@@ -2522,7 +2524,9 @@ fn takt_on_path(world: &World, args: &[&str], path: Option<&Path>) -> (i32, Stri
         .env("CARGO_INSTALL_ROOT", decoy(world))
         .env_remove("B10X_GATES_POLICY");
     if let Some(path) = path {
-        command.env("PATH", path);
+        command
+            .env("PATH", path)
+            .env("B10X_GATES_POLICY", stand_in_policy::path());
     }
     let output = command.output().expect("takt runs");
     (
@@ -2602,11 +2606,16 @@ fn state_of(repo: &Path) -> (Vec<(PathBuf, Vec<u8>)>, String, String) {
     )
 }
 
-/// A `PATH` holding `git` alone, so a run that went on through the bot route could reach no
-/// forge: neither `gh` nor `b10x-gates` is found.
+/// A `PATH` holding `git` and a `b10x-gates` that refuses every line, so the bot route passes
+/// its check before the case opens (story:forge-preflight) and a run that went on through it
+/// could reach no forge.
 fn git_only_path(world: &World) -> PathBuf {
     let bin = world.repo.parent().expect("a parent").join("git-only-bin");
     fs::create_dir_all(&bin).expect("the directory");
+    executable(
+        &bin.join("b10x-gates"),
+        "#!/bin/sh\necho \"the route is down\" >&2\nexit 1\n",
+    );
     let git = Command::new("sh")
         .args(["-c", "command -v git"])
         .output()
@@ -2695,17 +2704,12 @@ fn a_turn_that_recorded_no_forge_resumes_under_any() {
 /// A stand-in for the bot route, `b10x-gates` on `PATH`: its dry-run fetch of `main` answers,
 /// per repository (`acme/one`, `acme/two`), the commit named by `tip-<repo>` beside it, and every
 /// other line (the object fetch, the identity's scan) succeeds, the commits being already local.
-/// A `gh` that refuses beside it, so no line reaches a real forge. The `PATH` that finds them
-/// first.
+/// The `PATH` that finds it first.
 fn bot_stand_in(world: &World) -> PathBuf {
     let bin = world.repo.parent().expect("a parent").join("bot-bin");
     executable(
         &bin.join("b10x-gates"),
         "#!/bin/sh\nu=$(printf '%s\\n' \"$@\" | grep '^https://' | head -n 1)\ncase \"$*\" in *--dry-run*) printf '* %s %s refs/remotes/origin/main\\n' 0000000000000000000000000000000000000000 \"$(cat \"$(dirname \"$0\")/tip-$(basename \"$u\" .git)\")\";; esac\nexit 0\n",
-    );
-    executable(
-        &bin.join("gh"),
-        "#!/bin/sh\necho \"no gh in this test\" >&2\nexit 1\n",
     );
     write(&bin.join("tip-one"), &format!("{}\n", world.baseline));
     PathBuf::from(format!(

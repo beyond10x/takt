@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-console-opens-with-the-story
 kind: story
-status: active
+status: implemented
 title: A takt run's console opens with the story and keeps the frontier quiet
 summary: 'header with story id, title and Outcome summary; may: / may now: instead of a frontier line per decision; full frontier under --verbose'
 tags:
@@ -24,10 +24,11 @@ scope:
   path: crates/takt/src/console.rs
 - confidence: cited
   path: crates/takt/src/run.rs
-revision: 10
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T19:21:08Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-28T19:21:09Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-29T21:30:16Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"test_result":1}}}
 ---
 # A takt run's console opens with the story and keeps the frontier quiet
 

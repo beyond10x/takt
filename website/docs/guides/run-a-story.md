@@ -444,7 +444,9 @@ To deliver a known story on a GitHub repository, as takt's own trials do, see
 
 ## Bounds and resuming after a stop
 
-`--iterations` (steps), `--hours`, `--tokens` and `--active-seconds` bound the run.
+`--iterations` (steps), `--hours`, `--tokens` and `--active-seconds` bound the run. A run that
+names no token budget, by `--tokens` or the run file's `tokens`, stops at 3,000,000 tokens,
+exit 3.
 
 | stop | exit | the next run |
 |---|---|---|

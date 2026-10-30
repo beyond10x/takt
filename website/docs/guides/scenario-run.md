@@ -39,7 +39,9 @@ A trial branch is deleted afterwards with
 admits only while the branch's tip is merged into the default branch.
 
 `takt scenario run` takes the same budget, harness, endpoint, forge and test flags as
-`takt run`, `--continue-past-red-base` among them.
+`takt run`, `--continue-past-red-base` among them. Its token budget has the same default: with
+neither `--tokens` nor the run file's `tokens`, it stops at 3,000,000 tokens, exit 3. (Not in
+0.22.1.)
 
 `takt scenario run --config <FILE>` reads the same run configuration file as `takt run`, and
 refuses a `story` in it, since the scenario names the story. (Not in 0.14.0.)
@@ -61,10 +63,12 @@ What a trial needs that a plain run does not:
   preflight; the steps below install a release from its archive ([Install](./install.md)).
 - **The forge.** `--forge bot`. Under `--forge none` the run stops `Unperformable (pr.opened)`,
   exit 7, however good the change is. The bot route needs `b10x-gates` on `PATH`, acting as the
-  bot's GitHub App; its policy file, mode 600, at `~/.config/b10x/gates/policy.json` or where
-  `B10X_GATES_POLICY` names it (with neither, `b10x-gates` refuses: `protected file ... unavailable`);
-  and `gh` logged in to read the pull request. todo-app-example need not be listed in the policy's
-  repositories: the scan and the bot route serve it unlisted.
+  bot's GitHub App, and `B10X_GATES_POLICY` naming its policy file: a regular file you own, not
+  a symbolic link, at mode 0600 or stricter, in a directory you own that no other user can
+  write. The run checks both before the case opens and is refused with exit 1 when either is
+  missing; `b10x-gates`'s default policy path does not count here. takt reads the pull request and its checks through `b10x-gates api --method GET`, so no
+  `gh` login is needed (0.22.1 and earlier read them with `gh`). todo-app-example need not be
+  listed in the policy's repositories: the scan and the bot route serve it unlisted.
 - **A commit identity.** The repository has no `.engineering/commit-identity.conf`, and the bot
   route refuses takt's default identity before the case opens: give `--commit-identity`.
 - **The test command.** The repository's tests are `./check.sh`, not `cargo test`: give
