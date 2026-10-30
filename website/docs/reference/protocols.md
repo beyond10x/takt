@@ -18,8 +18,8 @@ from the documents of the `b10x-canon-engineering` release takt pins. It does no
 
 | id | from | a [case](/docs/concepts/glossary#case) is |
 |---|---|---|
-| `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store [story](/docs/concepts/glossary#story), the default; its inputs and [their defaults](protocol-defaults.md) |
-| `story.delivery/3` (listed as `story-delivery/3`) | takt, `protocols/story-delivery/3.yaml`, from 0.19.0 | one planning-store story, with the inputs of `/2` and two rules of its own ([how it differs](../concepts/protocol-and-case.md#takts-own-story-protocol)) |
+| `story.delivery/2` (listed as `story-delivery/2`) | `b10x-canon-engineering`, from 0.11.0 | one planning-store [story](/docs/concepts/glossary#story); its inputs and [their defaults](protocol-defaults.md) |
+| `story.delivery/3` (listed as `story-delivery/3`) | takt, `protocols/story-delivery/3.yaml`, from 0.19.0 | one planning-store story, the default, with the inputs of `/2` and two rules of its own ([how it differs](../concepts/protocol-and-case.md#takts-own-story-protocol)) |
 | `story.delivery/1` (listed as `story-delivery/1`) | `b10x-canon-engineering`, from 0.10.0 | one planning-store story, no case input |
 | `self.improvement/1` (listed as `self-improvement/1`) | `b10x-canon-engineering`, from 0.10.0 | one improvement turn on takt |
 | `software.change/1` (listed as `software-change/1`) | `b10x-canon-engineering` | one intent |

@@ -714,7 +714,7 @@ struct RunArgs {
     story_from: Option<PathBuf>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
     /// the planning store gives opens on its tag `protocol:<name>/<major>`, else the run file's
-    /// `protocol`, else `story.delivery/2`, an --intent on `software.change/1` (takt's defaults document),
+    /// `protocol`, else `story.delivery/3`, an --intent on `software.change/1` (takt's defaults document),
     /// and a resumed case runs on its own. Given for a resumed case, it must be the case's own:
     /// another is refused before the run, nothing changed.
     #[arg(long)]

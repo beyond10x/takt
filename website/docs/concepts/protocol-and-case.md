@@ -49,17 +49,19 @@ The ones takt's defaults and [validators](/docs/concepts/glossary#validator) are
 | protocol | a case is | opened by |
 |---|---|---|
 | `software.change/1` | one change for an intent | `--intent` (the default protocol) |
-| `story.delivery/2` | one [story](/docs/concepts/glossary#story) of the planning store, delivered to a merged pull request, with the case inputs `tests_first` and `gate_on` | a story the store gives (the default; [defaults](../reference/protocol-defaults.md)) |
-| `story.delivery/3` | the same story delivery, takt's own revision of `/2` (below) | `--protocol story.delivery/3` |
+| `story.delivery/2` | one [story](/docs/concepts/glossary#story) of the planning store, delivered to a merged pull request, with the case inputs `tests_first` and `gate_on` | `--protocol story.delivery/2` |
+| `story.delivery/3` | the same story delivery, takt's own revision of `/2` (below) | a story the store gives (the default; [defaults](../reference/protocol-defaults.md)) |
 | `story.delivery/1` | the same story delivery with no case input | `--protocol story.delivery/1` |
 | `self.improvement/1` | one improvement turn of takt itself | `--protocol self.improvement/1` |
 | `loop.improvement/1` | one change to the improvement loop | `--protocol loop.improvement/1` |
 
 ### The default story protocol
 
-A story opens on `story.delivery/2` unless something names another protocol. Its case has two
-inputs. takt gives each its [default](../reference/protocol-defaults.md) unless `--input`, a
-story tag or the run file sets it:
+A story opens on `story.delivery/3`, takt's own revision of `story.delivery/2`
+([below](#takts-own-story-protocol)), unless something names another protocol; a case opened on
+`story.delivery/2` keeps it when it is resumed. Both have two inputs. takt gives each its
+[default](../reference/protocol-defaults.md) unless `--input`, a story tag or the run file sets
+it:
 
 | input | values | default | what it decides |
 |---|---|---|---|

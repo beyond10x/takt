@@ -10,7 +10,7 @@ takt ships one defaults document, `crates/takt/src/protocol_defaults.yaml`; this
 
 | opens | on |
 |---|---|
-| a story of the planning store | `story.delivery/2` |
+| a story of the planning store | `story.delivery/3` |
 | an `--intent` | `software.change/1` |
 
 A `--protocol`, a story tag `protocol:<name>/<major>` or the run file's `protocol` chooses another.

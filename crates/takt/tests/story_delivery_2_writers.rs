@@ -1,5 +1,5 @@
 //! story:story-delivery-2-evidence-writers: a story case on the default protocol,
-//! `story.delivery/2` with its default inputs (`tests_first: required`), reaches `pr.open` with a
+//! `story.delivery/3` with its default inputs (`tests_first: required`), reaches `pr.open` with a
 //! harness that writes its tests first. takt writes one `tests_change` record about the
 //! implementation at the revision the `tests.write` step committed, and `change.read` writes one
 //! `paths_changed` record beside its `change_record`: `both`, `tests_only`, `implementation_only`
@@ -232,7 +232,7 @@ fn delivered(name: &str, protocol: Option<&str>, red: bool, harness: &dyn Harnes
                 file_protocol_applies: true,
             })
             .expect("the settings resolve");
-            assert_eq!(settings.protocol.id, "story.delivery/2");
+            assert_eq!(settings.protocol.id, "story.delivery/3");
             (settings.spec.clone(), settings.pairs())
         }
     };

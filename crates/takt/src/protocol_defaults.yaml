@@ -1,5 +1,5 @@
 format: takt-protocol-defaults/1
-protocol_for_story: story.delivery/2
+protocol_for_story: story.delivery/3
 protocol_for_intent: software.change/1
 inputs:
   story.delivery/2:

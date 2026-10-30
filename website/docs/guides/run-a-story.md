@@ -10,9 +10,8 @@ source: takt run --help and takt approve --help at 0.14.0; crates/takt/src/front
 
 A story run takes a story from the repository's
 [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep))
-planning store and delivers it on the protocol `story.delivery/2`, or, with `--protocol
-story.delivery/3`, on takt's own revision of it, which hands a change over only while its tests
-pass ([Protocol and case](../concepts/protocol-and-case.md#the-protocols-takt-runs)). takt does
+planning store and delivers it on the protocol `story.delivery/3`, takt's own revision of
+`story.delivery/2`, which hands a change over only while its tests pass ([Protocol and case](../concepts/protocol-and-case.md#the-protocols-takt-runs)). takt does
 not write or rank stories; AEP keeps them, and `aep` is the tool you use to add one.
 
 The examples use the default harness, Claude Code. Codex and b10x-harness are set up in
@@ -156,7 +155,7 @@ stopped: Unperformable (pr.opened; nothing performs it without the forge); steps
    `takt/<case>`. The store now lists the story `active`.
 2. The tests and the gate ran on the base, as validators. Only a validator writes evidence.
 3. The model edited the code, one action per step. takt committed the change. On the default
-   `story.delivery/2` the model writes the story's tests first and the implementation after
+   `story.delivery/3` the model writes the story's tests first and the implementation after
    ([After a red gate](#after-a-red-gate)).
 4. The tests and the gate ran again on the new revision.
 5. The model handed the change over, and `change.read` found it ahead of `main`.
@@ -260,16 +259,17 @@ stopped: Unperformable (pr.opened; nothing performs it without the forge); steps
 
 ### After a red gate
 
-A story opens on `story.delivery/2` with `tests_first=required` and `gate_on=after_handover`
-unless you set them ([Protocol defaults](../reference/protocol-defaults.md)). From 0.21.0 takt
-runs that protocol as engineering-protocols 0.14.0 writes it. Under `tests_first=required` the
-model may edit the implementation (`implementation.edit`) in two cases only:
+A story opens on `story.delivery/3` with `tests_first=required` and `gate_on=after_handover`
+unless you set them ([Protocol defaults](../reference/protocol-defaults.md)). Under
+`tests_first=required` the model may edit the implementation (`implementation.edit`) in two cases
+only:
 
 1. **The tests are red.** The story's tests were written, and they fail at the current revision.
-2. **The tests are green and the gate or CI is red.** At the current revision the tests pass and
-   the gate or continuous integration failed, and the tests were seen failing in a run after their
-   latest write at that revision. This is how a failure no test reads, such as formatting, lint or another
-   platform, gets fixed.
+2. **The tests are green and the gate or CI is red.** The story's tests were written, and at the
+   current revision they pass and the gate or continuous integration failed. This is how a
+   failure no test reads, such as formatting, lint or another platform, gets fixed. Under
+   `story.delivery/2` the tests must also have been seen failing after their latest write
+   ([When an edit is admitted](../concepts/protocol-and-case.md#when-an-edit-is-admitted)).
 
 In any other state `implementation.edit` is not among what the step may do. Under
 `gate_on=after_handover` the gate runs only on a revision whose tests pass and whose change was

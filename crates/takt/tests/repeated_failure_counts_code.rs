@@ -290,7 +290,7 @@ fn forge() -> Rc<dyn Forge> {
 }
 
 /// The options of a delivery run of the story on the default protocol for a story with its
-/// default inputs (`story.delivery/2`, `tests_first: required`), as `takt run` with no
+/// default inputs (`story.delivery/3`, `tests_first: required`), as `takt run` with no
 /// `--protocol` and no `--input` opens it, with `iterations` steps.
 fn options(name: &str, iterations: u64) -> RunOptions {
     let file = ProtocolSettings::default();
@@ -303,7 +303,7 @@ fn options(name: &str, iterations: u64) -> RunOptions {
         file_protocol_applies: true,
     })
     .expect("the settings resolve");
-    assert_eq!(settings.protocol.id, "story.delivery/2");
+    assert_eq!(settings.protocol.id, "story.delivery/3");
     RunOptions {
         protocol: settings.spec.clone(),
         intent: "remove a todo by its number".to_owned(),

@@ -286,7 +286,7 @@ fn validators(forge: &Rc<dyn Forge>, decided: Decided) -> Vec<Box<dyn Validator>
     ]
 }
 
-/// A delivery run on the default protocol for a story (`story.delivery/2`, tests first).
+/// A delivery run on the default protocol for a story (`story.delivery/3`, tests first).
 fn options(name: &str, iterations: u64) -> RunOptions {
     let file = ProtocolSettings::default();
     let settings = resolve_settings(&SettingsRequest {
@@ -298,7 +298,7 @@ fn options(name: &str, iterations: u64) -> RunOptions {
         file_protocol_applies: true,
     })
     .expect("the settings resolve");
-    assert_eq!(settings.protocol.id, "story.delivery/2");
+    assert_eq!(settings.protocol.id, "story.delivery/3");
     RunOptions {
         protocol: settings.spec.clone(),
         intent: "remove a todo by its number".to_owned(),
