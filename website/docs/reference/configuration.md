@@ -496,7 +496,13 @@ forge_endpoint: http://127.0.0.1:8402
 - **Push and scan.** The push stays takt's push over HTTPS to the project `origin` names, or
   over `http` to an `origin` on a loopback host, port kept and no redirect followed (`http://` to
   another host is refused before the case opens); it is published only under a declared
-  `scan: none`. `connectors invoke` refuses a write without
+  `scan: none`. A git line to such a relay, here and on `takt scenario run`'s trial route, runs in
+  an empty home without your global or system git configuration, so no credential helper of yours
+  and no `~/.netrc` reaches it, and it is refused before anything is sent, naming the key and the
+  file, when the repository's configuration or a file it includes sets a credential helper,
+  `http.cookieFile`, `http.curloptResolve`, a URL-scoped `http.<url>.extraHeader`,
+  `http.<url>.proxy` or `http.<url>.followRedirects` other than `false`, an `http.proxy` off
+  loopback, or a rewrite that puts a userinfo on the relay's URL. `connectors invoke` refuses a write without
   `--approval-file` (`approval_required`), and none is given here, so on the CLI route the open and
   the merge fail with that refusal. Only `github` reports the merge target's tip; on `gitlab` the
   judge guard refuses a merge through this forge.

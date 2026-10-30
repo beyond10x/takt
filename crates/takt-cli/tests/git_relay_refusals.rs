@@ -659,6 +659,92 @@ fn a_case_commit_of_another_identity_ends_the_run_naming_ref_and_reason() {
     assert_eq!(branch_in(&world.served, &world.branch), None);
 }
 
+/// Acceptance 4's refusal: the repository's configuration, or a file it includes, sets a key
+/// that would hand a line to the relay a credential or carry it off the relay, and that git
+/// would rank above what takt gives the line on its command line. `takt scenario run` refuses
+/// the fetch before it is sent, naming the key as git lists it and the file that sets it; the
+/// relay is sent nothing. A rewrite that would put a userinfo on the relay's URL
+/// (`url.<base>.insteadOf`) is refused the same way. `takt run` refuses the case's push as the
+/// scenario run refuses its fetch, and its push is not sent.
+#[test]
+fn a_relay_line_the_configuration_would_hand_a_credential_is_refused_naming_key_and_file() {
+    let cases: [(&str, &str, &str); 7] = [
+        (
+            "http.{relay}.extraHeader",
+            "Authorization: Bearer x",
+            "config",
+        ),
+        ("credential.helper", "store", "creds.inc"),
+        ("credential.{relay}.helper", "store", "config"),
+        ("http.cookieFile", "jar", "config"),
+        ("http.curloptResolve", "127.0.0.1:1:192.0.2.1", "config"),
+        ("http.{relay}.proxy", "http://127.0.0.1:1", "config"),
+        ("http.proxy", "proxy.example.invalid:3128", "config"),
+    ];
+    for (key, value, file) in cases {
+        let world = ScenarioWorld::new("config-refused", Push::Served);
+        let key = key.replace("{relay}", &world.relay.url("o/r.git"));
+        if file == "config" {
+            git(&world.repo, &["config", &key, value]);
+        } else {
+            git(
+                &world.repo,
+                &["config", "--file", &format!(".git/{file}"), &key, value],
+            );
+            git(&world.repo, &["config", "include.path", file]);
+        }
+        let (code, out, err) = world.run(&[]);
+        assert_eq!(code, 1, "{key}: stdout {out} stderr {err}");
+        assert!(
+            err.contains(&format!("`{}`", key.to_ascii_lowercase()))
+                && err.contains(&format!("/.git/{file}, which would hand it"))
+                && err.contains("nothing was sent"),
+            "{key}: stderr {err}"
+        );
+        assert!(
+            world.relay.requests().is_empty(),
+            "{key}: {:?}",
+            world.relay.requests()
+        );
+        assert_eq!(world.trial_branches(), "", "{key}");
+    }
+
+    let world = ScenarioWorld::new("config-refused-userinfo", Push::Served);
+    let base = world.relay.url("");
+    let with_userinfo = base.replacen("http://", "http://operator:x@", 1);
+    git(
+        &world.repo,
+        &["config", &format!("url.{with_userinfo}.insteadOf"), &base],
+    );
+    let (code, out, err) = world.run(&[]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("with a userinfo") && err.contains("nothing was sent"),
+        "stderr {err}"
+    );
+    assert!(
+        world.relay.requests().is_empty(),
+        "{:?}",
+        world.relay.requests()
+    );
+
+    let world = RunWorld::new("config-refused-run", Push::Served);
+    let key = format!("http.{}.extraHeader", world.relay.url("o/r.git"));
+    git(&world.repo, &["config", &key, "Authorization: Bearer x"]);
+    let before = world.relay.pushes();
+    let (code, out, err) = world.run(&[], &[]);
+    assert_eq!(code, 5, "stdout {out} stderr {err}");
+    let stopped = line_with(&out, "stopped: error:");
+    assert!(
+        stopped.contains(&format!("`{}`", key.to_ascii_lowercase()))
+            && stopped.contains("/.git/config, which would hand it")
+            && stopped.contains("nothing was sent"),
+        "{stopped}"
+    );
+    assert_eq!(world.relay.pushes(), before, "{:?}", world.relay.requests());
+    assert_eq!(branch_in(&world.served, &world.branch), None);
+}
+
 /// [`CREDENTIAL_VARIABLES`], each holding [`TOKEN`], and `PATH` with the recorder first.
 fn credentials_and(recorder: &GitRecorder) -> Vec<(&'static str, std::ffi::OsString)> {
     let mut env: Vec<(&str, std::ffi::OsString)> = CREDENTIAL_VARIABLES
