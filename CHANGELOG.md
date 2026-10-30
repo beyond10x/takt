@@ -11,6 +11,9 @@ takt's releases.
 - On `forge_endpoint`, each open and merge carries an `idempotency_key` from the case and the write; sent again, it replays the first outcome instead of writing twice.
 - A host without standing grants that refuses the key gets the write again unkeyed, and every later one, so open and merge work there as in 0.24.0.
 - `approval_required`, `idempotency_conflict` and `outcome_unknown` end a write naming the code; after a merge's `outcome_unknown` the pull request is read before any write.
+- A write the instance classifies `refused` or `not_attempted` takes a new key next time, counted in the case's `artifacts/pull-request.refusals.json`, so a resumed run does not replay the refusal.
+- The key covers the descriptor revision, so a write after the revision moves takes a new key instead of `idempotency_conflict`.
+- A write answered `applied` or `unknown`, a provider's 5xx among them, keeps its key and replays instead of writing twice.
 
 ### Changed
 

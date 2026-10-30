@@ -482,11 +482,15 @@ forge_endpoint: http://127.0.0.1:8402
   them, is no merge: the pull request is read again before any further write, and one that is no
   longer open at that head is not merged at all.
 - **Keyed writes.** With `forge_endpoint` the open and the merge each carry an `idempotency_key`:
-  `takt-` and a SHA-256 of the case's id, the operation and its input, so the same case and write
-  send the same key. An instance with standing grants replays a key sent again, so a write repeated
-  after a lost answer is not made twice; a write the provider refused takes a new key next time. An
-  instance without them refuses the key, before running anything, as `unsupported`; takt then sends
-  that write and every later one with no key. `approval_required` (no standing grant covers the
+  `takt-` and a SHA-256 of the case's id, the operation, the instance's descriptor revision and
+  the input, so the same case and write send the same key. An instance with standing grants
+  replays a key sent again, so a write repeated after a lost answer, a provider's 5xx or
+  `outcome_unknown` is not made twice. A write whose answer's `mutation.classification` is
+  `refused` or `not_attempted` takes a new key next time; `applied`, `unknown` or none keeps it.
+  That count is kept in the case's `artifacts/pull-request.refusals.json`, so a resumed run takes
+  the next key too, and a moved descriptor revision gives a new key. An instance without standing
+  grants refuses the key, before running anything, as `unsupported`; takt then sends that write
+  and every later one with no key. `approval_required` (no standing grant covers the
   write), `idempotency_conflict` and `outcome_unknown` end the write, naming the code; after a
   merge's `outcome_unknown` the pull request is read again before any further write.
 - **Push and scan.** The push stays takt's push over HTTPS to the project `origin` names, or

@@ -4041,7 +4041,8 @@ impl Validator for PrOpen {
     }
 
     /// The case's `branch.yaml`, and what the forge keeps of the request it sent, its title and
-    /// body as published and the response it read.
+    /// body as published, the response it read and, on the forge connectors, the count of its
+    /// keyed writes the provider refused.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
@@ -4050,6 +4051,7 @@ impl Validator for PrOpen {
             artifacts.join(forge::RESPONSE),
             artifacts.join(forge::PUBLISHED),
             artifacts.join(crate::forge::command::CommandForge::BODY),
+            artifacts.join(crate::forge::connectors::ConnectorsForge::REFUSALS),
         ]
     }
 
@@ -5245,13 +5247,15 @@ impl Validator for PrMerged {
     }
 
     /// The case's `branch.yaml`, when takt's riders are pushed before the merge, and what the
-    /// forge keeps of the merge request it sent and the response it read.
+    /// forge keeps of the merge request it sent and the response it read and, on the forge
+    /// connectors, the count of its keyed writes the provider refused.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
             PathBuf::from(BRANCH_FILE),
             artifacts.join(forge::MERGE_REQUEST),
             artifacts.join(forge::MERGE_RESPONSE),
+            artifacts.join(crate::forge::connectors::ConnectorsForge::REFUSALS),
         ]
     }
 
