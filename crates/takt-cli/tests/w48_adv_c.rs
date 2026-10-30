@@ -249,7 +249,10 @@ fn repository(outer: &Path) -> (PathBuf, PathBuf) {
 /// `origin`'s URL to `relay`: with `TOKEN` in its userinfo when `userinfo`.
 fn origin_url(relay: &GitStandIn, userinfo: bool) -> String {
     if userinfo {
-        format!("http://x-access-token:{TOKEN}@127.0.0.1:{}/o/r.git", relay.port)
+        format!(
+            "http://x-access-token:{TOKEN}@127.0.0.1:{}/o/r.git",
+            relay.port
+        )
     } else {
         relay.url("o/r.git")
     }
@@ -387,7 +390,9 @@ impl RunWorld {
 }
 
 fn no_control(line: &str) -> Vec<char> {
-    line.chars().filter(|c| c.is_control() && *c != '\t').collect()
+    line.chars()
+        .filter(|c| c.is_control() && *c != '\t')
+        .collect()
 }
 
 /// A reason with terminal escapes (a window title, a screen clear): the stop line of
@@ -466,7 +471,11 @@ fn w48c_a_reason_of_two_lines_is_named_whole_in_the_run_stop_line() {
 /// and the full ref.
 #[test]
 fn w48c_a_long_reason_is_named_whole_on_both_paths() {
-    let reason = format!("({}) -> refs/heads/main (x){}", "a".repeat(3000), "b".repeat(3000));
+    let reason = format!(
+        "({}) -> refs/heads/main (x){}",
+        "a".repeat(3000),
+        "b".repeat(3000)
+    );
     let run = RunWorld::new("long-run", refusing(&reason), Before::Nothing, false);
     let (pushes, stopped) = run.refused_run();
     assert_eq!(pushes, 1);
@@ -516,7 +525,11 @@ fn w48c_a_refused_fetch_ends_the_scenario_run_before_any_push() {
     assert_eq!(
         git_out(
             &world.repo,
-            &["for-each-ref", "--format=%(refname:short)", "refs/heads/trial/"]
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "refs/heads/trial/"
+            ]
         ),
         ""
     );

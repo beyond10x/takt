@@ -53,8 +53,8 @@ types:
   # read from: crates/takt/src/case.rs:470-483
   # read from: crates/takt/src/case.rs:421-455
   # read from: crates/takt/src/case.rs:372-417
-  # read from: crates/takt-cli/src/main.rs:4288-4289
-  # read from: crates/takt-cli/src/main.rs:3691-3692
+  # read from: crates/takt-cli/src/main.rs:4352-4353
+  # read from: crates/takt-cli/src/main.rs:3755-3756
   # read from: crates/takt/src/run.rs:8627-8628
   # read from: crates/takt/src/run.rs:10334-10341
   # read from: crates/takt/src/case.rs:150-152
@@ -67,7 +67,7 @@ types:
   # (`takt run --case <id>`) gives a case a second run, so a run is told apart from its case here.
   # read from: crates/takt/src/run.rs:9456-9470
   # read from: crates/takt/src/run.rs:9734
-  # read from: crates/takt-cli/src/main.rs:3506-3510
+  # read from: crates/takt-cli/src/main.rs:3570-3574
   # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
   - name: takt.work.RunId
     kind: newtype
@@ -150,10 +150,10 @@ types:
   # read from: crates/takt/src/run.rs:8574-8575
   # read from: crates/takt-cli/src/main.rs:712-718
   # read from: crates/takt-cli/src/main.rs:1796-1802
-  # read from: crates/takt-cli/src/main.rs:4266-4268
+  # read from: crates/takt-cli/src/main.rs:4330-4332
   # read from: crates/takt-cli/src/main.rs:2108-2169
-  # read from: crates/takt-cli/src/main.rs:4061-4065
-  # read from: crates/takt-cli/src/main.rs:4119-4148
+  # read from: crates/takt-cli/src/main.rs:4125-4129
+  # read from: crates/takt-cli/src/main.rs:4183-4212
   - name: takt.work.Unit
     kind: union
     tag: kind
@@ -654,7 +654,7 @@ types:
   # read from: crates/takt/src/run_config.rs:241-243
   # read from: crates/takt/src/scan.rs:24-45
   # read from: crates/takt-cli/src/main.rs:842
-  # read from: crates/takt-cli/src/main.rs:3810-3817
+  # read from: crates/takt-cli/src/main.rs:3874-3881
   # read from: crates/takt/src/run_config.rs:196-231
   # read from: crates/takt/src/run_config.rs:1433-1443
   # read from: crates/takt/src/run_config.rs:882-915
@@ -1046,11 +1046,11 @@ types:
   # read from: crates/takt/src/run.rs:11757
   # read from: crates/takt/src/run.rs:11928
   # read from: crates/takt/src/run.rs:12734-12735
-  # read from: crates/takt-cli/src/main.rs:3513-3521
+  # read from: crates/takt-cli/src/main.rs:3577-3585
   # read from: crates/takt-cli/src/main.rs:1433-1439
   # read from: crates/takt/src/run.rs:104-120
   # read from: crates/takt/src/run.rs:12506-12519
-  # read from: crates/takt-cli/src/main.rs:3515
+  # read from: crates/takt-cli/src/main.rs:3579
   # read from: crates/takt-cli/src/main.rs:1440
   # read from: crates/takt/src/run.rs:1851-1861
   # read from: crates/takt/src/run.rs:13234-13290
@@ -1058,10 +1058,10 @@ types:
   # read from: crates/takt/src/run.rs:121-131
   # read from: crates/takt/src/run.rs:12562-12575
   # read from: crates/takt/src/run.rs:2017-2024
-  # read from: crates/takt-cli/src/main.rs:3516
+  # read from: crates/takt-cli/src/main.rs:3580
   # read from: crates/takt-cli/src/main.rs:1441
   # read from: crates/takt/src/scorecard.rs:621-634
-  # read from: crates/takt-cli/src/main.rs:3467
+  # read from: crates/takt-cli/src/main.rs:3531
   # read from: crates/takt/src/run.rs:10536-10542
   # read from: crates/takt/src/run.rs:12708-12718
   # read from: crates/takt/src/validator.rs:88-96
@@ -1075,8 +1075,8 @@ types:
   # read from: crates/takt/src/run.rs:1383-1385
   # read from: crates/takt-cli/src/main.rs:1215-1222
   # read from: crates/takt-cli/src/main.rs:1442
-  # read from: crates/takt-cli/src/main.rs:3483-3485
-  # read from: crates/takt-cli/src/main.rs:3517
+  # read from: crates/takt-cli/src/main.rs:3547-3549
+  # read from: crates/takt-cli/src/main.rs:3581
   # read from: crates/takt/src/scorecard.rs:595-614
   # read from: crates/takt/src/scorecard.rs:1566-1605
   # read from: crates/takt/src/promotion.rs:3148-3155
@@ -1088,7 +1088,7 @@ types:
   # read from: crates/takt/src/run.rs:12514-12515
   # read from: crates/takt-cli/src/main.rs:1114-1120
   # read from: crates/takt-cli/src/main.rs:2264-2268
-  # read from: crates/takt-cli/src/main.rs:3464-3466
+  # read from: crates/takt-cli/src/main.rs:3528-3530
   # read from: crates/takt/src/scorecard.rs:610-618
   # read from: crates/takt/src/run.rs:185-196
   # read from: crates/takt/src/run.rs:367-377
@@ -1491,13 +1491,13 @@ types:
   # them, and the first line the run prints says each input's after its value; absent on a line
   # written before them and for a case that records none.
   # read from: crates/takt-cli/src/main.rs:25-27
-  # read from: crates/takt-cli/src/main.rs:3447
+  # read from: crates/takt-cli/src/main.rs:3508
   # read from: crates/takt-cli/build.rs:211-265
   # read from: crates/takt/src/run.rs:12231-12237
   # read from: crates/takt/src/harness.rs:87-103
   # read from: crates/takt/src/harness.rs:3623-3638
   # read from: crates/takt/src/events.rs:94-96
-  # read from: crates/takt-cli/src/main.rs:3443-3445
+  # read from: crates/takt-cli/src/main.rs:3504-3506
   - name: takt.work.RunOpened
     kind: struct
     fields:
@@ -2379,16 +2379,16 @@ types:
   # read from: crates/takt/src/forge/gitlab.rs:387-419
   # read from: crates/takt/src/forge/gitlab.rs:535-544
   # read from: crates/takt/src/forge/gitlab.rs:556-570
-  # read from: crates/takt-cli/src/main.rs:3335-3346
+  # read from: crates/takt-cli/src/main.rs:3396-3407
   # read from: crates/takt/src/forge/gitlab.rs:29-34
   # read from: crates/takt/src/forge/gitlab.rs:46-57
   # read from: crates/takt/src/forge/gitlab.rs:122-132
   # read from: crates/takt/src/forge/gitlab.rs:134-166
   # read from: crates/takt/src/forge/gitlab.rs:532-538
-  # read from: crates/takt-cli/src/main.rs:3362-3391
+  # read from: crates/takt-cli/src/main.rs:3423-3452
   # read from: crates/takt-cli/src/main.rs:1210-1212
   # read from: crates/takt/src/forge/gitlab.rs:660-667
-  # read from: crates/takt-cli/src/main.rs:3312-3313
+  # read from: crates/takt-cli/src/main.rs:3373-3374
   # `command` is the forge a run file's `forge_commands` section configures
   # (`takt.work.ForgeCommands`): each action of the forge is the exact argument list the file names,
   # run without a shell through the forge `Runner`; it is named, never defaulted to, and a scenario
@@ -2427,20 +2427,21 @@ types:
   # over HTTPS, or to the loopback relay it names over `http`, through no proxy, refused unless
   # every URL git's configuration could rewrite it to is on a loopback host. A push the relay
   # refuses fails with what git said, which names each ref refused and the relay's reason
-  # (`! [remote rejected] <ref> (<reason>)`), and the run ends on that error. It is named, never
+  # (`! [remote rejected] <ref> (<reason>)`), and the run ends on that error, its stop line
+  # holding each control character but a tab escaped (`\u{1b}`). It is named, never
   # defaulted to, and a scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/connectors.rs:12-19
   # read from: crates/takt/src/forge/connectors.rs:107-116
-  # read from: crates/takt/src/forge/connectors.rs:369-403
-  # read from: crates/takt/src/forge/connectors.rs:684-700
-  # read from: crates/takt/src/forge/connectors.rs:794-799
-  # read from: crates/takt/src/forge/connectors.rs:1057-1109
-  # read from: crates/takt/src/forge/connectors.rs:1311-1325
-  # read from: crates/takt/src/forge/connectors.rs:1529-1532
-  # read from: crates/takt/src/forge/connectors.rs:1739-1756
+  # read from: crates/takt/src/forge/connectors.rs:370-404
+  # read from: crates/takt/src/forge/connectors.rs:685-701
+  # read from: crates/takt/src/forge/connectors.rs:795-800
+  # read from: crates/takt/src/forge/connectors.rs:1058-1110
+  # read from: crates/takt/src/forge/connectors.rs:1312-1326
+  # read from: crates/takt/src/forge/connectors.rs:1530-1533
+  # read from: crates/takt/src/forge/connectors.rs:1740-1757
   # read from: crates/takt/src/forge/connectors.rs:165-177
-  # read from: crates/takt/src/forge/connectors.rs:456-465
-  # read from: crates/takt/src/forge/connectors.rs:925-969
+  # read from: crates/takt/src/forge/connectors.rs:457-466
+  # read from: crates/takt/src/forge/connectors.rs:926-970
   # read from: crates/takt/src/forge.rs:1567-1571
   # read from: crates/takt/src/validator.rs:4183-4185
   # `local` is a bare repository on this machine, the hub the tree's `origin` names by its path,
@@ -2458,7 +2459,8 @@ types:
   # scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/local.rs:1-14
   # read from: crates/takt/src/forge/local.rs:278-339
-  # read from: crates/takt-cli/src/main.rs:3260-3299
+  # read from: crates/takt-cli/src/main.rs:3321-3360
+  # read from: crates/takt-cli/src/main.rs:4548-4574
   - name: takt.work.ForgeName
     kind: enum
     variants: [gitlab, command, connectors, local, none]
@@ -3461,8 +3463,8 @@ types:
   # The hard guard holds within a checkout only: the numbers it knows are passed over, and
   # `git checkout -b` refuses a branch that exists
   # (story:trial-numbers-are-unique-across-checkouts).
-  # read from: crates/takt-cli/src/main.rs:3660-3663
-  # read from: crates/takt-cli/src/main.rs:3718-3729
+  # read from: crates/takt-cli/src/main.rs:3724-3727
+  # read from: crates/takt-cli/src/main.rs:3782-3793
   - name: takt.work.TrialNumber
     kind: newtype
     of: Integer
@@ -4284,7 +4286,7 @@ entities:
   # read from: crates/takt/src/harness.rs:3300-3352
   # read from: crates/takt/src/harness.rs:3165-3168
   # read from: crates/takt/src/run.rs:7529-7567
-  # read from: crates/takt-cli/src/main.rs:3449-3462
+  # read from: crates/takt-cli/src/main.rs:3510-3526
   - name: takt.work.Case
     naming:
       summary: >-
@@ -4485,7 +4487,7 @@ entities:
       # read from: crates/takt/src/case.rs:4481-4492
       # read from: crates/takt/src/promotion.rs:2388-2393
       # read from: crates/takt-cli/src/main.rs:1824-1833
-      # read from: crates/takt-cli/src/main.rs:4218-4230
+      # read from: crates/takt-cli/src/main.rs:4282-4294
       - name: judge
         type: Optional<String>
       # The install root an improvement turn reads the promoted binary under
@@ -4499,7 +4501,7 @@ entities:
       # turn that recorded none, or a case under another protocol, refuses any.
       # read from: crates/takt/src/case.rs:4015-4021
       # read from: crates/takt/src/improvement.rs:1881-1889
-      # read from: crates/takt-cli/src/main.rs:4331-4334
+      # read from: crates/takt-cli/src/main.rs:4395-4398
       - name: install_root
         type: Optional<String>
       # The forge an improvement turn reads the mainline through, the run's forge by its name or
@@ -4673,7 +4675,7 @@ entities:
       # run and the case are told apart here.
       # read from: crates/takt/src/run.rs:9459-9460
       # read from: crates/takt/src/run.rs:9734
-      # read from: crates/takt-cli/src/main.rs:3506-3510
+      # read from: crates/takt-cli/src/main.rs:3570-3574
       # read from: .engineering/planning/decision-blocker/approval-grant-and-case-resume.md:49-51
       name: run_id
       type: takt.work.RunId
@@ -4700,7 +4702,7 @@ entities:
       # read from: crates/takt/src/run.rs:54
       # read from: crates/takt/src/run.rs:9721-9724
       # read from: crates/takt-cli/src/main.rs:1772-1779
-      # read from: crates/takt-cli/src/main.rs:4301-4315
+      # read from: crates/takt-cli/src/main.rs:4365-4379
       # read from: crates/takt/src/protocol.rs:644-698
       # read from: crates/takt/src/protocol_defaults.yaml:2
       - name: protocol
@@ -4739,7 +4741,7 @@ entities:
       # read from: crates/takt/src/run.rs:58-59
       # read from: crates/takt-cli/src/main.rs:1991-2011
       # read from: crates/takt-cli/src/main.rs:2420-2435
-      # read from: crates/takt-cli/src/main.rs:4325
+      # read from: crates/takt-cli/src/main.rs:4389
       # read from: crates/takt/src/run.rs:10075
       # read from: crates/takt-cli/src/main.rs:1921-1985
       # read from: crates/takt-cli/src/main.rs:2185-2189
@@ -4817,8 +4819,8 @@ entities:
       # when `origin` is on a host `glab` is logged in to, else `none`, which registers none of
       # the three forge validators. A forge that publishes what the run makes is refused before
       # the case opens unless the run declares `scan: none` (takt.work.ForgeName).
-      # read from: crates/takt-cli/src/main.rs:3312-3357
-      # read from: crates/takt-cli/src/main.rs:3156-3162
+      # read from: crates/takt-cli/src/main.rs:3373-3418
+      # read from: crates/takt-cli/src/main.rs:3217-3223
       - name: forge
         type: takt.work.ForgeName
       # The least free space a step needs, in GiB, on the file system of the tree and, when
@@ -4827,7 +4829,7 @@ entities:
       # (takt.work.Stop) before the step. The CLI gives every run one; the library's default is
       # 0, which reads nothing, until `Run::stop_when_disk_below` gives one in bytes.
       # read from: crates/takt-cli/src/main.rs:1215-1222
-      # read from: crates/takt-cli/src/main.rs:3484
+      # read from: crates/takt-cli/src/main.rs:3548
       # read from: crates/takt/src/run.rs:9538-9540
       - name: min_free_gib
         type: Integer
@@ -4857,7 +4859,7 @@ entities:
         type: Integer
         summary: Tokens the harness reported, summed over its steps.
       # read from: crates/takt/src/run.rs:74-103
-      # read from: crates/takt-cli/src/main.rs:3506
+      # read from: crates/takt-cli/src/main.rs:3570
       - name: stop
         type: Optional<takt.work.Stop>
         summary: Why the run stopped; absent while it runs, and after a run that ended on an error.
@@ -5361,12 +5363,12 @@ entities:
       # read from: crates/takt/src/git.rs:1245-1250
       # read from: crates/takt/src/case.rs:3168-3182
       # read from: crates/takt-cli/src/main.rs:1907-1911
-      # read from: crates/takt-cli/src/main.rs:3849-3867
+      # read from: crates/takt-cli/src/main.rs:3913-3931
       # read from: crates/takt-cli/src/main.rs:2032-2048
-      # read from: crates/takt-cli/src/main.rs:3905-3915
-      # read from: crates/takt-cli/src/main.rs:3953-3965
-      # read from: crates/takt-cli/src/main.rs:4412-4447
-      # read from: crates/takt-cli/src/main.rs:4449-4482
+      # read from: crates/takt-cli/src/main.rs:3969-3979
+      # read from: crates/takt-cli/src/main.rs:4017-4029
+      # read from: crates/takt-cli/src/main.rs:4476-4511
+      # read from: crates/takt-cli/src/main.rs:4513-4546
       # read from: crates/takt/src/forge.rs:345-351
       # read from: crates/takt/src/forge.rs:415-431
       # read from: crates/takt/src/promotion.rs:508-512
@@ -5705,7 +5707,7 @@ entities:
   # read from: crates/takt/src/validator.rs:3732-3736
   # read from: crates/takt/src/validator.rs:4219-4283
   # read from: crates/takt/src/forge.rs:589-598
-  # read from: crates/takt-cli/src/main.rs:2992-2996
+  # read from: crates/takt-cli/src/main.rs:2994-2998
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
@@ -5731,7 +5733,7 @@ entities:
     # `self.improvement/1` case, the merge validators reading the forge's `main` or, with no
     # forge, the local `main`.
     # read from: crates/takt-cli/src/main.rs:2894-2905
-    # read from: crates/takt-cli/src/main.rs:3157-3161
+    # read from: crates/takt-cli/src/main.rs:3218-3222
     # read from: crates/takt-cli/src/main.rs:2907-2911
     # read from: crates/takt-cli/src/main.rs:2912-2922
     lifecycle:
@@ -5932,8 +5934,8 @@ entities:
   # a key takt does not read, is refused: a scenario names exactly one story.
   # read from: crates/takt-cli/src/main.rs:621-625
   # read from: crates/takt-cli/src/main.rs:633-635
-  # read from: crates/takt-cli/src/main.rs:3552-3558
-  # read from: crates/takt-cli/src/main.rs:3611-3613
+  # read from: crates/takt-cli/src/main.rs:3616-3622
+  # read from: crates/takt-cli/src/main.rs:3675-3677
   - name: takt.work.Scenario
     naming:
       summary: >-
@@ -6474,7 +6476,8 @@ entities:
   # not pushed. With one, the operator's git pushes it to `origin` with a lease that only lets
   # it create the branch, and the run is refused unless the push reports it created, the refusal
   # naming the branch and what the push reported for it, a relay's `[remote rejected]` and its
-  # reason among it; no forge takes part. Either way it then opens the case
+  # whole reason among it, on one line, each control character but a tab escaped; no forge
+  # takes part. Either way it then opens the case
   # `scenario-<id>-trial-<n>` for the scenario's story, whose pull request targets the trial
   # branch; with an `origin` it is refused before anything is cut when that case or its
   # branch exists, and without it such a number is passed over, so a trial base has one case;
@@ -6486,16 +6489,20 @@ entities:
   # configuration rewrites them, is read: `http://` goes to a loopback host (`localhost`,
   # `127.0.0.0/8`, `::1`) alone, a relay beside the run that holds the forge's credential, and a
   # line to one follows no redirect; one that is `http://` to another host is refused, naming it.
+  # A line to a relay goes to `origin`'s one URL for it without its userinfo, as `takt run`'s
+  # do, so a credential in that URL reaches no relay; more than one URL for it is refused.
   # read from: crates/takt-cli/src/main.rs:593-610
-  # read from: crates/takt-cli/src/main.rs:3660-3663
-  # read from: crates/takt-cli/src/main.rs:3685-3691
-  # read from: crates/takt-cli/src/main.rs:3892-3904
-  # read from: crates/takt-cli/src/main.rs:2949-2964
+  # read from: crates/takt-cli/src/main.rs:3724-3727
+  # read from: crates/takt-cli/src/main.rs:3749-3755
+  # read from: crates/takt-cli/src/main.rs:3956-3968
+  # read from: crates/takt-cli/src/main.rs:2949-2966
   # read from: .engineering/planning/design/recursive-self-improvement.md:96-98
-  # read from: crates/takt-cli/src/main.rs:3724-3726
-  # read from: crates/takt-cli/src/main.rs:2998-3013
+  # read from: crates/takt-cli/src/main.rs:3788-3790
+  # read from: crates/takt-cli/src/main.rs:3000-3054
   # read from: crates/takt/src/git.rs:805-847
-  # read from: crates/takt-cli/src/main.rs:3139-3146
+  # read from: crates/takt-cli/src/main.rs:3200-3207
+  # read from: crates/takt-cli/src/main.rs:3169-3182
+  # read from: crates/takt-cli/src/main.rs:4548-4574
   - name: takt.work.TrialBranch
     naming:
       summary: >-
