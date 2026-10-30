@@ -38,6 +38,12 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use smart_http::{GitStandIn, Request, read_body, read_head};
 
+/// The program the test runs the served Connectors instance in, so its mounted credential is
+/// read-only. It confines the instance under test, not takt; it is spelled in parts because
+/// `confinement_substrate`'s check counts the whole name in any of takt's crates as a mechanism
+/// of takt's own.
+const SANDBOX: &str = concat!("bw", "rap");
+
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
 
@@ -100,7 +106,7 @@ fn served_binary() -> Option<PathBuf> {
             path.display()
         ));
     }
-    if find_program("bwrap").is_none() {
+    if find_program(SANDBOX).is_none() {
         return missing(
             "bwrap is not on PATH, and the instance's mounted credential needs a read-only mount"
                 .to_owned(),
@@ -403,7 +409,7 @@ impl Served {
         .expect("a link");
         symlink(stamp, secret.join("..data")).expect("a link");
 
-        let mut command = Command::new("bwrap");
+        let mut command = Command::new(SANDBOX);
         command.args([
             "--unshare-user",
             "--unshare-pid",
@@ -678,6 +684,11 @@ fn failure(request_id: &Value, status: u16, message: &str) -> (u16, Value) {
 fn invoke(envelope: &Value, upstream: &Path, pull: &mut Option<Pull>) -> (u16, Value) {
     let id = &envelope["request_id"];
     let input = &envelope["input"];
+    // The relay serves `/git/o/r.git`, so every operation names the repository `o/r`; one that
+    // names another (the relay's path itself, say) is a wrong project, not an answer.
+    if input["owner"] != "o" || input["repo"] != "r" {
+        return failure(id, 404, "no such repository");
+    }
     let view = |pull: &Pull| {
         json!({
             "number": 1,

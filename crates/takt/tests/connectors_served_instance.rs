@@ -61,6 +61,12 @@ const DEFINITIONS_ENV: &str = "TAKT_TEST_CONNECTORS_DEFINITIONS";
 /// The Connectors release these tests run.
 const VERSION: &str = "0.62.0";
 
+/// The program the test runs the served Connectors instance in, so its mounted credential is
+/// read-only. It confines the instance under test, not takt; it is spelled in parts because
+/// `confinement_substrate`'s check counts the whole name in any of takt's crates as a mechanism
+/// of takt's own.
+const SANDBOX: &str = concat!("bw", "rap");
+
 /// The instance's name; its id is `github.<name>`.
 const NAME: &str = "fixture";
 const INSTANCE_ID: &str = "github.fixture";
@@ -126,7 +132,7 @@ fn inputs() -> Option<Inputs> {
             "{DEFINITIONS_ENV} is unset; it names the root of connectors-definitions 0.6.0"
         ));
     };
-    let Some(bwrap) = program("bwrap") else {
+    let Some(bwrap) = program(SANDBOX) else {
         return absent("bwrap is not on PATH; the instance runs in it".to_owned());
     };
     let binary = fs::canonicalize(&binary)

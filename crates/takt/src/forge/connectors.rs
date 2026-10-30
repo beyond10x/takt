@@ -285,8 +285,12 @@ fn refusals_in(dir: &Path) -> Result<Record> {
         Some(Value::Object(unknown)) => unknown
             .iter()
             .map(|(key, fresh)| match fresh {
+                _ if !is_key(key) => Err(anyhow!(
+                    "{} names {key:?} at `unknown`, which is no key takt takes; nothing was sent",
+                    path.display()
+                )),
                 Value::Null => Ok((key.clone(), None)),
-                Value::String(fresh) => Ok((key.clone(), Some(fresh.clone()))),
+                Value::String(fresh) if is_key(fresh) => Ok((key.clone(), Some(fresh.clone()))),
                 _ => Err(anyhow!(
                     "{} names no fresh key or null for {key} at `unknown`; nothing was sent",
                     path.display()
@@ -299,6 +303,17 @@ fn refusals_in(dir: &Path) -> Result<Record> {
         ),
     };
     Ok(Record { refused, unknown })
+}
+
+/// Whether `text` has the form of a key [`idempotency_key`] makes: `takt-` and 64 lowercase
+/// hexadecimal digits.
+fn is_key(text: &str) -> bool {
+    text.strip_prefix("takt-").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
 }
 
 /// What a case's refusal record ([`ConnectorsForge::REFUSALS`]) holds.
@@ -495,8 +510,8 @@ pub fn relay_of(url: &str) -> Result<String> {
 }
 
 /// The project a loopback relay's path names: a Connectors git relay serves
-/// `/git/<owner>/<repo>.git`, so `git/<owner>/<repo>` names `<owner>/<repo>`; any other path
-/// names itself.
+/// `/git/<owner>/<repo>.git`, so on github `git/<owner>/<repo>` names `<owner>/<repo>`; any other
+/// path, and every path on gitlab, where `git` can be a group, names itself.
 fn relay_project(path: &str) -> &str {
     match path.strip_prefix("git/") {
         Some(project) if project.split('/').count() == 2 => project,
@@ -740,6 +755,9 @@ impl fmt::Debug for ConnectorsForge {
 struct Request {
     view: PullRequestView,
     head_pipeline: Option<(u64, Option<String>)>,
+    /// Whether its state is `locked`, a merge in progress, which [`PullRequestState`] reads as
+    /// open.
+    locked: bool,
 }
 
 impl ConnectorsForge {
@@ -820,14 +838,22 @@ impl ConnectorsForge {
             .as_deref()
             .and_then(super::gitlab::project_of)
             .map(|(host, project)| match &relay {
-                Some(_) => (host, relay_project(&project).to_owned()),
-                None => (host, project),
+                Some(_) if connector == Connector::Github => {
+                    (host, relay_project(&project).to_owned())
+                }
+                _ => (host, project),
             })
             .ok_or_else(|| {
                 anyhow!(
                     "the forge connectors names the project by the origin remote, and it names none; nothing was opened"
                 )
             })?;
+        if relay.is_some() && origin.1.contains('%') {
+            bail!(
+                "the origin remote names the project {} through a loopback relay with a percent-encoded part: the relay decodes it and the API calls would not, so write it decoded; nothing was opened",
+                origin.1
+            );
+        }
         if connector == Connector::Github && origin.1.split('/').count() != 2 {
             bail!(
                 "the github connector names a repository by `<owner>/<repo>`, and the origin remote names {}; nothing was opened",
@@ -1162,7 +1188,11 @@ impl ConnectorsForge {
                 if let Some(merged) = self.settle_unknown(tree, &first, &key, number, head)? {
                     return Ok(merged);
                 }
-                refused = refused.saturating_add(1);
+                refused = refused.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "pull request {number}'s merge has used every key its record can count; nothing was sent"
+                    )
+                })?;
                 let fresh = idempotency_key(&case, operation, revision, input, refused);
                 refusals.refused.insert(first.clone(), refused);
                 refusals.unknown.insert(key, Some(fresh.clone()));
@@ -1341,7 +1371,8 @@ impl ConnectorsForge {
     /// sent again, by reading the pull request: merged is the merge applied, and the body
     /// returned stands for its answer, with nothing sent; open and unmerged at `head` is the
     /// merge not applied, `None`, and it goes under a fresh key, at most once per process for the
-    /// write whose first key is `first`. Closed, another head, or a second unknown in this
+    /// write whose first key is `first`. Closed, merged at another head, locked (a merge in
+    /// progress on gitlab), open at another head, or a second unknown in this
     /// process is no merge, and the error names what the read showed.
     fn settle_unknown(
         &self,
@@ -1351,12 +1382,31 @@ impl ConnectorsForge {
         number: u64,
         head: &str,
     ) -> Result<Option<Value>> {
-        let view = self.view(tree, number).with_context(|| {
+        let read = || -> Result<(PullRequestView, bool)> {
+            match self.connector {
+                Connector::Gitlab => {
+                    let request = self.read(tree, number)?;
+                    self.reread.borrow_mut().remove(&number);
+                    Ok((request.view, request.locked))
+                }
+                Connector::Github => Ok((self.view(tree, number)?, false)),
+            }
+        };
+        let (view, locked) = read().with_context(|| {
             format!(
                 "read pull request {number} again after a merge of it answered outcome_unknown under {key}; nothing was sent"
             )
         })?;
+        if locked {
+            bail!(
+                "whether pull request {number} was merged is not known (outcome_unknown): it reads locked, a merge in progress, after the merge under {key}; nothing was sent again, and a later run reads it again"
+            );
+        }
         match view.state {
+            PullRequestState::Merged if view.head.sha != head => bail!(
+                "pull request {number} reads merged at the head {}, not {head}, the head the merge under {key} named; that merge is not this one, and nothing was merged",
+                view.head.sha
+            ),
             PullRequestState::Merged => {
                 return Ok(Some(json!({
                     "merged": true,
@@ -1456,6 +1506,7 @@ impl ConnectorsForge {
                 base: field("target_branch")?,
             },
             head_pipeline,
+            locked: body["state"].as_str() == Some("locked"),
         })
     }
 
@@ -1476,7 +1527,7 @@ impl ConnectorsForge {
                 .ok_or_else(|| anyhow!("{named} reported no {}", pointer[1..].replace('/', ".")))
         };
         let state = match (body["state"].as_str(), body["merged"].as_bool()) {
-            (Some("open"), _) => PullRequestState::Open,
+            (Some("open"), Some(false) | None) => PullRequestState::Open,
             (Some("closed"), Some(true)) => PullRequestState::Merged,
             (Some("closed"), Some(false)) => PullRequestState::Closed,
             (state, merged) => bail!(

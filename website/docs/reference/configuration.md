@@ -466,7 +466,10 @@ forge_endpoint: http://127.0.0.1:8402
   commit, `pull_request.get` reads its `state`, `merged`, `head.ref`, `head.sha` and `base.ref`,
   `check_runs.list` (every page) and `commit.status` read the checks of the head's sha,
   `pull_request.merge` merges it and `branch.get` reads the merge target's tip. `owner` and `repo`
-  are the ones `origin` names.
+  are the ones `origin` names; an `origin` on a loopback relay whose path is `/git/<owner>/<repo>.git`,
+  the path a Connectors git relay serves, names `<owner>/<repo>`. A relay path with a
+  percent-encoded part is refused before the case opens. On `gitlab` the path names itself, since
+  `git` can be a group there.
 - **Preflight.** Before the case opens every operation the connector's map needs is described:
   `connectors invoke <target> <operation> --describe` for each, or the one `GET /v1/describe`, whose
   instance must be the one `forge_instance` names after its `/`. A missing one is exit 1, naming each

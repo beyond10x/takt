@@ -33,6 +33,8 @@ takt's releases.
 - A trial's refusal names the relay's whole reason, tabs and line breaks included.
 - A merge answered `outcome_unknown` whose pull request reads open at the same head is sent once per run under a fresh key, instead of replaying the unknown on every resume.
 - `--forge connectors` with `origin` a Connectors git relay's `/git/<owner>/<repo>.git` on loopback names the repository `<owner>/<repo>`, so the run opens instead of refusing `git/<owner>/<repo>`.
+- That mapping is github's only, since `git` can be a gitlab group, and a relay `origin` with a percent-encoded part is refused before the case opens.
+- After a merge's `outcome_unknown`, a pull request read merged at another head, or a gitlab merge request read `locked`, sends no merge and says so.
 
 ## [0.24.0] - 2026-10-30
 
