@@ -723,7 +723,7 @@ types:
       # It belongs to `forge: connectors`, which needs it.
       # read from: crates/takt/src/run_config.rs:267-271
       # read from: crates/takt/src/run_config.rs:1520-1530
-      # read from: crates/takt/src/forge/connectors.rs:197-210
+      # read from: crates/takt/src/forge/connectors.rs:243-256
       - name: forge_instance
         type: Optional<String>
       # The URL of the served Connectors instance `forge: connectors` calls instead of the
@@ -734,7 +734,7 @@ types:
       # read from: crates/takt/src/run_config.rs:272-275
       # read from: crates/takt/src/run_config.rs:320-322
       # read from: crates/takt/src/run_config.rs:1446-1457
-      # read from: crates/takt/src/forge/connectors.rs:212-245
+      # read from: crates/takt/src/forge/connectors.rs:258-291
       - name: forge_endpoint
         type: Optional<String>
       - name: transport
@@ -2411,7 +2411,16 @@ types:
   # `timed_out` or a combined `failure` or `error`, and are pending otherwise, a head nothing
   # reported on among them. The merge carries the head the checks were read on; one that fails,
   # a 409 among them, is no merge, and the pull request is read again before any further write,
-  # not merged when it is no longer open at that head. On github the merge target's tip is
+  # not merged when it is no longer open at that head. On the served route each write, the open
+  # and the merge, carries an `idempotency_key`: `takt-` and the hex SHA-256 of the case's id,
+  # the operation, its input and how many times the provider refused that write, so the same
+  # case and write give the same key, another write another, and a write sent again after a
+  # lost answer or `outcome_unknown` replays its first outcome, a replay read as that outcome. A
+  # host that refuses the key as a member it does not take (`unsupported`, HTTP 400,
+  # `request_id: null`) gets that write again, and every later one, with no key.
+  # `idempotency_conflict`, `approval_required` and `outcome_unknown` end the write naming the
+  # code, and a merge answered `outcome_unknown` is read again before any further write, never
+  # called no merge. On github the merge target's tip is
   # `branch.get`'s `commit.sha` only when `origin`'s own branch, read through git, names the same
   # commit; any other answer, or no such branch, is refused. The check runs are read page by page
   # until as many as their `total_count` are read. The push goes to the project `origin` names
@@ -2419,14 +2428,17 @@ types:
   # every URL git's configuration could rewrite it to is on a loopback host. It is named, never
   # defaulted to, and a scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/connectors.rs:12-19
-  # read from: crates/takt/src/forge/connectors.rs:95-104
-  # read from: crates/takt/src/forge/connectors.rs:323-357
-  # read from: crates/takt/src/forge/connectors.rs:598-614
-  # read from: crates/takt/src/forge/connectors.rs:708-713
-  # read from: crates/takt/src/forge/connectors.rs:907-950
-  # read from: crates/takt/src/forge/connectors.rs:1152-1166
-  # read from: crates/takt/src/forge/connectors.rs:1366-1369
-  # read from: crates/takt/src/forge/connectors.rs:1562-1579
+  # read from: crates/takt/src/forge/connectors.rs:107-116
+  # read from: crates/takt/src/forge/connectors.rs:369-403
+  # read from: crates/takt/src/forge/connectors.rs:684-700
+  # read from: crates/takt/src/forge/connectors.rs:794-799
+  # read from: crates/takt/src/forge/connectors.rs:1057-1109
+  # read from: crates/takt/src/forge/connectors.rs:1311-1325
+  # read from: crates/takt/src/forge/connectors.rs:1529-1532
+  # read from: crates/takt/src/forge/connectors.rs:1739-1756
+  # read from: crates/takt/src/forge/connectors.rs:165-177
+  # read from: crates/takt/src/forge/connectors.rs:456-465
+  # read from: crates/takt/src/forge/connectors.rs:925-969
   # `local` is a bare repository on this machine, the hub the tree's `origin` names by its path,
   # outside the tree and sharing neither its git directory nor its object files with it (a tree
   # cloned with `git clone --no-local`): the push is `git push` to the hub, a request is a record

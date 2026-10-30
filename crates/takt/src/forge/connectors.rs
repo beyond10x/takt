@@ -56,6 +56,18 @@
 //! again; a read the caller makes counts. A marked pull request that is no longer open, or whose
 //! head is no longer the one given, is not merged at all.
 //!
+//! **Keyed writes.** On the served route each write (the open, the merge) is sent first with an
+//! `idempotency_key` ([`idempotency_key`]): `takt-` and the hex SHA-256 of the case's id, the
+//! operation, its input and how many answers the provider refused that write in this process,
+//! so the same case and write give the same key and a write sent again after a lost answer, or
+//! after `outcome_unknown`, replays its first outcome. A host with standing grants takes the
+//! key; one without them refuses it as a member it does not take (`unsupported`, HTTP 400,
+//! `request_id: null`, nothing run), and the forge then sends that write, and every later one,
+//! with no key. An `idempotency_conflict`, `approval_required` or `outcome_unknown` ends the
+//! write naming the code; after a merge's `outcome_unknown` the pull request is read again
+//! before any further write. A provider's refusal of a write takes a new key next time, so a
+//! merge refused for a pending check is not replayed refused.
+//!
 //! `connectors invoke` refuses a write without `--approval-file` (`approval_required`), and none
 //! is given here: on the CLI route the open and the merge fail with that refusal. Standard error
 //! of a failed line, and the error of a served call, are kept in the error, bounded; an input
@@ -142,6 +154,40 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The longest word of a target, as Connectors admits one.
 const WORD_BYTES: usize = 128;
+
+/// What every `idempotency_key` the forge sends begins with.
+pub const KEY_PREFIX: &str = "takt-";
+
+/// What the digest of an `idempotency_key` is taken over first, so a change to what goes into it
+/// is a new name and never a key reused for another write.
+const KEY_DOMAIN: &str = "takt.connectors.write/1";
+
+/// The `idempotency_key` of the write `operation` on `input` for the case `case`, after the
+/// provider refused that same write `refused` times: [`KEY_PREFIX`] and the lowercase hex
+/// SHA-256 of a JSON array of [`KEY_DOMAIN`], the case, the operation, the input and `refused`.
+/// 69 ASCII bytes, inside the 1 to 256 bytes connectors admits; the same arguments always give
+/// the same key, and any other argument another.
+#[must_use]
+pub fn idempotency_key(case: &str, operation: &str, input: &Value, refused: u32) -> String {
+    use sha2::{Digest as _, Sha256};
+    let named = json!([KEY_DOMAIN, case, operation, input, refused]);
+    let digest = Sha256::digest(named.to_string().as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{KEY_PREFIX}{hex}")
+}
+
+/// The case whose artifacts directory is `dir` (`<case directory>/artifacts`, as the validators
+/// hand it to the forge): the case directory's name, its id; `dir` itself, as text, when it
+/// is no such directory.
+fn case_of(dir: &Path) -> String {
+    dir.file_name()
+        .filter(|name| *name == "artifacts")
+        .and_then(|_| dir.parent()?.file_name())
+        .map_or_else(
+            || dir.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+}
 
 /// The connectors this forge maps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,14 +430,47 @@ pub struct ServedRefused {
     pub code: Option<String>,
     /// The answer's message, bounded.
     pub message: String,
+    /// Whether the answer named a request: its `request_id` is not null.
+    pub echoed: bool,
+    /// The answer's `mutation.classification`, when it carries one: what the instance recorded
+    /// of a write's attempt.
+    pub classification: Option<String>,
 }
 
 impl ServedRefused {
     /// Whether the instance answered that what was asked conflicts with what holds now: HTTP
-    /// 409, or the code `conflict`.
+    /// 409, or the code `conflict`; a key held for another request (`idempotency_conflict`) is
+    /// not.
     #[must_use]
     pub fn is_conflict(&self) -> bool {
-        self.status == 409 || self.code.as_deref() == Some("conflict")
+        (self.status == 409 && self.code.as_deref() != Some("idempotency_conflict"))
+            || self.code.as_deref() == Some("conflict")
+    }
+
+    /// Whether the instance does not know whether the write was applied: `outcome_unknown`.
+    #[must_use]
+    pub fn is_outcome_unknown(&self) -> bool {
+        self.code.as_deref() == Some("outcome_unknown")
+    }
+
+    /// Whether the instance refused the request for a member it does not take, before reading
+    /// the rest of it: `unsupported`, HTTP 400, `request_id: null`, no attempt. A host without
+    /// standing grants answers so to `idempotency_key`, having run nothing.
+    #[must_use]
+    pub fn refuses_a_member(&self) -> bool {
+        self.status == 400
+            && self.code.as_deref() == Some("unsupported")
+            && !self.echoed
+            && self.classification.is_none()
+    }
+
+    /// Whether the answer says the write was not applied: its attempt `refused` or
+    /// `not_attempted`.
+    fn not_applied(&self) -> bool {
+        matches!(
+            self.classification.as_deref(),
+            Some("refused" | "not_attempted")
+        )
     }
 }
 
@@ -451,6 +530,11 @@ pub struct ConnectorsForge {
     reread: RefCell<BTreeSet<u64>>,
     calls: Cell<u64>,
     started: u128,
+    /// Whether the served instance refused `idempotency_key` as a member it does not take: then
+    /// every write goes with no key.
+    unkeyed: Cell<bool>,
+    /// For each write, by its first key, how many times the provider refused it.
+    refused: RefCell<BTreeMap<String, u32>>,
 }
 
 impl fmt::Debug for ConnectorsForge {
@@ -571,6 +655,8 @@ impl ConnectorsForge {
             reread: RefCell::new(BTreeSet::new()),
             calls: Cell::new(0),
             started,
+            unkeyed: Cell::new(false),
+            refused: RefCell::new(BTreeMap::new()),
         };
         forge.preflight(tree)?;
         Ok(forge)
@@ -819,6 +905,71 @@ impl ConnectorsForge {
 
     /// Invokes `operation` once on `input`: the provider's `body`.
     fn invoke(&self, tree: &Path, operation: &'static str, input: &Value) -> Result<Value> {
+        let outcome = self.outcome(tree, operation, input)?;
+        self.body_of(operation, &outcome)
+    }
+
+    /// The provider's `body` of `outcome`, an operation's result; a provider status outside
+    /// 2xx is the error.
+    fn body_of(&self, operation: &str, outcome: &Value) -> Result<Value> {
+        match outcome["status"].as_u64() {
+            Some(200..=299) | None => {}
+            Some(status) => bail!(
+                "{} reported the provider's status {status}",
+                self.named(operation)
+            ),
+        }
+        Ok(outcome["body"].clone())
+    }
+
+    /// Invokes the write `operation` once on `input` for the case whose artifacts directory is
+    /// `dir`: the provider's `body`. On the served route it carries its `idempotency_key`
+    /// ([`idempotency_key`]) until the instance refuses the member, and is then sent with none.
+    fn write(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        operation: &'static str,
+        input: &Value,
+    ) -> Result<Value> {
+        let Route::Served {
+            endpoint,
+            loopback,
+            revision,
+        } = &self.route
+        else {
+            return self.invoke(tree, operation, input);
+        };
+        if !self.unkeyed.get() {
+            let case = case_of(dir);
+            let first = idempotency_key(&case, operation, input, 0);
+            let refused = self.refused.borrow().get(&first).copied().unwrap_or(0);
+            let key = idempotency_key(&case, operation, input, refused);
+            let outcome =
+                self.served_invoke(endpoint, *loopback, revision, operation, input, Some(&key));
+            let refusal = outcome
+                .as_ref()
+                .err()
+                .and_then(|error| error.downcast_ref::<ServedRefused>());
+            if refusal.is_some_and(ServedRefused::refuses_a_member) {
+                self.unkeyed.set(true);
+            } else {
+                let not_applied = match &outcome {
+                    Ok(result) => self.body_of(operation, result).is_err(),
+                    Err(_) => refusal.is_some_and(ServedRefused::not_applied),
+                };
+                if not_applied {
+                    *self.refused.borrow_mut().entry(first).or_default() += 1;
+                }
+                return self.body_of(operation, &outcome?);
+            }
+        }
+        let outcome = self.served_invoke(endpoint, *loopback, revision, operation, input, None)?;
+        self.body_of(operation, &outcome)
+    }
+
+    /// Invokes `operation` once on `input`, unkeyed: the operation's result.
+    fn outcome(&self, tree: &Path, operation: &'static str, input: &Value) -> Result<Value> {
         let outcome = match &self.route {
             Route::Cli => {
                 let (schema, revision) = self.described(tree, operation)?;
@@ -841,19 +992,14 @@ impl ConnectorsForge {
                 endpoint,
                 loopback,
                 revision,
-            } => self.served_invoke(endpoint, *loopback, revision, operation, input)?,
+            } => self.served_invoke(endpoint, *loopback, revision, operation, input, None)?,
         };
-        match outcome["status"].as_u64() {
-            Some(200..=299) | None => {}
-            Some(status) => bail!(
-                "{} reported the provider's status {status}",
-                self.named(operation)
-            ),
-        }
-        Ok(outcome["body"].clone())
+        Ok(outcome)
     }
 
-    /// One `POST /v1alpha2/invoke` of `operation` on `input`: the operation's result.
+    /// One `POST /v1alpha2/invoke` of `operation` on `input`, carrying `key` as its
+    /// `idempotency_key` when one is given: the operation's result. A replay of a key
+    /// (`mutation.replayed: true`) is read as the original outcome it is.
     fn served_invoke(
         &self,
         endpoint: &str,
@@ -861,17 +1007,21 @@ impl ConnectorsForge {
         revision: &str,
         operation: &'static str,
         input: &Value,
+        key: Option<&str>,
     ) -> Result<Value> {
         let call = self.calls.get() + 1;
         self.calls.set(call);
         let request_id = format!("takt-{}-{}-{call}", std::process::id(), self.started);
-        let envelope = json!({
+        let mut envelope = json!({
             "version": "v1alpha2",
             "request_id": request_id,
             "operation": operation,
             "revision": revision,
             "input": input,
         });
+        if let Some(key) = key {
+            envelope["idempotency_key"] = json!(key);
+        }
         let named = self.named(operation);
         let (status, bytes) = exchange(
             endpoint,
@@ -931,9 +1081,18 @@ impl ConnectorsForge {
     }
 
     /// A merge of `number` that failed: no merge, and the pull request is read again before any
-    /// further write.
+    /// further write. A merge the instance answered `outcome_unknown` may have been made, and
+    /// is read again before any further write all the same.
     fn merge_failed(&self, number: u64, error: anyhow::Error) -> anyhow::Error {
         self.reread.borrow_mut().insert(number);
+        if error
+            .downcast_ref::<ServedRefused>()
+            .is_some_and(ServedRefused::is_outcome_unknown)
+        {
+            return error.context(format!(
+                "whether pull request {number} was merged is not known (outcome_unknown): it is read again before any further write, and a merge sent again carries the same key"
+            ));
+        }
         let conflict = error
             .downcast_ref::<ServedRefused>()
             .is_some_and(ServedRefused::is_conflict)
@@ -1273,7 +1432,7 @@ impl ConnectorsForge {
     /// Merges change request `number` at `head` with the pipeline the checks were read on: the
     /// reading kept by [`Forge::checks`] when it is of `head`, else a reading made now, which
     /// must be of `head` too; a head with none is refused with no merge invoked.
-    fn merge_gitlab(&self, tree: &Path, number: u64, head: &str) -> Result<Value> {
+    fn merge_gitlab(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<Value> {
         let held = self
             .bound
             .borrow()
@@ -1293,8 +1452,9 @@ impl ConnectorsForge {
             }
         };
         let body = self
-            .invoke(
+            .write(
                 tree,
+                dir,
                 MERGE,
                 &json!({
                     "id": self.project,
@@ -1318,11 +1478,12 @@ impl ConnectorsForge {
 
     /// Merges pull request `number` at `head`: `pull_request.merge` sends the head's sha, which
     /// GitHub compares with the pull request's head.
-    fn merge_github(&self, tree: &Path, number: u64, head: &str) -> Result<Value> {
+    fn merge_github(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<Value> {
         let (owner, repo) = self.repository();
         let body = self
-            .invoke(
+            .write(
                 tree,
+                dir,
                 PULL_MERGE,
                 &json!({
                     "owner": owner,
@@ -1360,6 +1521,8 @@ fn refused(call: String, status: u16, bytes: &[u8]) -> ServedRefused {
         status,
         code: error["code"].as_str().map(bounded),
         message: error["message"].as_str().map(bounded).unwrap_or_default(),
+        echoed: !answer["request_id"].is_null(),
+        classification: answer["mutation"]["classification"].as_str().map(bounded),
     }
 }
 
@@ -1512,7 +1675,21 @@ impl Forge for ConnectorsForge {
                 )
             }
         };
-        let body = self.invoke(tree, operation, &input)?;
+        let body = self
+            .write(tree, dir, operation, &input)
+            .map_err(|error| {
+                if error
+                    .downcast_ref::<ServedRefused>()
+                    .is_some_and(ServedRefused::is_outcome_unknown)
+                {
+                    error.context(format!(
+                        "whether a pull request for {} was opened is not known (outcome_unknown): an open sent again carries the same key",
+                        request.branch
+                    ))
+                } else {
+                    error
+                }
+            })?;
         std::fs::write(&output, serde_json::to_vec_pretty(&body)?)
             .with_context(|| format!("write the response {}", output.display()))?;
         body[number].as_u64().ok_or_else(|| {
@@ -1551,8 +1728,8 @@ impl Forge for ConnectorsForge {
         let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
         self.read_again(tree, Some((number, head)))?;
         let body = match self.connector {
-            Connector::Gitlab => self.merge_gitlab(tree, number, head)?,
-            Connector::Github => self.merge_github(tree, number, head)?,
+            Connector::Gitlab => self.merge_gitlab(tree, dir, number, head)?,
+            Connector::Github => self.merge_github(tree, dir, number, head)?,
         };
         std::fs::write(&output, serde_json::to_vec_pretty(&body)?)
             .with_context(|| format!("write the response {}", output.display()))?;

@@ -6,6 +6,12 @@ takt's releases.
 
 ## [Unreleased]
 
+### Added
+
+- On `forge_endpoint`, each open and merge carries an `idempotency_key` from the case and the write; sent again, it replays the first outcome instead of writing twice.
+- A host without standing grants that refuses the key gets the write again unkeyed, and every later one, so open and merge work there as in 0.24.0.
+- `approval_required`, `idempotency_conflict` and `outcome_unknown` end a write naming the code; after a merge's `outcome_unknown` the pull request is read before any write.
+
 ### Changed
 
 - Loom 0.52.0: `--harness harness` with a loopback endpoint and no credential starts its session; Loom 0.51.0 refused it at the first step.
