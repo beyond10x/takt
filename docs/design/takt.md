@@ -120,7 +120,7 @@ the harness's loop opens the secret store itself, so the key never enters takt, 
 
 Since M2: `story.delivery/2` of the engineering protocols was the default for a store story from
 0.16.0 through 0.23.0, and takt's own `story.delivery/3` (`protocols/story-delivery/3.yaml`) is
-embedded from 0.19.0. From the release after 0.23.0, a store story opens on `story.delivery/3`
+embedded from 0.19.0. From 0.24.0, a store story opens on `story.delivery/3`
 when nothing names a protocol (`crates/takt/src/protocol_defaults.yaml`); a case already open on
 `story.delivery/2` resumes on it. On 2026-10-29 five runs on `story.delivery/3`, with Codex and `--forge none`, took one
 story of takt's own store through its tests, the gate and the handover to `pr.opened`

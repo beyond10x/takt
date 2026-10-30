@@ -50,7 +50,7 @@ scope:
   path: website/docs/reference/protocols.md
 - confidence: cited
   path: website/docs/status.mdx
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T01:19:14Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-30T01:19:15Z", actor: "human:timo", revision: 5}
@@ -107,7 +107,7 @@ default. A case already open on `story.delivery/2` resumes on it. The specificat
 
 ## Acceptance
 
-1. The predicate above exits 0.
+1. The predicate above exits 1, its `healthy_exit` (0 is the defect's exit).
 2. `cargo test -p b10x-takt --test protocol_defaults` passes with
    `a_store_story_opens_on_story_delivery_3` in place of `..._2`; `takt protocol show` lists
    `story.delivery/3`'s inputs and defaults.
@@ -130,3 +130,4 @@ default. A case already open on `story.delivery/2` resumes on it. The specificat
 - `website/docs/concepts/protocol-and-case.md`, `website/docs/guides/run-a-story.md`,
   `website/docs/reference/configuration.md`, `website/docs/reference/protocol-defaults.md`,
   `website/docs/reference/protocols.md` (cited)
+
