@@ -1,7 +1,7 @@
 # Wave 48: Loom 0.52.0, the connectors forge at a served instance, git through its relay
 
-Stage: **a, b, b1, c, c1 and d merged and reviewed (ten review-results), review fixes at
-fa12f45b; e in implementation**. `wave/48` branches from 1c0e692c, 0.24.0's merge. Skill version
+Stage: **a, b, b1, c, c1, d and e merged and reviewed (twelve review-results), review fixes at
+fa12f45b and a1706c2a; the git 2.56 tracking-ref put-back at 1fece3ae**. `wave/48` branches from 1c0e692c, 0.24.0's merge. Skill version
 0.25.0 (aep:implementing, wave mode).
 
 ## Units
@@ -14,7 +14,7 @@ fa12f45b; e in implementation**. `wave/48` branches from 1c0e692c, 0.24.0's merg
 | c | story:git-through-the-connectors-git-relay, Acceptance 3 and 4 | relay refusals name the ref and reason; no token in git children | cited | committed 778cb31e; reviewed, fixed (adv-c, sec-c) |
 | c1 | story:git-through-the-connectors-git-relay, Acceptance 1 and 2 | fetch, push and `trial/<n>` through 0.62.0's relay | inferred | merged 005e6003; reviewed, fixed fa12f45b |
 | d | story:connectors-forge-at-a-served-instance, a trial's defect | a merge answered `outcome_unknown` and read open at the same head goes once per run under a fresh key | cited | merged 1a4cda17; reviewed, fixed fa12f45b |
-| e | story:connectors-forge-at-a-served-instance, a trial's defect | a pull request behind its base is brought up to date by takt's own merge commit before the merge | inferred | in implementation (`unit/48-e`) |
+| e | story:connectors-forge-at-a-served-instance, a trial's defect | a pull request behind its base is brought up to date by takt's own merge commit before the merge | inferred | merged 0f5e8a8c; reviewed, fixed a1706c2a |
 
 Ride-along: story:implementation-prompt-shows-the-tests-path implemented on its recorded self-run
 (docs/runs/2026-10-30-self-run-tests-path.md).
@@ -56,6 +56,8 @@ for touched crates only; no `--workspace`, no root `cargo test`, no local full g
 | d | `unit/48-d` 34b33b4e | 4 cases red first, green; merged 1a4cda17; tree finished |
 | adv-bc, sec-bc | `rv/48-adv-bc`, `rv/48-sec-bc` | 0 and 2 red (the mapping on gitlab, percent-encoded segments), a served stand-in blind to the repository; fixed fa12f45b; trees finished |
 | adv-d, sec-d | `rv/48-adv-d`, `rv/48-sec-d` | 4 and 5 red (merged at another head, gitlab locked, a malformed open, the count limit); fixed fa12f45b, two cases ignored with their reason; trees finished |
+| e | `unit/48-e` 044a4125 | 6 of 9 cases red first, green; merged 0f5e8a8c; tree finished |
+| adv-e, sec-e | `rv/48-adv-e`, `rv/48-sec-e` | 2 and 1 red (an update push not taken wedged the case, a lagging forge made the pass final, a check run rewrote the record); fixed a1706c2a; trees finished |
 
 ## Pre-flight (2026-10-30)
 
