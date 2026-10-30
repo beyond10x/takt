@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T17:53:07Z",
+  "actor": "human:timo",
+  "artifact": "story:connectors-forge-at-a-served-instance",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI check, task check (test-library) at a1706c2a: b10x-takt tests/w48_adv_b.rs: test result: ok. 5 passed; 0 failed; 0 ignored",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/41100711948/job/124217340736"
+  }
+}

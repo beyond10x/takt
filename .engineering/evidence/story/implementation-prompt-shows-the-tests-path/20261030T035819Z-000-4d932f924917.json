@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T03:58:19Z",
+  "actor": "human:timo",
+  "artifact": "story:implementation-prompt-shows-the-tests-path",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "Acceptance 3 self-run, docs/runs/2026-10-30-self-run-tests-path.md: takt 0.23.0 delivered story:credential-shape-sees-a-token-after-a-word-character, a fix spanning credential_shape and failing_lines; tests.run passed (189 passed) after the second implementation.edit, gate.run passed",
+    "reference": "https://github.com/beyond10x/takt/blob/1c0e692c287d5a8a877b2300193815edcbea3483/docs/runs/2026-10-30-self-run-tests-path.md"
+  }
+}

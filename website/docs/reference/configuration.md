@@ -242,8 +242,8 @@ Rules the run checks before a case opens, each exit 1:
 - A base URL is `https://`, or `http://` to a loopback host, with no userinfo, query or fragment.
 - A base URL other than the default needs a credential, unless its host is a loopback host: there
   a relay beside the run may hold the model's key, and the endpoint takes none (`kind: none` in
-  the case record), as does an `llm` route's anonymous endpoint there. Loom 0.51.0's session
-  executor still refuses such a session at its first step. The claude.ai token goes to the
+  the case record), as does an `llm` route's anonymous endpoint there, and Loom's session
+  executor starts that session (since 0.25.0, on Loom 0.52.0). The claude.ai token goes to the
   default base URL only.
 - A token file that is missing, or whose pointer resolves to no token, is refused naming the path
   and the pointer.
@@ -466,7 +466,10 @@ forge_endpoint: http://127.0.0.1:8402
   commit, `pull_request.get` reads its `state`, `merged`, `head.ref`, `head.sha` and `base.ref`,
   `check_runs.list` (every page) and `commit.status` read the checks of the head's sha,
   `pull_request.merge` merges it and `branch.get` reads the merge target's tip. `owner` and `repo`
-  are the ones `origin` names.
+  are the ones `origin` names; an `origin` on a loopback relay whose path is `/git/<owner>/<repo>.git`,
+  the path a Connectors git relay serves, names `<owner>/<repo>`. A relay path with a
+  percent-encoded part is refused before the case opens. On `gitlab` the path names itself, since
+  `git` can be a group there.
 - **Preflight.** Before the case opens every operation the connector's map needs is described:
   `connectors invoke <target> <operation> --describe` for each, or the one `GET /v1/describe`, whose
   instance must be the one `forge_instance` names after its `/`. A missing one is exit 1, naming each
@@ -481,10 +484,48 @@ forge_endpoint: http://127.0.0.1:8402
 - **Merge.** The merge sends the head the checks were read on. A merge that fails, a 409 among
   them, is no merge: the pull request is read again before any further write, and one that is no
   longer open at that head is not merged at all.
+- **Behind its base.** Before the merge, `repository.merge` reads whether the pull request is
+  behind its base: on `github` when `mergeable_state` is `behind`, on `gitlab` when
+  `detailed_merge_status` is `need_rebase`, or `diverged_commits_count` is above 0 when the read
+  carries it (takt does not ask GitLab for that count, so it is rarely there). One that is
+  behind is brought up to date once per merge attempt: the base's tip the judge guard judged is
+  merged into the head as takt's own merge commit (first parent the head, second that tip, the
+  run's commit identity), recorded in the case's `artifacts/base-update.json` (previous head,
+  base tip, merge, time), scanned and pushed as takt's riders are, and merged at that head once
+  its checks pass. A ruleset that requires the branch to be up to date then accepts the merge. A
+  base that conflicts with the head stops naming the conflicting files, with no merge commit made,
+  recorded or pushed and nothing merged. An update the forge did not take, or has not moved the
+  pull request to yet, is pushed again by the next pass as the same commit. Checks read at the
+  new head that change the case's `branch.yaml` or `artifacts/base-update.json` are refused, and
+  both files are put back. A state the provider has not computed yet reads as not known, and the merge
+  goes as it would without the read.
+- **Keyed writes.** With `forge_endpoint` the open and the merge each carry an `idempotency_key`:
+  `takt-` and a SHA-256 of the case's id, the operation, the instance's descriptor revision and
+  the input, so the same case and write send the same key. An instance with standing grants
+  replays a key sent again, so a write repeated after a lost answer, a provider's 5xx or
+  `outcome_unknown` is not made twice. A write whose answer's `mutation.classification` is
+  `refused` or `not_attempted` takes a new key next time; `applied`, `unknown` or none keeps it.
+  That count is kept in the case's `artifacts/pull-request.refusals.json`, so a resumed run takes
+  the next key too, and a moved descriptor revision gives a new key. An instance without standing
+  grants refuses the key, before running anything, as `unsupported`; takt then sends that write
+  and every later one with no key. `approval_required` (no standing grant covers the
+  write), `idempotency_conflict` and `outcome_unknown` end the write, naming the code; after a
+  merge's `outcome_unknown` the pull request is read again before any further write. The next
+  merge reads it first: merged, none is sent; open and unmerged at the same head, the merge goes
+  once per run under a fresh key, both keys recorded in the same file; closed or at another head,
+  nothing is merged. The served route is tested against a served instance of Connectors 0.62.0
+  (`connectors-catalog-provider --config`) with standing grants, running the `github` definition
+  of connectors-definitions 0.6.0.
 - **Push and scan.** The push stays takt's push over HTTPS to the project `origin` names, or
   over `http` to an `origin` on a loopback host, port kept and no redirect followed (`http://` to
   another host is refused before the case opens); it is published only under a declared
-  `scan: none`. `connectors invoke` refuses a write without
+  `scan: none`. A git line to such a relay, here and on `takt scenario run`'s trial route, runs in
+  an empty home without your global or system git configuration, so no credential helper of yours
+  and no `~/.netrc` reaches it, and it is refused before anything is sent, naming the key and the
+  file, when the repository's configuration or a file it includes sets a credential helper,
+  `http.cookieFile`, `http.curloptResolve`, a URL-scoped `http.<url>.extraHeader`,
+  `http.<url>.proxy` or `http.<url>.followRedirects` other than `false`, an `http.proxy` off
+  loopback, or a rewrite that puts a userinfo on the relay's URL. `connectors invoke` refuses a write without
   `--approval-file` (`approval_required`), and none is given here, so on the CLI route the open and
   the merge fail with that refusal. Only `github` reports the merge target's tip; on `gitlab` the
   judge guard refuses a merge through this forge.
@@ -522,7 +563,9 @@ local_checks: [cargo, test, --quiet]
   `git merge-tree --write-tree` of the base's tip and the head, a merge commit, then the base moved
   from the tip it was judged at to that commit. A conflict is refused naming its paths, and a base
   another writer moved meanwhile is refused, not overwritten. A base whose tip already holds the
-  head moves no ref; the request is recorded merged by the commit that holds it.
+  head moves no ref; the request is recorded merged by the commit that holds it. A request whose
+  head does not hold the base's tip is behind it, and is first brought up to date as on the
+  connectors forge ([Behind its base](#the-connectors-forge)).
 - **Read.** A request is merged only when its record names the head and a commit on the hub's base
   holds it, so a record written by hand merges nothing. The merge target's tip is the hub's
   `refs/heads/<base>`.

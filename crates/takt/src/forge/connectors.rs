@@ -23,7 +23,7 @@
 //! | action | operation | input | read from |
 //! |---|---|---|---|
 //! | open | `merge_request.create` | `id`, `sha` (the case branch's commit), `body` | `iid` |
-//! | read | `merge_request.get` | `id`, `merge_request_iid` | `state`, `source_branch`, `target_branch`, `sha`, `head_pipeline` |
+//! | read | `merge_request.get` | `id`, `merge_request_iid` | `state`, `source_branch`, `target_branch`, `sha`, `head_pipeline`; behind its base from `detailed_merge_status` and `diverged_commits_count` |
 //! | checks | `pipeline.get` | `id`, `pipeline_id` | `sha`, `status` |
 //! | merge | `merge_request.merge` | `id`, `merge_request_iid`, `pipeline_id`, `body.sha` | `state` |
 //!
@@ -32,7 +32,7 @@
 //! | action | operation | input | read from |
 //! |---|---|---|---|
 //! | open | `pull_request.create` | `owner`, `repo`, `sha` (the case branch's commit), `body` (`head`, `base`, `title`, `body`) | `number` |
-//! | read | `pull_request.get` | `owner`, `repo`, `pull_number` | `state`, `merged`, `head.ref`, `head.sha`, `base.ref` |
+//! | read | `pull_request.get` | `owner`, `repo`, `pull_number` | `state`, `merged`, `head.ref`, `head.sha`, `base.ref`; behind its base from `mergeable_state` |
 //! | checks | `check_runs.list`, `commit.status` | `owner`, `repo`, `ref` (the head's sha); `per_page`, `page` | `check_runs[].status`, `check_runs[].conclusion`, `total_count`; `state`, `statuses` |
 //! | merge | `pull_request.merge` | `owner`, `repo`, `pull_number`, `body.sha` (the head) | `merged` |
 //! | merge target | `branch.get` | `owner`, `repo`, `branch` | `commit.sha`, taken only when `git ls-remote` of the project `origin` names lists the branch at the same commit |
@@ -55,6 +55,26 @@
 //! request, and before any further write (a merge, an open) every marked pull request is read
 //! again; a read the caller makes counts. A marked pull request that is no longer open, or whose
 //! head is no longer the one given, is not merged at all.
+//!
+//! **Keyed writes.** On the served route each write (the open, the merge) is sent first with an
+//! `idempotency_key` ([`idempotency_key`]): `takt-` and the hex SHA-256 of the case's id, the
+//! operation, the descriptor revision, its input and how many times that write at that revision
+//! was not applied, so the same case and write give the same key and a write sent again after a
+//! lost answer, or after `outcome_unknown`, replays its first outcome. A host with standing
+//! grants takes the key; one without them refuses it as a member it does not take
+//! (`unsupported`, HTTP 400, `request_id: null`, nothing run), and the forge then sends that
+//! write, and every later one, with no key. An `idempotency_conflict`, `approval_required` or
+//! `outcome_unknown` ends the write naming the code; after a merge's `outcome_unknown` the pull
+//! request is read again before any further write, and that key is kept in the record below.
+//! The next merge under it reads the pull request first: merged is the merge applied, and none
+//! is sent; open and unmerged at the head the merge named is the merge not applied, and it goes
+//! under a fresh key, at most once per process, both keys recorded; closed or at another head is
+//! no merge, named. An open keeps its key after `outcome_unknown`. A write whose answer's
+//! `mutation.classification` is `refused` or `not_attempted` takes a new key next time, so a
+//! merge the provider refused is not replayed refused; `applied`, `unknown` or no
+//! classification keeps the key. That count is kept in the case's artifacts directory
+//! ([`ConnectorsForge::REFUSALS`]), so a resumed run reads it back; a descriptor revision
+//! that moves gives a new key, never the host's `idempotency_conflict`.
 //!
 //! `connectors invoke` refuses a write without `--approval-file` (`approval_required`), and none
 //! is given here: on the CLI route the open and the merge fail with that refusal. Standard error
@@ -142,6 +162,228 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The longest word of a target, as Connectors admits one.
 const WORD_BYTES: usize = 128;
+
+/// What every `idempotency_key` the forge sends begins with.
+pub const KEY_PREFIX: &str = "takt-";
+
+/// What the digest of an `idempotency_key` is taken over first, so a change to what goes into it
+/// is a new name and never a key reused for another write.
+const KEY_DOMAIN: &str = "takt.connectors.write/2";
+
+/// The `idempotency_key` of the write `operation` on `input` at the descriptor revision
+/// `revision` for the case `case`, after the provider refused that same write at that revision
+/// `refused` times: [`KEY_PREFIX`] and the lowercase hex SHA-256 of a JSON array of
+/// [`KEY_DOMAIN`], the case, the operation, the revision, the input and `refused`. The host holds
+/// a key for the operation, revision and input it was first sent with, so a write sent at
+/// another revision goes under another key, never meeting `idempotency_conflict`. 69 ASCII
+/// bytes, inside the 1 to 256 bytes connectors admits; the same arguments always give the same
+/// key, and any other argument another.
+#[must_use]
+pub fn idempotency_key(
+    case: &str,
+    operation: &str,
+    revision: &str,
+    input: &Value,
+    refused: u32,
+) -> String {
+    use sha2::{Digest as _, Sha256};
+    let named = json!([KEY_DOMAIN, case, operation, revision, input, refused]);
+    let digest = Sha256::digest(named.to_string().as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    format!("{KEY_PREFIX}{hex}")
+}
+
+/// What the file of a case's refused writes ([`ConnectorsForge::REFUSALS`]) names itself by.
+const REFUSALS_FORMAT: &str = "takt.connectors.refusals/1";
+
+/// Whether a write's `mutation.classification` says it was not applied: the provider refused it
+/// (`refused`), or its attempt never crossed the dispatch gate (`not_attempted`, an aborted
+/// attempt's replay among them). Only then is the write sent again under a new key; `applied`,
+/// `unknown` and an answer with no classification keep the key, so a write that may have been
+/// made is replayed and never made twice.
+fn not_applied(classification: Option<&str>) -> bool {
+    matches!(classification, Some("refused" | "not_attempted"))
+}
+
+/// The most bytes of a case's refusal record ([`ConnectorsForge::REFUSALS`]) that are read.
+const REFUSALS_LIMIT: u64 = 64 << 10;
+
+/// How many times the provider refused each write of the case whose artifacts directory is
+/// `dir`, by the write's first key: what [`ConnectorsForge::REFUSALS`] holds there, empty when
+/// nothing is there. A file that is not one is an error, never a count of zero: the record is
+/// opened without following a link at it (`O_NOFOLLOW`) or waiting on it (`O_NONBLOCK`), must be
+/// a regular file of at most [`REFUSALS_LIMIT`] bytes, its `refused` must be an object of
+/// non-negative integer counts, and its `unknown`, when there, an object of keys each naming a
+/// fresh key or null ([`Record::unknown`]).
+fn refusals_in(dir: &Path) -> Result<Record> {
+    use std::io::Read as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let path = dir.join(ConnectorsForge::REFUSALS);
+    let file = match std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
+        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => bail!(
+            "{} is a link, and a refusal record is never read through one; nothing was sent",
+            path.display()
+        ),
+        Err(error) => {
+            return Err(error)
+                .with_context(|| format!("read {}; nothing was sent", path.display()));
+        }
+    };
+    let meta = file
+        .metadata()
+        .with_context(|| format!("read {}; nothing was sent", path.display()))?;
+    if !meta.is_file() {
+        bail!("{} is not a regular file; nothing was sent", path.display());
+    }
+    let mut bytes = Vec::new();
+    file.take(REFUSALS_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {}; nothing was sent", path.display()))?;
+    if bytes.len() as u64 > REFUSALS_LIMIT {
+        bail!(
+            "{} is longer than {REFUSALS_LIMIT} bytes; nothing was sent",
+            path.display()
+        );
+    }
+    let document: Value = serde_json::from_slice(&bytes)
+        .with_context(|| format!("{} is not JSON; nothing was sent", path.display()))?;
+    if document["format"] != REFUSALS_FORMAT {
+        bail!(
+            "{} is no {REFUSALS_FORMAT} document; nothing was sent",
+            path.display()
+        );
+    }
+    let Some(refused) = document["refused"].as_object() else {
+        bail!(
+            "{} holds no object of counts at `refused`; nothing was sent",
+            path.display()
+        );
+    };
+    let refused = refused
+        .iter()
+        .map(|(key, count)| {
+            let count = count
+                .as_u64()
+                .and_then(|count| u32::try_from(count).ok())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "{} counts {key} as no number of refusals; nothing was sent",
+                        path.display()
+                    )
+                })?;
+            Ok((key.clone(), count))
+        })
+        .collect::<Result<_>>()?;
+    let unknown = match document.get("unknown") {
+        None => BTreeMap::new(),
+        Some(Value::Object(unknown)) => unknown
+            .iter()
+            .map(|(key, fresh)| match fresh {
+                _ if !is_key(key) => Err(anyhow!(
+                    "{} names {key:?} at `unknown`, which is no key takt takes; nothing was sent",
+                    path.display()
+                )),
+                Value::Null => Ok((key.clone(), None)),
+                Value::String(fresh) if is_key(fresh) => Ok((key.clone(), Some(fresh.clone()))),
+                _ => Err(anyhow!(
+                    "{} names no fresh key or null for {key} at `unknown`; nothing was sent",
+                    path.display()
+                )),
+            })
+            .collect::<Result<_>>()?,
+        Some(_) => bail!(
+            "{} holds no object of keys at `unknown`; nothing was sent",
+            path.display()
+        ),
+    };
+    Ok(Record { refused, unknown })
+}
+
+/// Whether `text` has the form of a key [`idempotency_key`] makes: `takt-` and 64 lowercase
+/// hexadecimal digits.
+fn is_key(text: &str) -> bool {
+    text.strip_prefix("takt-").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    })
+}
+
+/// What a case's refusal record ([`ConnectorsForge::REFUSALS`]) holds.
+#[derive(Debug, Default)]
+struct Record {
+    /// How many times each write at a revision was not applied, by its first key.
+    refused: BTreeMap<String, u32>,
+    /// Each key a merge was answered `outcome_unknown` under, with the fresh key taken after
+    /// the pull request read open and unmerged at the head that merge named, `None` until one is.
+    unknown: BTreeMap<String, Option<String>>,
+}
+
+/// Writes `record` into the case's artifacts directory `dir` ([`ConnectorsForge::REFUSALS`])
+/// through a file beside it renamed over it, so a later process reads the old count or the new
+/// one, never a part. That file is made new (`O_EXCL`) without following a link at its name
+/// (`O_NOFOLLOW`); whatever a stale one left there, a link among them, is removed first, never
+/// written through.
+fn record_refusals(dir: &Path, record: &Record) -> Result<()> {
+    use std::io::Write as _;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    let path = dir.join(ConnectorsForge::REFUSALS);
+    let partial = dir.join(format!(
+        ".{}.{}.partial",
+        ConnectorsForge::REFUSALS,
+        std::process::id()
+    ));
+    let mut document = json!({"format": REFUSALS_FORMAT, "refused": record.refused});
+    if !record.unknown.is_empty() {
+        document["unknown"] = json!(record.unknown);
+    }
+    let bytes = serde_json::to_vec_pretty(&document)?;
+    let create = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o644)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(&partial)
+    };
+    let mut file = match create() {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&partial)
+                .with_context(|| format!("remove the stale {}", partial.display()))?;
+            create()
+        }
+        opened => opened,
+    }
+    .with_context(|| format!("create {}", partial.display()))?;
+    let written = file.write_all(&bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&partial);
+        return Err(error).with_context(|| format!("write {}", partial.display()));
+    }
+    std::fs::rename(&partial, &path).with_context(|| format!("write {}", path.display()))
+}
+
+/// The case whose artifacts directory is `dir` (`<case directory>/artifacts`, as the validators
+/// hand it to the forge): the case directory's name, its id; `dir` itself, as text, when it
+/// is no such directory.
+fn case_of(dir: &Path) -> String {
+    dir.file_name()
+        .filter(|name| *name == "artifacts")
+        .and_then(|_| dir.parent()?.file_name())
+        .map_or_else(
+            || dir.to_string_lossy().into_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        )
+}
 
 /// The connectors this forge maps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,8 +491,9 @@ pub fn check_endpoint(url: &str) -> std::result::Result<bool, &'static str> {
 /// as [`RemoteTransport::LoopbackHttp`], read by the same parse: the authority ends at the
 /// first `/`, `?` or `#`, the host is what follows its last `@`, and the userinfo is dropped.
 /// A `?` or a `#` anywhere in it is refused, so no reader of the URL, git or curl, finds
-/// another host in it than the one admitted.
-fn relay_of(url: &str) -> Result<String> {
+/// another host in it than the one admitted. `takt run`'s lines and `takt scenario run`'s
+/// trial lines to a loopback relay both go to this URL, so neither sends the userinfo.
+pub fn relay_of(url: &str) -> Result<String> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| anyhow!("the origin remote's URL is no URL of a loopback relay"))?;
@@ -266,9 +509,15 @@ fn relay_of(url: &str) -> Result<String> {
     Ok(format!("{scheme}://{host_port}{tail}"))
 }
 
-/// What a git line to the loopback relay is given on its command line beside [`NO_REDIRECT`]:
-/// no proxy, so the line goes to the relay itself and through nothing between.
-const NO_PROXY_CONFIG: [&str; 2] = ["-c", "http.proxy="];
+/// The project a loopback relay's path names: a Connectors git relay serves
+/// `/git/<owner>/<repo>.git`, so on github `git/<owner>/<repo>` names `<owner>/<repo>`; any other
+/// path, and every path on gitlab, where `git` can be a group, names itself.
+fn relay_project(path: &str) -> &str {
+    match path.strip_prefix("git/") {
+        Some(project) if project.split('/').count() == 2 => project,
+        _ => path,
+    }
+}
 
 /// What a git line to the loopback relay is given in its environment: no proxy for any host,
 /// whatever the operator's environment or a URL-scoped `http.<url>.proxy` names.
@@ -384,14 +633,44 @@ pub struct ServedRefused {
     pub code: Option<String>,
     /// The answer's message, bounded.
     pub message: String,
+    /// Whether the answer named a request: its `request_id` is not null.
+    pub echoed: bool,
+    /// The answer's `mutation.classification`, when it carries one: what the instance recorded
+    /// of a write's attempt.
+    pub classification: Option<String>,
+    /// Whether the answer is a v1alpha2 error envelope ([`is_error_envelope`]), and not only
+    /// something that names a code.
+    pub envelope: bool,
 }
 
 impl ServedRefused {
     /// Whether the instance answered that what was asked conflicts with what holds now: HTTP
-    /// 409, or the code `conflict`.
+    /// 409, or the code `conflict`; a key held for another request (`idempotency_conflict`) is
+    /// not.
     #[must_use]
     pub fn is_conflict(&self) -> bool {
-        self.status == 409 || self.code.as_deref() == Some("conflict")
+        (self.status == 409 && self.code.as_deref() != Some("idempotency_conflict"))
+            || self.code.as_deref() == Some("conflict")
+    }
+
+    /// Whether the instance does not know whether the write was applied: `outcome_unknown`.
+    #[must_use]
+    pub fn is_outcome_unknown(&self) -> bool {
+        self.code.as_deref() == Some("outcome_unknown")
+    }
+
+    /// Whether the instance refused the request for a member it does not take, before reading
+    /// the rest of it: a v1alpha2 error envelope ([`is_error_envelope`]) with the code
+    /// `unsupported`, HTTP 400, `request_id: null`, no attempt. A host without standing grants
+    /// answers so to `idempotency_key`, having run nothing. Any other answer, one that only names
+    /// the code among them, is no such refusal.
+    #[must_use]
+    pub fn refuses_a_member(&self) -> bool {
+        self.envelope
+            && self.status == 400
+            && self.code.as_deref() == Some("unsupported")
+            && !self.echoed
+            && self.classification.is_none()
     }
 }
 
@@ -451,6 +730,15 @@ pub struct ConnectorsForge {
     reread: RefCell<BTreeSet<u64>>,
     calls: Cell<u64>,
     started: u128,
+    /// Whether the served instance refused `idempotency_key` as a member it does not take: then
+    /// every write goes with no key.
+    unkeyed: Cell<bool>,
+    /// The merges, by first key, that took a fresh key after `outcome_unknown` in this process:
+    /// each takes at most one.
+    retried: RefCell<BTreeSet<String>>,
+    /// The state directory the empty home of each line to the loopback relay is made under
+    /// ([`Self::with_state_dir`]); none for takt's own.
+    state_dir: Option<std::path::PathBuf>,
 }
 
 impl fmt::Debug for ConnectorsForge {
@@ -467,6 +755,40 @@ impl fmt::Debug for ConnectorsForge {
 struct Request {
     view: PullRequestView,
     head_pipeline: Option<(u64, Option<String>)>,
+    /// Whether its state is `locked`, a merge in progress, which [`PullRequestState`] reads as
+    /// open.
+    locked: bool,
+    /// Whether it is behind its target ([`gitlab_behind`]).
+    behind: Option<bool>,
+}
+
+/// Whether a change request `merge_request.get` reported as `body` is behind its target:
+/// `detailed_merge_status` `need_rebase` is; else `diverged_commits_count` above 0 is and 0 is
+/// not; else a `detailed_merge_status` GitLab has settled is not; one it is still computing
+/// (`checking`, `unchecked`, `preparing`, `approvals_syncing`), or neither field, is not known.
+fn gitlab_behind(body: &Value) -> Option<bool> {
+    let status = body["detailed_merge_status"].as_str();
+    if status == Some("need_rebase") {
+        return Some(true);
+    }
+    if let Some(count) = body["diverged_commits_count"].as_u64() {
+        return Some(count > 0);
+    }
+    match status {
+        Some("checking" | "unchecked" | "preparing" | "approvals_syncing") | None => None,
+        Some(_) => Some(false),
+    }
+}
+
+/// Whether a pull request `pull_request.get` reported as `body` is behind its base:
+/// `mergeable_state` `behind` is; any other state GitHub settled on is not; `unknown`, which it
+/// answers while it still computes the state, or no state, is not known.
+fn github_behind(body: &Value) -> Option<bool> {
+    match body["mergeable_state"].as_str() {
+        Some("behind") => Some(true),
+        Some("unknown") | None => None,
+        Some(_) => Some(false),
+    }
 }
 
 impl ConnectorsForge {
@@ -476,6 +798,11 @@ impl ConnectorsForge {
     /// The file that holds what the merge answered, which `repository.merge`'s validator
     /// declares.
     pub const MERGE_RESPONSE: &'static str = super::MERGE_RESPONSE;
+    /// The file under the case's artifacts directory that holds, for each keyed write by its
+    /// first key, how many times the provider refused it: the count a resumed run reads back,
+    /// so its write goes under the key after the last one refused and is not the refusal
+    /// replayed.
+    pub const REFUSALS: &'static str = "pull-request.refusals.json";
 
     /// The forge `forge` names for a run: the adapter over the connector `settings.instance`
     /// names, at `settings.endpoint` when it names one, when `forge` is `connectors`, after the
@@ -541,11 +868,23 @@ impl ConnectorsForge {
         let origin = url
             .as_deref()
             .and_then(super::gitlab::project_of)
+            .map(|(host, project)| match &relay {
+                Some(_) if connector == Connector::Github => {
+                    (host, relay_project(&project).to_owned())
+                }
+                _ => (host, project),
+            })
             .ok_or_else(|| {
                 anyhow!(
                     "the forge connectors names the project by the origin remote, and it names none; nothing was opened"
                 )
             })?;
+        if relay.is_some() && origin.1.contains('%') {
+            bail!(
+                "the origin remote names the project {} through a loopback relay with a percent-encoded part: the relay decodes it and the API calls would not, so write it decoded; nothing was opened",
+                origin.1
+            );
+        }
         if connector == Connector::Github && origin.1.split('/').count() != 2 {
             bail!(
                 "the github connector names a repository by `<owner>/<repo>`, and the origin remote names {}; nothing was opened",
@@ -571,6 +910,9 @@ impl ConnectorsForge {
             reread: RefCell::new(BTreeSet::new()),
             calls: Cell::new(0),
             started,
+            unkeyed: Cell::new(false),
+            retried: RefCell::default(),
+            state_dir: None,
         };
         forge.preflight(tree)?;
         Ok(forge)
@@ -819,6 +1161,118 @@ impl ConnectorsForge {
 
     /// Invokes `operation` once on `input`: the provider's `body`.
     fn invoke(&self, tree: &Path, operation: &'static str, input: &Value) -> Result<Value> {
+        let outcome = self.outcome(tree, operation, input)?;
+        self.body_of(operation, &outcome)
+    }
+
+    /// The provider's `body` of `outcome`, an operation's result; a provider status outside
+    /// 2xx is the error.
+    fn body_of(&self, operation: &str, outcome: &Value) -> Result<Value> {
+        match outcome["status"].as_u64() {
+            Some(200..=299) | None => {}
+            Some(status) => bail!(
+                "{} reported the provider's status {status}",
+                self.named(operation)
+            ),
+        }
+        Ok(outcome["body"].clone())
+    }
+
+    /// Invokes the write `operation` once on `input` for the case whose artifacts directory is
+    /// `dir`: the provider's `body`. On the served route it carries its `idempotency_key`
+    /// ([`idempotency_key`]) until the instance refuses the member, and is then sent with none.
+    /// The key counts the refusals of that write at that revision recorded in `dir`
+    /// ([`Self::REFUSALS`]); an answer whose `mutation.classification` says the write was not
+    /// applied ([`not_applied`]) is recorded there before the answer is returned, so the next
+    /// attempt, in this process or a resumed one, goes under a new key.
+    ///
+    /// `merging` is the pull request and head of a merge. A merge answered `outcome_unknown`
+    /// records its key there too ([`Record::unknown`]); the next merge under that key first
+    /// reads the pull request ([`Self::settle_unknown`]): merged since is the merge applied and
+    /// nothing is sent, open and unmerged at the head named is the merge not applied and it goes
+    /// under a fresh key, once per process, and anything else is no merge.
+    fn write(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        operation: &'static str,
+        input: &Value,
+        merging: Option<(u64, &str)>,
+    ) -> Result<Value> {
+        let Route::Served {
+            endpoint,
+            loopback,
+            revision,
+        } = &self.route
+        else {
+            return self.invoke(tree, operation, input);
+        };
+        if !self.unkeyed.get() {
+            let case = case_of(dir);
+            let first = idempotency_key(&case, operation, revision, input, 0);
+            let mut refusals = refusals_in(dir)?;
+            let mut refused = refusals.refused.get(&first).copied().unwrap_or(0);
+            let mut key = idempotency_key(&case, operation, revision, input, refused);
+            if let Some((number, head)) = merging
+                && matches!(refusals.unknown.get(&key), Some(None))
+            {
+                if let Some(merged) = self.settle_unknown(tree, &first, &key, number, head)? {
+                    return Ok(merged);
+                }
+                refused = refused.checked_add(1).ok_or_else(|| {
+                    anyhow!(
+                        "pull request {number}'s merge has used every key its record can count; nothing was sent"
+                    )
+                })?;
+                let fresh = idempotency_key(&case, operation, revision, input, refused);
+                refusals.refused.insert(first.clone(), refused);
+                refusals.unknown.insert(key, Some(fresh.clone()));
+                record_refusals(dir, &refusals).with_context(|| {
+                    format!(
+                        "pull request {number} reads open at {head} after a merge answered outcome_unknown, and the fresh key could not be recorded; nothing was sent"
+                    )
+                })?;
+                key = fresh;
+            }
+            let outcome =
+                self.served_answer(endpoint, *loopback, revision, operation, input, Some(&key));
+            let refusal = outcome
+                .as_ref()
+                .err()
+                .and_then(|error| error.downcast_ref::<ServedRefused>());
+            if refusal.is_some_and(ServedRefused::refuses_a_member) {
+                self.unkeyed.set(true);
+            } else {
+                let classification = match &outcome {
+                    Ok(answer) => answer["mutation"]["classification"].as_str(),
+                    Err(_) => refusal.and_then(|refusal| refusal.classification.as_deref()),
+                };
+                if merging.is_some() && refusal.is_some_and(ServedRefused::is_outcome_unknown) {
+                    refusals.unknown.entry(key).or_insert(None);
+                    record_refusals(dir, &refusals).with_context(|| {
+                        format!(
+                            "{} answered outcome_unknown, and its key could not be recorded for the next attempt",
+                            self.named(operation)
+                        )
+                    })?;
+                } else if not_applied(classification) {
+                    refusals.refused.insert(first, refused.saturating_add(1));
+                    record_refusals(dir, &refusals).with_context(|| {
+                        format!(
+                            "{} was not applied, and its refusal could not be recorded for the next attempt",
+                            self.named(operation)
+                        )
+                    })?;
+                }
+                return self.body_of(operation, &outcome?["result"]);
+            }
+        }
+        let outcome = self.served_invoke(endpoint, *loopback, revision, operation, input, None)?;
+        self.body_of(operation, &outcome)
+    }
+
+    /// Invokes `operation` once on `input`, unkeyed: the operation's result.
+    fn outcome(&self, tree: &Path, operation: &'static str, input: &Value) -> Result<Value> {
         let outcome = match &self.route {
             Route::Cli => {
                 let (schema, revision) = self.described(tree, operation)?;
@@ -841,19 +1295,14 @@ impl ConnectorsForge {
                 endpoint,
                 loopback,
                 revision,
-            } => self.served_invoke(endpoint, *loopback, revision, operation, input)?,
+            } => self.served_invoke(endpoint, *loopback, revision, operation, input, None)?,
         };
-        match outcome["status"].as_u64() {
-            Some(200..=299) | None => {}
-            Some(status) => bail!(
-                "{} reported the provider's status {status}",
-                self.named(operation)
-            ),
-        }
-        Ok(outcome["body"].clone())
+        Ok(outcome)
     }
 
-    /// One `POST /v1alpha2/invoke` of `operation` on `input`: the operation's result.
+    /// One `POST /v1alpha2/invoke` of `operation` on `input`, carrying `key` as its
+    /// `idempotency_key` when one is given: the operation's result. A replay of a key
+    /// (`mutation.replayed: true`) is read as the original outcome it is.
     fn served_invoke(
         &self,
         endpoint: &str,
@@ -861,17 +1310,36 @@ impl ConnectorsForge {
         revision: &str,
         operation: &'static str,
         input: &Value,
+        key: Option<&str>,
+    ) -> Result<Value> {
+        self.served_answer(endpoint, loopback, revision, operation, input, key)
+            .map(|answer| answer["result"].clone())
+    }
+
+    /// [`Self::served_invoke`]'s call, its whole success answer: the `result` and, for a write,
+    /// the `mutation` the instance recorded.
+    fn served_answer(
+        &self,
+        endpoint: &str,
+        loopback: bool,
+        revision: &str,
+        operation: &'static str,
+        input: &Value,
+        key: Option<&str>,
     ) -> Result<Value> {
         let call = self.calls.get() + 1;
         self.calls.set(call);
         let request_id = format!("takt-{}-{}-{call}", std::process::id(), self.started);
-        let envelope = json!({
+        let mut envelope = json!({
             "version": "v1alpha2",
             "request_id": request_id,
             "operation": operation,
             "revision": revision,
             "input": input,
         });
+        if let Some(key) = key {
+            envelope["idempotency_key"] = json!(key);
+        }
         let named = self.named(operation);
         let (status, bytes) = exchange(
             endpoint,
@@ -887,7 +1355,7 @@ impl ConnectorsForge {
                 if answer["request_id"] != request_id.as_str() {
                     bail!("{named} answered another request than the one sent");
                 }
-                Ok(answer["result"].clone())
+                Ok(answer)
             }
             _ => Err(refused(named, status, &bytes).into()),
         }
@@ -930,10 +1398,87 @@ impl ConnectorsForge {
         Ok(())
     }
 
+    /// Settles a merge of `number` at `head` answered `outcome_unknown` under `key` before it is
+    /// sent again, by reading the pull request: merged is the merge applied, and the body
+    /// returned stands for its answer, with nothing sent; open and unmerged at `head` is the
+    /// merge not applied, `None`, and it goes under a fresh key, at most once per process for the
+    /// write whose first key is `first`. Closed, merged at another head, locked (a merge in
+    /// progress on gitlab), open at another head, or a second unknown in this
+    /// process is no merge, and the error names what the read showed.
+    fn settle_unknown(
+        &self,
+        tree: &Path,
+        first: &str,
+        key: &str,
+        number: u64,
+        head: &str,
+    ) -> Result<Option<Value>> {
+        let read = || -> Result<(PullRequestView, bool)> {
+            match self.connector {
+                Connector::Gitlab => {
+                    let request = self.read(tree, number)?;
+                    self.reread.borrow_mut().remove(&number);
+                    Ok((request.view, request.locked))
+                }
+                Connector::Github => Ok((self.view(tree, number)?, false)),
+            }
+        };
+        let (view, locked) = read().with_context(|| {
+            format!(
+                "read pull request {number} again after a merge of it answered outcome_unknown under {key}; nothing was sent"
+            )
+        })?;
+        if locked {
+            bail!(
+                "whether pull request {number} was merged is not known (outcome_unknown): it reads locked, a merge in progress, after the merge under {key}; nothing was sent again, and a later run reads it again"
+            );
+        }
+        match view.state {
+            PullRequestState::Merged if view.head.sha != head => bail!(
+                "pull request {number} reads merged at the head {}, not {head}, the head the merge under {key} named; that merge is not this one, and nothing was merged",
+                view.head.sha
+            ),
+            PullRequestState::Merged => {
+                return Ok(Some(json!({
+                    "merged": true,
+                    "state": "merged",
+                    "message": format!(
+                        "pull request {number} reads merged after a merge of it answered outcome_unknown under {key}; no merge was sent again"
+                    ),
+                })));
+            }
+            PullRequestState::Closed => bail!(
+                "pull request {number} reads closed and not merged after a merge of it answered outcome_unknown under {key}; nothing was merged"
+            ),
+            PullRequestState::Open => {}
+        }
+        if view.head.sha != head {
+            bail!(
+                "pull request {number} reads open at the head {}, not {head}, after a merge of it answered outcome_unknown under {key}; nothing was merged",
+                view.head.sha
+            );
+        }
+        if !self.retried.borrow_mut().insert(first.to_owned()) {
+            bail!(
+                "whether pull request {number} was merged is not known (outcome_unknown): the merge under {key}, the fresh key this run took, was answered so too; it reads open at {head}, nothing was sent again, and a later run reads it again"
+            );
+        }
+        Ok(None)
+    }
+
     /// A merge of `number` that failed: no merge, and the pull request is read again before any
-    /// further write.
+    /// further write. A merge the instance answered `outcome_unknown` may have been made, and
+    /// is read again before any further write all the same.
     fn merge_failed(&self, number: u64, error: anyhow::Error) -> anyhow::Error {
         self.reread.borrow_mut().insert(number);
+        if error
+            .downcast_ref::<ServedRefused>()
+            .is_some_and(ServedRefused::is_outcome_unknown)
+        {
+            return error.context(format!(
+                "whether pull request {number} was merged is not known (outcome_unknown): it is read again before any further write, and a merge sent again takes a fresh key once when it still reads open at the head merged"
+            ));
+        }
         let conflict = error
             .downcast_ref::<ServedRefused>()
             .is_some_and(ServedRefused::is_conflict)
@@ -992,11 +1537,22 @@ impl ConnectorsForge {
                 base: field("target_branch")?,
             },
             head_pipeline,
+            locked: body["state"].as_str() == Some("locked"),
+            behind: gitlab_behind(&body),
         })
     }
 
     /// The pull request `number` as `pull_request.get` reports it.
     fn read_pull(&self, tree: &Path, number: u64) -> Result<PullRequestView> {
+        self.read_pull_behind(tree, number).map(|(view, _)| view)
+    }
+
+    /// [`Self::read_pull`], and whether the pull request is behind its base ([`github_behind`]).
+    fn read_pull_behind(
+        &self,
+        tree: &Path,
+        number: u64,
+    ) -> Result<(PullRequestView, Option<bool>)> {
         let (owner, repo) = self.repository();
         let body = self.invoke(
             tree,
@@ -1012,21 +1568,22 @@ impl ConnectorsForge {
                 .ok_or_else(|| anyhow!("{named} reported no {}", pointer[1..].replace('/', ".")))
         };
         let state = match (body["state"].as_str(), body["merged"].as_bool()) {
-            (Some("open"), _) => PullRequestState::Open,
+            (Some("open"), Some(false) | None) => PullRequestState::Open,
             (Some("closed"), Some(true)) => PullRequestState::Merged,
             (Some("closed"), Some(false)) => PullRequestState::Closed,
             (state, merged) => bail!(
                 "{named} reported the state {state:?} with merged {merged:?}, not open, or closed with merged true or false"
             ),
         };
-        Ok(PullRequestView {
+        let view = PullRequestView {
             state,
             head: Head {
                 branch: field("/head/ref")?,
                 sha: field("/head/sha")?,
             },
             base: field("/base/ref")?,
-        })
+        };
+        Ok((view, github_behind(&body)))
     }
 
     /// The checks on the head of change request `number`, and the pipeline they were read
@@ -1168,22 +1725,22 @@ impl ConnectorsForge {
     }
 
     /// What a git line to [`Self::push_url`] is given on its command line after `git`: to the
-    /// loopback relay, no redirect followed ([`NO_REDIRECT`]) and no proxy
-    /// ([`NO_PROXY_CONFIG`]); over HTTPS, nothing.
+    /// loopback relay, no redirect followed ([`NO_REDIRECT`]), no proxy and no extra header
+    /// ([`super::relay::CONFIG`]); over HTTPS, nothing.
     fn relay_options(&self) -> Vec<String> {
         if self.relay.is_none() {
             return Vec::new();
         }
         NO_REDIRECT
             .iter()
-            .chain(&NO_PROXY_CONFIG)
+            .chain(&super::relay::CONFIG)
             .map(|word| (*word).to_owned())
             .collect()
     }
 
     /// `git` and what a line that reads from [`Self::push_url`] (`ls-remote`, `fetch`) is given
     /// before its verb: no hook, no redirect followed ([`NO_REDIRECT`]) and, to the loopback
-    /// relay, no proxy ([`Self::relay_options`]).
+    /// relay, no proxy and no extra header ([`super::relay::CONFIG`]).
     fn read_prefix(&self) -> Vec<String> {
         let mut argv: Vec<String> = ["git", "-c", "core.hooksPath=/dev/null"]
             .into_iter()
@@ -1191,53 +1748,55 @@ impl ConnectorsForge {
             .map(str::to_owned)
             .collect();
         if self.relay.is_some() {
-            argv.extend(NO_PROXY_CONFIG.map(str::to_owned));
+            argv.extend(super::relay::CONFIG.map(str::to_owned));
         }
         argv
     }
 
     /// The environment of a git line to [`Self::push_url`]: the protocols its transport allows
-    /// and, to the loopback relay, no proxy for any host ([`NO_PROXY_ENV`]).
-    fn line_env(&self) -> Vec<(&'static str, &'static str)> {
+    /// and, to the loopback relay, no proxy for any host ([`NO_PROXY_ENV`]) and the line's own
+    /// empty home without global or system configuration ([`super::relay::Line::env`]).
+    fn line_env<'a>(&self, line: Option<&'a super::relay::Line>) -> Vec<(&'static str, &'a str)> {
         let mut env = vec![("GIT_ALLOW_PROTOCOL", self.transport().allowed_protocols())];
         if self.relay.is_some() {
             env.extend(NO_PROXY_ENV);
         }
+        if let Some(line) = line {
+            env.extend(line.env());
+        }
         env
     }
 
-    /// Refuses a line to the loopback relay that git's configuration would carry anywhere else:
-    /// each URL git reaches the relay's URL at, as it reads them for a fetch (`insteadOf`) and
-    /// for a push (`pushInsteadOf`, and a `pushurl` or `url` of a remote named by that URL),
-    /// must be `http://` to a loopback host ([`RemoteTransport::LoopbackHttp`]). Every such URL
-    /// is read off the tree's configuration ([`reached_by`]), as git reads it for this tree,
-    /// with the configuration the environment hands git included, as the push keeps it.
-    /// Over HTTPS, nothing is read: `GIT_ALLOW_PROTOCOL` holds that line to HTTPS.
-    fn relay_reached(&self, tree: &Path) -> Result<()> {
+    /// Admits a line to the loopback relay ([`super::relay::admit`]), its empty home made under
+    /// the run's state directory ([`Self::with_state_dir`]): refused when git's configuration
+    /// would carry it anywhere else (each URL git reaches the relay's URL at, as it reads them
+    /// for a fetch, `insteadOf`, and for a push, `pushInsteadOf` and a `pushurl` or `url` of a
+    /// remote named by that URL, must be `http://` to a loopback host,
+    /// [`RemoteTransport::LoopbackHttp`], [`reached_by`]) or hand it a credential, read as the
+    /// line reads it, with the configuration the environment hands git included. Over HTTPS,
+    /// nothing is read and none is answered: `GIT_ALLOW_PROTOCOL` holds that line to HTTPS.
+    fn relay_reached(&self, tree: &Path) -> Result<Option<super::relay::Line>> {
         let Some(relay) = &self.relay else {
-            return Ok(());
+            return Ok(None);
         };
-        let config = crate::git::bytes_as_remote_git(tree, &["config", "--list", "-z"])
-            .context("read git's configuration of the tree before a line to the loopback relay; nothing was sent")?;
-        for url in reached_by(relay, &config) {
-            if !matches!(
-                crate::git::remote_transport(&url),
-                Ok(RemoteTransport::LoopbackHttp)
-            ) {
-                bail!(
-                    "a line to the loopback relay {relay} would go to {}, no loopback host, as git's configuration rewrites it (`url.<base>.insteadOf`, `url.<base>.pushInsteadOf`, a remote's `pushurl`): the relay's lines go to the relay alone, so nothing was sent",
-                    super::without_userinfo(&url)
-                );
-            }
-        }
-        Ok(())
+        let homes = super::relay::Homes::at(self.state_dir.as_deref())?;
+        super::relay::admit(tree, relay, &homes).map(Some)
+    }
+
+    /// The same forge, the empty home of each line to the loopback relay made under the state
+    /// directory `state` (`<state>/relay-home`), as the run's other state is; none keeps takt's
+    /// own (`$XDG_STATE_HOME/takt/relay-home`, [`super::relay::Homes::at`]).
+    #[must_use]
+    pub fn with_state_dir(mut self, state: Option<&Path>) -> Self {
+        self.state_dir = state.map(Path::to_path_buf);
+        self
     }
 
     /// The commit `origin`'s project holds `base` at, read through git from the URL every line
     /// goes to ([`Self::push_url`]): `git ls-remote --refs <url> refs/heads/<base>`, run
     /// through the runner. A branch it does not list, or a line that fails, is the error.
     fn origin_tip(&self, tree: &Path, base: &str) -> Result<String> {
-        self.relay_reached(tree)?;
+        let line = self.relay_reached(tree)?;
         let url = self.push_url();
         let reference = format!("refs/heads/{base}");
         let mut argv = self.read_prefix();
@@ -1247,7 +1806,9 @@ impl ConnectorsForge {
             url.clone(),
             reference.clone(),
         ]);
-        let exit = self.runner.run_env(tree, &argv, &self.line_env())?;
+        let exit = self
+            .runner
+            .run_env(tree, &argv, &self.line_env(line.as_ref()))?;
         if !exit.success() {
             return Err(Failed {
                 line: argv.join(" "),
@@ -1273,7 +1834,7 @@ impl ConnectorsForge {
     /// Merges change request `number` at `head` with the pipeline the checks were read on: the
     /// reading kept by [`Forge::checks`] when it is of `head`, else a reading made now, which
     /// must be of `head` too; a head with none is refused with no merge invoked.
-    fn merge_gitlab(&self, tree: &Path, number: u64, head: &str) -> Result<Value> {
+    fn merge_gitlab(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<Value> {
         let held = self
             .bound
             .borrow()
@@ -1293,8 +1854,9 @@ impl ConnectorsForge {
             }
         };
         let body = self
-            .invoke(
+            .write(
                 tree,
+                dir,
                 MERGE,
                 &json!({
                     "id": self.project,
@@ -1302,6 +1864,7 @@ impl ConnectorsForge {
                     "pipeline_id": pipeline,
                     "body": {"sha": head},
                 }),
+                Some((number, head)),
             )
             .map_err(|error| self.merge_failed(number, error))?;
         if let Some(state) = body["state"].as_str()
@@ -1318,11 +1881,12 @@ impl ConnectorsForge {
 
     /// Merges pull request `number` at `head`: `pull_request.merge` sends the head's sha, which
     /// GitHub compares with the pull request's head.
-    fn merge_github(&self, tree: &Path, number: u64, head: &str) -> Result<Value> {
+    fn merge_github(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<Value> {
         let (owner, repo) = self.repository();
         let body = self
-            .invoke(
+            .write(
                 tree,
+                dir,
                 PULL_MERGE,
                 &json!({
                     "owner": owner,
@@ -1330,6 +1894,7 @@ impl ConnectorsForge {
                     "pull_number": number,
                     "body": {"sha": head},
                 }),
+                Some((number, head)),
             )
             .map_err(|error| self.merge_failed(number, error))?;
         if body["merged"] != true {
@@ -1347,7 +1912,58 @@ impl ConnectorsForge {
     }
 }
 
-/// The error of a served call that did not succeed, from its HTTP status and its answer.
+/// Whether `answer` is an error envelope of the v1alpha2 binding, as compatibility §5 closes
+/// it: an object of `version: v1alpha2`, `request_id` (a string or null), `status: error`, an
+/// `error` of a string `code`, a string `message` and an optional positive integer
+/// `retry_after_seconds` and nothing else, no `result`, `audit_ref` and `audit_status`
+/// consistent (`complete` and `incomplete` with a reference, `unavailable` and `not_required`
+/// with null), and no member besides those and `source_audit` and `mutation`.
+#[must_use]
+pub fn is_error_envelope(answer: &Value) -> bool {
+    const MEMBERS: [&str; 8] = [
+        "version",
+        "request_id",
+        "status",
+        "error",
+        "audit_ref",
+        "audit_status",
+        "source_audit",
+        "mutation",
+    ];
+    let Some(members) = answer.as_object() else {
+        return false;
+    };
+    let Some(error) = answer["error"].as_object() else {
+        return false;
+    };
+    let audited = match answer["audit_status"].as_str() {
+        Some("complete" | "incomplete") => answer["audit_ref"].is_string(),
+        Some("unavailable" | "not_required") => {
+            members.contains_key("audit_ref") && answer["audit_ref"].is_null()
+        }
+        _ => false,
+    };
+    members.keys().all(|name| MEMBERS.contains(&name.as_str()))
+        && answer["version"] == "v1alpha2"
+        && members
+            .get("request_id")
+            .is_some_and(|id| id.is_null() || id.is_string())
+        && answer["status"] == "error"
+        && audited
+        && error
+            .keys()
+            .all(|name| matches!(name.as_str(), "code" | "message" | "retry_after_seconds"))
+        && error.get("code").is_some_and(Value::is_string)
+        && error.get("message").is_some_and(Value::is_string)
+        && error
+            .get("retry_after_seconds")
+            .is_none_or(|seconds| seconds.as_u64().is_some_and(|seconds| seconds > 0))
+}
+
+/// The error of a served call that did not succeed, from its HTTP status and its answer. The
+/// code and the message of an answer that is no envelope are read from its top level, for the
+/// message alone: such an answer is never taken for the refusal of a member
+/// ([`ServedRefused::refuses_a_member`]).
 fn refused(call: String, status: u16, bytes: &[u8]) -> ServedRefused {
     let answer: Value = serde_json::from_slice(bytes).unwrap_or_default();
     let error = if answer["error"].is_object() {
@@ -1360,6 +1976,9 @@ fn refused(call: String, status: u16, bytes: &[u8]) -> ServedRefused {
         status,
         code: error["code"].as_str().map(bounded),
         message: error["message"].as_str().map(bounded).unwrap_or_default(),
+        echoed: !answer["request_id"].is_null(),
+        classification: answer["mutation"]["classification"].as_str().map(bounded),
+        envelope: is_error_envelope(&answer),
     }
 }
 
@@ -1446,7 +2065,7 @@ impl Forge for ConnectorsForge {
     }
 
     fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> Result<()> {
-        self.relay_reached(tree)?;
+        let line = self.relay_reached(tree)?;
         let mut argv = vec!["git".to_owned()];
         argv.extend(self.relay_options());
         argv.extend([
@@ -1462,7 +2081,7 @@ impl Forge for ConnectorsForge {
             &argv,
             &self.push_url(),
             "the forge connectors",
-            &self.line_env(),
+            &self.line_env(line.as_ref()),
         )
     }
 
@@ -1512,7 +2131,21 @@ impl Forge for ConnectorsForge {
                 )
             }
         };
-        let body = self.invoke(tree, operation, &input)?;
+        let body = self
+            .write(tree, dir, operation, &input, None)
+            .map_err(|error| {
+                if error
+                    .downcast_ref::<ServedRefused>()
+                    .is_some_and(ServedRefused::is_outcome_unknown)
+                {
+                    error.context(format!(
+                        "whether a pull request for {} was opened is not known (outcome_unknown): an open sent again carries the same key",
+                        request.branch
+                    ))
+                } else {
+                    error
+                }
+            })?;
         std::fs::write(&output, serde_json::to_vec_pretty(&body)?)
             .with_context(|| format!("write the response {}", output.display()))?;
         body[number].as_u64().ok_or_else(|| {
@@ -1525,6 +2158,16 @@ impl Forge for ConnectorsForge {
 
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {
         self.view(tree, number)
+    }
+
+    /// From the pull read: on github `mergeable_state` ([`github_behind`]), on gitlab
+    /// `detailed_merge_status` and `diverged_commits_count` ([`gitlab_behind`]); not known when
+    /// the read does not say.
+    fn behind_base(&self, tree: &Path, number: u64) -> Result<Option<bool>> {
+        Ok(match self.connector {
+            Connector::Gitlab => self.read(tree, number)?.behind,
+            Connector::Github => self.read_pull_behind(tree, number)?.1,
+        })
     }
 
     fn checks(&self, tree: &Path, number: u64) -> Result<Checks> {
@@ -1551,8 +2194,8 @@ impl Forge for ConnectorsForge {
         let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
         self.read_again(tree, Some((number, head)))?;
         let body = match self.connector {
-            Connector::Gitlab => self.merge_gitlab(tree, number, head)?,
-            Connector::Github => self.merge_github(tree, number, head)?,
+            Connector::Gitlab => self.merge_gitlab(tree, dir, number, head)?,
+            Connector::Github => self.merge_github(tree, dir, number, head)?,
         };
         std::fs::write(&output, serde_json::to_vec_pretty(&body)?)
             .with_context(|| format!("write the response {}", output.display()))?;
@@ -1595,6 +2238,7 @@ impl Forge for ConnectorsForge {
         if commit_id(tree, tip).is_ok() {
             return Ok(tip.to_owned());
         }
+        let line = self.relay_reached(tree)?;
         let url = self.push_url();
         let mut argv = self.read_prefix();
         argv.extend(
@@ -1608,7 +2252,9 @@ impl Forge for ConnectorsForge {
             ]
             .map(str::to_owned),
         );
-        let exit = self.runner.run_env(tree, &argv, &self.line_env())?;
+        let exit = self
+            .runner
+            .run_env(tree, &argv, &self.line_env(line.as_ref()))?;
         if !exit.success() {
             return Err(Failed {
                 line: argv.join(" "),

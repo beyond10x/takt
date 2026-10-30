@@ -1460,7 +1460,7 @@ fn main() -> ExitCode {
     let mut cli = match parsed() {
         Ok(cli) => cli,
         Err(error) => {
-            eprintln!("takt: {error:#}");
+            eprintln!("takt: {}", printable(&format!("{error:#}")));
             if error
                 .downcast_ref::<takt::run_config::TokensRefused>()
                 .is_some()
@@ -1478,7 +1478,7 @@ fn main() -> ExitCode {
         _ => Ok(()),
     };
     if let Err(error) = taken {
-        eprintln!("takt: {error:#}");
+        eprintln!("takt: {}", printable(&format!("{error:#}")));
         return ExitCode::from(EXIT_REFUSED);
     }
     let stdout = std::io::stdout();
@@ -1486,7 +1486,7 @@ fn main() -> ExitCode {
     match run(cli, &mut out) {
         Ok(code) => ExitCode::from(code),
         Err(error) => {
-            eprintln!("takt: {error:#}");
+            eprintln!("takt: {}", printable(&format!("{error:#}")));
             ExitCode::from(EXIT_REFUSED)
         }
     }
@@ -1717,7 +1717,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         .downcast_ref::<takt::promotion::BuildFailed>()
                         .is_some() =>
                 {
-                    eprintln!("takt: {error:#}");
+                    eprintln!("takt: {}", printable(&format!("{error:#}")));
                     Ok(EXIT_ERROR)
                 }
                 Err(error) => Err(error),
@@ -2960,12 +2960,20 @@ fn publishes(forge: &dyn Forge) -> bool {
 /// `http://` goes to a loopback host alone, a relay that holds the forge's credential: every URL
 /// git reaches `origin` at is read before the fetch, and one that is `http://` to another host
 /// is refused, naming it ([`Self::relayed`]); a line to a relay follows no redirect
-/// and goes through no proxy.
+/// and goes through no proxy, and goes to the relay's URL without its userinfo
+/// ([`takt::forge::connectors::relay_of`]), as `takt run`'s lines do, so a credential `origin`'s
+/// URL holds is sent to no relay. It is held to the rule `takt run`'s lines to a relay are
+/// ([`takt::forge::relay::admit`]): its own empty home, no global or system configuration, and
+/// refused when the repository's configuration would hand it a credential or carry it off the
+/// relay.
 struct TrialRoute {
     /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
     fetcher: Process,
     /// What the push runs as.
     pusher: Process,
+    /// The run's state directory (`--state-dir`), under which a line to a relay makes its empty
+    /// home ([`takt::forge::relay::Homes::at`]); none for takt's own.
+    state_dir: Option<PathBuf>,
 }
 
 impl TrialRoute {
@@ -2975,8 +2983,9 @@ impl TrialRoute {
     /// How long the fetch may take before it is killed and the run refused.
     const FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
-    /// The trial route of the checkout `repo` when it has an `origin`; none without one.
-    fn of(repo: &Path) -> Option<Self> {
+    /// The trial route of the checkout `repo` when it has an `origin`; none without one. A line
+    /// to a relay makes its empty home under `state_dir`, the run's state directory.
+    fn of(repo: &Path, state_dir: Option<&Path>) -> Option<Self> {
         takt::git::remote_url(repo, Self::REMOTE).ok()?;
         Some(Self {
             fetcher: Process {
@@ -2986,6 +2995,7 @@ impl TrialRoute {
                 },
             },
             pusher: Process::default(),
+            state_dir: state_dir.map(Path::to_path_buf),
         })
     }
 
@@ -2999,8 +3009,15 @@ impl TrialRoute {
     /// ([`takt::git::RemoteTransport::LoopbackHttp`]), read from every URL git reaches
     /// [`Self::REMOTE`] at for each, as git rewrites them ([`takt::git::remote_urls`]). A URL
     /// that is `http://` to no loopback host is refused, naming it
-    /// ([`takt::git::remote_transport`]).
-    fn relayed(tree: &Path) -> Result<(bool, bool)> {
+    /// ([`takt::git::remote_transport`]). For each, the URL of the loopback relay the line goes
+    /// to, without its userinfo, admitted ([`Self::relay`]); none when it does not go to one.
+    fn relayed(
+        &self,
+        tree: &Path,
+    ) -> Result<(
+        Option<takt::forge::relay::Line>,
+        Option<takt::forge::relay::Line>,
+    )> {
         let (fetch, push) = takt::git::remote_urls(tree, Self::REMOTE)?;
         let relayed = |urls: &[String]| -> Result<bool> {
             let mut any = false;
@@ -3010,51 +3027,80 @@ impl TrialRoute {
             }
             Ok(any)
         };
-        Ok((relayed(&fetch)?, relayed(&push)?))
+        let fetch = if relayed(&fetch)? {
+            Some(self.relay(tree, &fetch)?)
+        } else {
+            None
+        };
+        let push = if relayed(&push)? {
+            Some(self.relay(tree, &push)?)
+        } else {
+            None
+        };
+        Ok((fetch, push))
     }
 
-    /// `git`, and for a line to a loopback relay [`takt::git::NO_REDIRECT`] and [`Self::NO_PROXY`]
-    /// after it.
+    /// The line to a loopback relay that goes instead of to [`Self::REMOTE`]: to `urls`' one
+    /// URL without its userinfo ([`takt::forge::connectors::relay_of`]), so git sends no
+    /// credential `origin`'s URL holds. Refused when `origin` names more than one URL for the
+    /// line, and as `takt run`'s lines to a relay are ([`takt::forge::relay::admit`]): when git's
+    /// configuration would carry the URL without its userinfo to another than a loopback host,
+    /// or hand the line a credential.
+    fn relay(&self, tree: &Path, urls: &[String]) -> Result<takt::forge::relay::Line> {
+        let [url] = urls else {
+            return Err(anyhow!(
+                "{} names {} URLs for one line, among them a loopback relay; a line to a loopback relay goes to one URL, so nothing was sent",
+                Self::REMOTE,
+                urls.len()
+            ));
+        };
+        let relay = takt::forge::connectors::relay_of(url)?;
+        let homes = takt::forge::relay::Homes::at(self.state_dir.as_deref())?;
+        takt::forge::relay::admit(tree, &relay, &homes)
+    }
+
+    /// `git`, and for a line to a loopback relay [`takt::git::NO_REDIRECT`] and
+    /// [`takt::forge::relay::CONFIG`] after it: no redirect followed, no proxy, whatever the
+    /// environment (`http_proxy`, `all_proxy`) or the configuration names, and no extra header.
+    /// A line to `https://` keeps the operator's proxy.
     fn git(relayed: bool) -> Vec<String> {
         let mut argv = vec!["git".to_owned()];
         if relayed {
             argv.extend(takt::git::NO_REDIRECT.map(str::to_owned));
-            argv.extend(Self::NO_PROXY.map(str::to_owned));
+            argv.extend(takt::forge::relay::CONFIG.map(str::to_owned));
         }
         argv
     }
 
-    /// What a line to a loopback relay is given on git's command line: no proxy, whatever the
-    /// environment (`http_proxy`, `all_proxy`) or the configuration names; an empty
-    /// `http.proxy` turns proxying off. A line to `https://` keeps the operator's proxy.
-    const NO_PROXY: [&str; 2] = ["-c", "http.proxy="];
-
     /// What a line to a loopback relay is started with besides: every loopback host left out of
-    /// any proxy, also one a URL-specific `http.<url>.proxy` names, which the empty
-    /// `http.proxy` does not override ([`Self::NO_PROXY`]).
+    /// any proxy.
     const LOOPBACK_NO_PROXY: [(&str, &str); 2] = [
         ("no_proxy", "127.0.0.1,127.0.0.0/8,localhost,::1,[::1]"),
         ("NO_PROXY", "127.0.0.1,127.0.0.0/8,localhost,::1,[::1]"),
     ];
 
-    /// The environment of a line ([`Self::LOOPBACK_NO_PROXY`] for one to a loopback relay).
-    fn env(relayed: bool) -> &'static [(&'static str, &'static str)] {
-        if relayed {
-            &Self::LOOPBACK_NO_PROXY
-        } else {
-            &[]
+    /// The environment of a line: for one to a loopback relay [`Self::LOOPBACK_NO_PROXY`] and
+    /// the line's own empty home without global or system configuration
+    /// ([`takt::forge::relay::Line::env`]).
+    fn env(line: Option<&takt::forge::relay::Line>) -> Vec<(&'static str, &str)> {
+        let mut env = Vec::new();
+        if let Some(line) = line {
+            env.extend(Self::LOOPBACK_NO_PROXY);
+            env.extend(line.env());
         }
+        env
     }
 
-    /// The line that fetches `origin`'s trial branches into its remote-tracking refs.
-    fn fetch_argv(relayed: bool) -> Vec<String> {
-        let mut argv = Self::git(relayed);
+    /// The line that fetches `origin`'s trial branches into its remote-tracking refs, from
+    /// `relay` when the fetch goes to a loopback relay ([`Self::relay`]), else from `origin`.
+    fn fetch_argv(relay: Option<&str>) -> Vec<String> {
+        let mut argv = Self::git(relay.is_some());
         argv.extend(
             [
                 "fetch",
                 "--no-tags",
                 "--quiet",
-                Self::REMOTE,
+                relay.unwrap_or(Self::REMOTE),
                 "+refs/heads/trial/*:refs/remotes/origin/trial/*",
             ]
             .map(str::to_owned),
@@ -3063,14 +3109,15 @@ impl TrialRoute {
     }
 
     /// The line that creates `origin`'s `trial` from the local one, reporting each ref on
-    /// stdout; the lease refuses it when the remote has the branch.
-    fn push_argv(trial: &str, relayed: bool) -> Vec<String> {
-        let mut argv = Self::git(relayed);
+    /// stdout; the lease refuses it when the remote has the branch. It goes to `relay` when the
+    /// push goes to a loopback relay ([`Self::relay`]), else to `origin`.
+    fn push_argv(trial: &str, relay: Option<&str>) -> Vec<String> {
+        let mut argv = Self::git(relay.is_some());
         argv.extend([
             "push".to_owned(),
             "--porcelain".to_owned(),
             format!("--force-with-lease=refs/heads/{trial}:"),
-            Self::REMOTE.to_owned(),
+            relay.unwrap_or(Self::REMOTE).to_owned(),
             format!("refs/heads/{trial}:refs/heads/{trial}"),
         ]);
         argv
@@ -3094,31 +3141,48 @@ impl TrialRoute {
     /// Fetches `origin`'s trial branches, killed past [`Self::FETCH_TIMEOUT`], once every URL
     /// the fetch and the push go to is admitted ([`Self::relayed`]).
     fn fetch(&self, tree: &Path) -> Result<()> {
-        let (relayed, _) = Self::relayed(tree)?;
-        let argv = Self::fetch_argv(relayed);
+        let (line, _) = self.relayed(tree)?;
+        let argv = Self::fetch_argv(line.as_ref().map(|line| line.url.as_str()));
         let exit = self
             .fetcher
-            .run_keeping(tree, &argv, Self::env(relayed), Self::keeps)?;
+            .run_keeping(tree, &argv, &Self::env(line.as_ref()), Self::keeps)?;
         Self::succeed(&argv, exit).map(|_| ())
     }
 
+    /// Whether `line` of `git push --porcelain`'s standard output is one of its own: `To <url>`,
+    /// a ref's report (`<flag>\t<from>:<to>\t<summary>`) or `Done`. Any other line continues
+    /// the summary before it, a reason that held a line break.
+    fn porcelain(line: &str) -> bool {
+        line == "Done" || line.starts_with("To ") || line.as_bytes().get(1) == Some(&b'\t')
+    }
+
     /// Pushes `trial` and answers only when the push exits 0 and reports it created on the
-    /// remote. A refusal says what the push reported for the branch and what that means for
-    /// the remote's `trial`: as it was (`=` up to date, `!` rejected), moved (` ` or `+`, which
-    /// only a push that dropped the lease reports), or not known (no report for it).
+    /// remote. A refusal says what the push reported for the branch, its summary whole (every
+    /// field after the ref and every line of its reason, on one line, [`one_line`]), and what
+    /// that means for the remote's `trial`: as it was (`=` up to date, `!` rejected), moved
+    /// (` ` or `+`, which only a push that dropped the lease reports), or not known (no report
+    /// for it).
     fn create(&self, tree: &Path, trial: &str) -> Result<()> {
-        let (_, relayed) = Self::relayed(tree)?;
-        let argv = Self::push_argv(trial, relayed);
+        let (_, line) = self.relayed(tree)?;
+        let argv = Self::push_argv(trial, line.as_ref().map(|line| line.url.as_str()));
         let exit = self
             .pusher
-            .run_keeping(tree, &argv, Self::env(relayed), Self::keeps)?;
+            .run_keeping(tree, &argv, &Self::env(line.as_ref()), Self::keeps)?;
         let target = format!(":refs/heads/{trial}");
-        let reported = exit.stdout.lines().find_map(|line| {
-            let mut fields = line.split('\t');
+        let lines: Vec<&str> = exit.stdout.lines().collect();
+        let reported = lines.iter().enumerate().find_map(|(at, line)| {
+            let mut fields = line.splitn(3, '\t');
             let flag = fields.next()?;
             let refs = fields.next()?;
-            refs.ends_with(&target)
-                .then(|| (flag.to_owned(), fields.next().unwrap_or("").to_owned()))
+            refs.ends_with(&target).then(|| {
+                let mut summary = vec![fields.next().unwrap_or("")];
+                summary.extend(
+                    lines[at + 1..]
+                        .iter()
+                        .take_while(|next| !Self::porcelain(next)),
+                );
+                (flag.to_owned(), one_line(&summary.join("\n")))
+            })
         });
         let exited = exit
             .code
@@ -3196,7 +3260,9 @@ fn forge_with(
         settings,
         scan.clone(),
         Box::new(Process::default()),
-    )? {
+    )?
+    .map(|connectors| connectors.with_state_dir(state_dir))
+    {
         let line = format!(
             "forge: connectors ({}); pr.open, ci.read and repository.merge run {}",
             connectors.identity(),
@@ -3458,7 +3524,10 @@ fn finish(
     if let Some(transcripts) = transcripts
         && let Err(error) = run.transcripts_in(transcripts)
     {
-        eprintln!("no step transcript is kept: {error:#}");
+        eprintln!(
+            "no step transcript is kept: {}",
+            printable(&format!("{error:#}"))
+        );
     }
     run.take_default_gate();
     if let Some(seconds) = looping.active_seconds {
@@ -3876,7 +3945,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     // `--forge none` or the checkout has no `origin`.
     let trials = match looping.forge.as_deref() {
         Some("none") => None,
-        _ => TrialRoute::of(&repo),
+        _ => TrialRoute::of(&repo, looping.state_dir.as_deref()),
     };
     // The fetch is read-only and comes first, so the number is chosen and checked once, on
     // everything the checkout knows after it, and before anything is cut or pushed.
@@ -4481,13 +4550,32 @@ fn scan_identity_at_open(
     Ok(())
 }
 
-/// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `.
+/// `text` on one line: its lines, trimmed, the empty ones left out, joined with ` | `, each
+/// [`printable`].
 fn one_line(text: &str) -> String {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join(" | ")
+    printable(
+        &text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>()
+            .join(" | "),
+    )
+}
+
+/// `text` as takt prints it to a terminal: every control character but a line break and a tab
+/// written as its Rust escape (`\u{1b}`), so a reason or a line a relay, a forge or a program
+/// sent cannot move the cursor, retitle the window or clear the screen.
+fn printable(text: &str) -> String {
+    text.chars()
+        .map(|c| {
+            if c.is_control() && c != '\n' && c != '\t' {
+                c.escape_default().collect()
+            } else {
+                c.to_string()
+            }
+        })
+        .collect()
 }
 
 /// The gates document a run takes when `--gates` is not given and this is a file.

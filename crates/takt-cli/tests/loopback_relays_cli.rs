@@ -8,16 +8,31 @@
 //! Nothing leaves the machine: a run that might reach `example.com` is given a proxy stand-in on
 //! 127.0.0.1 that records every request it is sent and answers 502, so a request git makes off
 //! the machine is seen here and goes no further.
+//!
+//! Acceptance 2 and 4: `takt run --harness harness --model-endpoint http://127.0.0.1:<p>/v1` with
+//! no credential flag starts its session, the session executor handing b10x-harness no
+//! credential flag, and no variable of the harness's environment holds a value the stand-ins were
+//! given as a token, though takt's own environment holds each of them under a credential's name.
+//! A `b10x-harness` double records what it was started with. That the real b10x-harness, started
+//! so, sends the model stand-in no `Authorization` and no `x-api-key` header is the one case here
+//! that needs the real program, and is ignored unless asked for (`--ignored`).
 
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
+#[allow(dead_code)]
+#[path = "support/smart_http.rs"]
+mod smart_http;
+
 use std::fs;
-use std::io::{BufRead as _, BufReader, Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufReader, Write as _};
+use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
+
+use smart_http::{GitStandIn, Request, read_body, read_head};
 
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
@@ -70,206 +85,6 @@ fn copy_dir(from: &Path, to: &Path) {
         } else {
             fs::copy(entry.path(), &target).expect("a copied file");
         }
-    }
-}
-
-/// One request a stand-in was sent: its method, its target and its headers, each name in lower
-/// case.
-#[derive(Debug, Clone)]
-struct Request {
-    method: String,
-    target: String,
-    headers: Vec<(String, String)>,
-}
-
-impl Request {
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    }
-}
-
-/// Reads one request's line and headers from `reader`; none at the end of the stream.
-fn read_head(reader: &mut BufReader<TcpStream>) -> Option<Request> {
-    let mut line = String::new();
-    if reader.read_line(&mut line).ok()? == 0 {
-        return None;
-    }
-    let mut parts = line.split_whitespace();
-    let method = parts.next()?.to_owned();
-    let target = parts.next()?.to_owned();
-    let mut headers = Vec::new();
-    loop {
-        let mut header = String::new();
-        reader.read_line(&mut header).ok()?;
-        let header = header.trim_end();
-        if header.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':') {
-            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
-        }
-    }
-    Some(Request {
-        method,
-        target,
-        headers,
-    })
-}
-
-/// Reads the body `request` announces, by `Content-Length` or in chunks.
-fn read_body(reader: &mut BufReader<TcpStream>, request: &Request) -> std::io::Result<Vec<u8>> {
-    let mut body = Vec::new();
-    if let Some(length) = request.header("content-length") {
-        body.resize(length.parse().unwrap_or(0), 0);
-        reader.read_exact(&mut body)?;
-    } else if request
-        .header("transfer-encoding")
-        .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
-    {
-        loop {
-            let mut size = String::new();
-            reader.read_line(&mut size)?;
-            let size =
-                usize::from_str_radix(size.trim().split(';').next().unwrap_or(""), 16).unwrap_or(0);
-            if size == 0 {
-                let mut trailer = String::new();
-                while reader.read_line(&mut trailer)? > 0 && !trailer.trim().is_empty() {
-                    trailer.clear();
-                }
-                break;
-            }
-            let start = body.len();
-            body.resize(start + size, 0);
-            reader.read_exact(&mut body[start..])?;
-            let mut end = [0; 2];
-            reader.read_exact(&mut end)?;
-        }
-    }
-    Ok(body)
-}
-
-/// A smart-HTTP stand-in on 127.0.0.1: the bare repositories under its root, served by
-/// `git http-backend`; with a redirect, every receive-pack request (the push) is answered with a
-/// 302 to the same path under that base instead. It logs every request it is sent.
-struct GitStandIn {
-    port: u16,
-    log: Arc<Mutex<Vec<Request>>>,
-}
-
-impl GitStandIn {
-    fn serve(root: PathBuf, redirect: Option<String>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-        let port = listener.local_addr().expect("an address").port();
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let seen = Arc::clone(&log);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let _ = Self::answer(stream, &root, redirect.as_deref(), &seen);
-            }
-        });
-        Self { port, log }
-    }
-
-    fn answer(
-        stream: TcpStream,
-        root: &Path,
-        redirect: Option<&str>,
-        log: &Mutex<Vec<Request>>,
-    ) -> std::io::Result<()> {
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let Some(request) = read_head(&mut reader) else {
-            return Ok(());
-        };
-        let body = read_body(&mut reader, &request)?;
-        log.lock().expect("the log").push(request.clone());
-        let mut out = stream;
-        if let Some(base) = redirect
-            && request.target.contains("git-receive-pack")
-        {
-            return write!(
-                out,
-                "HTTP/1.1 302 Found\r\nLocation: {base}{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                request.target
-            );
-        }
-        let (path, query) = request
-            .target
-            .split_once('?')
-            .unwrap_or((request.target.as_str(), ""));
-        let mut command = Command::new("git");
-        command
-            .arg("http-backend")
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_PROJECT_ROOT", root)
-            .env("GIT_HTTP_EXPORT_ALL", "1")
-            .env("REQUEST_METHOD", &request.method)
-            .env("PATH_INFO", path)
-            .env("QUERY_STRING", query)
-            .env("CONTENT_LENGTH", body.len().to_string())
-            .env("REMOTE_ADDR", "127.0.0.1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        for (header, variable) in [
-            ("content-type", "CONTENT_TYPE"),
-            ("content-encoding", "HTTP_CONTENT_ENCODING"),
-            ("git-protocol", "HTTP_GIT_PROTOCOL"),
-        ] {
-            if let Some(value) = request.header(header) {
-                command.env(variable, value);
-            }
-        }
-        let mut child = command.spawn()?;
-        let mut stdin = child.stdin.take().expect("a stdin");
-        let writer = std::thread::spawn(move || {
-            let _ = stdin.write_all(&body);
-        });
-        let output = child.wait_with_output()?;
-        let _ = writer.join();
-        let cgi = output.stdout;
-        let (head, payload) = match cgi.windows(4).position(|window| window == b"\r\n\r\n") {
-            Some(at) => (&cgi[..at], &cgi[at + 4..]),
-            None => match cgi.windows(2).position(|window| window == b"\n\n") {
-                Some(at) => (&cgi[..at], &cgi[at + 2..]),
-                None => (&cgi[..0], &cgi[..]),
-            },
-        };
-        let head = String::from_utf8_lossy(head);
-        let mut status = "200 OK".to_owned();
-        let mut headers = String::new();
-        for line in head.lines() {
-            match line.split_once(':') {
-                Some((name, value)) if name.eq_ignore_ascii_case("status") => {
-                    status = value.trim().to_owned();
-                }
-                Some(_) => {
-                    headers.push_str(line.trim_end());
-                    headers.push_str("\r\n");
-                }
-                None => {}
-            }
-        }
-        write!(
-            out,
-            "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
-            payload.len()
-        )?;
-        out.write_all(payload)?;
-        out.flush()
-    }
-
-    fn requests(&self) -> Vec<Request> {
-        self.log.lock().expect("the log").clone()
-    }
-
-    fn url(&self, path: &str) -> String {
-        format!("http://127.0.0.1:{}/{path}", self.port)
     }
 }
 
@@ -557,6 +372,38 @@ fn an_http_push_url_on_another_host_is_refused_before_the_fetch() {
     world.unchanged(&head);
 }
 
+/// A line to a loopback relay goes to one URL without its userinfo, so an `origin` that names
+/// two URLs for the fetch, one of them the relay, is refused before git runs, naming the count;
+/// the relay is sent nothing.
+#[test]
+fn an_origin_with_two_urls_to_a_relay_is_refused_before_the_fetch() {
+    let world = world("two-urls");
+    let standin = GitStandIn::serve(world.root.clone(), None);
+    git(
+        &world.repo,
+        &["remote", "add", "origin", &standin.url("o/r.git")],
+    );
+    git(
+        &world.repo,
+        &[
+            "remote",
+            "set-url",
+            "--add",
+            "origin",
+            &standin.url("o/s.git"),
+        ],
+    );
+    let head = git_out(&world.repo, &["rev-parse", "HEAD"]);
+    let (code, out, err) = world.scenario_run(&[]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains("origin names 2 URLs for one line") && err.contains("nothing was sent"),
+        "stderr {err}"
+    );
+    assert!(standin.requests().is_empty(), "{:?}", standin.requests());
+    world.unchanged(&head);
+}
+
 /// And for the URL as git rewrites it: a loopback `origin` that the repository's configuration
 /// rewrites (`url.<base>.insteadOf`) to `http://` on another host is refused, naming the URL git
 /// would reach.
@@ -616,4 +463,343 @@ fn a_redirect_from_a_loopback_origin_does_not_carry_the_push() {
         standin.requests()
     );
     world.unchanged(&head);
+}
+
+/// The token the model stand-in was given, as the relay beside a run holds the model's key.
+const MODEL_RELAY_TOKEN: &str = concat!("model-relay-", "stand-in-", "value-7c41e2");
+/// The token the git stand-in was given, as the git relay holds the forge's.
+const GIT_RELAY_TOKEN: &str = concat!("git-relay-", "stand-in-", "value-90b3d8");
+
+/// The variables `takt`'s own environment holds a stand-in's token under in these runs, each a
+/// name a model client or git reads a credential from. None of the values may reach the harness.
+const CREDENTIAL_VARIABLES: [(&str, &str); 7] = [
+    ("ANTHROPIC_API_KEY", MODEL_RELAY_TOKEN),
+    ("ANTHROPIC_AUTH_TOKEN", MODEL_RELAY_TOKEN),
+    ("OPENAI_API_KEY", MODEL_RELAY_TOKEN),
+    ("CLAUDE_CODE_OAUTH_TOKEN", MODEL_RELAY_TOKEN),
+    ("GITHUB_TOKEN", GIT_RELAY_TOKEN),
+    ("GH_TOKEN", GIT_RELAY_TOKEN),
+    ("GIT_PASSWORD", GIT_RELAY_TOKEN),
+];
+
+/// Every flag by which the session executor can hand b10x-harness a credential.
+const CREDENTIAL_FLAGS: [&str; 6] = [
+    "--api-key-file",
+    "--api-key-env",
+    "--api-key-secret",
+    "--oauth-token-file",
+    "--oauth-token-env",
+    "--oauth-token-pointer",
+];
+
+/// A model endpoint stand-in on 127.0.0.1, as the relay beside a run is: it logs every request it
+/// is sent with its headers, and answers each with a 400 and an error body of the messages wire,
+/// so a session that reaches it ends there.
+struct ModelStandIn {
+    port: u16,
+    log: Arc<Mutex<Vec<Request>>>,
+}
+
+impl ModelStandIn {
+    fn serve() -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = listener.local_addr().expect("an address").port();
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&log);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let Ok(clone) = stream.try_clone() else {
+                    continue;
+                };
+                let mut reader = BufReader::new(clone);
+                let Some(request) = read_head(&mut reader) else {
+                    continue;
+                };
+                let _ = read_body(&mut reader, &request);
+                seen.lock().expect("the log").push(request);
+                let body = r#"{"type":"error","error":{"type":"invalid_request_error","message":"a stand-in"}}"#;
+                let mut out = stream;
+                let _ = write!(
+                    out,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+            }
+        });
+        Self { port, log }
+    }
+
+    fn base_url(&self) -> String {
+        format!("http://127.0.0.1:{}/v1", self.port)
+    }
+
+    fn requests(&self) -> Vec<Request> {
+        self.log.lock().expect("the log").clone()
+    }
+}
+
+/// The program the session executor starts as b10x-harness in a [`HarnessWorld`].
+enum Harness {
+    /// A double that answers `--version` and otherwise writes its environment and its arguments
+    /// to `started` and exits 1, so `started` holds the session's call, not the version probe.
+    Double,
+    /// The real b10x-harness at this path, linked in.
+    Real(PathBuf),
+}
+
+/// One scratch world for `takt run --harness harness`: a repository with one commit whose
+/// `origin` is the git stand-in, a HOME whose `.local/bin` (where the session executor finds it)
+/// holds b10x-harness, a runtime directory of mode 0700, and the model and git stand-ins.
+struct HarnessWorld {
+    scratch: Scratch,
+    model: ModelStandIn,
+    _git: GitStandIn,
+}
+
+impl HarnessWorld {
+    fn new(name: &str, harness: &Harness) -> Self {
+        let outer = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("loopback-model-{}-{name}", std::process::id()));
+        if outer.exists() {
+            fs::remove_dir_all(&outer).expect("a stale scratch tree is removed");
+        }
+        let repo = outer.join("repo");
+        let program = outer.join("home/.local/bin/b10x-harness");
+        let runtime = outer.join("runtime");
+        let served = outer.join("served/o/r.git");
+        for dir in [
+            &repo,
+            program.parent().expect("a parent"),
+            &runtime,
+            &served,
+        ] {
+            fs::create_dir_all(dir).expect("a directory");
+        }
+        fs::set_permissions(&runtime, fs::Permissions::from_mode(0o700))
+            .expect("a private runtime directory");
+        git(&served, &["init", "-q", "--bare", "-b", "main"]);
+        let git_standin = GitStandIn::serve(outer.join("served"), None);
+        fs::write(repo.join("README.md"), "a story\n").expect("a file");
+        git(&repo, &["init", "-q", "-b", "main"]);
+        git(&repo, &["add", "-A"]);
+        git(&repo, &["commit", "-q", "-m", "start"]);
+        git(
+            &repo,
+            &["remote", "add", "origin", &git_standin.url("o/r.git")],
+        );
+        match harness {
+            Harness::Double => {
+                fs::write(
+                    &program,
+                    format!(
+                        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo b10x-harness 0.22.0; exit 0; fi\nexec > '{}' 2>&1\nenv\necho '-- args'\nfor arg in \"$@\"; do echo \"$arg\"; done\necho '-- end'\nexit 1\n",
+                        outer.join("started").display()
+                    ),
+                )
+                .expect("a double");
+                fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("exec bit");
+            }
+            Harness::Real(path) => {
+                std::os::unix::fs::symlink(path, &program).expect("the real b10x-harness linked");
+            }
+        }
+        Self {
+            scratch: Scratch(outer),
+            model: ModelStandIn::serve(),
+            _git: git_standin,
+        }
+    }
+
+    fn outer(&self) -> &Path {
+        &self.scratch.0
+    }
+
+    /// `takt run --harness harness --model-endpoint <the model stand-in> --iterations 2` (step 1
+    /// is `tests.run`, step 2 the judgement step whose session starts b10x-harness), with no
+    /// credential flag, `--test-cmd true` (the scratch repository lies under this workspace's
+    /// build directory, where the default `cargo test` would find this workspace), `--forge none`
+    /// and a run file declaring `scan: none` (a harness run opens
+    /// only under a declared scan adapter); HOME, the state and the runtime directory the scratch
+    /// ones, no session bus, every proxy variable cleared, and each of [`CREDENTIAL_VARIABLES`]
+    /// set to its stand-in's token.
+    fn run(&self) -> Output {
+        let scan = self.outer().join("scan-none.yaml");
+        fs::write(&scan, "scan: none\n").expect("a run configuration file");
+        let mut command = Command::new(env!("CARGO_BIN_EXE_takt"));
+        command
+            .args([
+                "run",
+                "--repo",
+                self.outer().join("repo").to_str().expect("utf-8"),
+                "--intent",
+                "probe",
+                "--forge",
+                "none",
+                "--harness",
+                "harness",
+                "--model-endpoint",
+                &self.model.base_url(),
+                "--iterations",
+                "2",
+                "--test-cmd",
+                "true",
+                "--config",
+                scan.to_str().expect("utf-8"),
+            ])
+            .env("HOME", self.outer().join("home"))
+            .env("XDG_STATE_HOME", self.outer().join("xdg-state"))
+            .env("XDG_RUNTIME_DIR", self.outer().join("runtime"))
+            .env_remove("DBUS_SESSION_BUS_ADDRESS");
+        for variable in PROXY_VARIABLES {
+            command.env_remove(variable);
+        }
+        command
+            .envs(CREDENTIAL_VARIABLES)
+            .output()
+            .expect("takt runs")
+    }
+
+    /// What the double wrote: its environment, and its arguments one per line. Panics, naming
+    /// the run's output, when the double was never started.
+    fn started(&self, output: &Output) -> (String, Vec<String>) {
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        let text = fs::read_to_string(self.outer().join("started")).unwrap_or_else(|error| {
+            panic!("b10x-harness was never started ({error}):\nstdout {stdout}\nstderr {stderr}")
+        });
+        let (environment, rest) = text
+            .split_once("-- args\n")
+            .expect("the double listed its arguments");
+        let args = rest
+            .split_once("-- end")
+            .map_or(rest, |(args, _)| args)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        (environment.to_owned(), args)
+    }
+
+    /// The `opened` line of the run's one case.
+    fn opened(&self) -> serde_json::Value {
+        let cases = self.outer().join("repo/.takt/cases");
+        let mut events = Vec::new();
+        let mut dirs = vec![cases];
+        while let Some(dir) = dirs.pop() {
+            for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs.push(path);
+                } else if path.file_name().is_some_and(|name| name == "events.jsonl") {
+                    events.push(path);
+                }
+            }
+        }
+        assert_eq!(events.len(), 1, "one case record: {events:?}");
+        fs::read_to_string(&events[0])
+            .expect("the run record")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("a JSON line"))
+            .find(|line| line["event"] == "opened")
+            .expect("an opened line")
+    }
+}
+
+/// Acceptance 2, as far as takt and the session executor go: `--harness harness --model-endpoint
+/// http://127.0.0.1:<p>/v1` with no credential flag starts its session, b10x-harness pointed at
+/// the stand-in and handed no credential flag; the case records the credential as `none`.
+#[test]
+fn a_keyless_loopback_endpoint_starts_its_session_with_no_credential() {
+    let world = HarnessWorld::new("keyless-starts", &Harness::Double);
+    let output = world.run();
+    let (_, args) = world.started(&output);
+    let base_url = world.model.base_url();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--base-url" && pair[1] == base_url),
+        "b10x-harness is pointed at the stand-in: {args:?}"
+    );
+    for flag in CREDENTIAL_FLAGS {
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == flag || arg.starts_with(&format!("{flag}="))),
+            "b10x-harness was handed {flag}: {args:?}"
+        );
+    }
+    assert_eq!(
+        world.opened()["endpoint"]["credential"],
+        serde_json::json!({"kind": "none"})
+    );
+}
+
+/// Acceptance 4: no variable of the harness's environment holds a value the stand-ins were given
+/// as a token, though takt's own environment holds each of them under a credential's name; and
+/// no argument holds one either.
+#[test]
+fn no_variable_of_the_harness_environment_holds_a_stand_in_token() {
+    let world = HarnessWorld::new("keyless-environment", &Harness::Double);
+    let output = world.run();
+    let (environment, args) = world.started(&output);
+    assert!(
+        environment.lines().any(|line| line.starts_with("PATH=")),
+        "the double wrote its environment:\n{environment}"
+    );
+    for token in [MODEL_RELAY_TOKEN, GIT_RELAY_TOKEN] {
+        let holding: Vec<&str> = environment
+            .lines()
+            .filter(|line| line.contains(token))
+            .collect();
+        assert!(
+            holding.is_empty(),
+            "the harness's environment holds a stand-in's token: {holding:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg.contains(token)),
+            "an argument holds a stand-in's token: {args:?}"
+        );
+    }
+}
+
+/// The real b10x-harness on the program path (or at `TAKT_TEST_B10X_HARNESS`); none is a failure,
+/// not a pass.
+fn real_harness() -> PathBuf {
+    if let Some(path) = std::env::var_os("TAKT_TEST_B10X_HARNESS") {
+        return PathBuf::from(path);
+    }
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|dir| dir.join("b10x-harness"))
+        .find(|path| path.is_file())
+        .expect("a real b10x-harness on the program path or at TAKT_TEST_B10X_HARNESS")
+}
+
+/// Acceptance 2 on the wire: the real b10x-harness, started by the session as above, reaches the
+/// model stand-in, and no request it sends carries an `Authorization` or an `x-api-key` header, or
+/// any header holding a stand-in's token. It needs the real program, which CI does not install.
+#[test]
+#[ignore = "needs a real b10x-harness on the program path or at TAKT_TEST_B10X_HARNESS"]
+fn the_real_harness_sends_the_stand_in_no_credential_header() {
+    let world = HarnessWorld::new("keyless-wire", &Harness::Real(real_harness()));
+    let output = world.run();
+    let requests = world.model.requests();
+    assert!(
+        !requests.is_empty(),
+        "the session reached the stand-in:\nstdout {}\nstderr {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for request in &requests {
+        assert_eq!(request.header("authorization"), None, "{request:?}");
+        assert_eq!(request.header("x-api-key"), None, "{request:?}");
+        for token in [MODEL_RELAY_TOKEN, GIT_RELAY_TOKEN] {
+            assert!(
+                !request
+                    .headers
+                    .iter()
+                    .any(|(_, value)| value.contains(token)),
+                "{request:?}"
+            );
+        }
+    }
 }

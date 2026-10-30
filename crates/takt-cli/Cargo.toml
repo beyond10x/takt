@@ -23,3 +23,5 @@ serde_yaml_ng = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 libc = "0.2.191"
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }

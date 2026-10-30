@@ -1,14 +1,14 @@
 ---
 title: Install
 sidebar_position: 1
-description: Install takt 0.24.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build; the tools each kind of run needs beside it; and how the test command is confined.
+description: Install takt 0.25.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build; the tools each kind of run needs beside it; and how the test command is confined.
 lede: takt is one binary. What else you install depends on the harness, the forge and whether you deliver stories.
 source: the release asset and checksum commands (run against 0.14.0's assets); install and command -v run on a build of 0.21.0's source; cargo install --git and docker build of the Dockerfile (run at 0.14.0); takt run --help of 0.21.0; the Dockerfile; metaharness 0.23.0 (PINNED_VERSIONS of metaharness-claude); runs of a build of 0.21.0's source with Claude Code 2.1.312 and 2.1.309, 2026-10-29
 ---
 
 # Install
 
-Three ways to get takt 0.24.0. They give the same `takt` binary.
+Three ways to get takt 0.25.0. They give the same `takt` binary.
 
 | way | needs | gets you |
 |---|---|---|
@@ -19,7 +19,7 @@ Three ways to get takt 0.24.0. They give the same `takt` binary.
 ## From a release asset
 
 ```sh
-version=0.24.0 target=x86_64-unknown-linux-gnu
+version=0.25.0 target=x86_64-unknown-linux-gnu
 release=https://github.com/beyond10x/takt/releases/download/$version
 curl -fsSLO "$release/takt-$version-$target.tar.gz"
 curl -fsSLO "$release/SHA256SUMS"
@@ -38,7 +38,7 @@ from:
 
 ```console
 $ takt --version
-takt 0.24.0 (<the commit the 0.24.0 tag names>)
+takt 0.25.0 (<the commit the 0.25.0 tag names>)
 ```
 
 On macOS, where `sha256sum` may be missing, check the archive with:
@@ -56,7 +56,7 @@ The archive holds `takt`, `README.md`, `CHANGELOG.md` and `LICENSE` in the direc
 From the tag, without a checkout:
 
 ```sh
-cargo install --locked --git https://github.com/beyond10x/takt --tag 0.24.0 b10x-takt-cli
+cargo install --locked --git https://github.com/beyond10x/takt --tag 0.25.0 b10x-takt-cli
 ```
 
 The package is `b10x-takt-cli`; the binary it installs is `takt`, in `~/.cargo/bin`. From a
@@ -71,9 +71,9 @@ cargo install --locked --path crates/takt-cli
 No takt image is published. Build one from a checkout of the tag:
 
 ```sh
-git clone --branch 0.24.0 https://github.com/beyond10x/takt
+git clone --branch 0.25.0 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.24.0 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.25.0 .
 ```
 
 The image holds takt, `aep`, `b10x-harness`, `ess` and a Rust toolchain, and runs

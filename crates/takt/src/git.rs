@@ -722,11 +722,23 @@ fn run_as_remote_git(tree: &Path, args: &[&str]) -> Result<String> {
 /// the environment hands git ([`environment_config`]), as a fetch or a push of this tree reads
 /// it: for `config --list -z` before a line whose URL a rewrite could change.
 pub fn bytes_as_remote_git(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    bytes_as_remote_git_with(tree, args, &[])
+}
+
+/// [`bytes_as_remote_git`] with `extra` set in git's environment besides: for a read of the
+/// configuration as a line to a loopback relay reads it, in its own empty home and without the
+/// global and the system configuration ([`crate::forge::relay::Line::env`]).
+pub fn bytes_as_remote_git_with(
+    tree: &Path,
+    args: &[&str],
+    extra: &[(&str, &str)],
+) -> Result<Vec<u8>> {
     let config = environment_config()?;
-    let env: Vec<(&str, &str)> = config
+    let mut env: Vec<(&str, &str)> = config
         .iter()
         .map(|(name, value)| (*name, value.as_str()))
         .collect();
+    env.extend_from_slice(extra);
     raw_with(tree, args, None, &env)
 }
 

@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.24.0, 2026-10-30 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.25.0, 2026-10-30 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
@@ -79,6 +79,7 @@ Each release in one line, from the changelog:
 | 0.22.1 | `libz-sys` 1.1.31 in the lock, for RUSTSEC-2026-0418 |
 | 0.23.0 | a run that names no token budget stops at 3,000,000 tokens, and a step killed or ending in an error counts the tokens its session reported; the github.com forge, since removed, is checked before the case opens and reads pull requests and checks with no `gh`; `pr.open` takes the open pull request for its head and base before and after a post, so a resumed run posts once; under a delegation of `repository.merge` to `agent:takt-delivery` in the target's `.engineering/delegations.yaml`, a run whose merge waits on approval grants it as that role once `tests.pass`, `gate.green` and `ci.green` hold, and the merge reads the delegation again |
 | 0.24.0 | the `bot` value of `--forge`, its route and the `gates` scan adapter are removed, and a forge that publishes needs `scan: none`; `forge: connectors` drives a GitHub pull request through a served Connectors instance at `forge_endpoint` with no credential, on the `connectors invoke` form of connectors 0.60.0; `takt scenario run` creates `trial/<n>` on `origin` with the operator's own git; git, and a model endpoint with no credential, take plain `http://` on a loopback host, following no redirect and through no proxy; `takt report --cases <dir>...` prints units accepted, tokens and human interventions per repository and UTC day, with a total, a figure no record states printed `unknown`; a store story opens on takt's own `story.delivery/3` when nothing names a protocol, and a case open on `story.delivery/2` resumes on it; Loom 0.51.0 and engineering-protocols 0.15.2 |
+| 0.25.0 | `forge: connectors` on a host with standing grants keys each open and merge with an `idempotency_key`, replays a lost answer and reads the pull request back after `outcome_unknown`, sending a merge read open at the same head once per run under a fresh key; a pull request behind its base gets the judged base tip merged in as takt's recorded merge commit, pushed and checked before the merge; `origin` may be a Connectors git relay on loopback, its refusals named with the ref and reason; git lines to a loopback relay run without global configuration or credentials; a push under git 2.56 moves no tracking ref; Loom 0.52.0 starts a keyless `--harness harness` session on a loopback endpoint |
 
 ## Every story
 

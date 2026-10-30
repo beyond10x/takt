@@ -5,11 +5,16 @@
 //! served wire is a small HTTP server on 127.0.0.1 inside this test that records each request's
 //! method, path and headers and answers as an instance of the github connector would; the push
 //! goes through a double of the forge's runner. Nothing here reaches a network beyond 127.0.0.1.
+//!
+//! story:connectors-forge-at-a-served-instance: the stand-in is a host without standing grants
+//! by default, which refuses `idempotency_key` as an unknown member (`unsupported`, HTTP 400,
+//! `request_id: null`), and one with them when its world says so ([`Standing`]), which takes
+//! keyed writes, replays a key and refuses as connectors 0.62.0 documents.
 
 #[path = "support/own_home.rs"]
 mod own_home;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::fs;
 use std::io::{BufRead as _, BufReader, Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
@@ -121,7 +126,35 @@ struct Seen {
     path: String,
     headers: Vec<(String, String)>,
     body: Value,
+    /// Whether the stand-in refused the request for a member it does not take, before reading
+    /// anything else of it: no operation was run.
+    refused_member: bool,
 }
+
+/// The writes of the github map, the operations a host with standing grants keys.
+const WRITES: [&str; 2] = ["pull_request.create", "pull_request.merge"];
+
+/// The stand-in as a host whose service configuration sets `standing_grants`, with a grant
+/// covering every write unless [`Standing::refuse`] says otherwise.
+#[derive(Debug, Default)]
+struct Standing {
+    /// Each key used and what it was used for (the operation, the revision and the input), with
+    /// the answer stored for its replay.
+    keys: BTreeMap<String, (Value, (u16, Value))>,
+    /// The answers, an HTTP status and a code, the next writes with a new key meet before
+    /// anything is recorded, one each, in order.
+    refuse: VecDeque<(u16, &'static str)>,
+    /// How many of the next writes recorded are answered `outcome_unknown`, applied all the same.
+    unknown: usize,
+    /// How many of the next writes recorded get no answer at all: applied, recorded, and the
+    /// connection closed.
+    dropped: usize,
+    /// Each write that reached the provider, in order: what the fixture of GitHub saw.
+    applied: Vec<String>,
+}
+
+/// The HTTP status [`invoke`] answers to close the connection with no answer.
+const NO_ANSWER: u16 = 0;
 
 /// The pull request the stand-in holds once one is opened.
 #[derive(Clone, Debug)]
@@ -149,6 +182,8 @@ struct World {
     /// `moved_to`, when it names one.
     conflicts: usize,
     moved_to: Option<String>,
+    /// `None` for a host without standing grants.
+    standing: Option<Standing>,
 }
 
 impl World {
@@ -165,7 +200,14 @@ impl World {
             combined: ("pending", 0),
             conflicts: 0,
             moved_to: None,
+            standing: None,
         }
+    }
+
+    /// The world served by a host with standing grants.
+    fn with_standing_grants(mut self) -> Self {
+        self.standing = Some(Standing::default());
+        self
     }
 
     /// The world with pull request [`NUMBER`] open from `BRANCH` into `main`.
@@ -221,8 +263,97 @@ fn failure(request_id: &Value, status: u16, code: &str, message: &str) -> (u16, 
     )
 }
 
-/// The stand-in's answer to one invocation, `envelope` the request body.
+/// The stand-in's answer to one invocation, `envelope` the request body: on a host without
+/// standing grants `idempotency_key` is refused as an unknown member and every write runs
+/// unkeyed; on a host with them a write needs a key of 1 to 256 bytes, a key on a read is
+/// `unsupported`, a key held for another request is `idempotency_conflict`, the same key and
+/// request again replays the stored answer with `mutation.replayed: true`, and a new key meets
+/// [`Standing::refuse`] before it is recorded.
 fn invoke(envelope: &Value, world: &mut World) -> (u16, Value) {
+    let id = &envelope["request_id"];
+    let key = envelope.get("idempotency_key");
+    if world.standing.is_none() {
+        if key.is_some() {
+            return failure(
+                &Value::Null,
+                400,
+                "unsupported",
+                "idempotency_key is not supported",
+            );
+        }
+        return dispatch(envelope, world);
+    }
+    let operation = envelope["operation"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
+    let key = match (WRITES.contains(&operation.as_str()), key) {
+        (false, None) => return dispatch(envelope, world),
+        (false, Some(_)) => {
+            return failure(id, 400, "unsupported", "idempotency_key on a read");
+        }
+        (true, None) => return failure(id, 400, "invalid_input", "a write needs idempotency_key"),
+        (true, Some(key)) => match key.as_str().filter(|key| (1..=256).contains(&key.len())) {
+            Some(key) => key.to_owned(),
+            None => return failure(id, 400, "invalid_input", "idempotency_key is malformed"),
+        },
+    };
+    let request = json!([operation, envelope["revision"], envelope["input"]]);
+    let standing = world
+        .standing
+        .as_mut()
+        .expect("a host with standing grants");
+    if let Some((held, (status, answer))) = standing.keys.get(&key) {
+        if *held != request {
+            return failure(
+                id,
+                409,
+                "idempotency_conflict",
+                "the key was used for another request",
+            );
+        }
+        let mut answer = answer.clone();
+        answer["request_id"] = id.clone();
+        answer["mutation"]["replayed"] = json!(true);
+        return (*status, answer);
+    }
+    if let Some((status, code)) = standing.refuse.pop_front() {
+        return failure(id, status, code, "refused before the attempt is recorded");
+    }
+    let (status, answer) = dispatch(envelope, world);
+    let standing = world
+        .standing
+        .as_mut()
+        .expect("a host with standing grants");
+    standing.applied.push(operation);
+    let (status, mut answer, classification) = if standing.unknown > 0 {
+        standing.unknown -= 1;
+        let (status, answer) =
+            failure(id, 502, "outcome_unknown", "the provider's answer was lost");
+        (status, answer, "unknown")
+    } else if answer["status"] == "success" {
+        (status, answer, "applied")
+    } else {
+        (status, answer, "refused")
+    };
+    answer["mutation"] = json!({
+        "classification": classification,
+        "attempt": {"instance": INSTANCE, "id": format!("attempt-{}", standing.applied.len())},
+        "original_request_id": id,
+        "replayed": false,
+    });
+    standing
+        .keys
+        .insert(key, (request, (status, answer.clone())));
+    if standing.dropped > 0 {
+        standing.dropped -= 1;
+        return (NO_ANSWER, Value::Null);
+    }
+    (status, answer)
+}
+
+/// The operation `envelope` names run on `world`, as the provider answers it.
+fn dispatch(envelope: &Value, world: &mut World) -> (u16, Value) {
     let id = &envelope["request_id"];
     if envelope["version"] != "v1alpha2" || !id.is_string() {
         return failure(
@@ -410,13 +541,19 @@ fn serve(stream: TcpStream, seen: &Mutex<Vec<Seen>>, world: &Mutex<World>) {
         return;
     }
     let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    seen.lock().expect("the log").push(Seen {
-        method: method.clone(),
-        path: path.clone(),
-        headers,
-        body: body.clone(),
-    });
     let (status, answer) = answer(&method, &path, &body, &mut world.lock().expect("the world"));
+    seen.lock().expect("the log").push(Seen {
+        method,
+        path,
+        headers,
+        body,
+        refused_member: status == 400
+            && answer["request_id"].is_null()
+            && answer["error"]["code"] == "unsupported",
+    });
+    if status == NO_ANSWER {
+        return;
+    }
     let text = answer.to_string();
     let mut stream = stream;
     let _ = write!(
@@ -452,22 +589,82 @@ impl StandIn {
         self.seen.lock().expect("the log").clone()
     }
 
-    /// The operations invoked, in order.
-    fn invoked(&self) -> Vec<String> {
+    /// The invocations the stand-in read past their members, in order: every one but those it
+    /// refused for a member it does not take ([`Seen::refused_member`]).
+    fn read_invocations(&self) -> Vec<Seen> {
         self.seen()
+            .into_iter()
+            .filter(|seen| seen.path == INVOKE && !seen.refused_member)
+            .collect()
+    }
+
+    /// The operations invoked, in order, those refused for a member left out.
+    fn invoked(&self) -> Vec<String> {
+        self.read_invocations()
             .iter()
-            .filter(|seen| seen.path == INVOKE)
             .filter_map(|seen| seen.body["operation"].as_str().map(str::to_owned))
             .collect()
     }
 
-    /// The input of every invocation of `operation`, in order.
+    /// The input of every invocation of `operation`, in order, those refused for a member left
+    /// out.
     fn inputs_of(&self, operation: &str) -> Vec<Value> {
-        self.seen()
+        self.read_invocations()
             .iter()
-            .filter(|seen| seen.path == INVOKE && seen.body["operation"] == operation)
+            .filter(|seen| seen.body["operation"] == operation)
             .map(|seen| seen.body["input"].clone())
             .collect()
+    }
+
+    /// The `idempotency_key` of every invocation of `operation` the stand-in read, `None` for
+    /// one sent with none.
+    fn keys_of(&self, operation: &str) -> Vec<Option<String>> {
+        self.read_invocations()
+            .iter()
+            .filter(|seen| seen.body["operation"] == operation)
+            .map(|seen| seen.body["idempotency_key"].as_str().map(str::to_owned))
+            .collect()
+    }
+
+    /// The operation of every invocation refused for a member the stand-in does not take, and
+    /// whether it carried `idempotency_key`.
+    fn refused_members(&self) -> Vec<(String, bool)> {
+        self.seen()
+            .iter()
+            .filter(|seen| seen.path == INVOKE && seen.refused_member)
+            .map(|seen| {
+                (
+                    seen.body["operation"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
+                    seen.body.get("idempotency_key").is_some(),
+                )
+            })
+            .collect()
+    }
+
+    /// Each write a host with standing grants let reach the provider, in order.
+    fn applied(&self) -> Vec<String> {
+        self.world
+            .lock()
+            .expect("the world")
+            .standing
+            .as_ref()
+            .map(|standing| standing.applied.clone())
+            .unwrap_or_default()
+    }
+
+    /// Changes the host's standing-grant state with `change`.
+    fn standing(&self, change: impl FnOnce(&mut Standing)) {
+        change(
+            self.world
+                .lock()
+                .expect("the world")
+                .standing
+                .as_mut()
+                .expect("a host with standing grants"),
+        );
     }
 
     /// Every request is `GET /v1/describe` or `POST /v1alpha2/invoke`, and none carries a
@@ -735,11 +932,20 @@ fn records_of(dir: &Path, kind: &str) -> Vec<Value> {
 #[test]
 fn a_run_opens_reads_and_merges_a_pull_request_through_the_served_wire() {
     let scratch = Scratch::new("run");
-    let (tree, main, _) = repository(&scratch);
-    let stand_in = StandIn::start(World::new(&[("main", &main)]));
+    let (stand_in, pushes, out) = delivered(&scratch, |main| World::new(&[("main", main)]));
+    served_wire_of_a_delivered_run(&stand_in, &pushes, &out);
+}
+
+/// A run of `story.delivery/1` on `forge: connectors` at a stand-in of `world` (given `main`'s
+/// commit), the change a docs edit with its tests, gate, handover and change records in place:
+/// it completes accepted, merged once, the pull request opened and the merge granted under the
+/// owner's delegation. The stand-in, the runner's double and what the run wrote.
+fn delivered(scratch: &Scratch, world: impl FnOnce(&str) -> World) -> (StandIn, Pushes, String) {
+    let (tree, main, _) = repository(scratch);
+    let stand_in = StandIn::start(world(&main));
     let pushes = Pushes::new(stand_in.world.clone());
     let forge: Rc<dyn Forge> =
-        Rc::new(select(&scratch, &tree, &stand_in, &pushes).expect("the forge is selected"));
+        Rc::new(select(scratch, &tree, &stand_in, &pushes).expect("the forge is selected"));
     assert_eq!(forge.name(), "connectors");
     let validators: Vec<Box<dyn Validator>> = vec![
         Box::new(PrOpen::new(forge.clone())),
@@ -826,7 +1032,14 @@ fn a_run_opens_reads_and_merges_a_pull_request_through_the_served_wire() {
         Some("agent:takt-delivery"),
         "{out}"
     );
+    (stand_in, pushes, out)
+}
 
+/// What the stand-in of a [`delivered`] run saw: only `GET /v1/describe` and
+/// `POST /v1alpha2/invoke`, no credential, the instance described once, every operation of the
+/// map invoked at the described revision, the merge at the pushed head, and the runner running
+/// only the push and the read of the target's tip.
+fn served_wire_of_a_delivered_run(stand_in: &StandIn, pushes: &Pushes, out: &str) {
     stand_in.assert_served_wire_only();
     let seen = stand_in.seen();
     assert_eq!(
@@ -1237,6 +1450,8 @@ fn a_loopback_relay_origin_keeps_its_port() {
                 "http.followRedirects=false",
                 "-c",
                 "http.proxy=",
+                "-c",
+                "http.extraHeader=",
                 "push",
                 relay,
                 &refspec,
@@ -1251,6 +1466,8 @@ fn a_loopback_relay_origin_keeps_its_port() {
                 "http.followRedirects=false",
                 "-c",
                 "http.proxy=",
+                "-c",
+                "http.extraHeader=",
                 "ls-remote",
                 "--refs",
                 relay,
@@ -1264,6 +1481,8 @@ fn a_loopback_relay_origin_keeps_its_port() {
                 "http.followRedirects=false",
                 "-c",
                 "http.proxy=",
+                "-c",
+                "http.extraHeader=",
                 "fetch",
                 relay,
                 OTHER,
@@ -1555,5 +1774,322 @@ fn without_an_endpoint_the_github_map_runs_connectors_invoke() {
     assert_eq!(
         serde_json::from_str::<Value>(read.last().expect("an input")).expect("JSON"),
         json!({"owner": "owner", "repo": "repo", "pull_number": NUMBER})
+    );
+}
+
+// story:connectors-forge-at-a-served-instance: keyed writes under a standing grant.
+
+/// The request for the case branch into `main` the forge-level cases open.
+fn the_request() -> PullRequest {
+    PullRequest {
+        branch: BRANCH.to_owned(),
+        base: "main".to_owned(),
+        title: "A title".to_owned(),
+        body: "the body".to_owned(),
+    }
+}
+
+/// The artifacts directory of the case `id` under `scratch`, as the validators hand it to the
+/// forge: `<case directory>/artifacts`.
+fn artifacts_of(scratch: &Scratch, id: &str) -> PathBuf {
+    scratch.join("cases").join(id).join("artifacts")
+}
+
+/// A world served by a host with standing grants.
+fn keyed(main: &str, head: &str) -> World {
+    branches(main, head).with_standing_grants()
+}
+
+/// Whether `key` has the form the forge sends: `takt-` and 64 lowercase hexadecimal digits,
+/// within the 1 to 256 bytes connectors admits.
+fn is_takt_key(key: &str) -> bool {
+    key.len() <= 256
+        && key.strip_prefix("takt-").is_some_and(|digest| {
+            digest.len() == 64
+                && digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
+/// Acceptance 2: on a host with standing grants the create and the merge each carry an
+/// `idempotency_key`, the reads none; the two keys differ. The same case and write give the same
+/// key from another forge, as another process would make it, and another case another key.
+#[test]
+fn each_write_on_a_host_with_standing_grants_carries_a_key_of_its_case_and_write() {
+    let scratch = Scratch::new("keyed");
+    let (tree, main, head) = repository(&scratch);
+    let over = |world: World| {
+        let stand_in = StandIn::start(world);
+        let pushes = Pushes::new(stand_in.world.clone());
+        let forge = select(&scratch, &tree, &stand_in, &pushes).expect("the forge is selected");
+        (forge, stand_in)
+    };
+    let case = artifacts_of(&scratch, "case-a");
+    let (forge, stand_in) = over(keyed(&main, &head));
+    let number = forge
+        .open_pull_request(&tree, &case, &the_request())
+        .expect("opens");
+    forge.pull_request(&tree, number).expect("reads");
+    forge.merge(&tree, &case, number, &head).expect("merges");
+
+    let created = stand_in.keys_of("pull_request.create");
+    let merged = stand_in.keys_of("pull_request.merge");
+    assert_eq!(
+        (created.len(), merged.len()),
+        (1, 1),
+        "{created:?} {merged:?}"
+    );
+    let create = created[0].clone().expect("the create carries a key");
+    let merge = merged[0].clone().expect("the merge carries a key");
+    assert!(is_takt_key(&create), "{create}");
+    assert!(is_takt_key(&merge), "{merge}");
+    assert_ne!(create, merge, "another write, another key");
+    assert_eq!(
+        stand_in.keys_of("pull_request.get"),
+        [None],
+        "a read carries no key"
+    );
+    assert_eq!(stand_in.applied(), WRITES);
+    assert!(stand_in.refused_members().is_empty());
+    stand_in.assert_served_wire_only();
+
+    let (forge, again) = over(keyed(&main, &head));
+    forge
+        .open_pull_request(&tree, &case, &the_request())
+        .expect("opens");
+    assert_eq!(
+        again.keys_of("pull_request.create"),
+        [Some(create.clone())],
+        "the same case and write, the same key"
+    );
+
+    let (forge, other) = over(keyed(&main, &head));
+    forge
+        .open_pull_request(&tree, &artifacts_of(&scratch, "case-b"), &the_request())
+        .expect("opens");
+    let other = other.keys_of("pull_request.create")[0]
+        .clone()
+        .expect("the create carries a key");
+    assert!(is_takt_key(&other), "{other}");
+    assert_ne!(other, create, "another case, another key");
+}
+
+/// Acceptance 5, at the forge: a host without standing grants refuses the key as a member it
+/// does not take, before anything runs; the create is sent again with no key and the merge is
+/// sent with none, as before keyed writes.
+#[test]
+fn a_host_without_standing_grants_opens_and_merges_unkeyed() {
+    let scratch = Scratch::new("unkeyed");
+    let (forge, stand_in, _, tree, head) = forge_over(&scratch, branches);
+    let case = artifacts_of(&scratch, "case");
+    let number = forge
+        .open_pull_request(&tree, &case, &the_request())
+        .expect("opens");
+    forge.merge(&tree, &case, number, &head).expect("merges");
+    assert_eq!(
+        stand_in.refused_members(),
+        [("pull_request.create".to_owned(), true)],
+        "the key is offered once and refused before anything ran"
+    );
+    assert_eq!(stand_in.keys_of("pull_request.create"), [None]);
+    assert_eq!(stand_in.keys_of("pull_request.merge"), [None]);
+    let pull = stand_in.world.lock().expect("the world").pull.clone();
+    assert!(pull.is_some_and(|pull| pull.merged), "merged");
+}
+
+/// Acceptance 5, through a run: on a host without standing grants the run opens and merges with
+/// unkeyed writes, the key refused once before anything ran.
+#[test]
+fn a_run_on_a_host_without_standing_grants_writes_unkeyed() {
+    let scratch = Scratch::new("run-unkeyed");
+    let (stand_in, _, out) = delivered(&scratch, |main| World::new(&[("main", main)]));
+    for write in WRITES {
+        let keys = stand_in.keys_of(write);
+        assert!(
+            !keys.is_empty() && keys.iter().all(Option::is_none),
+            "{write}: {keys:?}\n{out}"
+        );
+    }
+    assert_eq!(
+        stand_in.refused_members(),
+        [("pull_request.create".to_owned(), true)],
+        "{out}"
+    );
+}
+
+/// Acceptances 1 and 2 against the stand-in: a run on a host with standing grants opens, reads
+/// and merges with keyed writes; one create and one merge reach the provider.
+#[test]
+fn a_run_on_a_host_with_standing_grants_opens_and_merges_with_keyed_writes() {
+    let scratch = Scratch::new("run-keyed");
+    let (stand_in, pushes, out) = delivered(&scratch, |main| {
+        World::new(&[("main", main)]).with_standing_grants()
+    });
+    served_wire_of_a_delivered_run(&stand_in, &pushes, &out);
+    assert_eq!(stand_in.applied(), WRITES, "{out}");
+    assert!(stand_in.refused_members().is_empty(), "{out}");
+    for write in WRITES {
+        let keys = stand_in.keys_of(write);
+        assert!(
+            keys.iter().flatten().all(|key| is_takt_key(key)) && keys.iter().all(Option::is_some),
+            "{write}: {keys:?}\n{out}"
+        );
+    }
+}
+
+/// Acceptance 4: `approval_required` and `idempotency_conflict` end the create and the merge
+/// naming the instance's code; nothing reaches the provider, and the merge is not called a
+/// conflict of what was read.
+#[test]
+fn a_refused_keyed_write_ends_naming_the_instances_code() {
+    for (status, code) in [(403, "approval_required"), (409, "idempotency_conflict")] {
+        let scratch = Scratch::new(code);
+        let (forge, stand_in, _, tree, head) = forge_over(&scratch, keyed);
+        let case = artifacts_of(&scratch, "case");
+        stand_in.standing(|standing| standing.refuse.push_back((status, code)));
+        let error = forge
+            .open_pull_request(&tree, &case, &the_request())
+            .expect_err("the create is refused");
+        let said = format!("{error:#}");
+        assert!(said.contains(code), "{said}");
+        assert!(stand_in.applied().is_empty(), "{code}");
+
+        let number = forge
+            .open_pull_request(&tree, &case, &the_request())
+            .expect("opens once nothing refuses");
+        stand_in.standing(|standing| standing.refuse.push_back((status, code)));
+        let error = forge
+            .merge(&tree, &case, number, &head)
+            .expect_err("the merge is refused");
+        let said = format!("{error:#}");
+        assert!(said.contains(code), "{said}");
+        assert!(said.contains("nothing was merged"), "{said}");
+        assert!(!said.contains("what was read no longer holds"), "{said}");
+        assert_eq!(stand_in.applied(), ["pull_request.create"], "{code}");
+    }
+}
+
+/// Acceptance 4: a merge answered `outcome_unknown` ends naming the code and never says nothing
+/// was merged; the pull request is read before any further write, and a merge it already holds
+/// is not sent again.
+#[test]
+fn after_outcome_unknown_the_pull_request_is_read_before_any_further_write() {
+    let scratch = Scratch::new("unknown");
+    let (forge, stand_in, _, tree, head) =
+        forge_over(&scratch, |main, head| keyed(main, head).with_open_pull());
+    let case = artifacts_of(&scratch, "case");
+    stand_in.standing(|standing| standing.unknown = 1);
+    let error = forge
+        .merge(&tree, &case, NUMBER, &head)
+        .expect_err("the outcome is unknown");
+    let said = format!("{error:#}");
+    assert!(said.contains("outcome_unknown"), "{said}");
+    assert!(!said.contains("nothing was merged"), "{said}");
+    assert!(
+        said.contains("read again before any further write"),
+        "{said}"
+    );
+
+    let error = forge
+        .merge(&tree, &case, NUMBER, &head)
+        .expect_err("it is merged already");
+    let said = format!("{error:#}");
+    assert!(said.contains("Merged"), "{said}");
+    assert_eq!(
+        stand_in.invoked(),
+        ["pull_request.merge", "pull_request.get"],
+        "read before the next write, and the merge not sent again"
+    );
+    assert_eq!(stand_in.applied(), ["pull_request.merge"]);
+
+    let scratch = Scratch::new("unknown-open");
+    let (forge, stand_in, _, tree, head) =
+        forge_over(&scratch, |main, head| keyed(main, head).with_open_pull());
+    stand_in.standing(|standing| standing.unknown = 1);
+    let case = artifacts_of(&scratch, "case");
+    forge
+        .merge(&tree, &case, NUMBER, &head)
+        .expect_err("the outcome is unknown");
+    let _ = forge.open_pull_request(&tree, &case, &the_request());
+    assert_eq!(
+        stand_in.invoked()[..2],
+        ["pull_request.merge", "pull_request.get"],
+        "read before a write of any kind"
+    );
+}
+
+/// A write whose answer was lost is sent again under the same key, and the instance's replay is
+/// taken as the original outcome: one create reached the provider, and the pull request's
+/// number is the one it opened. A create answered `outcome_unknown` and sent again replays that
+/// answer and is not applied again.
+#[test]
+fn a_write_sent_again_under_its_key_replays_its_first_outcome() {
+    let scratch = Scratch::new("replay");
+    let (forge, stand_in, _, tree, _) = forge_over(&scratch, keyed);
+    let case = artifacts_of(&scratch, "case");
+    stand_in.standing(|standing| standing.dropped = 1);
+    forge
+        .open_pull_request(&tree, &case, &the_request())
+        .expect_err("the answer is lost");
+    let number = forge
+        .open_pull_request(&tree, &case, &the_request())
+        .expect("the replay is the first outcome");
+    assert_eq!(number, NUMBER);
+    let keys = stand_in.keys_of("pull_request.create");
+    assert_eq!(keys.len(), 2, "{keys:?}");
+    assert!(keys[0].is_some() && keys[0] == keys[1], "{keys:?}");
+    assert_eq!(stand_in.applied(), ["pull_request.create"]);
+
+    let scratch = Scratch::new("replay-unknown");
+    let (forge, stand_in, _, tree, _) = forge_over(&scratch, keyed);
+    let case = artifacts_of(&scratch, "case");
+    stand_in.standing(|standing| standing.unknown = 1);
+    for _ in 0..2 {
+        let error = forge
+            .open_pull_request(&tree, &case, &the_request())
+            .expect_err("the outcome is unknown");
+        let said = format!("{error:#}");
+        assert!(said.contains("outcome_unknown"), "{said}");
+    }
+    let keys = stand_in.keys_of("pull_request.create");
+    assert!(keys[0].is_some() && keys[0] == keys[1], "{keys:?}");
+    assert_eq!(stand_in.applied(), ["pull_request.create"]);
+}
+
+/// A write the provider refused, a merge answered 409, holds its key's answer: taken again after
+/// the read it goes under a new key and merges, so a refusal is not replayed forever.
+#[test]
+fn a_write_the_provider_refused_is_taken_again_under_a_new_key() {
+    let scratch = Scratch::new("refused-again");
+    let (forge, stand_in, _, tree, head) = forge_over(&scratch, |main, head| {
+        let mut world = keyed(main, head).with_open_pull();
+        world.conflicts = 1;
+        world
+    });
+    let case = artifacts_of(&scratch, "case");
+    let error = forge
+        .merge(&tree, &case, NUMBER, &head)
+        .expect_err("a 409 is no merge");
+    assert!(format!("{error:#}").contains("nothing was merged"));
+    forge
+        .merge(&tree, &case, NUMBER, &head)
+        .expect("merged once read again");
+    assert_eq!(
+        stand_in.invoked(),
+        [
+            "pull_request.merge",
+            "pull_request.get",
+            "pull_request.merge"
+        ]
+    );
+    let keys = stand_in.keys_of("pull_request.merge");
+    assert!(
+        keys.iter().all(Option::is_some) && keys[0] != keys[1],
+        "{keys:?}"
+    );
+    assert_eq!(
+        stand_in.applied(),
+        ["pull_request.merge", "pull_request.merge"]
     );
 }

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T17:44:55Z",
+  "actor": "human:timo",
+  "artifact": "story:git-and-model-through-loopback-relays",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI check, task check (check-static) at a1706c2a: ess specify validate valid, check-citations resolved, release-notes, fmt and clippy passed",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/41100711948/job/124217340508"
+  }
+}

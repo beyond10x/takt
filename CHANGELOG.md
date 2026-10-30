@@ -6,6 +6,42 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-30
+
+### Added
+
+- On `forge_endpoint`, each open and merge carries an `idempotency_key` from the case and the write; sent again, it replays the first outcome instead of writing twice.
+- A host without standing grants that refuses the key gets the write again unkeyed, and every later one, so open and merge work there as in 0.24.0.
+- `approval_required`, `idempotency_conflict` and `outcome_unknown` end a write naming the code; after a merge's `outcome_unknown` the pull request is read before any write.
+- A write the instance classifies `refused` or `not_attempted` takes a new key next time, counted in the case's `artifacts/pull-request.refusals.json`, so a resumed run does not replay the refusal.
+- The key covers the descriptor revision, so a write after the revision moves takes a new key instead of `idempotency_conflict`.
+- A write answered `applied` or `unknown`, a provider's 5xx among them, keeps its key and replays instead of writing twice.
+- `pull-request.refusals.json` is never read or written through a link, is read as a regular file of at most 64 KiB, and a malformed one is an error.
+- Only a v1alpha2 error envelope with `unsupported` turns keying off; any other 400 is an error.
+- A pull request behind its base gets the judged base tip merged in as takt's recorded merge commit, pushed and checked before the merge; a conflict stops naming the files.
+- CI runs a pull request through a served Connectors 0.62.0 instance with standing grants, a lost answer included, against a local GitHub fixture.
+
+### Changed
+
+- Loom 0.52.0: `--harness harness` with a loopback endpoint and no credential starts its session; Loom 0.51.0 refused it at the first step.
+- engineering-protocols 0.14.0 leaves the lock: Loom 0.52.0's governor pins 0.15.2, as takt does.
+
+### Fixed
+
+- `takt scenario run` fetches from and pushes to a loopback relay at `origin`'s URL without its userinfo, as `takt run` does, so a token in that URL is no longer sent to the relay.
+- Git lines to a loopback relay run in an empty home without global or system git configuration, so no credential helper or `~/.netrc` reaches the relay.
+- Such a line is refused before sending when the repository's configuration sets a credential helper, a cookie file, a resolve entry or a proxy off loopback.
+- It is also refused on a URL-scoped extra header, proxy or redirect setting, or a rewrite with userinfo; an included `http.extraHeader` is emptied.
+- Control characters in a relay's or a program's reason are printed escaped (`\u{1b}`) in `takt:` errors and the stop line.
+- A trial's refusal names the relay's whole reason, tabs and line breaks included.
+- A merge answered `outcome_unknown` whose pull request reads open at the same head is sent once per run under a fresh key, instead of replaying the unknown on every resume.
+- `--forge connectors` with `origin` a Connectors git relay's `/git/<owner>/<repo>.git` on loopback names the repository `<owner>/<repo>`, so the run opens instead of refusing `git/<owner>/<repo>`.
+- That mapping is github's only, since `git` can be a gitlab group, and a relay `origin` with a percent-encoded part is refused before the case opens.
+- After a merge's `outcome_unknown`, a pull request read merged at another head, or a gitlab merge request read `locked`, sends no merge and says so.
+- Under git 2.56, a push by the command, gitlab or connectors forge puts back the tracking ref git wrote for it, so `pr.open` is not refused for `refs/remotes/origin/<branch>`.
+- A base update the forge did not take, or has not moved the pull request to yet, is pushed again as the same commit, instead of the case stopping at "nothing to merge".
+- Checks read at the merge that change the case's `branch.yaml` or `artifacts/base-update.json` are refused and both files put back.
+
 ## [0.24.0] - 2026-10-30
 
 ### Added
@@ -925,7 +961,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.24.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.25.0...HEAD
+[0.25.0]: https://github.com/beyond10x/takt/compare/0.24.0...0.25.0
 [0.24.0]: https://github.com/beyond10x/takt/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/beyond10x/takt/compare/0.22.1...0.23.0
 [0.22.1]: https://github.com/beyond10x/takt/compare/0.22.0...0.22.1
