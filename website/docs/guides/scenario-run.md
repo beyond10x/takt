@@ -21,7 +21,10 @@ takt scenario run --repo <path> <id> --hours 1
 
 1. checks that the tree is clean;
 2. fetches `origin`'s `trial/*` branches with your own git, under your git configuration and
-   credential helpers, never waiting on a prompt;
+   credential helpers, never waiting on a prompt. Plain `http://` is taken for the fetch and the
+   push only to a loopback host, a relay beside the run that holds the forge's credential, and
+   then git follows no redirect; `http://` to any other host is refused before the fetch, naming
+   the URL;
 3. cuts `trial/<n>` from the seed and checks it out, `<n>` one past the highest the checkout
    knows, local or remote;
 4. refuses unless the store there shows the story ready;

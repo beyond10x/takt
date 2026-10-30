@@ -693,6 +693,77 @@ pub fn remote_url(tree: &Path, remote: &str) -> Result<String> {
     run(tree, &["remote", "get-url", remote])
 }
 
+/// Every URL git reaches `remote` at, as git reads them: a fetch's (`url`, `insteadOf`
+/// applied), then each a push goes to (`pushurl`, else `url` with `pushInsteadOf` applied). An
+/// error when the tree has no such remote.
+pub fn remote_urls(tree: &Path, remote: &str) -> Result<(Vec<String>, Vec<String>)> {
+    let lines = |args: &[&str]| -> Result<Vec<String>> {
+        Ok(run(tree, args)?.lines().map(str::to_owned).collect())
+    };
+    Ok((
+        lines(&["remote", "get-url", "--all", remote])?,
+        lines(&["remote", "get-url", "--push", "--all", remote])?,
+    ))
+}
+
+/// How git reaches a remote URL for a fetch or a push ([`remote_transport`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteTransport {
+    /// `https://`.
+    Https,
+    /// `http://` to a loopback host (`localhost`, `127.0.0.0/8`, `[::1]`): a relay on this
+    /// machine, or in this pod, that holds whatever credential the remote takes, so takt holds
+    /// none and nothing crosses the network in the clear. A line to it follows no redirect
+    /// ([`NO_REDIRECT`]), so a relay cannot send the fetch or the push on to another host.
+    LoopbackHttp,
+    /// Any other: SSH, a path on this machine, `file://`, `git://`.
+    Other,
+}
+
+impl RemoteTransport {
+    /// What `GIT_ALLOW_PROTOCOL` lists for a line held to HTTPS that goes to a remote of this
+    /// transport: `https`, and `http` beside it for a loopback relay alone.
+    #[must_use]
+    pub fn allowed_protocols(self) -> &'static str {
+        match self {
+            Self::LoopbackHttp => "http:https",
+            Self::Https | Self::Other => "https",
+        }
+    }
+}
+
+/// What a fetch or a push to a loopback relay is given on git's command line: follow no
+/// redirect, not even the first request's (`http.followRedirects` is `initial` by default).
+pub const NO_REDIRECT: [&str; 2] = ["-c", "http.followRedirects=false"];
+
+/// How git reaches `url` ([`RemoteTransport`]). An `http://` URL whose host is no loopback host
+/// (`crate::harness::loopback`) is refused, naming it without its userinfo, which may hold a
+/// password: what git sends there, and any credential with it, would cross the network in the
+/// clear.
+pub fn remote_transport(url: &str) -> Result<RemoteTransport> {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return Ok(RemoteTransport::Other);
+    };
+    if scheme.eq_ignore_ascii_case("https") {
+        return Ok(RemoteTransport::Https);
+    }
+    if !scheme.eq_ignore_ascii_case("http") {
+        return Ok(RemoteTransport::Other);
+    }
+    let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
+    let host_port = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    match crate::harness::host_of(host_port) {
+        Some(host) if crate::harness::loopback(host) => Ok(RemoteTransport::LoopbackHttp),
+        host => bail!(
+            "the remote URL {} is `http://` to {}, no loopback host (`localhost`, `127.0.0.0/8`, `::1`): what git sends there would cross the network in the clear; give `https://`, or `http://` to a relay on a loopback host",
+            crate::forge::without_userinfo(url),
+            host.unwrap_or("no host takt reads")
+        ),
+    }
+}
+
 /// The full names of the refs under each prefix of `prefixes` (`refs/heads/trial/`), in ref
 /// order; none when nothing is there.
 pub fn refs(tree: &Path, prefixes: &[&str]) -> Result<Vec<String>> {

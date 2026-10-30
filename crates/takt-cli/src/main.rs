@@ -2669,7 +2669,9 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
                         &StagedToken::candidates(),
                     )?);
                 }
-                Credential::SubscriptionFile { .. } | Credential::Secret { .. } => {}
+                Credential::SubscriptionFile { .. }
+                | Credential::Secret { .. }
+                | Credential::None => {}
             }
             session.home = home;
             Ok(Box::new(session))
@@ -2951,7 +2953,10 @@ fn publishes(forge: &dyn Forge) -> bool {
 ///
 /// Both reach `origin` as the operator's git does, through its own configuration and credential
 /// helpers and its SSH agent ([`Self::keeps`]); neither can wait on a prompt
-/// ([`takt::forge::NO_PROMPT`]), and the fetch is held to [`Self::FETCH_TIMEOUT`].
+/// ([`takt::forge::NO_PROMPT`]), and the fetch is held to [`Self::FETCH_TIMEOUT`]. Plain
+/// `http://` goes to a loopback host alone, a relay that holds the forge's credential: every URL
+/// git reaches `origin` at is read before the fetch, and one that is `http://` to another host
+/// is refused, naming it ([`Self::relayed`]); a line to a relay follows no redirect.
 struct TrialRoute {
     /// What the fetch runs as, held to [`Self::FETCH_TIMEOUT`].
     fetcher: Process,
@@ -2986,31 +2991,61 @@ impl TrialRoute {
         name == "SSH_AUTH_SOCK"
     }
 
+    /// Whether the fetch and the push go to a loopback relay
+    /// ([`takt::git::RemoteTransport::LoopbackHttp`]), read from every URL git reaches
+    /// [`Self::REMOTE`] at for each, as git rewrites them ([`takt::git::remote_urls`]). A URL
+    /// that is `http://` to no loopback host is refused, naming it
+    /// ([`takt::git::remote_transport`]).
+    fn relayed(tree: &Path) -> Result<(bool, bool)> {
+        let (fetch, push) = takt::git::remote_urls(tree, Self::REMOTE)?;
+        let relayed = |urls: &[String]| -> Result<bool> {
+            let mut any = false;
+            for url in urls {
+                any |=
+                    takt::git::remote_transport(url)? == takt::git::RemoteTransport::LoopbackHttp;
+            }
+            Ok(any)
+        };
+        Ok((relayed(&fetch)?, relayed(&push)?))
+    }
+
+    /// `git`, and [`takt::git::NO_REDIRECT`] after it for a line to a loopback relay.
+    fn git(relayed: bool) -> Vec<String> {
+        let mut argv = vec!["git".to_owned()];
+        if relayed {
+            argv.extend(takt::git::NO_REDIRECT.map(str::to_owned));
+        }
+        argv
+    }
+
     /// The line that fetches `origin`'s trial branches into its remote-tracking refs.
-    fn fetch_argv() -> Vec<String> {
-        [
-            "git",
-            "fetch",
-            "--no-tags",
-            "--quiet",
-            Self::REMOTE,
-            "+refs/heads/trial/*:refs/remotes/origin/trial/*",
-        ]
-        .map(str::to_owned)
-        .to_vec()
+    fn fetch_argv(relayed: bool) -> Vec<String> {
+        let mut argv = Self::git(relayed);
+        argv.extend(
+            [
+                "fetch",
+                "--no-tags",
+                "--quiet",
+                Self::REMOTE,
+                "+refs/heads/trial/*:refs/remotes/origin/trial/*",
+            ]
+            .map(str::to_owned),
+        );
+        argv
     }
 
     /// The line that creates `origin`'s `trial` from the local one, reporting each ref on
     /// stdout; the lease refuses it when the remote has the branch.
-    fn push_argv(trial: &str) -> Vec<String> {
-        vec![
-            "git".to_owned(),
+    fn push_argv(trial: &str, relayed: bool) -> Vec<String> {
+        let mut argv = Self::git(relayed);
+        argv.extend([
             "push".to_owned(),
             "--porcelain".to_owned(),
             format!("--force-with-lease=refs/heads/{trial}:"),
             Self::REMOTE.to_owned(),
             format!("refs/heads/{trial}:refs/heads/{trial}"),
-        ]
+        ]);
+        argv
     }
 
     /// `exit`, how `argv` ended; a program that did not exit 0 is an error naming the line and
@@ -3028,9 +3063,11 @@ impl TrialRoute {
         Ok(exit)
     }
 
-    /// Fetches `origin`'s trial branches, killed past [`Self::FETCH_TIMEOUT`].
+    /// Fetches `origin`'s trial branches, killed past [`Self::FETCH_TIMEOUT`], once every URL
+    /// the fetch and the push go to is admitted ([`Self::relayed`]).
     fn fetch(&self, tree: &Path) -> Result<()> {
-        let argv = Self::fetch_argv();
+        let (relayed, _) = Self::relayed(tree)?;
+        let argv = Self::fetch_argv(relayed);
         let exit = self.fetcher.run_keeping(tree, &argv, &[], Self::keeps)?;
         Self::succeed(&argv, exit).map(|_| ())
     }
@@ -3040,7 +3077,8 @@ impl TrialRoute {
     /// the remote's `trial`: as it was (`=` up to date, `!` rejected), moved (` ` or `+`, which
     /// only a push that dropped the lease reports), or not known (no report for it).
     fn create(&self, tree: &Path, trial: &str) -> Result<()> {
-        let argv = Self::push_argv(trial);
+        let (_, relayed) = Self::relayed(tree)?;
+        let argv = Self::push_argv(trial, relayed);
         let exit = self.pusher.run_keeping(tree, &argv, &[], Self::keeps)?;
         let target = format!(":refs/heads/{trial}");
         let reported = exit.stdout.lines().find_map(|line| {

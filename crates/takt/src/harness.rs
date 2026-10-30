@@ -3692,7 +3692,8 @@ pub const ENVIRONMENT_WIRE: &str = "openai-responses";
 /// subscription token file only to check, before the first step, that a token is where its
 /// pointer points, and never reads a secret. Recorded as `kind` `subscription_file` with the
 /// `path` and, when given, the `pointer`, or `kind` `secret` with the `namespace` and `name`, or
-/// `kind` `environment` with the variable's `name`, never its value nor the staged file.
+/// `kind` `environment` with the variable's `name`, never its value nor the staged file, or
+/// `kind` `none` for an endpoint on a loopback host that takes none.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Credential {
@@ -3718,6 +3719,10 @@ pub enum Credential {
         endpoint: String,
         secret: RouteSecret,
     },
+    /// No credential: an endpoint on a loopback host given none, or an anonymous route's
+    /// endpoint there, a relay beside the run that holds the model's key; the session names no
+    /// token file and no secret.
+    None,
 }
 
 /// The kind of source a route endpoint's `auth.secret` names, as llm reports it.
@@ -4252,6 +4257,7 @@ impl Credential {
                     secret.as_str()
                 )
             }
+            Self::None => "no credential".to_owned(),
         }
     }
 
@@ -4411,8 +4417,9 @@ impl EndpointConfig {
 
     /// The endpoint a session is built with, read back by reference: the secret
     /// `api_key_secret` names when the session is given one, else the endpoint's token file and
-    /// pointer. A name not of the shape `<namespace>/<name>`, which the session executor refuses,
-    /// is read back whole as the `name`, its `namespace` empty.
+    /// pointer, else, with neither, no credential. A name not of the shape `<namespace>/<name>`,
+    /// which the session executor refuses, is read back whole as the `name`, its `namespace`
+    /// empty.
     #[must_use]
     pub fn of_session(endpoint: &Endpoint, api_key_secret: Option<&str>) -> Self {
         let credential = match api_key_secret {
@@ -4423,6 +4430,7 @@ impl EndpointConfig {
                     name: name.to_owned(),
                 }
             }
+            None if endpoint.token_file.as_os_str().is_empty() => Credential::None,
             None => Credential::SubscriptionFile {
                 path: endpoint.token_file.clone(),
                 pointer: endpoint.token_pointer.clone(),
@@ -4454,7 +4462,9 @@ impl EndpointConfig {
     /// default: b10x-harness's own `claude` provider on the user's claude.ai subscription token
     /// under `home`. The credential is taken whole from one source: a token file with its
     /// pointer, or a secret's name; a relative token file is made absolute against the current
-    /// directory, since the harness runs in a scratch copy of the tree. Refused: a token file
+    /// directory, since the harness runs in a scratch copy of the tree. A base URL on a loopback
+    /// host given no credential takes none ([`Credential::None`]): a relay beside the run holds
+    /// the model's key. Refused: a token file
     /// and a secret both given by flag, a pointer flag without a token file flag, a wire
     /// b10x-harness does not speak, a base URL [`check_base_url`] refuses, an empty model, the
     /// default credential with no HOME or with a base URL other than the default, which would
@@ -4500,16 +4510,17 @@ impl EndpointConfig {
                 ENDPOINT_WIRES.join(" or ")
             );
         }
-        check_base_url(&base_url)?;
+        let on_loopback = check_base_url(&base_url)?;
         if model.is_empty() || model.chars().any(char::is_whitespace) {
             bail!("the endpoint's model `{model}` is no model id");
         }
         let credential = match flags.credential().or_else(|| file.credential()) {
             Some(credential) => credential?,
+            None if on_loopback => Credential::None,
             None => {
                 if base_url != Self::BASE_URL {
                     bail!(
-                        "the endpoint's base URL {base_url} is not the default {}, and no credential is given: the default credential, the claude.ai subscription token in ~/{}, is not sent to another host; give --endpoint-token-file, --endpoint-secret or --endpoint-token-env, or the endpoint file's `[credential]`",
+                        "the endpoint's base URL {base_url} is not the default {}, and no credential is given: the default credential, the claude.ai subscription token in ~/{}, is not sent to another host, and only an endpoint on a loopback host takes none; give --endpoint-token-file, --endpoint-secret or --endpoint-token-env, or the endpoint file's `[credential]`",
                         Self::BASE_URL,
                         Self::TOKEN_FILE
                     );
@@ -4599,14 +4610,16 @@ impl EndpointConfig {
     /// token file maps onto the session executor's token file and pointer; a secret's name
     /// leaves both empty (`token_file` empty, no pointer), the key named by
     /// [`Self::api_key_secret`] alone; a variable leaves both empty until the harness holds the
-    /// file its value is staged in ([`SessionHarness::hold_staged`]).
+    /// file its value is staged in ([`SessionHarness::hold_staged`]); no credential leaves both
+    /// empty for good.
     #[must_use]
     pub fn session_endpoint(&self) -> Endpoint {
         let (token_file, token_pointer) = match &self.credential {
             Credential::SubscriptionFile { path, pointer } => (path.clone(), pointer.clone()),
             Credential::Secret { .. }
             | Credential::Environment { .. }
-            | Credential::Route { .. } => (std::path::PathBuf::new(), None),
+            | Credential::Route { .. }
+            | Credential::None => (std::path::PathBuf::new(), None),
         };
         Endpoint {
             base_url: self.base_url.clone(),
@@ -4619,14 +4632,15 @@ impl EndpointConfig {
 
     /// The secret's name the session executor hands b10x-harness (`api_key_secret`),
     /// `<namespace>/<name>`, which the harness resolves; takt reads no secret and opens no
-    /// store. None for a subscription token file and for a variable.
+    /// store. None for a subscription token file, for a variable and for no credential.
     #[must_use]
     pub fn api_key_secret(&self) -> Option<String> {
         match &self.credential {
             Credential::Secret { namespace, name } => Some(format!("{namespace}/{name}")),
             Credential::SubscriptionFile { .. }
             | Credential::Environment { .. }
-            | Credential::Route { .. } => None,
+            | Credential::Route { .. }
+            | Credential::None => None,
         }
     }
 }
@@ -4646,7 +4660,8 @@ fn protocol_name(protocol: llm_core::Protocol) -> &'static str {
 /// base URL, the wire its protocol maps to and the upstream model, as an [`EndpointConfig`] whose
 /// credential is [`Credential::Route`], and the key llm resolved for it, which is staged as the
 /// token file of [`Credential::Environment`] is and held as the value of a variable: it is
-/// never printed, and it is in no argument, environment or case file.
+/// never printed, and it is in no argument, environment or case file. An anonymous endpoint on a
+/// loopback host has [`Credential::None`] and no key.
 pub struct RouteEndpoint {
     pub config: EndpointConfig,
     pub secret: Option<VariableValue>,
@@ -4655,11 +4670,11 @@ pub struct RouteEndpoint {
 impl RouteEndpoint {
     /// The route or alias `model` names in `routes`, or `<endpoint>/<model-id>`, as llm resolves it.
     /// Refused, before any case opens and naming the route: a name llm does not know (llm's own
-    /// message), a protocol other than `messages` or `responses`, an endpoint with no credential,
-    /// a credential that is not admitted on the `openai-responses` wire (a staged key is read by
-    /// b10x-harness as a subscription token on the Messages wire), a base URL [`check_base_url`]
-    /// refuses, and a secret llm cannot resolve, with llm's reason. The secret is resolved at once
-    /// by llm's resolver; `home` is the directory a `file:~/` reference expands against.
+    /// message), a protocol other than `messages` or `responses`, an endpoint with no credential
+    /// off a loopback host (on one it resolves to [`Credential::None`]), a credential not admitted
+    /// on the `openai-responses` wire (b10x-harness reads a staged key as a subscription token on
+    /// the Messages wire), a base URL [`check_base_url`] refuses, and a secret llm cannot resolve,
+    /// with llm's reason. llm resolves the secret at once; `home` is where `file:~/` expands.
     ///
     /// # Errors
     /// As above, each refusal naming the route and why, and none of it repeating a value.
@@ -4691,10 +4706,21 @@ impl RouteEndpoint {
                 )
             })?;
         let base_url = declared.base_url().as_str();
-        check_base_url(base_url)?;
+        let on_loopback = check_base_url(base_url)?;
         let Some(kind) = declared.secret_kind() else {
+            if on_loopback {
+                return Ok(Self {
+                    config: EndpointConfig {
+                        base_url: base_url.to_owned(),
+                        wire: wire.to_owned(),
+                        model: target.upstream_model.as_str().to_owned(),
+                        credential: Credential::None,
+                    },
+                    secret: None,
+                });
+            }
             bail!(
-                "the route {route} reaches endpoint {endpoint_name}, which names no credential, and takt gives b10x-harness a credential only: give the endpoint an `auth.secret`; nothing was started"
+                "the route {route} reaches endpoint {endpoint_name}, which names no credential, and takt gives b10x-harness a credential except on a loopback host: give the endpoint an `auth.secret`; nothing was started"
             );
         };
         let kind_name = match kind {
@@ -4794,8 +4820,9 @@ pub unsafe fn take_environment_holding(value: &VariableValue) {
 /// with an optional port; and it holds no userinfo, query or fragment, each of which can carry
 /// a key that the case's `opened` line and every error would repeat. A refusal names the part
 /// found and shows the URL without its userinfo, query and fragment, or, for a URL that is no
-/// http(s) URL or has no such host, nothing of it.
-fn check_base_url(url: &str) -> Result<()> {
+/// http(s) URL or has no such host, nothing of it. Returns whether the host is a loopback host,
+/// the one place an endpoint may take no credential.
+fn check_base_url(url: &str) -> Result<bool> {
     let Some((scheme, rest)) = url
         .split_once("://")
         .filter(|(scheme, _)| matches!(*scheme, "https" | "http"))
@@ -4843,7 +4870,7 @@ fn check_base_url(url: &str) -> Result<()> {
             "the endpoint's base URL {shown} is `http://` to {host}, no loopback host (`localhost`, `127.0.0.0/8`, `::1`): the credential would cross the network in the clear; give `https://`"
         );
     }
-    Ok(())
+    Ok(loopback(host))
 }
 
 /// The host of a URL's `host[:port]`: a name of letters, digits, `-`, `.` and `_`, an IPv4
