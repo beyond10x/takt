@@ -4848,7 +4848,7 @@ fn check_base_url(url: &str) -> Result<()> {
 
 /// The host of a URL's `host[:port]`: a name of letters, digits, `-`, `.` and `_`, an IPv4
 /// address, or an IPv6 address in brackets, its brackets kept; the port, when given, digits.
-fn host_of(host_port: &str) -> Option<&str> {
+pub(crate) fn host_of(host_port: &str) -> Option<&str> {
     let (host, port) = if host_port.starts_with('[') {
         let (host, after) = host_port.split_at(host_port.find(']')? + 1);
         host.strip_prefix('[')?
@@ -4876,7 +4876,7 @@ fn host_of(host_port: &str) -> Option<&str> {
 
 /// Whether `host` ([`host_of`]) is a loopback host: `localhost`, an address in `127.0.0.0/8`,
 /// or `[::1]`.
-fn loopback(host: &str) -> bool {
+pub(crate) fn loopback(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host
             .parse::<std::net::Ipv4Addr>()
