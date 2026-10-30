@@ -14,6 +14,7 @@ takt's releases.
 - A write the instance classifies `refused` or `not_attempted` takes a new key next time, counted in the case's `artifacts/pull-request.refusals.json`, so a resumed run does not replay the refusal.
 - The key covers the descriptor revision, so a write after the revision moves takes a new key instead of `idempotency_conflict`.
 - A write answered `applied` or `unknown`, a provider's 5xx among them, keeps its key and replays instead of writing twice.
+- `pull-request.refusals.json` is never read or written through a link, is read as a regular file of at most 64 KiB, and a malformed one is an error; only a v1alpha2 error envelope with `unsupported` turns keying off.
 
 ### Changed
 
