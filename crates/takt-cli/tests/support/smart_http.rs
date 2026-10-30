@@ -6,7 +6,7 @@
 //! with that reason (`ng <ref> <reason>`), which git shows as `! [remote rejected] <ref>
 //! (<reason>)`, and nothing is applied.
 
-use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+use std::io::{BufRead, BufReader, Write as _};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -31,7 +31,7 @@ impl Request {
 }
 
 /// Reads one request's line and headers from `reader`; none at the end of the stream.
-pub fn read_head(reader: &mut BufReader<TcpStream>) -> Option<Request> {
+pub fn read_head(reader: &mut impl BufRead) -> Option<Request> {
     let mut line = String::new();
     if reader.read_line(&mut line).ok()? == 0 {
         return None;
@@ -59,7 +59,7 @@ pub fn read_head(reader: &mut BufReader<TcpStream>) -> Option<Request> {
 }
 
 /// Reads the body `request` announces, by `Content-Length` or in chunks.
-pub fn read_body(reader: &mut BufReader<TcpStream>, request: &Request) -> std::io::Result<Vec<u8>> {
+pub fn read_body(reader: &mut impl BufRead, request: &Request) -> std::io::Result<Vec<u8>> {
     let mut body = Vec::new();
     if let Some(length) = request.header("content-length") {
         body.resize(length.parse().unwrap_or(0), 0);
