@@ -714,13 +714,20 @@ fn environment_config() -> Result<Vec<(&'static str, String)>> {
 /// The trimmed standard output of `git <args>` in `tree` read under the configuration the
 /// environment hands git ([`environment_config`]), as a remote's own git reads it.
 fn run_as_remote_git(tree: &Path, args: &[&str]) -> Result<String> {
+    let stdout = bytes_as_remote_git(tree, args)?;
+    Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+}
+
+/// The standard output of `git <args>` in `tree`, byte for byte, read under the configuration
+/// the environment hands git ([`environment_config`]), as a fetch or a push of this tree reads
+/// it: for `config --list -z` before a line whose URL a rewrite could change.
+pub fn bytes_as_remote_git(tree: &Path, args: &[&str]) -> Result<Vec<u8>> {
     let config = environment_config()?;
     let env: Vec<(&str, &str)> = config
         .iter()
         .map(|(name, value)| (*name, value.as_str()))
         .collect();
-    let stdout = raw_with(tree, args, None, &env)?;
-    Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+    raw_with(tree, args, None, &env)
 }
 
 /// The URL of `remote`, `insteadOf` applied as the environment's configuration and the

@@ -1210,13 +1210,14 @@ impl ConnectorsForge {
     /// each URL git reaches the relay's URL at, as it reads them for a fetch (`insteadOf`) and
     /// for a push (`pushInsteadOf`, and a `pushurl` or `url` of a remote named by that URL),
     /// must be `http://` to a loopback host ([`RemoteTransport::LoopbackHttp`]). Every such URL
-    /// is read off the tree's configuration ([`reached_by`]), as git reads it for this tree.
+    /// is read off the tree's configuration ([`reached_by`]), as git reads it for this tree,
+    /// with the configuration the environment hands git included, as the push keeps it.
     /// Over HTTPS, nothing is read: `GIT_ALLOW_PROTOCOL` holds that line to HTTPS.
     fn relay_reached(&self, tree: &Path) -> Result<()> {
         let Some(relay) = &self.relay else {
             return Ok(());
         };
-        let config = crate::git::bytes(tree, &["config", "--list", "-z"])
+        let config = crate::git::bytes_as_remote_git(tree, &["config", "--list", "-z"])
             .context("read git's configuration of the tree before a line to the loopback relay; nothing was sent")?;
         for url in reached_by(relay, &config) {
             if !matches!(

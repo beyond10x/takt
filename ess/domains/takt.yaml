@@ -1171,7 +1171,7 @@ types:
   # read from: crates/takt/src/run.rs:691-696
   # read from: crates/takt/src/run.rs:648-649
   # read from: crates/takt/src/run.rs:357-359
-  # read from: crates/takt/src/git.rs:3116-3124
+  # read from: crates/takt/src/git.rs:3123-3131
   - name: takt.work.RepeatedTestFailure
     kind: struct
     fields:
@@ -1293,8 +1293,8 @@ types:
   # read from: crates/takt/src/run.rs:9896-9906
   # read from: crates/takt/src/run.rs:9944-9956
   # read from: crates/takt/src/run.rs:10994-11000
-  # read from: crates/takt/src/git.rs:3546-3554
-  # read from: crates/takt/src/git.rs:3617-3631
+  # read from: crates/takt/src/git.rs:3553-3561
+  # read from: crates/takt/src/git.rs:3624-3638
   - name: takt.work.DeliveryCandidate
     kind: struct
     fields:
@@ -1994,7 +1994,7 @@ types:
   # read from: crates/takt/src/run.rs:12904-12974
   # read from: crates/takt/src/run.rs:13457-13468
   # read from: crates/takt/src/run.rs:8221-8248
-  # read from: crates/takt/src/git.rs:1088
+  # read from: crates/takt/src/git.rs:1095
   - name: takt.work.RunRefusal
     kind: struct
     fields:
@@ -2337,10 +2337,10 @@ types:
   # read from: crates/takt/src/forge.rs:355-401
   # read from: crates/takt/src/forge.rs:1720
   # read from: crates/takt/src/forge.rs:1537-1571
-  # read from: crates/takt/src/git.rs:1983
+  # read from: crates/takt/src/git.rs:1990
   # read from: crates/takt/src/forge.rs:1660-1662
-  # read from: crates/takt/src/git.rs:1681-1686
-  # read from: crates/takt/src/git.rs:1256-1259
+  # read from: crates/takt/src/git.rs:1688-1693
+  # read from: crates/takt/src/git.rs:1263-1266
   # read from: crates/takt/src/forge.rs:1642-1651
   # read from: crates/takt/src/forge.rs:383-392
   # read from: crates/takt/src/forge.rs:58-72
@@ -2425,8 +2425,8 @@ types:
   # read from: crates/takt/src/forge/connectors.rs:708-713
   # read from: crates/takt/src/forge/connectors.rs:907-950
   # read from: crates/takt/src/forge/connectors.rs:1152-1166
-  # read from: crates/takt/src/forge/connectors.rs:1365-1368
-  # read from: crates/takt/src/forge/connectors.rs:1561-1578
+  # read from: crates/takt/src/forge/connectors.rs:1366-1369
+  # read from: crates/takt/src/forge/connectors.rs:1562-1579
   # `local` is a bare repository on this machine, the hub the tree's `origin` names by its path,
   # outside the tree and sharing neither its git directory nor its object files with it (a tree
   # cloned with `git clone --no-local`): the push is `git push` to the hub, a request is a record
@@ -5156,9 +5156,9 @@ entities:
   # `remote.<name>.uploadpack` through a shell and outlive the git that started it; an object
   # not in the repository is missing.
   # read from: crates/takt/src/git.rs:190-201
-  # read from: crates/takt/src/git.rs:1975-1985
+  # read from: crates/takt/src/git.rs:1982-1992
   # read from: crates/takt/src/forge.rs:1456-1465
-  # read from: crates/takt/src/git.rs:1608-1625
+  # read from: crates/takt/src/git.rs:1615-1632
   # read from: crates/takt/src/run.rs:6437-6446
   # A step or an observation that puts something else in the cases directory's own place (a
   # link, removed as the link itself and never followed, or a file) is refused naming it, and
@@ -5204,15 +5204,15 @@ entities:
   # observation moves nothing aside: what its command rewrote there is its own build output
   # and stays, refused or not, as a pass keeps it; a change to `.takt` or `.takt/.gitignore` is
   # the exception, refused and put back by the observation's undo.
-  # read from: crates/takt/src/git.rs:1999-2062
-  # read from: crates/takt/src/git.rs:2831-2843
+  # read from: crates/takt/src/git.rs:2006-2069
+  # read from: crates/takt/src/git.rs:2838-2850
   # read from: crates/takt/src/run.rs:8487-8496
   # read from: crates/takt/src/run.rs:10427-10443
-  # read from: crates/takt/src/git.rs:2214-2219
-  # read from: crates/takt/src/git.rs:2273-2376
+  # read from: crates/takt/src/git.rs:2221-2226
+  # read from: crates/takt/src/git.rs:2280-2383
   # read from: crates/takt/src/run.rs:8460-8473
-  # read from: crates/takt/src/git.rs:2165-2184
-  # read from: crates/takt/src/git.rs:2573-2576
+  # read from: crates/takt/src/git.rs:2172-2191
+  # read from: crates/takt/src/git.rs:2580-2583
   # read from: crates/takt/src/run.rs:12922-12925
   # read from: crates/takt/src/run.rs:8331-8351
   # read from: crates/takt/src/run.rs:3669-3760
@@ -5341,8 +5341,8 @@ entities:
       # a state directory, else `$XDG_STATE_HOME/takt/identity-scans/<pid>` (`~/.local/state`
       # without it), never in the repository, removed after; no forge keeps anything there now.
       # read from: crates/takt/src/run.rs:13986-14002
-      # read from: crates/takt/src/git.rs:1232-1237
-      # read from: crates/takt/src/git.rs:1238-1243
+      # read from: crates/takt/src/git.rs:1239-1244
+      # read from: crates/takt/src/git.rs:1245-1250
       # read from: crates/takt/src/case.rs:3168-3182
       # read from: crates/takt-cli/src/main.rs:1907-1911
       # read from: crates/takt-cli/src/main.rs:3849-3867
@@ -5616,9 +5616,9 @@ entities:
   # read from: crates/takt/src/forge.rs:1475-1522
   # read from: crates/takt/src/validator.rs:1413-1433
   # read from: crates/takt/src/validator.rs:5724-5747
-  # read from: crates/takt/src/git.rs:3085-3089
+  # read from: crates/takt/src/git.rs:3092-3096
   # read from: crates/takt/src/validator.rs:5837-5947
-  # read from: crates/takt/src/git.rs:3754-3761
+  # read from: crates/takt/src/git.rs:3761-3768
   # read from: crates/takt/src/validator.rs:2130-2138
   # read from: crates/takt/src/run.rs:11955-11978
   # read from: crates/takt/src/validator.rs:2146-2162
@@ -5682,7 +5682,7 @@ entities:
   # read from: crates/takt/src/validator.rs:5738-5745
   # read from: crates/takt/src/validator.rs:5758-5815
   # read from: crates/takt/src/validator.rs:5957-5978
-  # read from: crates/takt/src/git.rs:3116-3179
+  # read from: crates/takt/src/git.rs:3123-3186
   # read from: crates/takt/src/run.rs:14037-14046
   # read from: crates/takt/src/run.rs:14051-14096
   # read from: crates/takt/src/run.rs:14100-14108
@@ -6477,7 +6477,7 @@ entities:
   # read from: .engineering/planning/design/recursive-self-improvement.md:96-98
   # read from: crates/takt-cli/src/main.rs:3724-3726
   # read from: crates/takt-cli/src/main.rs:2998-3013
-  # read from: crates/takt/src/git.rs:798-840
+  # read from: crates/takt/src/git.rs:805-847
   - name: takt.work.TrialBranch
     naming:
       summary: >-
@@ -6593,11 +6593,11 @@ entities:
   # read from: crates/takt/src/validator.rs:4970
   # read from: crates/takt/src/validator.rs:5075
   # read from: crates/takt/src/validator.rs:4858
-  # read from: crates/takt/src/git.rs:3759-3760
+  # read from: crates/takt/src/git.rs:3766-3767
   # read from: crates/takt/src/validator.rs:4912
   # read from: crates/takt/src/validator.rs:5089
   # read from: crates/takt/src/validator.rs:5488
-  # read from: crates/takt/src/git.rs:3639
+  # read from: crates/takt/src/git.rs:3646
   - name: takt.work.JudgeAllowList
     naming:
       summary: >-
