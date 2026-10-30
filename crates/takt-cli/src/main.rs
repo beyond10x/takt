@@ -4916,32 +4916,6 @@ mod tests {
         );
     }
 
-    /// With an origin and no `--forge`, the bot route is the forge, named with the repository
-    /// its origin names; the run stops before anything would be pushed, on the gate it has no
-    /// gates document for, which comes ahead of its step budget.
-    #[test]
-    fn with_an_origin_the_default_forge_is_the_bot_route() {
-        let repo = gated_repository("forge-default-bot", None);
-        git(
-            &repo,
-            &["remote", "add", "origin", "git@github.com:owner/repo.git"],
-        );
-        let (code, out) = takt(&delivery_args(
-            repo.to_str().expect("utf-8"),
-            "default-bot",
-            &[
-                "--iterations",
-                "1",
-                "--commit-identity",
-                "Test Bot <bot@example.invalid>",
-            ],
-        ));
-        assert_eq!(code, 7, "{out}");
-        assert!(out.contains("forge: bot (owner/repo)"), "{out}");
-        assert!(out.contains("step 1: tests.run {}"), "{out}");
-        assert!(!out.contains("pr.open {}"), "nothing is pushed: {out}");
-    }
-
     #[test]
     fn forge_bot_without_an_origin_is_refused_before_the_run() {
         let repo = gated_repository("forge-bot-no-origin", None);

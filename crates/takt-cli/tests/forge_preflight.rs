@@ -124,6 +124,16 @@ impl Setup {
     /// path the stub directory (when there is one) and the links, `B10X_GATES_POLICY` `policy`
     /// or unset: the exit code, stdout and stderr.
     fn run(&self, case: &str, policy: Option<&Path>) -> (i32, String, String) {
+        self.run_with_forge(case, policy, &["--forge", "bot"])
+    }
+
+    /// [`Setup::run`] with `forge` in place of `--forge bot`: empty, the run takes its default.
+    fn run_with_forge(
+        &self,
+        case: &str,
+        policy: Option<&Path>,
+        forge: &[&str],
+    ) -> (i32, String, String) {
         let path =
             std::env::join_paths([self.outer.0.join("stub-bin"), self.outer.0.join("sys-bin")])
                 .expect("a program path");
@@ -139,13 +149,12 @@ impl Setup {
                 case,
                 "--harness",
                 "none",
-                "--forge",
-                "bot",
                 "--test-cmd",
                 "true",
                 "--iterations",
                 "1",
             ])
+            .args(forge)
             .env("PATH", path)
             .env("XDG_STATE_HOME", self.outer.0.join("state"));
         match policy {
@@ -255,4 +264,20 @@ fn with_both_and_no_gh_the_case_opens() {
         !setup.case_dirs().is_empty(),
         "a case directory\nexit {code}\nstdout {out}\nstderr {err}"
     );
+}
+
+/// With a GitHub origin and no `--forge`, the run's forge is the bot route, through the same
+/// preflight: `forge: bot (owner/repo)`, and nothing is pushed in one step. Moved here from the
+/// CLI's unit tests, which run in one process and cannot give the run its own program path.
+#[test]
+fn with_an_origin_the_default_forge_is_the_bot_route() {
+    let setup = Setup::new("default-bot");
+    setup.with_gates();
+    let policy = setup.policy();
+    let (code, out, err) = setup.run_with_forge("default-bot", Some(&policy), &[]);
+    assert!(
+        out.contains("forge: bot (owner/repo)"),
+        "exit {code}\nstdout {out}\nstderr {err}"
+    );
+    assert!(!out.contains("pr.open {}"), "nothing is pushed: {out}");
 }
