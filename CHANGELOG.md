@@ -30,6 +30,7 @@ takt's releases.
 - It is also refused on a URL-scoped extra header, proxy or redirect setting, or a rewrite with userinfo; an included `http.extraHeader` is emptied.
 - Control characters in a relay's or a program's reason are printed escaped (`\u{1b}`) in `takt:` errors and the stop line.
 - A trial's refusal names the relay's whole reason, tabs and line breaks included.
+- A merge answered `outcome_unknown` whose pull request reads open at the same head is sent once per run under a fresh key, instead of replaying the unknown on every resume.
 - `--forge connectors` with `origin` a Connectors git relay's `/git/<owner>/<repo>.git` on loopback names the repository `<owner>/<repo>`, so the run opens instead of refusing `git/<owner>/<repo>`.
 
 ## [0.24.0] - 2026-10-30

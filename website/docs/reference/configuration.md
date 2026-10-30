@@ -492,7 +492,10 @@ forge_endpoint: http://127.0.0.1:8402
   grants refuses the key, before running anything, as `unsupported`; takt then sends that write
   and every later one with no key. `approval_required` (no standing grant covers the
   write), `idempotency_conflict` and `outcome_unknown` end the write, naming the code; after a
-  merge's `outcome_unknown` the pull request is read again before any further write.
+  merge's `outcome_unknown` the pull request is read again before any further write. The next
+  merge reads it first: merged, none is sent; open and unmerged at the same head, the merge goes
+  once per run under a fresh key, both keys recorded in the same file; closed or at another head,
+  nothing is merged.
 - **Push and scan.** The push stays takt's push over HTTPS to the project `origin` names, or
   over `http` to an `origin` on a loopback host, port kept and no redirect followed (`http://` to
   another host is refused before the case opens); it is published only under a declared

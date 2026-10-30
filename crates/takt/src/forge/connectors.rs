@@ -65,7 +65,11 @@
 //! (`unsupported`, HTTP 400, `request_id: null`, nothing run), and the forge then sends that
 //! write, and every later one, with no key. An `idempotency_conflict`, `approval_required` or
 //! `outcome_unknown` ends the write naming the code; after a merge's `outcome_unknown` the pull
-//! request is read again before any further write. A write whose answer's
+//! request is read again before any further write, and that key is kept in the record below.
+//! The next merge under it reads the pull request first: merged is the merge applied, and none
+//! is sent; open and unmerged at the head the merge named is the merge not applied, and it goes
+//! under a fresh key, at most once per process, both keys recorded; closed or at another head is
+//! no merge, named. An open keeps its key after `outcome_unknown`. A write whose answer's
 //! `mutation.classification` is `refused` or `not_attempted` takes a new key next time, so a
 //! merge the provider refused is not replayed refused; `applied`, `unknown` or no
 //! classification keeps the key. That count is kept in the case's artifacts directory
@@ -208,9 +212,10 @@ const REFUSALS_LIMIT: u64 = 64 << 10;
 /// `dir`, by the write's first key: what [`ConnectorsForge::REFUSALS`] holds there, empty when
 /// nothing is there. A file that is not one is an error, never a count of zero: the record is
 /// opened without following a link at it (`O_NOFOLLOW`) or waiting on it (`O_NONBLOCK`), must be
-/// a regular file of at most [`REFUSALS_LIMIT`] bytes, and its `refused` must be an object of
-/// non-negative integer counts.
-fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
+/// a regular file of at most [`REFUSALS_LIMIT`] bytes, its `refused` must be an object of
+/// non-negative integer counts, and its `unknown`, when there, an object of keys each naming a
+/// fresh key or null ([`Record::unknown`]).
+fn refusals_in(dir: &Path) -> Result<Record> {
     use std::io::Read as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     let path = dir.join(ConnectorsForge::REFUSALS);
@@ -220,7 +225,7 @@ fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
         .open(&path)
     {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => bail!(
             "{} is a link, and a refusal record is never read through one; nothing was sent",
             path.display()
@@ -260,7 +265,7 @@ fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
             path.display()
         );
     };
-    refused
+    let refused = refused
         .iter()
         .map(|(key, count)| {
             let count = count
@@ -274,15 +279,44 @@ fn refusals_in(dir: &Path) -> Result<BTreeMap<String, u32>> {
                 })?;
             Ok((key.clone(), count))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    let unknown = match document.get("unknown") {
+        None => BTreeMap::new(),
+        Some(Value::Object(unknown)) => unknown
+            .iter()
+            .map(|(key, fresh)| match fresh {
+                Value::Null => Ok((key.clone(), None)),
+                Value::String(fresh) => Ok((key.clone(), Some(fresh.clone()))),
+                _ => Err(anyhow!(
+                    "{} names no fresh key or null for {key} at `unknown`; nothing was sent",
+                    path.display()
+                )),
+            })
+            .collect::<Result<_>>()?,
+        Some(_) => bail!(
+            "{} holds no object of keys at `unknown`; nothing was sent",
+            path.display()
+        ),
+    };
+    Ok(Record { refused, unknown })
 }
 
-/// Writes `refused` into the case's artifacts directory `dir` ([`ConnectorsForge::REFUSALS`])
+/// What a case's refusal record ([`ConnectorsForge::REFUSALS`]) holds.
+#[derive(Debug, Default)]
+struct Record {
+    /// How many times each write at a revision was not applied, by its first key.
+    refused: BTreeMap<String, u32>,
+    /// Each key a merge was answered `outcome_unknown` under, with the fresh key taken after
+    /// the pull request read open and unmerged at the head that merge named, `None` until one is.
+    unknown: BTreeMap<String, Option<String>>,
+}
+
+/// Writes `record` into the case's artifacts directory `dir` ([`ConnectorsForge::REFUSALS`])
 /// through a file beside it renamed over it, so a later process reads the old count or the new
 /// one, never a part. That file is made new (`O_EXCL`) without following a link at its name
 /// (`O_NOFOLLOW`); whatever a stale one left there, a link among them, is removed first, never
 /// written through.
-fn record_refusals(dir: &Path, refused: &BTreeMap<String, u32>) -> Result<()> {
+fn record_refusals(dir: &Path, record: &Record) -> Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
@@ -292,7 +326,10 @@ fn record_refusals(dir: &Path, refused: &BTreeMap<String, u32>) -> Result<()> {
         ConnectorsForge::REFUSALS,
         std::process::id()
     ));
-    let document = json!({"format": REFUSALS_FORMAT, "refused": refused});
+    let mut document = json!({"format": REFUSALS_FORMAT, "refused": record.refused});
+    if !record.unknown.is_empty() {
+        document["unknown"] = json!(record.unknown);
+    }
     let bytes = serde_json::to_vec_pretty(&document)?;
     let create = || {
         std::fs::OpenOptions::new()
@@ -681,6 +718,9 @@ pub struct ConnectorsForge {
     /// Whether the served instance refused `idempotency_key` as a member it does not take: then
     /// every write goes with no key.
     unkeyed: Cell<bool>,
+    /// The merges, by first key, that took a fresh key after `outcome_unknown` in this process:
+    /// each takes at most one.
+    retried: RefCell<BTreeSet<String>>,
     /// The state directory the empty home of each line to the loopback relay is made under
     /// ([`Self::with_state_dir`]); none for takt's own.
     state_dir: Option<std::path::PathBuf>,
@@ -814,6 +854,7 @@ impl ConnectorsForge {
             calls: Cell::new(0),
             started,
             unkeyed: Cell::new(false),
+            retried: RefCell::default(),
             state_dir: None,
         };
         forge.preflight(tree)?;
@@ -1087,12 +1128,19 @@ impl ConnectorsForge {
     /// ([`Self::REFUSALS`]); an answer whose `mutation.classification` says the write was not
     /// applied ([`not_applied`]) is recorded there before the answer is returned, so the next
     /// attempt, in this process or a resumed one, goes under a new key.
+    ///
+    /// `merging` is the pull request and head of a merge. A merge answered `outcome_unknown`
+    /// records its key there too ([`Record::unknown`]); the next merge under that key first
+    /// reads the pull request ([`Self::settle_unknown`]): merged since is the merge applied and
+    /// nothing is sent, open and unmerged at the head named is the merge not applied and it goes
+    /// under a fresh key, once per process, and anything else is no merge.
     fn write(
         &self,
         tree: &Path,
         dir: &Path,
         operation: &'static str,
         input: &Value,
+        merging: Option<(u64, &str)>,
     ) -> Result<Value> {
         let Route::Served {
             endpoint,
@@ -1106,8 +1154,25 @@ impl ConnectorsForge {
             let case = case_of(dir);
             let first = idempotency_key(&case, operation, revision, input, 0);
             let mut refusals = refusals_in(dir)?;
-            let refused = refusals.get(&first).copied().unwrap_or(0);
-            let key = idempotency_key(&case, operation, revision, input, refused);
+            let mut refused = refusals.refused.get(&first).copied().unwrap_or(0);
+            let mut key = idempotency_key(&case, operation, revision, input, refused);
+            if let Some((number, head)) = merging
+                && matches!(refusals.unknown.get(&key), Some(None))
+            {
+                if let Some(merged) = self.settle_unknown(tree, &first, &key, number, head)? {
+                    return Ok(merged);
+                }
+                refused = refused.saturating_add(1);
+                let fresh = idempotency_key(&case, operation, revision, input, refused);
+                refusals.refused.insert(first.clone(), refused);
+                refusals.unknown.insert(key, Some(fresh.clone()));
+                record_refusals(dir, &refusals).with_context(|| {
+                    format!(
+                        "pull request {number} reads open at {head} after a merge answered outcome_unknown, and the fresh key could not be recorded; nothing was sent"
+                    )
+                })?;
+                key = fresh;
+            }
             let outcome =
                 self.served_answer(endpoint, *loopback, revision, operation, input, Some(&key));
             let refusal = outcome
@@ -1121,8 +1186,16 @@ impl ConnectorsForge {
                     Ok(answer) => answer["mutation"]["classification"].as_str(),
                     Err(_) => refusal.and_then(|refusal| refusal.classification.as_deref()),
                 };
-                if not_applied(classification) {
-                    refusals.insert(first, refused.saturating_add(1));
+                if merging.is_some() && refusal.is_some_and(ServedRefused::is_outcome_unknown) {
+                    refusals.unknown.entry(key).or_insert(None);
+                    record_refusals(dir, &refusals).with_context(|| {
+                        format!(
+                            "{} answered outcome_unknown, and its key could not be recorded for the next attempt",
+                            self.named(operation)
+                        )
+                    })?;
+                } else if not_applied(classification) {
+                    refusals.refused.insert(first, refused.saturating_add(1));
                     record_refusals(dir, &refusals).with_context(|| {
                         format!(
                             "{} was not applied, and its refusal could not be recorded for the next attempt",
@@ -1264,6 +1337,54 @@ impl ConnectorsForge {
         Ok(())
     }
 
+    /// Settles a merge of `number` at `head` answered `outcome_unknown` under `key` before it is
+    /// sent again, by reading the pull request: merged is the merge applied, and the body
+    /// returned stands for its answer, with nothing sent; open and unmerged at `head` is the
+    /// merge not applied, `None`, and it goes under a fresh key, at most once per process for the
+    /// write whose first key is `first`. Closed, another head, or a second unknown in this
+    /// process is no merge, and the error names what the read showed.
+    fn settle_unknown(
+        &self,
+        tree: &Path,
+        first: &str,
+        key: &str,
+        number: u64,
+        head: &str,
+    ) -> Result<Option<Value>> {
+        let view = self.view(tree, number).with_context(|| {
+            format!(
+                "read pull request {number} again after a merge of it answered outcome_unknown under {key}; nothing was sent"
+            )
+        })?;
+        match view.state {
+            PullRequestState::Merged => {
+                return Ok(Some(json!({
+                    "merged": true,
+                    "state": "merged",
+                    "message": format!(
+                        "pull request {number} reads merged after a merge of it answered outcome_unknown under {key}; no merge was sent again"
+                    ),
+                })));
+            }
+            PullRequestState::Closed => bail!(
+                "pull request {number} reads closed and not merged after a merge of it answered outcome_unknown under {key}; nothing was merged"
+            ),
+            PullRequestState::Open => {}
+        }
+        if view.head.sha != head {
+            bail!(
+                "pull request {number} reads open at the head {}, not {head}, after a merge of it answered outcome_unknown under {key}; nothing was merged",
+                view.head.sha
+            );
+        }
+        if !self.retried.borrow_mut().insert(first.to_owned()) {
+            bail!(
+                "whether pull request {number} was merged is not known (outcome_unknown): the merge under {key}, the fresh key this run took, was answered so too; it reads open at {head}, nothing was sent again, and a later run reads it again"
+            );
+        }
+        Ok(None)
+    }
+
     /// A merge of `number` that failed: no merge, and the pull request is read again before any
     /// further write. A merge the instance answered `outcome_unknown` may have been made, and
     /// is read again before any further write all the same.
@@ -1274,7 +1395,7 @@ impl ConnectorsForge {
             .is_some_and(ServedRefused::is_outcome_unknown)
         {
             return error.context(format!(
-                "whether pull request {number} was merged is not known (outcome_unknown): it is read again before any further write, and a merge sent again carries the same key"
+                "whether pull request {number} was merged is not known (outcome_unknown): it is read again before any further write, and a merge sent again takes a fresh key once when it still reads open at the head merged"
             ));
         }
         let conflict = error
@@ -1650,6 +1771,7 @@ impl ConnectorsForge {
                     "pipeline_id": pipeline,
                     "body": {"sha": head},
                 }),
+                Some((number, head)),
             )
             .map_err(|error| self.merge_failed(number, error))?;
         if let Some(state) = body["state"].as_str()
@@ -1679,6 +1801,7 @@ impl ConnectorsForge {
                     "pull_number": number,
                     "body": {"sha": head},
                 }),
+                Some((number, head)),
             )
             .map_err(|error| self.merge_failed(number, error))?;
         if body["merged"] != true {
@@ -1916,7 +2039,7 @@ impl Forge for ConnectorsForge {
             }
         };
         let body = self
-            .write(tree, dir, operation, &input)
+            .write(tree, dir, operation, &input, None)
             .map_err(|error| {
                 if error
                     .downcast_ref::<ServedRefused>()
