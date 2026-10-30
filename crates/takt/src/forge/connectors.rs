@@ -457,6 +457,16 @@ pub fn relay_of(url: &str) -> Result<String> {
     Ok(format!("{scheme}://{host_port}{tail}"))
 }
 
+/// The project a loopback relay's path names: a Connectors git relay serves
+/// `/git/<owner>/<repo>.git`, so `git/<owner>/<repo>` names `<owner>/<repo>`; any other path
+/// names itself.
+fn relay_project(path: &str) -> &str {
+    match path.strip_prefix("git/") {
+        Some(project) if project.split('/').count() == 2 => project,
+        _ => path,
+    }
+}
+
 /// What a git line to the loopback relay is given in its environment: no proxy for any host,
 /// whatever the operator's environment or a URL-scoped `http.<url>.proxy` names.
 const NO_PROXY_ENV: [(&str, &str); 2] = [("no_proxy", "*"), ("NO_PROXY", "*")];
@@ -769,6 +779,10 @@ impl ConnectorsForge {
         let origin = url
             .as_deref()
             .and_then(super::gitlab::project_of)
+            .map(|(host, project)| match &relay {
+                Some(_) => (host, relay_project(&project).to_owned()),
+                None => (host, project),
+            })
             .ok_or_else(|| {
                 anyhow!(
                     "the forge connectors names the project by the origin remote, and it names none; nothing was opened"
