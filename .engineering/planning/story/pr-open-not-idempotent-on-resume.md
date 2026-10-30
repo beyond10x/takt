@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:pr-open-not-idempotent-on-resume
 kind: story
-status: active
+status: implemented
 title: pr.open is not idempotent on resume
 tags:
 - finding
@@ -15,10 +15,11 @@ relations:
 - decomposes: epic:takt-as-a-loom-agent
 - depends_on: story:forge-preflight
 - serves: vision:safe-agentic-coding
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:36:07Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":2}}}
 - {from: "proposed", to: "active", at: "2026-10-29T21:36:07Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"review_outcome":2}}}
+- {from: "active", to: "implemented", at: "2026-10-30T00:45:25Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}}
 ---
 # pr.open is not idempotent on resume
 

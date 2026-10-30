@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:an-unattended-run-merges-under-a-delegated-grant
 kind: story
-status: active
+status: implemented
 title: An unattended run merges under a grant given by a delegated agent role
 summary: no person's takt approve; a revocable owner delegation and a reviewer pass at the revision
 tags:
@@ -10,10 +10,11 @@ tags:
 relations:
 - decomposes: epic:takt-as-a-loom-agent
 - serves: vision:safe-agentic-coding
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:36:01Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"review_outcome":4}}}
 - {from: "proposed", to: "active", at: "2026-10-29T21:36:02Z", actor: "human:timo", revision: 4, decided_on: {"recorded":{"review_outcome":4}}}
+- {from: "active", to: "implemented", at: "2026-10-30T00:45:25Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1,"review_outcome":4}}}
 ---
 # Story: an-unattended-run-merges-under-a-delegated-grant
 

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-killed-step-records-its-tokens
 kind: story
-status: active
+status: implemented
 title: A step killed by the hour budget or a harness error still records the tokens it spent
 summary: a killed step records 0 tokens, so a candidate whose steps time out looks cheaper to the judge
 tags:
@@ -11,10 +11,11 @@ relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
 - decomposes: epic:takt-as-a-loom-agent
-revision: 6
+revision: 7
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:36:00Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-29T21:36:00Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
+- {from: "active", to: "implemented", at: "2026-10-30T00:45:23Z", actor: "human:timo", revision: 7, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: a-killed-step-records-its-tokens
 
