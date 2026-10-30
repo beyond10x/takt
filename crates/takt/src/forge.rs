@@ -1557,7 +1557,10 @@ fn push_over_https(
 }
 
 /// [`push_over_https`] with `env` as the line's environment, which holds [`PUSH_ENV`]
-/// and what the adapter's credential helper reads besides.
+/// and what the adapter's credential helper reads besides. A git that writes the tracking ref
+/// of a remote whose URL is `url` on such a push (2.56 does, 2.55 does not) has it put back, so
+/// the push moves no ref of the tree, which the step guard would charge to the step that
+/// pushed.
 fn push_over_https_with(
     runner: &dyn Runner,
     tree: &Path,
@@ -1566,7 +1569,12 @@ fn push_over_https_with(
     route: &str,
     env: &[(&str, &str)],
 ) -> Result<()> {
-    let exit = runner.run_env(tree, argv, env)?;
+    let before = tracking_refs(tree).ok();
+    let exit = runner.run_env(tree, argv, env);
+    if let Some(before) = &before {
+        put_back_tracking(tree, before)?;
+    }
+    let exit = exit?;
     if exit.success() {
         return Ok(());
     }
@@ -1581,6 +1589,39 @@ fn push_over_https_with(
         stderr: exit.stderr.trim().to_owned(),
     }
     .into())
+}
+
+/// The tree's tracking refs, `refs/remotes/`, each with the object it names.
+fn tracking_refs(tree: &Path) -> Result<BTreeMap<String, String>> {
+    let listed = crate::git::run(
+        tree,
+        &[
+            "for-each-ref",
+            "--format=%(objectname) %(refname)",
+            "refs/remotes",
+        ],
+    )?;
+    Ok(listed
+        .lines()
+        .filter_map(|line| line.split_once(' '))
+        .map(|(object, name)| (name.to_owned(), object.to_owned()))
+        .collect())
+}
+
+/// Puts the tree's tracking refs back as `before` held them: one made since is deleted, one
+/// moved since is moved back, each only from the object it names now.
+fn put_back_tracking(tree: &Path, before: &BTreeMap<String, String>) -> Result<()> {
+    for (name, object) in tracking_refs(tree)? {
+        match before.get(&name) {
+            Some(old) if *old == object => {}
+            Some(old) => drop(crate::git::run(tree, &["update-ref", &name, old, &object])?),
+            None => drop(crate::git::run(
+                tree,
+                &["update-ref", "-d", &name, &object],
+            )?),
+        }
+    }
+    Ok(())
 }
 
 /// The transport git names when `GIT_ALLOW_PROTOCOL` refused it: `transport 'ssh' not allowed`.
@@ -1894,5 +1935,69 @@ impl Forge for Memory {
             ],
         )
         .with_context(|| format!("the double's {base} is not a branch of the tree"))
+    }
+}
+
+#[cfg(test)]
+mod push_tests {
+    use super::*;
+
+    /// A runner that does what git 2.56 does on a push to a URL a remote names: it writes that
+    /// remote's tracking ref of the pushed branch and moves another, then exits 0.
+    struct WritesTracking(String);
+
+    impl Runner for WritesTracking {
+        fn run(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
+            self.run_env(tree, argv, &[])
+        }
+
+        fn run_env(&self, tree: &Path, _: &[String], _: &[(&str, &str)]) -> Result<Exit> {
+            crate::git::run(
+                tree,
+                &["update-ref", "refs/remotes/origin/takt/case", &self.0],
+            )?;
+            crate::git::run(tree, &["update-ref", "refs/remotes/origin/main", &self.0])?;
+            Ok(Exit {
+                code: Some(0),
+                stdout: String::new(),
+                stderr: String::new(),
+            })
+        }
+    }
+
+    /// The push leaves the tree's tracking refs as they were: the one it made is deleted and
+    /// the one it moved is moved back, so no step that pushes is charged with a ref.
+    #[test]
+    fn a_push_that_writes_a_tracking_ref_leaves_none_written() {
+        let dir = std::env::temp_dir().join(format!("takt-push-tracking-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let git = |args: &[&str]| crate::git::run(&dir, args).expect("git runs");
+        let commit = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.invalid",
+            "commit",
+        ];
+        git(&["init", "--quiet", "--template=", "-b", "main"]);
+        git(&[&commit[..], &["--quiet", "--allow-empty", "-m", "one"]].concat());
+        let one = git(&["rev-parse", "HEAD"]);
+        git(&[&commit[..], &["--quiet", "--allow-empty", "-m", "two"]].concat());
+        let two = git(&["rev-parse", "HEAD"]);
+        git(&["update-ref", "refs/remotes/origin/main", &one]);
+        let before = tracking_refs(&dir).expect("the refs are read");
+        let argv = ["git".to_owned(), "push".to_owned()];
+        push_over_https_with(
+            &WritesTracking(two),
+            &dir,
+            &argv,
+            "https://example.invalid/o/r.git",
+            "the test",
+            &[],
+        )
+        .expect("the push succeeds");
+        assert_eq!(tracking_refs(&dir).expect("the refs are read"), before);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

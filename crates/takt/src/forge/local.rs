@@ -24,7 +24,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use super::{
     Checks, Forge, Head, IdentityScan, Limits, MergeMessage, Outgoing, PullRequest,
-    PullRequestState, PullRequestView, TimedOut, exact_ref, is_object_id,
+    PullRequestState, PullRequestView, TimedOut, exact_ref, is_object_id, put_back_tracking,
+    tracking_refs,
 };
 use crate::git::CommitIdentity;
 
@@ -860,39 +861,6 @@ impl Forge for Local {
             .insert(base.to_owned(), tip.clone());
         Ok(tip)
     }
-}
-
-/// The tree's tracking refs, `refs/remotes/`, each with the object it names.
-fn tracking_refs(tree: &Path) -> Result<BTreeMap<String, String>> {
-    let listed = crate::git::run(
-        tree,
-        &[
-            "for-each-ref",
-            "--format=%(objectname) %(refname)",
-            "refs/remotes",
-        ],
-    )?;
-    Ok(listed
-        .lines()
-        .filter_map(|line| line.split_once(' '))
-        .map(|(object, name)| (name.to_owned(), object.to_owned()))
-        .collect())
-}
-
-/// Puts the tree's tracking refs back as `before` held them: one made since is deleted, one
-/// moved since is moved back, each only from the object it names now.
-fn put_back_tracking(tree: &Path, before: &BTreeMap<String, String>) -> Result<()> {
-    for (name, object) in tracking_refs(tree)? {
-        match before.get(&name) {
-            Some(old) if *old == object => {}
-            Some(old) => drop(crate::git::run(tree, &["update-ref", &name, old, &object])?),
-            None => drop(crate::git::run(
-                tree,
-                &["update-ref", "-d", &name, &object],
-            )?),
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

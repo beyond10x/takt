@@ -2335,13 +2335,13 @@ types:
   # `pr.open` opens as it would without it. A remote URL is shown without its userinfo wherever
   # takt prints one. `none` opens nothing and registers none of the three forge validators.
   # read from: crates/takt/src/forge.rs:356-412
-  # read from: crates/takt/src/forge.rs:1732
-  # read from: crates/takt/src/forge.rs:1549-1583
+  # read from: crates/takt/src/forge.rs:1773
+  # read from: crates/takt/src/forge.rs:1549-1591
   # read from: crates/takt/src/git.rs:2002
-  # read from: crates/takt/src/forge.rs:1672-1674
+  # read from: crates/takt/src/forge.rs:1713-1715
   # read from: crates/takt/src/git.rs:1700-1705
   # read from: crates/takt/src/git.rs:1275-1278
-  # read from: crates/takt/src/forge.rs:1654-1663
+  # read from: crates/takt/src/forge.rs:1695-1704
   # read from: crates/takt/src/forge.rs:384-393
   # read from: crates/takt/src/forge.rs:59-73
   # read from: crates/takt-cli/src/main.rs:1881-1888
@@ -2471,7 +2471,7 @@ types:
   # read from: crates/takt/src/forge/connectors.rs:218-372
   # read from: crates/takt/src/forge/connectors.rs:801-805
   # read from: crates/takt/src/forge/connectors.rs:1915-1961
-  # read from: crates/takt/src/forge.rs:1578-1582
+  # read from: crates/takt/src/forge.rs:1586-1590
   # read from: crates/takt/src/forge/relay.rs:24-29
   # read from: crates/takt/src/forge/relay.rs:101-112
   # read from: crates/takt/src/forge/relay.rs:177-203
@@ -2492,7 +2492,7 @@ types:
   # the run's confinement can run and a commit identity, is named, never defaulted to, and a
   # scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/local.rs:1-14
-  # read from: crates/takt/src/forge/local.rs:278-339
+  # read from: crates/takt/src/forge/local.rs:279-340
   # read from: crates/takt-cli/src/main.rs:3326-3365
   # read from: crates/takt-cli/src/main.rs:4553-4579
   - name: takt.work.ForgeName
@@ -5407,7 +5407,7 @@ entities:
       # read from: crates/takt/src/forge.rs:426-442
       # read from: crates/takt/src/promotion.rs:508-512
       # read from: crates/takt/src/forge/gitlab.rs:660-667
-      # read from: crates/takt/src/forge/local.rs:558-562
+      # read from: crates/takt/src/forge/local.rs:559-563
       # read from: crates/takt/src/scan.rs:154-162
       - name: committed
         type: Optional<takt.work.Revision>
