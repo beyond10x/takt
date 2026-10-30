@@ -20,13 +20,19 @@
 #[path = "../../takt/tests/support/own_home.rs"]
 mod own_home;
 
+#[allow(dead_code)]
+#[path = "support/smart_http.rs"]
+mod smart_http;
+
 use std::fs;
-use std::io::{BufRead as _, BufReader, Read as _, Write as _};
-use std::net::{TcpListener, TcpStream};
+use std::io::{BufReader, Write as _};
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Command, Output};
 use std::sync::{Arc, Mutex};
+
+use smart_http::{GitStandIn, Request, read_body, read_head};
 
 /// The fixture stores of the library crate, one directory each.
 const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../takt/tests/fixtures");
@@ -79,206 +85,6 @@ fn copy_dir(from: &Path, to: &Path) {
         } else {
             fs::copy(entry.path(), &target).expect("a copied file");
         }
-    }
-}
-
-/// One request a stand-in was sent: its method, its target and its headers, each name in lower
-/// case.
-#[derive(Debug, Clone)]
-struct Request {
-    method: String,
-    target: String,
-    headers: Vec<(String, String)>,
-}
-
-impl Request {
-    fn header(&self, name: &str) -> Option<&str> {
-        self.headers
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    }
-}
-
-/// Reads one request's line and headers from `reader`; none at the end of the stream.
-fn read_head(reader: &mut BufReader<TcpStream>) -> Option<Request> {
-    let mut line = String::new();
-    if reader.read_line(&mut line).ok()? == 0 {
-        return None;
-    }
-    let mut parts = line.split_whitespace();
-    let method = parts.next()?.to_owned();
-    let target = parts.next()?.to_owned();
-    let mut headers = Vec::new();
-    loop {
-        let mut header = String::new();
-        reader.read_line(&mut header).ok()?;
-        let header = header.trim_end();
-        if header.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = header.split_once(':') {
-            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_owned()));
-        }
-    }
-    Some(Request {
-        method,
-        target,
-        headers,
-    })
-}
-
-/// Reads the body `request` announces, by `Content-Length` or in chunks.
-fn read_body(reader: &mut BufReader<TcpStream>, request: &Request) -> std::io::Result<Vec<u8>> {
-    let mut body = Vec::new();
-    if let Some(length) = request.header("content-length") {
-        body.resize(length.parse().unwrap_or(0), 0);
-        reader.read_exact(&mut body)?;
-    } else if request
-        .header("transfer-encoding")
-        .is_some_and(|value| value.eq_ignore_ascii_case("chunked"))
-    {
-        loop {
-            let mut size = String::new();
-            reader.read_line(&mut size)?;
-            let size =
-                usize::from_str_radix(size.trim().split(';').next().unwrap_or(""), 16).unwrap_or(0);
-            if size == 0 {
-                let mut trailer = String::new();
-                while reader.read_line(&mut trailer)? > 0 && !trailer.trim().is_empty() {
-                    trailer.clear();
-                }
-                break;
-            }
-            let start = body.len();
-            body.resize(start + size, 0);
-            reader.read_exact(&mut body[start..])?;
-            let mut end = [0; 2];
-            reader.read_exact(&mut end)?;
-        }
-    }
-    Ok(body)
-}
-
-/// A smart-HTTP stand-in on 127.0.0.1: the bare repositories under its root, served by
-/// `git http-backend`; with a redirect, every receive-pack request (the push) is answered with a
-/// 302 to the same path under that base instead. It logs every request it is sent.
-struct GitStandIn {
-    port: u16,
-    log: Arc<Mutex<Vec<Request>>>,
-}
-
-impl GitStandIn {
-    fn serve(root: PathBuf, redirect: Option<String>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
-        let port = listener.local_addr().expect("an address").port();
-        let log = Arc::new(Mutex::new(Vec::new()));
-        let seen = Arc::clone(&log);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let _ = Self::answer(stream, &root, redirect.as_deref(), &seen);
-            }
-        });
-        Self { port, log }
-    }
-
-    fn answer(
-        stream: TcpStream,
-        root: &Path,
-        redirect: Option<&str>,
-        log: &Mutex<Vec<Request>>,
-    ) -> std::io::Result<()> {
-        let mut reader = BufReader::new(stream.try_clone()?);
-        let Some(request) = read_head(&mut reader) else {
-            return Ok(());
-        };
-        let body = read_body(&mut reader, &request)?;
-        log.lock().expect("the log").push(request.clone());
-        let mut out = stream;
-        if let Some(base) = redirect
-            && request.target.contains("git-receive-pack")
-        {
-            return write!(
-                out,
-                "HTTP/1.1 302 Found\r\nLocation: {base}{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-                request.target
-            );
-        }
-        let (path, query) = request
-            .target
-            .split_once('?')
-            .unwrap_or((request.target.as_str(), ""));
-        let mut command = Command::new("git");
-        command
-            .arg("http-backend")
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_PROJECT_ROOT", root)
-            .env("GIT_HTTP_EXPORT_ALL", "1")
-            .env("REQUEST_METHOD", &request.method)
-            .env("PATH_INFO", path)
-            .env("QUERY_STRING", query)
-            .env("CONTENT_LENGTH", body.len().to_string())
-            .env("REMOTE_ADDR", "127.0.0.1")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        for (header, variable) in [
-            ("content-type", "CONTENT_TYPE"),
-            ("content-encoding", "HTTP_CONTENT_ENCODING"),
-            ("git-protocol", "HTTP_GIT_PROTOCOL"),
-        ] {
-            if let Some(value) = request.header(header) {
-                command.env(variable, value);
-            }
-        }
-        let mut child = command.spawn()?;
-        let mut stdin = child.stdin.take().expect("a stdin");
-        let writer = std::thread::spawn(move || {
-            let _ = stdin.write_all(&body);
-        });
-        let output = child.wait_with_output()?;
-        let _ = writer.join();
-        let cgi = output.stdout;
-        let (head, payload) = match cgi.windows(4).position(|window| window == b"\r\n\r\n") {
-            Some(at) => (&cgi[..at], &cgi[at + 4..]),
-            None => match cgi.windows(2).position(|window| window == b"\n\n") {
-                Some(at) => (&cgi[..at], &cgi[at + 2..]),
-                None => (&cgi[..0], &cgi[..]),
-            },
-        };
-        let head = String::from_utf8_lossy(head);
-        let mut status = "200 OK".to_owned();
-        let mut headers = String::new();
-        for line in head.lines() {
-            match line.split_once(':') {
-                Some((name, value)) if name.eq_ignore_ascii_case("status") => {
-                    status = value.trim().to_owned();
-                }
-                Some(_) => {
-                    headers.push_str(line.trim_end());
-                    headers.push_str("\r\n");
-                }
-                None => {}
-            }
-        }
-        write!(
-            out,
-            "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n",
-            payload.len()
-        )?;
-        out.write_all(payload)?;
-        out.flush()
-    }
-
-    fn requests(&self) -> Vec<Request> {
-        self.log.lock().expect("the log").clone()
-    }
-
-    fn url(&self, path: &str) -> String {
-        format!("http://127.0.0.1:{}/{path}", self.port)
     }
 }
 

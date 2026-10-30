@@ -2425,7 +2425,9 @@ types:
   # commit; any other answer, or no such branch, is refused. The check runs are read page by page
   # until as many as their `total_count` are read. The push goes to the project `origin` names
   # over HTTPS, or to the loopback relay it names over `http`, through no proxy, refused unless
-  # every URL git's configuration could rewrite it to is on a loopback host. It is named, never
+  # every URL git's configuration could rewrite it to is on a loopback host. A push the relay
+  # refuses fails with what git said, which names each ref refused and the relay's reason
+  # (`! [remote rejected] <ref> (<reason>)`), and the run ends on that error. It is named, never
   # defaulted to, and a scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/connectors.rs:12-19
   # read from: crates/takt/src/forge/connectors.rs:107-116
@@ -2439,6 +2441,8 @@ types:
   # read from: crates/takt/src/forge/connectors.rs:165-177
   # read from: crates/takt/src/forge/connectors.rs:456-465
   # read from: crates/takt/src/forge/connectors.rs:925-969
+  # read from: crates/takt/src/forge.rs:1567-1571
+  # read from: crates/takt/src/validator.rs:4183-4185
   # `local` is a bare repository on this machine, the hub the tree's `origin` names by its path,
   # outside the tree and sharing neither its git directory nor its object files with it (a tree
   # cloned with `git clone --no-local`): the push is `git push` to the hub, a request is a record
@@ -6468,8 +6472,9 @@ entities:
   # and a number past the largest is refused, never wrapped. Without an `origin`, or under
   # `--forge none`, `<n>` is the instant and a nonce (takt.work.TrialNumber), and the branch is
   # not pushed. With one, the operator's git pushes it to `origin` with a lease that only lets
-  # it create the branch, and the run is refused unless the push reports it created; no forge
-  # takes part. Either way it then opens the case
+  # it create the branch, and the run is refused unless the push reports it created, the refusal
+  # naming the branch and what the push reported for it, a relay's `[remote rejected]` and its
+  # reason among it; no forge takes part. Either way it then opens the case
   # `scenario-<id>-trial-<n>` for the scenario's story, whose pull request targets the trial
   # branch; with an `origin` it is refused before anything is cut when that case or its
   # branch exists, and without it such a number is passed over, so a trial base has one case;
@@ -6490,6 +6495,7 @@ entities:
   # read from: crates/takt-cli/src/main.rs:3724-3726
   # read from: crates/takt-cli/src/main.rs:2998-3013
   # read from: crates/takt/src/git.rs:805-847
+  # read from: crates/takt-cli/src/main.rs:3139-3146
   - name: takt.work.TrialBranch
     naming:
       summary: >-
