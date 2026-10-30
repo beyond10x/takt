@@ -14,7 +14,8 @@ takt's releases.
 - A write the instance classifies `refused` or `not_attempted` takes a new key next time, counted in the case's `artifacts/pull-request.refusals.json`, so a resumed run does not replay the refusal.
 - The key covers the descriptor revision, so a write after the revision moves takes a new key instead of `idempotency_conflict`.
 - A write answered `applied` or `unknown`, a provider's 5xx among them, keeps its key and replays instead of writing twice.
-- `pull-request.refusals.json` is never read or written through a link, is read as a regular file of at most 64 KiB, and a malformed one is an error; only a v1alpha2 error envelope with `unsupported` turns keying off.
+- `pull-request.refusals.json` is never read or written through a link, is read as a regular file of at most 64 KiB, and a malformed one is an error.
+- Only a v1alpha2 error envelope with `unsupported` turns keying off; any other 400 is an error.
 
 ### Changed
 
@@ -24,8 +25,11 @@ takt's releases.
 ### Fixed
 
 - `takt scenario run` fetches from and pushes to a loopback relay at `origin`'s URL without its userinfo, as `takt run` does, so a token in that URL is no longer sent to the relay.
-- Git lines to a loopback relay (`forge: connectors` and the trial route) run in an empty home without global or system git configuration, so no credential helper or `~/.netrc` reaches the relay, and are refused before sending when the repository's configuration sets a credential helper, a cookie file, a resolve entry, a URL-scoped extra header, proxy or redirect setting, a proxy off loopback, or a rewrite with userinfo; an included `http.extraHeader` is emptied.
-- A relay's or a program's control characters in a reason are printed escaped (`\u{1b}`) in `takt:` errors and the stop line, and a trial's refusal names the relay's whole reason, tabs and line breaks included.
+- Git lines to a loopback relay run in an empty home without global or system git configuration, so no credential helper or `~/.netrc` reaches the relay.
+- Such a line is refused before sending when the repository's configuration sets a credential helper, a cookie file, a resolve entry or a proxy off loopback.
+- It is also refused on a URL-scoped extra header, proxy or redirect setting, or a rewrite with userinfo; an included `http.extraHeader` is emptied.
+- Control characters in a relay's or a program's reason are printed escaped (`\u{1b}`) in `takt:` errors and the stop line.
+- A trial's refusal names the relay's whole reason, tabs and line breaks included.
 
 ## [0.24.0] - 2026-10-30
 
