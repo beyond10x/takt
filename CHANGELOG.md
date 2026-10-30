@@ -9,6 +9,10 @@ takt's releases.
 ### Added
 
 - `takt report --cases <dir>...` prints units accepted, tokens and human interventions per repository and UTC day, with a total; tokens no record states are `unknown`.
+- `takt scenario run` fetches and pushes over `http://` when `origin` is on a loopback host, following no redirect; `http://` to another host is refused before the fetch, naming the URL.
+- `forge: connectors` drives a GitHub pull request through the `github` connector: open, read, check runs and combined status, merge at the head, and the merge target's tip.
+- The run file's `forge_endpoint` calls a served Connectors instance with no credential; a value not `https://`, or `http://` to a loopback host, exits 2 naming its line.
+- On github the checks pass when every check run passed or was skipped and the combined status is `success`, or `pending` with none; a 409 merge rereads the pull request first.
 
 ### Changed
 
@@ -19,12 +23,21 @@ takt's releases.
 - A Codex or b10x-harness run with no `scan` declared is refused naming `scan: none` in `--config`; `opened.scan` in `events.jsonl` is `unset` or `none`.
 - An improvement turn that recorded a forge takt no longer has is refused under every forge when resumed; open a new turn.
 - Failed tests and failed gates in a prompt are no longer scanned; a line of a credential's shape is still left out.
+- `--harness harness` takes a loopback endpoint with no credential, or an anonymous `llm` route there, and records `none`; Loom 0.51.0 still refuses that session at its first step.
+- **Breaking:** `forge: connectors` runs `connectors invoke <connector>[/<instance>]`, as connectors 0.60.0 takes it; `forge_instance` names `gitlab` or `github`, then an optional `/<instance>`.
+- `forge: connectors` pushes to an `origin` that is `http://` to a loopback relay at that URL, port kept, following no redirect.
+- On the `connectors invoke` route, connectors 0.60.0 refuses a write without `--approval-file`, which takt does not pass: open and merge fail naming it; `forge_endpoint` is the route.
+- engineering-protocols 0.15.2 (`pr.open` opens through the run's forge) and Loom 0.51.0.
 
 ### Removed
 
 - **Breaking:** `--forge bot` and its route: clap refuses `--forge bot` with exit 2, and a run file whose `forge` is `bot` is refused naming the file and the line.
 - **Breaking:** the `gates` scan adapter and `B10X_GATES_POLICY`; a run file's `scan: gates` is refused naming the file and the line, and `none` is the one adapter.
 - The container image no longer ships `b10x-gates`.
+
+### Fixed
+
+- `forge: connectors` writes its open and merge answers under the names `pr.open` and `repository.merge` declare; a run through it was refused at `pr.open` before.
 
 ## [0.23.0] - 2026-10-30
 
