@@ -782,7 +782,8 @@ pub(crate) fn sweeping() -> std::sync::RwLockWriteGuard<'static, ()> {
 /// carries a mark of this process's calls but none of these. Changed only while [`RUNNING`]
 /// is held.
 #[cfg(target_os = "macos")]
-static LIVE: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+static LIVE: std::sync::Mutex<std::collections::BTreeSet<String>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
 
 /// The variable every child of [`run_child`] carries, its value unique to the call: a process
 /// that still carries it after the child ended was started by the child.

@@ -387,6 +387,29 @@ impl World {
             &self.remote,
             &["config", "uploadpack.hideRefs", "refs/heads/trial"],
         );
+        // A git that records a push to `origin`'s URL in `origin`'s remote-tracking refs would
+        // tell the run of `trial/0` without a fetch; the run is to learn of it only by the push.
+        git(
+            &self.repo,
+            &["update-ref", "-d", "refs/remotes/origin/trial/0"],
+        );
+        assert_eq!(
+            git_out(&self.repo, &["ls-remote", "origin", "refs/heads/trial/*"]),
+            "",
+            "uploadpack.hideRefs does not hide trial/0 from a fetch with this git"
+        );
+        assert_eq!(
+            git_out(
+                &self.repo,
+                &[
+                    "for-each-ref",
+                    "refs/remotes/origin/trial",
+                    "refs/heads/trial"
+                ]
+            ),
+            "",
+            "the checkout knows a trial branch before the run"
+        );
     }
 }
 

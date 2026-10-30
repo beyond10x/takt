@@ -2335,13 +2335,13 @@ types:
   # `pr.open` opens as it would without it. A remote URL is shown without its userinfo wherever
   # takt prints one. `none` opens nothing and registers none of the three forge validators.
   # read from: crates/takt/src/forge.rs:355-401
-  # read from: crates/takt/src/forge.rs:1720
-  # read from: crates/takt/src/forge.rs:1537-1571
+  # read from: crates/takt/src/forge.rs:1721
+  # read from: crates/takt/src/forge.rs:1538-1572
   # read from: crates/takt/src/git.rs:1990
-  # read from: crates/takt/src/forge.rs:1660-1662
+  # read from: crates/takt/src/forge.rs:1661-1663
   # read from: crates/takt/src/git.rs:1688-1693
   # read from: crates/takt/src/git.rs:1263-1266
-  # read from: crates/takt/src/forge.rs:1642-1651
+  # read from: crates/takt/src/forge.rs:1643-1652
   # read from: crates/takt/src/forge.rs:383-392
   # read from: crates/takt/src/forge.rs:58-72
   # read from: crates/takt-cli/src/main.rs:1881-1888
@@ -5157,7 +5157,7 @@ entities:
   # not in the repository is missing.
   # read from: crates/takt/src/git.rs:190-201
   # read from: crates/takt/src/git.rs:1982-1992
-  # read from: crates/takt/src/forge.rs:1456-1465
+  # read from: crates/takt/src/forge.rs:1457-1466
   # read from: crates/takt/src/git.rs:1615-1632
   # read from: crates/takt/src/run.rs:6437-6446
   # A step or an observation that puts something else in the cases directory's own place (a
@@ -5608,12 +5608,12 @@ entities:
   # read from: crates/takt/src/validator.rs:2105-2119
   # read from: crates/takt/src/validator.rs:1829-1831
   # read from: crates/takt/src/validator.rs:2198-2213
-  # read from: crates/takt/src/forge.rs:1291-1314
+  # read from: crates/takt/src/forge.rs:1292-1315
   # read from: crates/takt/src/validator.rs:4138
   # read from: crates/takt/src/validator.rs:5358
   # read from: docs/design/takt.md:69-71
   # read from: docs/design/takt.md:86-88
-  # read from: crates/takt/src/forge.rs:1475-1522
+  # read from: crates/takt/src/forge.rs:1476-1523
   # read from: crates/takt/src/validator.rs:1413-1433
   # read from: crates/takt/src/validator.rs:5724-5747
   # read from: crates/takt/src/git.rs:3092-3096
