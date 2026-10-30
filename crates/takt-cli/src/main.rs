@@ -76,7 +76,8 @@ enum Commands {
     Trace(TraceArgs),
     /// Print where runs' time and tokens went: one table across the runs given (wall time
     /// split by actor, steps, model calls, turns, tokens, cost), then per run the actors'
-    /// shares, a row per step, the defects and what the sources did not record.
+    /// shares, a row per step, the defects and what the sources did not record. With --cases,
+    /// instead, the units accepted, tokens and interventions per repository and UTC day.
     #[command(after_help = REPORT_EXIT_CODES)]
     Report(ReportArgs),
     /// Write one offline HTML page of the runs under a directory: every `takt-trace/1` file
@@ -454,8 +455,17 @@ struct TraceArgs {
 }
 
 #[derive(clap::Args)]
-#[command(group(clap::ArgGroup::new("input").required(true).multiple(true).args(["case", "trace"])))]
+#[command(group(clap::ArgGroup::new("input").required(true).multiple(true).args(["case", "trace", "cases"])))]
 struct ReportArgs {
+    /// A cases directory, `<repo>/.takt/cases` or `<repo>/.engineering/cases`; repeatable.
+    /// Prints, instead of a run report, one row per repository and UTC day with the units
+    /// accepted (cases whose last stop is `Completed (accepted)`, on that run's day), the
+    /// tokens the harness reported on the runs opened that day (`unknown` when a harness step
+    /// recorded none, or 0) and the interventions (decisions in `authority.yaml` by a
+    /// `human:` approver, granted or denied, on the day given), then a total row. Text only;
+    /// not beside --case, --steps or --trace.
+    #[arg(long, value_name = "DIR", num_args = 1.., conflicts_with_all = ["case", "steps", "trace"])]
+    cases: Vec<PathBuf>,
     /// A case directory, holding `events.jsonl`; repeatable.
     #[arg(long, value_name = "DIR")]
     case: Vec<PathBuf>,
@@ -467,7 +477,7 @@ struct ReportArgs {
     #[arg(long, value_name = "FILE")]
     trace: Vec<PathBuf>,
     /// How to print: `text` (markdown), or `json`, one document with each run's outcome, stop
-    /// and repository obligations.
+    /// and repository obligations; `json` is refused beside --cases.
     #[arg(long, value_enum, default_value = "text")]
     format: ShowFormat,
 }
@@ -498,8 +508,8 @@ const TRACE_EXIT_CODES: &str = "Exit codes:
 /// What `takt report --help` says about the exit codes.
 const REPORT_EXIT_CODES: &str = "Exit codes:
   0  printed
-  1  refused: a case has no events.jsonl, a record, steps file or trace does not read, or --steps is given more often than --case; the reason on stderr
-  2  the arguments do not parse, or neither --case nor --trace is given";
+  1  refused: a case has no events.jsonl, a record, steps file or trace does not read, or --steps is given more often than --case; with --cases, a cases directory, an events.jsonl or an authority.yaml that does not read (named); the reason on stderr
+  2  the arguments do not parse, neither --case, --trace nor --cases is given, --cases is given beside --case, --steps or --trace, or --format json beside --cases";
 
 #[derive(Subcommand)]
 enum ProtocolCommands {
@@ -1062,6 +1072,16 @@ fn parsed() -> Result<Cli> {
                 args.configured(run)?;
             }
         }
+        Commands::Report(args)
+            if !args.cases.is_empty() && matches!(args.format, ShowFormat::Json) =>
+        {
+            Cli::command()
+                .error(
+                    clap::error::ErrorKind::ArgumentConflict,
+                    "--format json does not apply to --cases, which prints text only",
+                )
+                .exit();
+        }
         _ => {}
     }
     Ok(cli)
@@ -1583,11 +1603,16 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             Ok(EXIT_DONE)
         }
         Commands::Report(ReportArgs {
+            cases,
             case,
             steps,
             trace,
             format,
         }) => {
+            if !cases.is_empty() {
+                takt::report::print_case_sums(&takt::report::case_sums(&cases)?, out)?;
+                return Ok(EXIT_DONE);
+            }
             if steps.len() > case.len() {
                 return Err(anyhow!(
                     "--steps is given {} times for {} --case: give at most one per case, in the same order",

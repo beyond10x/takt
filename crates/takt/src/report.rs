@@ -918,6 +918,239 @@ pub fn print_json(traces: &[Trace], out: &mut dyn Write) -> std::io::Result<()> 
     writeln!(out, "{}", serde_json::json!({ "runs": runs }))
 }
 
+/// The day of `takt report --cases` an instant no record states, or one that does not read as
+/// one, counts on.
+pub const UNKNOWN_DAY: &str = "unknown";
+
+/// The figures `takt report --cases` sums for one repository on one UTC day, or over all of
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DayFigures {
+    /// The cases whose last `stop` line is `Completed (accepted)`, each on the day of the run
+    /// that wrote that line. A scenario case's held-out result does not change it.
+    pub accepted: u64,
+    /// The tokens the harness reported on the runs opened that day, read by the scorecard's
+    /// rule (`scorecard::runs`): a validator's step adds 0, `skipped` lines and lines after a
+    /// run's `stop` are not read, and the `stop` line's own `tokens` never is. None, printed
+    /// `unknown`, when a harness step of one of them recorded no tokens, or 0.
+    pub tokens: Option<u64>,
+    /// The decisions of the cases' `authority.yaml` by a person (an approver `human:<name>`),
+    /// granted or denied, each on the day it was given (`granted_at`); a grant by an agent role
+    /// is none.
+    pub interventions: u64,
+}
+
+impl Default for DayFigures {
+    fn default() -> Self {
+        Self {
+            accepted: 0,
+            tokens: Some(0),
+            interventions: 0,
+        }
+    }
+}
+
+impl DayFigures {
+    fn add_tokens(&mut self, tokens: Option<u64>) -> anyhow::Result<()> {
+        self.tokens = match (self.tokens, tokens) {
+            (Some(sum), Some(tokens)) => Some(
+                sum.checked_add(tokens)
+                    .ok_or_else(|| anyhow::anyhow!("the tokens summed exceed {}", u64::MAX))?,
+            ),
+            _ => None,
+        };
+        Ok(())
+    }
+
+    fn add(&mut self, other: &Self) -> anyhow::Result<()> {
+        let overflow = || anyhow::anyhow!("a sum exceeds {}", u64::MAX);
+        self.accepted = self
+            .accepted
+            .checked_add(other.accepted)
+            .ok_or_else(overflow)?;
+        self.interventions = self
+            .interventions
+            .checked_add(other.interventions)
+            .ok_or_else(overflow)?;
+        self.add_tokens(other.tokens)
+    }
+}
+
+/// One row of `takt report --cases`: a repository, a UTC day, its figures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayRow {
+    /// The repository: the directory above the cases root a `--cases` argument ends in
+    /// (`<repo>/.takt/cases`, `<repo>/.engineering/cases`), else the argument as given.
+    pub repository: String,
+    /// The UTC date, `YYYY-MM-DD`, or [`UNKNOWN_DAY`].
+    pub day: String,
+    /// What it sums to.
+    pub figures: DayFigures,
+}
+
+/// What `takt report --cases` prints: a row per repository and day, in that order, and their
+/// total.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaseSums {
+    /// The rows.
+    pub rows: Vec<DayRow>,
+    /// The rows summed.
+    pub total: DayFigures,
+}
+
+/// The repository a cases directory belongs to ([`DayRow::repository`]).
+fn repository_of(cases: &std::path::Path) -> String {
+    for root in crate::case::CASE_ROOTS {
+        if cases.ends_with(root)
+            && let Some(repository) = cases.parent().and_then(std::path::Path::parent)
+        {
+            let shown = repository.display().to_string();
+            return if shown.is_empty() {
+                ".".to_owned()
+            } else {
+                shown
+            };
+        }
+    }
+    cases.display().to_string()
+}
+
+/// The UTC date of an event line's instant, or [`UNKNOWN_DAY`] for none and one that does not
+/// read.
+fn day_of(at: Option<&str>) -> String {
+    at.filter(|at| crate::scorecard::instant(at).is_some())
+        .and_then(|at| at.get(..10))
+        .map_or_else(|| UNKNOWN_DAY.to_owned(), str::to_owned)
+}
+
+/// Sums, per repository and UTC day, the case directories under each cases directory in
+/// `roots`: the units accepted, the tokens and the interventions ([`DayFigures`]). Each run
+/// counts on the UTC date of its `opened` line, each decision on that of its `granted_at`.
+///
+/// # Errors
+/// A cases directory that does not read, a case's `events.jsonl` or `authority.yaml` that does
+/// not read (each named), or a sum past `u64::MAX`.
+pub fn case_sums(roots: &[std::path::PathBuf]) -> anyhow::Result<CaseSums> {
+    use anyhow::Context as _;
+    let mut days: BTreeMap<(String, String), DayFigures> = BTreeMap::new();
+    for root in roots {
+        let repository = repository_of(root);
+        let mut cases = Vec::new();
+        for entry in std::fs::read_dir(root)
+            .with_context(|| format!("read the cases directory {}", root.display()))?
+        {
+            let entry =
+                entry.with_context(|| format!("read the cases directory {}", root.display()))?;
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                cases.push((
+                    entry.file_name().to_string_lossy().into_owned(),
+                    entry.path(),
+                ));
+            }
+        }
+        cases.sort();
+        for (name, dir) in cases {
+            let lines = crate::events::Events::new(&dir).read()?;
+            // `scorecard::runs` opens one row per `opened` line, in their order.
+            let opened = lines
+                .iter()
+                .filter(|line| line["event"] == "opened")
+                .map(|line| day_of(line["at"].as_str()));
+            let mut last_stop = None;
+            for (run, day) in crate::scorecard::runs(&name, &lines).iter().zip(opened) {
+                days.entry((repository.clone(), day.clone()))
+                    .or_default()
+                    .add_tokens(run.tokens)?;
+                // A run with no stop line has an outcome no stop names ([`scorecard::outcome_of`]).
+                if !matches!(run.stop.as_str(), "error" | "unfinished") {
+                    last_stop = Some((day, run.stop == "accepted"));
+                }
+            }
+            if let Some((day, true)) = last_stop {
+                days.entry((repository.clone(), day))
+                    .or_default()
+                    .add(&DayFigures {
+                        accepted: 1,
+                        ..DayFigures::default()
+                    })?;
+            }
+            let decisions = crate::case::Authority::read(&dir)?
+                .map(|authority| authority.decisions)
+                .unwrap_or_default();
+            for decision in decisions
+                .iter()
+                .filter(|decision| decision.approver.starts_with("human:"))
+            {
+                days.entry((repository.clone(), day_of(Some(&decision.granted_at))))
+                    .or_default()
+                    .add(&DayFigures {
+                        interventions: 1,
+                        ..DayFigures::default()
+                    })?;
+            }
+        }
+    }
+    let mut total = DayFigures::default();
+    let mut rows = Vec::new();
+    for ((repository, day), figures) in days {
+        total.add(&figures)?;
+        rows.push(DayRow {
+            repository,
+            day,
+            figures,
+        });
+    }
+    Ok(CaseSums { rows, total })
+}
+
+/// A table cell's text: escaped ([`escape`]), a `|` as `\|`.
+fn cell(text: &str) -> String {
+    escape(text).replace('|', "\\|")
+}
+
+/// Prints `sums` as one markdown table, a row per repository and day and a total row; tokens
+/// no record states in full print `unknown`, never a number, and a note says why.
+///
+/// # Errors
+/// A write that fails.
+pub fn print_case_sums(sums: &CaseSums, out: &mut dyn Write) -> std::io::Result<()> {
+    let tokens = |figures: &DayFigures| {
+        figures
+            .tokens
+            .map_or_else(|| "unknown".to_owned(), |tokens| tokens.to_string())
+    };
+    writeln!(
+        out,
+        "| repository | day (UTC) | units accepted | tokens | interventions |"
+    )?;
+    writeln!(out, "|---|---|---:|---:|---:|")?;
+    for row in &sums.rows {
+        writeln!(
+            out,
+            "| {} | {} | {} | {} | {} |",
+            cell(&row.repository),
+            cell(&row.day),
+            row.figures.accepted,
+            tokens(&row.figures),
+            row.figures.interventions
+        )?;
+    }
+    writeln!(
+        out,
+        "| total | | {} | {} | {} |",
+        sums.total.accepted,
+        tokens(&sums.total),
+        sums.total.interventions
+    )?;
+    if sums.total.tokens.is_none() {
+        writeln!(
+            out,
+            "\ntokens `unknown`: a harness step of a run that day recorded no tokens, or 0, which is never read as 0."
+        )?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

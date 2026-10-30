@@ -1,0 +1,5 @@
+- capability: repository.merge
+  decision: granted
+  approver: agent:takt-delivery
+  granted_at: 2026-10-01T09:01:30.000000Z
+  revision: 1111111111111111111111111111111111111111

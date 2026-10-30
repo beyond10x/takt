@@ -784,7 +784,7 @@ pub(crate) fn opened_layers(line: &serde_json::Value) -> Option<BTreeMap<String,
 }
 
 /// The runs of one case's record, in the order they ran.
-fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
+pub(crate) fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
     let mut rows = Vec::new();
     let mut open: Option<Span> = None;
     for line in lines {

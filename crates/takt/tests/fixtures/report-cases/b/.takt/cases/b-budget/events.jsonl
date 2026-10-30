@@ -1,0 +1,4 @@
+{"at":"2026-10-02T10:00:00.000000Z","step":0,"event":"opened","case":"b-budget","protocol":"story.delivery/1","binary":"bee77822aa9ac86df153de9871b962b419d195f3"}
+{"at":"2026-10-02T10:02:00.000000Z","step":1,"event":"step","by":"harness","name":"claude-code","action":"tests.write","tokens":4321}
+{"at":"2026-10-02T11:00:00.000000Z","step":2,"event":"step","by":"harness","name":"claude-code","action":"implementation.edit"}
+{"at":"2026-10-02T11:00:00.100000Z","step":2,"event":"stop","stop":"Hours (1)","steps":2,"tokens":4321,"completed":false}

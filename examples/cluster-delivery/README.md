@@ -54,7 +54,7 @@ architecture.svg` renders it again.
 |---|---|
 | `kubectl -n loom-agents get loomagent` | 3 runs `Completed`, exit code 0 |
 | `curl -s https://api.github.com/repos/beyond10x/<repo>/pulls/<n>` | `"merged": true`, `user.login` `b10x-bot[bot]`, for 3 pull requests in 2 repositories |
-| `takt report --cases <dir>` | units accepted, tokens and interventions per run (*open*: `story:report-sums-cases`) |
+| `takt report --cases <dir>...` | units accepted, tokens and interventions per repository and day, and their total |
 
 ## Stop rules
 
@@ -69,7 +69,6 @@ architecture.svg` renders it again.
 |---|---|---|
 | no secret in the agent's container | the harness session runs as the same user in the same container as takt, so it can read every key mounted there; Loom's `spec.boundary` puts them in a second container that relays the model, the forge's operations and git on loopback | `story:connectors-forge-speaks-github-at-an-endpoint`, `story:git-and-model-through-loopback-relays`, `story:example-agent-runs-credential-free` |
 | a forge write whose answer was lost | it is read back, never sent twice | `story:fenced-forge-dispatch` |
-| a summary across cases | `takt report --cases` sums what the runs did | `story:report-sums-cases` |
 
 ## The three stories
 

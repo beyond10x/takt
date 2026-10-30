@@ -3,7 +3,7 @@ title: Read a run report
 sidebar_position: 10
 description: Turn a case's run record into a trace and a report of where its time and tokens went.
 lede: takt trace and takt report read a case's events.jsonl back as one trace per run and a table of where the wall time and the tokens went.
-source: takt trace --help and takt report --help at 0.14.0; crates/takt/src/trace.rs; crates/takt/src/report.rs; docs/metrics/README.md; takt trace and takt report on a story case of takt 0.14.0, 2026-10-26
+source: takt trace --help and takt report --help at 0.14.0; crates/takt/src/trace.rs; crates/takt/src/report.rs; docs/metrics/README.md; takt trace and takt report on a story case of takt 0.14.0, 2026-10-26; takt report --cases on crates/takt/tests/fixtures/report-cases, 2026-10-30
 ---
 
 # Read a run report
@@ -54,6 +54,34 @@ A run's step table, from the story case of [Run a story](./run-a-story.md):
 Cost is `-` there: the record states none, and a figure it lacks is never 0. How to read the token and
 cost figures:
 [Methodology](../self-improvement/methodology.md).
+
+## Sum many cases by repository and day
+
+`takt report --cases` takes cases directories instead of runs, `<repo>/.takt/cases` or the older
+`<repo>/.engineering/cases`, one or more, and prints one row per repository and UTC day, then a total:
+
+```console
+$ takt report --cases a/.engineering/cases b/.takt/cases
+| repository | day (UTC) | units accepted | tokens | interventions |
+|---|---|---:|---:|---:|
+| a | 2026-10-01 | 1 | 3000 | 0 |
+| a | 2026-10-02 | 1 | 500 | 1 |
+| b | 2026-10-02 | 0 | unknown | 0 |
+| total | | 2 | unknown | 1 |
+
+tokens `unknown`: a harness step of a run that day recorded no tokens, or 0, which is never read as 0.
+```
+
+- **units accepted**: cases whose last `stop` line is `Completed (accepted)`, counted on the day of
+  the run that wrote it. A scenario's held-out result does not change it.
+- **tokens**: the harness's `tokens` on the `step` lines of the runs opened that day, read as
+  `takt scorecard` reads them. A harness step with no count, or 0, makes the figure `unknown`;
+  the `stop` line's total is never used in its place.
+- **interventions**: entries of each case's `authority.yaml` whose approver is `human:<name>`,
+  granted or denied, on the day they were given. A grant by an agent role is not one.
+
+The repository is the directory above `.takt/cases` or `.engineering/cases`, or the argument as
+given when it ends in neither. The output is text only: `--format json` beside `--cases` is refused.
 
 ## Older records
 
