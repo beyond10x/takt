@@ -219,6 +219,12 @@ impl World {
             &self.remote,
             &["config", "uploadpack.hideRefs", "refs/heads/trial"],
         );
+        // A git that records a push to `origin`'s URL in `origin`'s remote-tracking refs (git
+        // 2.56) would tell the run of `trial/0` without a fetch.
+        git(
+            &self.repo,
+            &["update-ref", "-d", "refs/remotes/origin/trial/0"],
+        );
     }
 }
 
@@ -260,6 +266,11 @@ fn a_collision_the_fetch_would_number_past_does_not_refuse_the_run() {
             world.remote.to_str().expect("utf-8"),
             &format!("{}:refs/heads/trial/0", world.seed),
         ],
+    );
+    // Before the fetch the checkout knows no trial, whatever a push to `origin`'s URL records.
+    git(
+        &world.repo,
+        &["update-ref", "-d", "refs/remotes/origin/trial/0"],
     );
     git(
         &world.repo,

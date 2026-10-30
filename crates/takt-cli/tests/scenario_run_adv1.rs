@@ -264,6 +264,12 @@ fn a_trial_branch_the_remote_holds_but_the_checkout_never_fetched_is_not_reused(
             &format!("{}:refs/heads/trial/0", world.seed),
         ],
     );
+    // A git that records a push to `origin`'s URL in `origin`'s remote-tracking refs (git
+    // 2.56) would tell the checkout of `trial/0`; this checkout is one that never fetched it.
+    git(
+        &world.repo,
+        &["update-ref", "-d", "refs/remotes/origin/trial/0"],
+    );
     assert!(
         world.trial_branches().is_empty()
             && git_out(&world.repo, &["for-each-ref", "refs/remotes/"]).is_empty(),
