@@ -1,6 +1,6 @@
 # Wave 48: Loom 0.52.0, the connectors forge at a served instance, git through its relay
 
-Stage: **approved (approval-record:wave-48-and-release-0-25-0); review pass 1 running**. Units a, b-stand-in and c-stand-in
+Stage: **reviews done (six review-results); b1 and c1 wait for connectors `v0.62.0`**. Units a, b-stand-in and c-stand-in
 are committed on `wave/48` (from 1c0e692c, 0.24.0's merge), head 778cb31e. Skill version 0.25.0
 (aep:implementing, wave mode).
 
@@ -38,6 +38,17 @@ Build limits in every brief: `cargo test -p <crate> --test <target>` or `cargo b
 for touched crates only; no `--workspace`, no root `cargo test`, no local full gate;
 `CARGO_PROFILE_DEV_DEBUG=line-tables-only CARGO_INCREMENTAL=0`; every `takt run` in a test passes
 `--test-cmd true`; `cargo clean` a tree whose `target/` passes 15G; stop under 35G free.
+
+## Stage 2 progress
+
+| unit | branch, head | stage |
+|---|---|---|
+| adv-a | `rv/48-adv-a` b7c34698 | 8 cases green, one note; merged into `wave/48`; tree finished |
+| adv-b | `rv/48-adv-b` f1b329cb | 4 red (one blocker: refusal count not kept across a resumed run), fixed; merged 1109b070; tree finished |
+| adv-c | `rv/48-adv-c` | 5 red (one warning: trial path sends origin's userinfo), fixed; merged a9e440f7; tree finished |
+| sec-a | `rv/48-sec-a` | 3 cases green, no findings; merged 24968c40; tree finished |
+| sec-b | `rv/48-sec-b` | 4 red (refusal record guards, unkeyed fallback), fixed; merged 2b09c607; tree finished |
+| sec-c | `rv/48-sec-c` | 4 red (global config, netrc, included extraHeader, scoped followRedirects reach the relay), fixed; merged 3ae1a408; tree finished |
 
 ## Pre-flight (2026-10-30)
 
@@ -78,6 +89,8 @@ only. Left out: every other active story (not part of this wave's release goal).
 - A relay answer of 413 is not named in the stop line.
 - After `outcome_unknown` on an open, no read-back can find the pull request (no list
   operation), so the keyed resend is the only recovery.
+- Found in review: the temporary file of three other atomic writes (case.rs, forge/local.rs,
+  promotion.rs) follows a planted link; story:atomic-writes-follow-no-link (draft).
 
 ## Commits this wave makes
 
