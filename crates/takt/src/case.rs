@@ -2254,6 +2254,102 @@ pub fn resumable(
 /// The most approval commits [`approvals_only`] walks back through.
 const APPROVALS_AT_MOST: usize = 64;
 
+/// The case's record of the base updates takt made, under its directory: a JSON list of
+/// [`BaseUpdate`], one per update, in the order made. Written by `repository.merge` alone
+/// ([`record_base_update`]), in the case directory no step may change; what the rider rule
+/// ([`approvals_only`]) reads a merge commit above the revision against.
+pub const BASE_UPDATE_RECORD: &str = "artifacts/base-update.json";
+
+/// The most base updates a case records, and so the most [`approvals_only`] walks through.
+pub const BASE_UPDATES_AT_MOST: usize = 16;
+
+/// One base update: takt's merge commit `merge` of the base's tip `base_tip`, the tip the judge
+/// guard judged, into the pull request's head `previous_head`, the head its first parent and the
+/// tip its second, at the instant `at`. Made when the forge reads the pull request behind its
+/// base ([`crate::forge::Forge::behind_base`]), so a host that merges only a head up to date
+/// with its base merges it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BaseUpdate {
+    /// The pull request's head the base was merged into, the merge's first parent.
+    pub previous_head: String,
+    /// The base's tip merged, the merge's second parent.
+    pub base_tip: String,
+    /// The merge commit.
+    pub merge: String,
+    /// When it was made, `YYYY-MM-DDTHH:MM:SSZ`.
+    pub at: String,
+}
+
+/// The base updates the case at `case_dir` recorded ([`BASE_UPDATE_RECORD`]); none when there
+/// is no record. A record that does not read as a list of updates, or holds more than
+/// [`BASE_UPDATES_AT_MOST`], is none too: nothing rides on it.
+#[must_use]
+pub fn base_updates_of(case_dir: &Path) -> Vec<BaseUpdate> {
+    std::fs::read(case_dir.join(BASE_UPDATE_RECORD))
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<Vec<BaseUpdate>>(&bytes).ok())
+        .filter(|updates| updates.len() <= BASE_UPDATES_AT_MOST)
+        .unwrap_or_default()
+}
+
+/// Adds `update` to the case's record of base updates at `case_dir`; refused, nothing written,
+/// once it holds [`BASE_UPDATES_AT_MOST`].
+pub fn record_base_update(case_dir: &Path, update: BaseUpdate) -> Result<()> {
+    let mut updates = base_updates_of(case_dir);
+    if updates.len() >= BASE_UPDATES_AT_MOST {
+        bail!(
+            "the case holds {BASE_UPDATES_AT_MOST} base updates in {BASE_UPDATE_RECORD}, the most it records; no other is made"
+        );
+    }
+    updates.push(update);
+    let path = case_dir.join(BASE_UPDATE_RECORD);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    let bytes = serde_json::to_vec_pretty(&updates).context("serialize the base updates")?;
+    std::fs::write(&path, bytes).with_context(|| format!("write {}", path.display()))
+}
+
+/// The first parent of `at` when `at`, read as `commit`, is a base update `updates` records
+/// ([`BaseUpdate`]): exactly two parents, the first the recorded previous head and the second
+/// the recorded base tip, that tip a descendant of the case's pinned base commit `pinned`, and
+/// its tree the one `git merge-tree --write-tree` makes of the two parents with no conflict
+/// ([`crate::git::merged_tree`]), recomputed here. `None` for any other commit.
+fn base_update_parent(
+    tree: &Path,
+    at: &str,
+    commit: &crate::git::Commit,
+    pinned: Option<&str>,
+    updates: &[BaseUpdate],
+) -> Result<Option<String>> {
+    let ([first, second], Some(pinned)) = (commit.parents.as_slice(), pinned) else {
+        return Ok(None);
+    };
+    let recorded = updates.iter().any(|update| {
+        update.merge == at && update.previous_head == *first && update.base_tip == *second
+    });
+    if !recorded
+        || !crate::forge::is_object_id(pinned)
+        || crate::git::run(
+            tree,
+            &[
+                "merge-base",
+                "--is-ancestor",
+                "--end-of-options",
+                pinned,
+                second,
+            ],
+        )
+        .is_err()
+    {
+        return Ok(None);
+    }
+    let merged = crate::git::merged_tree(tree, first, second)?;
+    let own = crate::git::run(tree, &["rev-parse", "--verify", &format!("{at}^{{tree}}")])?;
+    Ok((merged.conflicted.is_empty() && merged.tree == own).then(|| first.clone()))
+}
+
 /// The largest file [`approvals_only`] reads as a record; the store's record of an approval is
 /// a few hundred bytes.
 const RECORD_AT_MOST: u64 = 64 << 10;
@@ -2393,15 +2489,47 @@ fn is_kept(
 ///   in the planning store changed, byte for byte the file the case keeps at `revision` as
 ///   [`KEPT_MOVE`].
 ///
+/// Besides, in any place, a base update `repository.merge` made and recorded in the case
+/// ([`BaseUpdate`], [`BASE_UPDATE_RECORD`]), the walk going on from its first parent: exactly
+/// two parents, the first the recorded previous head and the second the recorded base tip,
+/// which descends from the case's pinned base commit, and a tree equal to the clean merge of the
+/// two that `git merge-tree --write-tree` makes again here. It rides for a case with no story
+/// too; a move to `implemented` below one is still the last of the story's riders. A merge
+/// commit not recorded, whose tree is not that merge, whose second parent is not the recorded
+/// tip or does not descend from the base, rides on nothing.
+///
 /// The case stays at `revision`, the one the grant was given at and every claim is about;
 /// `pr.open` and `repository.merge` push `HEAD` with the riders above it and merge that head,
 /// so the store's records of the story reach the base with the pull request and nothing else
 /// rides along. A commit that does anything else, a file that is any other record or not
 /// byte-equal to the one kept at its path, a grant recorded twice, a second `test_result`, a
 /// move that is not last, without the `test_result` below it or a second one, or a case with
-/// no story, rides on nothing.
+/// no story above anything but base updates, rides on nothing.
 pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) -> Result<bool> {
+    let updates = base_updates_of(case_dir);
+    let pinned = if updates.is_empty() {
+        None
+    } else {
+        Branch::read(case_dir)
+            .ok()
+            .and_then(|branch| branch.base_commit)
+    };
     let Some(story) = story_of(case_dir)? else {
+        if head == revision {
+            return Ok(false);
+        }
+        // No story, so no rider: only base updates above the revision.
+        let mut at = head.to_owned();
+        for _ in 0..=updates.len() {
+            if at == revision {
+                return Ok(true);
+            }
+            let commit = crate::git::commit(tree, &at)?;
+            match base_update_parent(tree, &at, &commit, pinned.as_deref(), &updates)? {
+                Some(first) => at = first,
+                None => return Ok(false),
+            }
+        }
         return Ok(false);
     };
     let case = case_dir
@@ -2447,12 +2575,19 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
     // Whether the head is the move, which rides only with the `test_result` below it.
     let mut moved_last = false;
     let mut at = head.to_owned();
-    // One approval's commit per grant, one `test_result` and one move, then `revision`.
-    for depth in 0..=grants.min(APPROVALS_AT_MOST) + 2 {
+    // How many of the story's riders the walk passed: the move rides only as the first.
+    let mut riders = 0usize;
+    // One approval's commit per grant, one `test_result` and one move, each base update
+    // recorded, then `revision`.
+    for _ in 0..=grants.min(APPROVALS_AT_MOST) + 2 + updates.len() {
         if at == revision {
             return Ok(!moved_last || test_result_rode);
         }
         let commit = crate::git::commit(tree, &at)?;
+        if let Some(first) = base_update_parent(tree, &at, &commit, pinned.as_deref(), &updates)? {
+            at = first;
+            continue;
+        }
         let [parent] = commit.parents.as_slice() else {
             return Ok(false);
         };
@@ -2461,7 +2596,7 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
         };
         let rides = if commit.subject == moved {
             moved_last = true;
-            depth == 0
+            riders == 0
                 && match changes.as_slice() {
                     [change] => {
                         change.status == "M"
@@ -2498,6 +2633,7 @@ pub fn approvals_only(tree: &Path, revision: &str, head: &str, case_dir: &Path) 
         if !rides {
             return Ok(false);
         }
+        riders += 1;
         at.clone_from(parent);
     }
     Ok(false)

@@ -484,6 +484,17 @@ forge_endpoint: http://127.0.0.1:8402
 - **Merge.** The merge sends the head the checks were read on. A merge that fails, a 409 among
   them, is no merge: the pull request is read again before any further write, and one that is no
   longer open at that head is not merged at all.
+- **Behind its base.** Before the merge, `repository.merge` reads whether the pull request is
+  behind its base: on `github` when `mergeable_state` is `behind`, on `gitlab` when
+  `diverged_commits_count` is above 0 or `detailed_merge_status` is `need_rebase`. One that is
+  behind is brought up to date once per merge attempt: the base's tip the judge guard judged is
+  merged into the head as takt's own merge commit (first parent the head, second that tip, the
+  run's commit identity), recorded in the case's `artifacts/base-update.json` (previous head,
+  base tip, merge, time), scanned and pushed as takt's riders are, and merged at that head once
+  its checks pass. A ruleset that requires the branch to be up to date then accepts the merge. A
+  base that conflicts with the head stops naming the conflicting files, with nothing committed,
+  pushed or merged. A state the provider has not computed yet reads as not known, and the merge
+  goes as it would without the read.
 - **Keyed writes.** With `forge_endpoint` the open and the merge each carry an `idempotency_key`:
   `takt-` and a SHA-256 of the case's id, the operation, the instance's descriptor revision and
   the input, so the same case and write send the same key. An instance with standing grants
@@ -548,7 +559,9 @@ local_checks: [cargo, test, --quiet]
   `git merge-tree --write-tree` of the base's tip and the head, a merge commit, then the base moved
   from the tip it was judged at to that commit. A conflict is refused naming its paths, and a base
   another writer moved meanwhile is refused, not overwritten. A base whose tip already holds the
-  head moves no ref; the request is recorded merged by the commit that holds it.
+  head moves no ref; the request is recorded merged by the commit that holds it. A request whose
+  head does not hold the base's tip is behind it, and is first brought up to date as on the
+  connectors forge ([Behind its base](#the-connectors-forge)).
 - **Read.** A request is merged only when its record names the head and a commit on the hub's base
   holds it, so a record written by hand merges nothing. The merge target's tip is the hub's
   `refs/heads/<base>`.
