@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T02:22:16Z",
+  "actor": "human:timo",
+  "artifact": "story:a-handover-after-red-is-not-the-next-step",
+  "kind": "story",
+  "revision": 3,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI check, task check (test-library) at 75c13eb3: b10x-takt tests/handover_after_red.rs: test result: ok. 3 passed; 0 failed; 0 ignored",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/40989920234/job/123849562171"
+  }
+}

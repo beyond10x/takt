@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:report-sums-cases
 kind: story
-status: active
+status: implemented
 title: takt report --cases sums units accepted, tokens and interventions
 summary: per repository and UTC day, from events.jsonl and authority.yaml
 tags:
@@ -32,10 +32,11 @@ scope:
   path: examples/cluster-delivery/README.md
 - confidence: inferred
   path: website/docs/guides/read-a-run-report.md
-revision: 9
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:22:44Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T21:22:44Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-10-30T02:33:48Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":2,"review_outcome":1}}}
 ---
 # Story: report-sums-cases
 

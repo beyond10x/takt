@@ -1,6 +1,6 @@
 # Wave 46: a story opens on story.delivery/3, and report --cases sums a repository's days
 
-Stage: **review fixes green, CI gate next**. Shape: one coordinator and implementor sub-agents
+Stage: **CI green at 75c13eb3, stories implemented, merge next**. Shape: one coordinator and implementor sub-agents
 in one tree, on `wave/46` from bf0fa9c6 (release 0.23.0).
 
 ## Units

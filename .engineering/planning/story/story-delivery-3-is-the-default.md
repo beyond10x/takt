@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:story-delivery-3-is-the-default
 kind: story
-status: active
+status: implemented
 title: A store story opens on story.delivery/2, which dead-ends after a red gate with passing tests
 tags:
 - finding
@@ -50,10 +50,11 @@ scope:
   path: website/docs/reference/protocols.md
 - confidence: cited
   path: website/docs/status.mdx
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-30T01:19:14Z", actor: "human:timo", revision: 4}
 - {from: "proposed", to: "active", at: "2026-10-30T01:19:15Z", actor: "human:timo", revision: 5}
+- {from: "active", to: "implemented", at: "2026-10-30T02:33:47Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":2}}}
 ---
 # A store story opens on story.delivery/2, which dead-ends after a red gate with passing tests
 

@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-30T02:22:16Z",
+  "actor": "human:timo",
+  "artifact": "story:report-sums-cases",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI check, task check (test-library) at 75c13eb3: b10x-takt tests/report_cases.rs: test result: ok. 12 passed; 0 failed; 0 ignored; tests/w46_adv_report_cases.rs: test result: ok. 8 passed; 0 failed; 0 ignored",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/40989920234/job/123849562171"
+  }
+}

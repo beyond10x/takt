@@ -1,0 +1,12 @@
+{
+  "at": "2026-10-30T02:35:07Z",
+  "actor": "human:timo",
+  "artifact": "story:a-turn-pins-the-repository-of-its-forge",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "scripts/check-finding story:a-turn-pins-the-repository-of-its-forge dcae6b06fa94f2833690d35a3539a4cc41967452: result: reproduced (the Acceptance 4 predicate, revision 8 of the story)"
+  }
+}

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-turn-pins-the-repository-of-its-forge
 kind: story
-status: active
+status: implemented
 title: A turn records the repository its forge reads, and its merge reads the same one
 summary: the forge file records only a name, so the bot route reads whatever origin names at the call
 tags:
@@ -31,10 +31,11 @@ scope:
   path: ess/domains/takt.citations.tsv
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-28T19:03:57Z", actor: "human:timo", revision: 6}
 - {from: "proposed", to: "active", at: "2026-10-28T19:03:58Z", actor: "human:timo", revision: 7}
+- {from: "active", to: "implemented", at: "2026-10-30T02:33:48Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":3,"verification":2}}}
 ---
 # Story: a-turn-pins-the-repository-of-its-forge
 
