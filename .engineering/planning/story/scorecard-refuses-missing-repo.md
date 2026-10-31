@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-refuses-missing-repo
 kind: story
-status: draft
+status: proposed
 title: takt scorecard refuses a --repo that does not exist
 tags:
 - finding
@@ -12,7 +12,10 @@ refs:
 relations:
 - informed_by: review-result:findings-hunt-3fe3f21
 - decomposes: epic:recursive-self-improvement
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 3
+transitions:
+- {from: "draft", to: "proposed", at: "2026-10-31T03:46:07Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 
@@ -37,3 +40,7 @@ source: .engineering/planning/review-result/findings-hunt-3fe3f21.md
 ## Acceptance
 
 A `--repo` that is not an existing directory exits 1, names the path and writes no file. An existing repository with no `.engineering/cases/` still prints 0 cases.
+
+The refusal goes in `scorecard::report`, before `Scorecard::read`, so the other callers of `read` keep their behaviour. The new test goes in `crates/takt/tests/scorecard.rs`, which the run's test command covers. No existing test changes.
+
+Claimed: takt pod run (gpt-6-astra), 2026-10-31
