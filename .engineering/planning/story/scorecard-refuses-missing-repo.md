@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:scorecard-refuses-missing-repo
 kind: story
-status: proposed
+status: active
 title: takt scorecard refuses a --repo that does not exist
 tags:
 - finding
@@ -13,9 +13,10 @@ relations:
 - informed_by: review-result:findings-hunt-3fe3f21
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-31T03:46:07Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-10-31T04:07:18Z", actor: "human:unknown", revision: 4, executor: "agent:takt"}
 ---
 ## Outcome
 

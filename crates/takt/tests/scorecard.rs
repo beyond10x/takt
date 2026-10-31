@@ -54,6 +54,59 @@ fn scratch(name: &str) -> Scratch {
     Scratch(dir)
 }
 
+/// A bad repository is refused by the reporting boundary before printing or saving.
+#[test]
+fn report_refuses_a_repository_that_is_not_a_directory() {
+    let root = scratch("report-invalid-repo");
+    let missing = root.join("no-such-repo");
+    let file = root.join("not-a-directory");
+    fs::write(&file, "not a repository\n").expect("a regular file");
+    let saves = root.join("scorecards");
+    for repo in [&missing, &file] {
+        for save in [None, Some(saves.as_path())] {
+            let mut out = Vec::new();
+            let error = takt::scorecard::report(
+                repo,
+                save,
+                Some("4444444444444444444444444444444444444444"),
+                None,
+                &[],
+                false,
+                &mut out,
+            )
+            .expect_err("a repository that is not a directory is refused");
+            let error = format!("{error:#}");
+            assert!(error.contains(&repo.display().to_string()), "{error}");
+            assert!(out.is_empty(), "nothing is printed before refusal");
+            assert!(!saves.exists(), "no save directory or file is written");
+        }
+    }
+    assert!(!missing.exists(), "the missing repository is not created");
+}
+
+#[test]
+fn report_accepts_an_existing_repository_without_cases() {
+    let repo = scratch("report-no-cases");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    let card = Scorecard::read(&repo).expect("an empty scorecard");
+    assert!(card.rows.is_empty());
+    assert!(card.no_record.is_empty());
+    let mut out = Vec::new();
+    let reported = takt::scorecard::report(&repo, None, None, None, &[], false, &mut out)
+        .expect("a repository without cases is accepted");
+    assert_eq!(reported.worse, 0);
+    assert_eq!(String::from_utf8(out).expect("utf-8"), print(&card));
+}
+
+#[test]
+fn read_keeps_accepting_a_missing_repository_as_empty() {
+    let root = scratch("read-missing-repo");
+    let card = Scorecard::read(&root.join("no-such-repo"))
+        .expect("only report refuses a missing repository");
+    assert!(card.rows.is_empty());
+    assert!(card.no_record.is_empty());
+}
+
 fn opened(case: &str) -> Event {
     Event::Opened {
         case: case.to_owned(),

@@ -2825,7 +2825,7 @@ types:
       # read from: crates/takt/src/scorecard.rs:237-252
       # read from: crates/takt/src/scorecard.rs:1293-1307
       # read from: crates/takt/src/scorecard.rs:2003-2005
-      # read from: crates/takt/src/scorecard.rs:2022-2024
+      # read from: crates/takt/src/scorecard.rs:2025-2027
       # read from: crates/takt-cli/src/main.rs:419-427
       - name: layers
         type: Optional<Map<takt.work.LayerName, String>>
@@ -3425,7 +3425,7 @@ types:
   # read from: crates/takt/src/scorecard.rs:987-1060
   # read from: crates/takt/src/scorecard.rs:1083-1093
   # read from: crates/takt/src/scorecard.rs:1770-1988
-  # read from: crates/takt/src/scorecard.rs:2015-2046
+  # read from: crates/takt/src/scorecard.rs:2018-2049
   # read from: crates/takt-cli/src/main.rs:401-418
   # read from: crates/takt-cli/src/main.rs:431-436
   # read from: crates/takt-cli/src/main.rs:1584-1590
