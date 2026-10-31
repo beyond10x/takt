@@ -6,6 +6,13 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-10-31
+
+### Fixed
+
+- `takt scorecard` refuses a `--repo` that is not an existing directory, exit 1 naming the path, instead of printing an empty table or saving an empty scorecard.
+- A repository that exists but has no cases still prints 0 cases.
+
 ## [0.25.0] - 2026-10-30
 
 ### Added
@@ -961,7 +968,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.25.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.26.0...HEAD
+[0.26.0]: https://github.com/beyond10x/takt/compare/0.25.0...0.26.0
 [0.25.0]: https://github.com/beyond10x/takt/compare/0.24.0...0.25.0
 [0.24.0]: https://github.com/beyond10x/takt/compare/0.23.0...0.24.0
 [0.23.0]: https://github.com/beyond10x/takt/compare/0.22.1...0.23.0

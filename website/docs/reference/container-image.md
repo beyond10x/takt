@@ -13,7 +13,7 @@ of this repository builds or pushes an image, and none is published: you build i
 loads your build.
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.25.0 .
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.26.0 .
 ```
 
 Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a [Loom](/docs/concepts/glossary#loom) agent:
