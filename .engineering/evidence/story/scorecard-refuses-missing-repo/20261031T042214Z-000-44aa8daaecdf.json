@@ -1,0 +1,13 @@
+{
+  "at": "2026-10-31T04:22:14Z",
+  "actor": "human:timo",
+  "artifact": "story:scorecard-refuses-missing-repo",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "CI check, task check (test-library) at d4ce8808: b10x-takt tests/scorecard.rs: test result: ok. 25 passed; 0 failed; 0 ignored",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/41167520241/job/124438192044"
+  }
+}
