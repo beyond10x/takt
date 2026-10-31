@@ -2012,6 +2012,9 @@ pub fn report(
     across_layers: bool,
     out: &mut dyn Write,
 ) -> Result<Reported> {
+    if !repo.is_dir() {
+        bail!("repository {} is not an existing directory", repo.display());
+    }
     if !steps.is_empty() && against.is_none() {
         bail!(
             "--steps needs --against <saved scorecard>: a targeted step is judged against the saved side's"
