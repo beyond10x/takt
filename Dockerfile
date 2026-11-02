@@ -1,5 +1,5 @@
-ARG RUST_IMAGE=docker.io/library/rust:1.99-slim-trixie
-ARG BASE_IMAGE=docker.io/library/debian:trixie-slim
+ARG RUST_IMAGE=docker.io/library/rust:1.99-slim-trixie@sha256:b8e062b1c3a80183df83d9ba187cadd2b5ab84bc78d453dbfeb2fccd5f982247
+ARG BASE_IMAGE=docker.io/library/debian:trixie-slim@sha256:f6b08b09a05725f9431502d3b5714f5c4576e82c1a84fa1debe0c24a7e0c3ec4
 
 FROM ${RUST_IMAGE} AS build
 RUN apt-get update \

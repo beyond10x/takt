@@ -1,20 +1,51 @@
 ---
 title: Container image
 sidebar_position: 7
-description: What the takt container image holds, the user it runs as, its entrypoint and mounts, and what it cannot do.
+description: Where the takt container image is published, what it holds, what a deployment supplies, the user it runs as, its entrypoint and mounts, and what it cannot do.
 lede: The image is one takt run on a mounted repository and a mounted configuration, with the tools and the Rust toolchain that run needs, as an unprivileged user.
-source: Dockerfile (ARG pins, stages, ENTRYPOINT); CHANGELOG.md 0.12.0 to 0.14.0; crates/takt/src/run_config.rs; a local build of the Dockerfile at 0.13.1 (docker inspect, tool versions), run with and without the default seccomp profile; Loom 0.44.0 crates/loom-operator/src/render.rs and admission.rs
+source: Dockerfile (ARG pins, stages, ENTRYPOINT); .github/workflows/release.yml and image.yml; CHANGELOG.md 0.12.0 to 0.14.0; crates/takt/src/run_config.rs; a local build of the Dockerfile at 0.13.1 (docker inspect, tool versions), run with and without the default seccomp profile; Loom 0.44.0 crates/loom-operator/src/render.rs and admission.rs
 ---
 
 # Container image
 
-`Dockerfile` in the repository builds an x86_64 image of takt from the source tree. No workflow
-of this repository builds or pushes an image, and none is published: you build it, and a cluster
-loads your build.
+`Dockerfile` in the repository builds an x86_64 image of takt from the source tree. From 0.27.0
+on, every release publishes it to the GitHub container registry as
+`ghcr.io/beyond10x/takt:<version>`, linux/amd64:
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.26.0 .
+$ docker pull ghcr.io/beyond10x/takt:0.27.0
 ```
+
+The release workflow (`.github/workflows/release.yml`) calls `.github/workflows/image.yml`
+after the tagged commit's checks, macOS tests and binary builds pass. That workflow builds the
+image from the tagged commit with `REVISION` set to it, checks that `takt --version` in the image
+prints `takt <version> (<commit>)` and that the revision label names the commit, refuses a version
+the registry already holds, and pushes the version's tag. A published version is never replaced,
+and there is no `latest` tag. Only a tag push publishes: a manual backfill of a release publishes
+no image. A pull request that changes `Dockerfile`, `.dockerignore` or
+`image.yml` builds the image and checks its version line, without pushing.
+
+To build it yourself:
+
+```console
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.27.0 .
+```
+
+## What a deployment supplies
+
+The image runs as it is; a deployment adds configuration and mounts, no layer of its own:
+
+| what | where |
+|---|---|
+| the repository to work on | a git checkout at `/workspace`, writable by uid 10001 ([Mounts](#mounts)) |
+| the run's configuration | `/config/agent.yaml`, or arguments after the image name ([configuration](./configuration.md)) |
+| the model endpoint | `/config/endpoint.toml` when the configuration names `endpoint_file` ([the endpoint file](./configuration.md#the-endpoint-file)) |
+| the endpoint's token | an environment variable whose name the configuration gives (`endpoint_token_env`, or `env` under `[credential]` in the endpoint file), from a Secret |
+| a forge credential | only for a forge that publishes: the variable or file the configuration's `credential` names |
+
+`HOME` is `/var/lib/takt` unless the deployment sets another; takt's state goes under
+`$XDG_STATE_HOME/takt`, else `$HOME/.local/state/takt`, unless the configuration's `state_dir`
+names a directory.
 
 Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes as a [Loom](/docs/concepts/glossary#loom) agent:
 [Deploy on Kubernetes](../guides/deploy-on-kubernetes.md).
@@ -23,11 +54,11 @@ Running it: [Run in a container](../guides/run-in-a-container.md). On Kubernetes
 
 | layer | what |
 |---|---|
-| base | Debian trixie slim (`docker.io/library/debian:trixie-slim`) |
+| base | Debian trixie slim (`docker.io/library/debian:trixie-slim`, pinned by digest) |
 | packages | `ca-certificates`, `git`, `gcc`, `libc6-dev`, `pkg-config`, `libssl-dev`, `python3`, `tini` |
 | takt | `/usr/local/bin/takt`, built `--release --locked` from the tree |
 | tools | `aep`, `b10x-harness` and `ess` in `/usr/local/bin` |
-| Rust | the toolchain of `rust:1.99-slim-trixie` with `clippy` and `rustfmt`, in `/opt/rust`, linked into `/usr/local/bin` |
+| Rust | the toolchain of `rust:1.99-slim-trixie` (pinned by digest) with `clippy` and `rustfmt`, in `/opt/rust`, linked into `/usr/local/bin` |
 
 The tools are downloaded by release URL and checked against a SHA256 in the Dockerfile:
 
@@ -35,7 +66,7 @@ The tools are downloaded by release URL and checked against a SHA256 in the Dock
 |---|---|
 | [aep](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) | 0.77.1 |
 | [b10x-harness](https://beyond10x.github.io/harness/) ([GitHub](https://github.com/beyond10x/harness)) | 0.22.0 |
-| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.76.0 |
+| [ess](https://beyond10x.github.io/ess/) ([GitHub](https://github.com/beyond10x/ess)) | 0.77.0 |
 
 `b10x-harness` 0.22.0 is the [harness](/docs/concepts/glossary#harness) that Loom 0.48.0 and metaharness 0.23.0 need. The transcript
 below was recorded from a local build of this Dockerfile at takt 0.13.1, when it pinned
@@ -149,7 +180,6 @@ mounts the claim at `/workspace`. The variable `--endpoint-token-env` names come
   Loom 0.45.0 renders `seccompProfile: RuntimeDefault` on the pod of a `Command` resource and has
   no spec field for another (read in its `render.rs`; not run in a cluster here), so whether the
   test command runs there depends on the cluster's runtime default.
-- **No registry.** Nothing is pushed.
 
 The stop rules apply in the image as anywhere: a base whose tests are red stops `RedBase` before
 any model call, exit 3 (`continue_past_red_base: true` goes on). A test command that cannot start,

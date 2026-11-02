@@ -1,7 +1,7 @@
 ---
 title: Run in a container
 sidebar_position: 6
-description: Build the takt image, give it a repository and a configuration, run it with docker, and get past the two things a container's defaults refuse.
+description: Pull or build the takt image, give it a repository and a configuration, run it with docker, and get past the two things a container's defaults refuse.
 lede: The image is one takt run on a mounted repository. At 0.14.0 its test command needed seccomp and AppArmor unconfined and an existing cargo home; neither need has been measured again at 0.21.0.
 source: Dockerfile at 0.14.0, its tool pins checked against the 0.21.0 Dockerfile; CHANGELOG.md 0.15.0 and 0.16.0; examples/loom-agent/agent.yaml and endpoint.toml (checked by crates/takt/tests/examples_config.rs); three docker runs of a local takt:0.14.0 build on a seeded volume, 2026-10-26
 ---
@@ -13,14 +13,21 @@ argument is `--config /config/agent.yaml`, which any argument after the image na
 supply two mounts: the repository at `/workspace`, and the configuration at `/config`. What the
 image holds is in [Container image](../reference/container-image.md).
 
-## 1. Build the image
+## 1. Pull or build the image
 
-No image is published, so build it from the tag:
+Every release from 0.27.0 on publishes the image to the GitHub container registry:
 
 ```sh
-git clone --branch 0.26.0 https://github.com/beyond10x/takt
+docker pull ghcr.io/beyond10x/takt:0.27.0
+docker tag ghcr.io/beyond10x/takt:0.27.0 takt:0.27.0
+```
+
+Or build it from the tag:
+
+```sh
+git clone --branch 0.27.0 https://github.com/beyond10x/takt
 cd takt
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.26.0 .
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.27.0 .
 ```
 
 The image carries takt, `aep`, `b10x-harness` 0.22.0, `ess` and a Rust toolchain with `clippy`
@@ -73,7 +80,7 @@ under another uid is refused by git as `dubious ownership`, so clone into a volu
 git -C my-repo bundle create ../my-repo.bundle main
 docker volume create takt-demo-ws
 docker run --rm -v "$PWD/my-repo.bundle:/src/my-repo.bundle:ro" -v takt-demo-ws:/workspace \
-  --entrypoint git takt:0.26.0 clone -q -b main /src/my-repo.bundle /workspace
+  --entrypoint git takt:0.27.0 clone -q -b main /src/my-repo.bundle /workspace
 ```
 
 A [story](/docs/concepts/glossary#story) run needs what [Run a story](./run-a-story.md#1-prepare-the-repository) lists, committed
@@ -86,7 +93,7 @@ docker run --rm \
   --security-opt seccomp=unconfined --security-opt apparmor=unconfined \
   -e LLM_API_KEY \
   -v takt-demo-ws:/workspace -v "$PWD/config:/config:ro" \
-  --entrypoint tini takt:0.26.0 -- \
+  --entrypoint tini takt:0.27.0 -- \
   /bin/sh -c 'mkdir -p "$HOME/.cargo/bin" && exec takt run --repo /workspace --config /config/agent.yaml "$@"' takt
 ```
 

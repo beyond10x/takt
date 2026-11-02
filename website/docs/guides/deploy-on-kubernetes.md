@@ -28,7 +28,7 @@ program once, as a Job. Loom deploys and confines it. takt decides each step ins
 | tool | for |
 |---|---|
 | `kind`, `kubectl`, `helm`, `docker` | the cluster and the install |
-| a takt image | built as in [Run in a container](./run-in-a-container.md#1-build-the-image) |
+| a takt image | `ghcr.io/beyond10x/takt:<version>` from 0.27.0 on, or built as in [Run in a container](./run-in-a-container.md#1-pull-or-build-the-image) |
 | a Loom operator image and a Loom agent image | built by you from Loom 0.45.0, which ships neither an image nor a Dockerfile |
 | a checkout of Loom at `0.45.0` | the chart `charts/loom-agents` and the CRD in `deploy/crd/` |
 
@@ -50,14 +50,17 @@ nodes:
 
 ```sh
 kind create cluster --config examples/loom-agent/kind-cluster.yaml
-docker tag takt:0.26.0 registry.example/takt:0.26.0
-kind load docker-image registry.example/takt:0.26.0 --name takt-demo
+docker tag takt:0.27.0 registry.example/takt:0.27.0
+kind load docker-image registry.example/takt:0.27.0 --name takt-demo
 kind load docker-image registry.example/loom-operator:0.45.0 --name takt-demo
 kind load docker-image registry.example/loom-agent:0.45.0 --name takt-demo
 ```
 
 The names are the ones the manifests use. The images are loaded, not pulled, and a pod pulls a
-tagged image only when the node lacks it.
+tagged image only when the node lacks it. A cluster that reaches the GitHub container registry
+can instead set the takt image to `ghcr.io/beyond10x/takt:0.27.0` in `takt-agent.yaml` and
+`workspace.yaml` and skip its
+`docker tag` and `kind load`.
 
 ## 2. Install the operator
 
@@ -119,7 +122,7 @@ metadata:
   name: takt-demo
   namespace: agents
 spec:
-  image: {repository: registry.example/takt, tag: "0.26.0"}
+  image: {repository: registry.example/takt, tag: "0.27.0"}
   command:
     entrypoint:
       - tini

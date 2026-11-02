@@ -1,11 +1,3 @@
-# Cuts a GitHub Release for every version tag: the tag's provenance is checked, `task check`
-# and the macOS tests (darwin.yml) run on the tagged commit, `takt` is built natively per target, and the archives are published
-# with a SHA256SUMS file and the notes `scripts/release-notes` prints for the tag, read from the
-# tagged CHANGELOG.md, or on a backfill from the dispatching branch's. Manual dispatch
-# exists only to backfill an annotated tag that is already cut; a release is driven by the tag push.
-#
-# Tags are bare SemVer (`0.1.0`). Every third-party action is pinned by commit: the release job
-# holds write authority, so neither action code nor the source revision it packages may float.
 name: Release
 
 on:
@@ -126,6 +118,18 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
           retention-days: 7
+
+  image:
+    name: Publish the image
+    needs: [provenance, gate, darwin, build]
+    if: github.event_name == 'push'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/image.yml
+    with:
+      ref: ${{ needs.provenance.outputs.commit }}
+      version: ${{ needs.provenance.outputs.version }}
 
   release:
     name: Publish binaries and release notes

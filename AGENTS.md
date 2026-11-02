@@ -56,8 +56,15 @@ git add <paths> && b10x-gates bot -- commit -F <file>   # staging is plain git; 
 b10x-gates scan-text --policy <file> <path>...           # or B10X_GATES_POLICY; no policy found is "not scanned", never "passed"
 cargo run -p b10x-takt-cli -- run --repo <path> --intent "<text>" --iterations 1
 cargo run -p b10x-takt-cli -- run --help     # defaults and exit codes
-docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:<version> .   # the container image; never pushed to a registry
+docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:<version> .   # the container image, locally; never pushed by hand
 ```
+
+Every release tag publishes the image as `ghcr.io/beyond10x/takt:<version>` (linux/amd64): the
+`image` job of `.github/workflows/release.yml` calls `.github/workflows/image.yml` after the gate,
+the macOS tests and the binary builds; it checks `takt --version` in the image, refuses a version
+the registry already holds and pushes. A pull request that changes `Dockerfile`, `.dockerignore`
+or `image.yml` builds the image there without pushing; build it locally only when asked, since it
+writes several GB. The base images are pinned by digest: move a digest only with its tag.
 
 The image's mount contract (`/workspace`, `/config/agent.yaml`, `/config/endpoint.toml`) is in
 `website/docs/reference/container-image.md`. `agent.yaml` is `takt run --config`
