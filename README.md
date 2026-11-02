@@ -36,7 +36,13 @@ runtime drives the case, Loom's governor decides, the harness proposes. It gives
 
 takt is not a model, a planner, a CI service or a sandbox for the harness. The harness does the work,
 [AEP](https://beyond10x.github.io/ecosystem/aep/) ([GitHub](https://github.com/beyond10x/aep)) keeps
-the plan, and no container image is published: you build one from `Dockerfile`.
+the plan.
+
+From 0.27.0 on, every release publishes a linux/amd64 container image,
+`ghcr.io/beyond10x/takt:<version>`. A deployment adds only configuration: the repository mounted
+at `/workspace`, the run's configuration at `/config/agent.yaml`, the endpoint file beside it and
+the token variable the configuration names. What it holds and what a deployment supplies:
+[Container image](https://beyond10x.github.io/takt/docs/reference/container-image).
 
 ## Status
 

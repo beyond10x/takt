@@ -1,0 +1,159 @@
+name: image
+
+on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .github/workflows/image.yml
+  workflow_call:
+    inputs:
+      ref:
+        description: The tagged commit to build the image from
+        required: true
+        type: string
+      version:
+        description: The release version, the image's tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/beyond10x/takt
+  PACKAGE: takt
+
+jobs:
+  build:
+    name: takt / image (build)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    concurrency:
+      group: image-${{ github.ref }}
+      cancel-in-progress: true
+    steps:
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          docker build --platform linux/amd64 --build-arg "REVISION=$(git rev-parse HEAD)" -t takt:check .
+
+      - name: The image's takt names this commit
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)"
+          expected="takt $version ($(git rev-parse HEAD))"
+          actual="$(docker run --rm --platform linux/amd64 --entrypoint takt takt:check --version)"
+          echo "$actual"
+          test "$actual" = "$expected"
+
+  publish:
+    name: takt / image (publish)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    concurrency:
+      group: image-publish-${{ inputs.version }}
+      cancel-in-progress: false
+    env:
+      COMMIT: ${{ inputs.ref }}
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: The version and commit are well formed
+        run: |
+          set -euo pipefail
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write the check that the version is not in the registry
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/absent.sh" <<'SCRIPT'
+          set -uo pipefail
+          reference="$IMAGE:$VERSION"
+          answer=$(docker buildx imagetools inspect "$reference" 2>&1) && status=0 || status=$?
+          if [ "$status" -eq 0 ]; then
+            echo "::error::$reference already exists; a release never replaces a published image"
+            exit 1
+          fi
+          absent=no
+          case "$answer" in
+            *": not found" | *"manifest unknown"* | *"name unknown"*)
+              [ "$status" -ne 127 ] && absent=yes ;;
+            *denied* | *DENIED* | *unauthorized* | *UNAUTHORIZED*)
+              package=$(gh api "/orgs/beyond10x/packages/container/$PACKAGE" 2>&1) && pstatus=0 || pstatus=$?
+              if [ "$pstatus" -ne 0 ] && [ "$pstatus" -ne 127 ]; then
+                case "$package" in
+                  *"HTTP 404"*) absent=yes ;;
+                esac
+              fi ;;
+          esac
+          if [ "$absent" != yes ]; then
+            echo "$answer"
+            echo "::error::the registry did not say whether $reference exists"
+            exit 1
+          fi
+          echo "$reference is not in the registry yet"
+          SCRIPT
+
+      - name: Refuse a version that already exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash "$RUNNER_TEMP/absent.sh"
+
+      - name: Free disk space
+        run: |
+          set -euo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+
+      - name: Build the image from the tagged commit
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$COMMIT"
+          docker build --platform linux/amd64 --build-arg "REVISION=$COMMIT" -t "$IMAGE:$VERSION" .
+
+      - name: The image's takt is the release
+        run: |
+          set -euo pipefail
+          actual="$(docker run --rm --platform linux/amd64 --entrypoint takt "$IMAGE:$VERSION" --version)"
+          echo "$actual"
+          test "$actual" = "takt $VERSION ($COMMIT)"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$IMAGE:$VERSION")" = "$COMMIT"
+
+      - name: Refuse a version that appeared meanwhile, then push
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          bash "$RUNNER_TEMP/absent.sh"
+          docker push "$IMAGE:$VERSION"
+          docker buildx imagetools inspect "$IMAGE:$VERSION"

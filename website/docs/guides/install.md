@@ -1,7 +1,7 @@
 ---
 title: Install
 sidebar_position: 1
-description: Install takt 0.26.0 from a release asset with its checksum, with cargo from the tag, or as a container image you build; the tools each kind of run needs beside it; and how the test command is confined.
+description: Install takt 0.26.0 from a release asset with its checksum, with cargo from the tag, or as the published container image; the tools each kind of run needs beside it; and how the test command is confined.
 lede: takt is one binary. What else you install depends on the harness, the forge and whether you deliver stories.
 source: the release asset and checksum commands (run against 0.14.0's assets); install and command -v run on a build of 0.21.0's source; cargo install --git and docker build of the Dockerfile (run at 0.14.0); takt run --help of 0.21.0; the Dockerfile; metaharness 0.23.0 (PINNED_VERSIONS of metaharness-claude); runs of a build of 0.21.0's source with Claude Code 2.1.312 and 2.1.309, 2026-10-29
 ---
@@ -68,7 +68,15 @@ cargo install --locked --path crates/takt-cli
 
 ## As a container image
 
-No takt image is published. Build one from a checkout of the tag:
+From 0.27.0 on, every release publishes a linux/amd64 image to the GitHub container registry,
+built from the tagged commit after the release's checks pass:
+
+```sh
+docker pull ghcr.io/beyond10x/takt:0.26.0
+```
+
+The tag is the release version; there is no `latest`. To build one yourself from a checkout of
+the tag:
 
 ```sh
 git clone --branch 0.26.0 https://github.com/beyond10x/takt
