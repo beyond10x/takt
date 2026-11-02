@@ -7,7 +7,7 @@ title: The release publishes the runtime image to the GitHub container registry
 summary: one wave, one pull request, the next minor; the tag waits for the orchestrator
 relations:
 - decides: story:release-publishes-the-image
-revision: 4
+revision: 5
 transitions:
 - {from: "draft", to: "approved", at: "2026-11-02T10:19:09Z", actor: "human:timo", revision: 2}
 ---
@@ -38,3 +38,13 @@ archived unbuilt.
 
 - The package's visibility in the registry, which is a setting of the organization.
 - Platforms other than linux/amd64, a `latest` tag, a chart.
+
+## Released
+
+| item | what |
+|---|---|
+| pull request | beyond10x/takt#52, merged at 97c56193 |
+| tag | 0.27.0 on 97c56193, pushed through the bot route |
+| release workflow | actions run 41432901115, success; the GitHub Release published 2026-11-02T11:47:45Z with 4 assets |
+| image | `ghcr.io/beyond10x/takt:0.27.0` in the registry, public |
+| verification | the release verification exited 0; the announcement was sent |
