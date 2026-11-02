@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:release-publishes-the-image
 kind: story
-status: active
+status: implemented
 title: Every release tag publishes the runtime image to the GitHub container registry
 summary: ghcr.io/beyond10x/takt:<version>, linux/amd64, built after the gate
 tags:
@@ -11,10 +11,11 @@ tags:
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:takt-as-a-loom-agent
-revision: 5
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-02T10:19:09Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-02T10:19:09Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-02T10:57:45Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: release-publishes-the-image
 

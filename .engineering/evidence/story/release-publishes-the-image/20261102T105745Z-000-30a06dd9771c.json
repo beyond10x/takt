@@ -1,0 +1,12 @@
+{
+  "at": "2026-11-02T10:57:45Z",
+  "actor": "human:timo",
+  "artifact": "story:release-publishes-the-image",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/41429199080/job/125223231482"
+  }
+}
