@@ -13,7 +13,7 @@ on, every release publishes it to the GitHub container registry as
 `ghcr.io/beyond10x/takt:<version>`, linux/amd64:
 
 ```console
-$ docker pull ghcr.io/beyond10x/takt:0.26.0
+$ docker pull ghcr.io/beyond10x/takt:0.27.0
 ```
 
 The release workflow (`.github/workflows/release.yml`) calls `.github/workflows/image.yml`
@@ -27,7 +27,7 @@ and there is no `latest` tag. A pull request that changes `Dockerfile`, `.docker
 To build it yourself:
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.26.0 .
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.27.0 .
 ```
 
 ## What a deployment supplies

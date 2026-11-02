@@ -50,15 +50,15 @@ nodes:
 
 ```sh
 kind create cluster --config examples/loom-agent/kind-cluster.yaml
-docker tag takt:0.26.0 registry.example/takt:0.26.0
-kind load docker-image registry.example/takt:0.26.0 --name takt-demo
+docker tag takt:0.27.0 registry.example/takt:0.27.0
+kind load docker-image registry.example/takt:0.27.0 --name takt-demo
 kind load docker-image registry.example/loom-operator:0.45.0 --name takt-demo
 kind load docker-image registry.example/loom-agent:0.45.0 --name takt-demo
 ```
 
 The names are the ones the manifests use. The images are loaded, not pulled, and a pod pulls a
 tagged image only when the node lacks it. A cluster that reaches the GitHub container registry
-can instead set the takt image to `ghcr.io/beyond10x/takt:0.26.0` in `takt-agent.yaml` and
+can instead set the takt image to `ghcr.io/beyond10x/takt:0.27.0` in `takt-agent.yaml` and
 `workspace.yaml` and skip its
 `docker tag` and `kind load`.
 
@@ -122,7 +122,7 @@ metadata:
   name: takt-demo
   namespace: agents
 spec:
-  image: {repository: registry.example/takt, tag: "0.26.0"}
+  image: {repository: registry.example/takt, tag: "0.27.0"}
   command:
     entrypoint:
       - tini
