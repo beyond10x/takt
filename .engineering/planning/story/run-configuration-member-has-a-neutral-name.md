@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:run-configuration-member-has-a-neutral-name
 kind: story
-status: active
+status: archived
 title: A loom.agent/1 document names the run configuration member runner
 summary: runner beside takt; both together refused
 tags:
@@ -11,10 +11,11 @@ tags:
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:takt-as-a-loom-agent
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-02T10:19:09Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-02T10:19:09Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "archived", at: "2026-11-02T10:19:56Z", actor: "human:timo", revision: 4}
 ---
 # Story: run-configuration-member-has-a-neutral-name
 

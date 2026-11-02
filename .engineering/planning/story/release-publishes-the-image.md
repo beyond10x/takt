@@ -4,14 +4,14 @@ id: story:release-publishes-the-image
 kind: story
 status: active
 title: Every release tag publishes the runtime image to the GitHub container registry
-summary: ghcr.io/beyond10x/work-runner:<version>, linux/amd64, built after the gate
+summary: ghcr.io/beyond10x/takt:<version>, linux/amd64, built after the gate
 tags:
 - loom-agent
 - priority:high
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:takt-as-a-loom-agent
-revision: 3
+revision: 5
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-02T10:19:09Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-02T10:19:09Z", actor: "human:timo", revision: 3}
@@ -21,7 +21,7 @@ transitions:
 ## Outcome
 
 Every release tag publishes takt's runtime image to the GitHub container registry as
-`ghcr.io/beyond10x/work-runner:<version>`, linux/amd64, built from the tagged commit's
+`ghcr.io/beyond10x/takt:<version>`, linux/amd64, built from the tagged commit's
 `Dockerfile`, so a downstream platform deploys it from the registry and adds only configuration.
 
 ## Context
@@ -30,7 +30,6 @@ Every release tag publishes takt's runtime image to the GitHub container registr
   registry"; a downstream platform adds only configuration on top.
 - Until now no workflow built or pushed an image (`website/docs/reference/container-image.md`,
   "No registry"); a deployment built its own from `Dockerfile`.
-- The image name carries no product name, so a downstream's configuration names none.
 
 ## Acceptance
 
@@ -39,7 +38,7 @@ Every release tag publishes takt's runtime image to the GitHub container registr
    tagged commit, the version and `push: true`, with `packages: write` on that job only.
 2. `image.yml` builds `Dockerfile` for linux/amd64 with `REVISION` set to the commit, checks
    that `takt --version` in the image prints `takt <version> (<commit>)`, refuses a version the
-   registry already holds, pushes `ghcr.io/beyond10x/work-runner:<version>` and reads it back.
+   registry already holds, pushes `ghcr.io/beyond10x/takt:<version>` and reads it back.
 3. A pull request that changes `Dockerfile`, `.dockerignore` or `image.yml` builds the image and
    checks its version line, with read-only permissions and no push.
 4. Every action is pinned by commit, and the `Dockerfile`'s base images are pinned by digest.
