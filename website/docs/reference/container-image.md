@@ -21,7 +21,8 @@ after the tagged commit's checks, macOS tests and binary builds pass. That workf
 image from the tagged commit with `REVISION` set to it, checks that `takt --version` in the image
 prints `takt <version> (<commit>)` and that the revision label names the commit, refuses a version
 the registry already holds, and pushes the version's tag. A published version is never replaced,
-and there is no `latest` tag. A pull request that changes `Dockerfile`, `.dockerignore` or
+and there is no `latest` tag. Only a tag push publishes: a manual backfill of a release publishes
+no image. A pull request that changes `Dockerfile`, `.dockerignore` or
 `image.yml` builds the image and checks its version line, without pushing.
 
 To build it yourself:

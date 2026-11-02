@@ -122,6 +122,7 @@ jobs:
   image:
     name: Publish the image
     needs: [provenance, gate, darwin, build]
+    if: github.event_name == 'push'
     permissions:
       contents: read
       packages: write
