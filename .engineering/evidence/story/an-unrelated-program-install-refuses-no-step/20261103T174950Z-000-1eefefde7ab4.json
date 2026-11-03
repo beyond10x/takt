@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T17:49:50Z",
+  "actor": "human:timo",
+  "artifact": "story:an-unrelated-program-install-refuses-no-step",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "VERIFIED: acceptance 1 holds since 46905fc2 (tests/support/own_home.rs in every test file that runs a guarded step; 32 files without it run none); acceptance 2: the expected_before command run under a private HOME exits 0 (approval_riders_adv2 10 passed), but as written its cp copies nothing, because command -v true names the shell builtin; with type -P true 40 copies overlapped the run and it still passed, the test binary reading its own program directories; acceptance 3 decided as refuse, naming the path of unknown origin apart from the step's own writes: tests/unattributed_program_write.rs red at the base (3 failed), green at 309189273 (3 passed). The scorecard still ranks such a StepRefused as any other (scorecard.rs rank), left unchanged",
+    "reference": "309189273"
+  }
+}
