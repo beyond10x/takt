@@ -641,7 +641,12 @@ impl Forge for AnyNumber {
         Ok(())
     }
 
-    fn open_pull_request(&self, _: &Path, _: &Path, request: &PullRequest) -> anyhow::Result<u64> {
+    fn open_pull_request(
+        &self,
+        _: &Path,
+        _: &Path,
+        request: &PullRequest,
+    ) -> takt::forge::Written<u64> {
         self.calls
             .borrow_mut()
             .push(format!("open {} #1", request.branch));
@@ -665,7 +670,7 @@ impl Forge for AnyNumber {
         Ok(Checks::Pass)
     }
 
-    fn merge(&self, _: &Path, _: &Path, number: u64, _: &str) -> anyhow::Result<()> {
+    fn merge(&self, _: &Path, _: &Path, number: u64, _: &str) -> takt::forge::Written<()> {
         self.calls.borrow_mut().push(format!("merge #{number}"));
         Ok(())
     }

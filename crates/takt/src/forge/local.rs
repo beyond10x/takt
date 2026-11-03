@@ -24,8 +24,8 @@ use anyhow::{Context as _, Result, anyhow, bail};
 
 use super::{
     Checks, Forge, Head, IdentityScan, Limits, MergeMessage, Outgoing, PullRequest,
-    PullRequestState, PullRequestView, TimedOut, exact_ref, is_object_id, put_back_tracking,
-    tracking_refs,
+    PullRequestState, PullRequestView, TimedOut, WriteError, Written, exact_ref, is_object_id,
+    put_back_tracking, tracking_refs,
 };
 use crate::git::CommitIdentity;
 
@@ -596,23 +596,27 @@ impl Forge for Local {
 
     /// Writes the request's record under the lowest number no record holds, taken with an
     /// exclusive create, so a number held is passed over and never written over; the head and
-    /// the base must be branches of the hub.
-    fn open_pull_request(&self, _: &Path, _: &Path, request: &PullRequest) -> Result<u64> {
-        self.tip_of(&request.branch)?;
-        self.tip_of(&request.base)?;
-        let dir = self.hub.join(Self::REQUESTS);
-        std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
-        let record = Request {
-            branch: request.branch.clone(),
-            base: request.base.clone(),
-            title: request.title.clone(),
-            body: request.body.clone(),
-            state: PullRequestState::Open.as_str().to_owned(),
-            checks: BTreeMap::new(),
-            merge: None,
-            head: None,
-        };
-        let bytes = serde_json::to_vec_pretty(&record).context("serialize the request")?;
+    /// the base must be branches of the hub. Every failure before the record's file is made is
+    /// `not_attempted`; a write into the file made is `unknown`, the record perhaps there.
+    fn open_pull_request(&self, _: &Path, _: &Path, request: &PullRequest) -> Written<u64> {
+        let bytes = (|| -> Result<_> {
+            self.tip_of(&request.branch)?;
+            self.tip_of(&request.base)?;
+            let dir = self.hub.join(Self::REQUESTS);
+            std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+            let record = Request {
+                branch: request.branch.clone(),
+                base: request.base.clone(),
+                title: request.title.clone(),
+                body: request.body.clone(),
+                state: PullRequestState::Open.as_str().to_owned(),
+                checks: BTreeMap::new(),
+                merge: None,
+                head: None,
+            };
+            serde_json::to_vec_pretty(&record).context("serialize the request")
+        })()
+        .map_err(WriteError::not_attempted)?;
         let mut number = 1;
         loop {
             let path = self.record(number);
@@ -628,7 +632,9 @@ impl Forge for Local {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => number += 1,
                 Err(error) => {
-                    return Err(error).with_context(|| format!("create {}", path.display()));
+                    return Err(WriteError::not_attempted(
+                        anyhow::Error::new(error).context(format!("create {}", path.display())),
+                    ));
                 }
             }
         }
@@ -730,8 +736,11 @@ impl Forge for Local {
     }
 
     /// [`Self::merge_with`], the message `Merge request #<n>: <title>`.
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
-        let title = format!("Merge request #{number}: {}", self.read(number)?.title);
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Written<()> {
+        let title = format!(
+            "Merge request #{number}: {}",
+            self.read(number).map_err(WriteError::not_attempted)?.title
+        );
         self.merge_with(
             tree,
             dir,
@@ -751,7 +760,10 @@ impl Forge for Local {
     /// ([`Local::holder`]). A conflict is [`LocalRefused::Conflict`]; else the merge commit, the
     /// tip its first parent and `head` its second, carries the run's identity and `message`, and
     /// the base moves to it only from that tip ([`LocalRefused::BaseMoved`]). The record is
-    /// marked merged after, with the merge and the head.
+    /// marked merged after, with the merge and the head. Every failure before the base moves is
+    /// `not_attempted`, but a conflict and a base another writer moved, which the hub refuses,
+    /// and a move of the base that fails with the base where it was, `refused`; a record that
+    /// cannot be marked merged once the base holds the head is `unknown`.
     fn merge_with(
         &self,
         _: &Path,
@@ -759,41 +771,41 @@ impl Forge for Local {
         number: u64,
         head: &str,
         message: &MergeMessage,
-    ) -> Result<()> {
-        let mut request = self.read(number)?;
+    ) -> Written<()> {
+        let not_sent = WriteError::not_attempted;
+        let mut request = self.read(number).map_err(not_sent)?;
         if request.state != PullRequestState::Open.as_str() {
-            bail!(
+            return Err(not_sent(anyhow!(
                 "request #{number} is {}, not open; nothing merged",
                 request.state
-            );
+            )));
         }
-        let at = self.tip_of(&request.branch)?;
+        let at = self.tip_of(&request.branch).map_err(not_sent)?;
         if at != head {
-            bail!(
+            return Err(not_sent(anyhow!(
                 "request #{number} has the head {} at {at}, not {head}; not merged",
                 request.branch
-            );
+            )));
         }
         let base = request.base.clone();
         let judged = self.judged.borrow_mut().remove(&base);
         let tip = match judged {
             Some(tip) => tip,
-            None => self.tip_of(&base)?,
+            None => self.tip_of(&base).map_err(not_sent)?,
         };
         if crate::git::run(&self.hub, &["merge-base", "--is-ancestor", head, &tip]).is_ok() {
             request.state = PullRequestState::Merged.as_str().to_owned();
-            request.merge = Some(self.holder(&tip, head)?);
+            request.merge = Some(self.holder(&tip, head).map_err(not_sent)?);
             request.head = Some(head.to_owned());
-            return self.write(number, &request);
+            return self.write(number, &request).map_err(WriteError::unknown);
         }
-        let merged = crate::git::merged_tree(&self.hub, &tip, head)?;
+        let merged = crate::git::merged_tree(&self.hub, &tip, head).map_err(not_sent)?;
         if !merged.conflicted.is_empty() {
-            return Err(LocalRefused::Conflict {
+            return Err(WriteError::refused(LocalRefused::Conflict {
                 number,
                 base,
                 paths: merged.conflicted,
-            }
-            .into());
+            }));
         }
         let text = if message.body.is_empty() {
             format!("{}\n", message.title)
@@ -806,7 +818,8 @@ impl Forge for Local {
             &[&tip, head],
             &text,
             &self.identity,
-        )?;
+        )
+        .map_err(not_sent)?;
         let reference = format!("refs/heads/{base}");
         let reason = format!("takt: merge request #{number}");
         if let Err(error) = crate::git::run(
@@ -815,20 +828,21 @@ impl Forge for Local {
         ) {
             let found = self.tip(&base);
             if found.as_deref() != Some(tip.as_str()) {
-                return Err(LocalRefused::BaseMoved {
+                return Err(WriteError::refused(LocalRefused::BaseMoved {
                     number,
                     base,
                     expected: tip,
                     found,
-                }
-                .into());
+                }));
             }
-            return Err(error.context(format!("move {base} in the hub to the merge {commit}")));
+            return Err(WriteError::refused(
+                error.context(format!("move {base} in the hub to the merge {commit}")),
+            ));
         }
         request.state = PullRequestState::Merged.as_str().to_owned();
         request.merge = Some(commit);
         request.head = Some(head.to_owned());
-        self.write(number, &request)
+        self.write(number, &request).map_err(WriteError::unknown)
     }
 
     /// The hub's `refs/heads/<base>`, fetched by its id into the tree's repository with no ref

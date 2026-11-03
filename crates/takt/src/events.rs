@@ -304,8 +304,21 @@ pub enum Event {
     },
 }
 
+/// The forge write a validator step attempted, as its `step` line records it (`forge_write`):
+/// the outcome class ([`crate::forge::WriteOutcome`]), the pull request it concerned when one
+/// was known, and the head the step read it at, or pushed for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgeWrite {
+    pub outcome: crate::forge::WriteOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
 /// One line of the file: the instant, the step, the event.
-/// On a run's `opened` line, the digest of the `llm.routes/1` document the run ran under.
+/// On a run's `opened` line, the digest of the `llm.routes/1` document the run ran under; on a
+/// `step` line, the forge write the step attempted, when it attempted one.
 #[derive(Serialize)]
 struct Line<'a> {
     at: String,
@@ -316,12 +329,15 @@ struct Line<'a> {
     llm_digest: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forge_write: Option<&'a ForgeWrite>,
 }
 
 /// The run record of one case.
 #[derive(Debug, Clone)]
 pub struct Events {
     path: PathBuf,
+    forge_write: Option<ForgeWrite>,
 }
 
 impl Events {
@@ -330,6 +346,17 @@ impl Events {
     pub fn new(case_dir: &Path) -> Self {
         Self {
             path: case_dir.join(EVENTS_FILE),
+            forge_write: None,
+        }
+    }
+
+    /// The same record, its `step` lines carrying `write` as their `forge_write` member, none
+    /// when `write` is `None`; every other line is written as [`Events::emit`] writes it.
+    #[must_use]
+    pub fn writing(&self, write: Option<&ForgeWrite>) -> Self {
+        Self {
+            path: self.path.clone(),
+            forge_write: write.cloned(),
         }
     }
 
@@ -399,9 +426,14 @@ impl Events {
                 },
                 None,
                 None,
+                None,
             )?);
         }
-        text.push_str(&Self::line(step, event, llm_digest, commit)?);
+        let forge_write = match event {
+            Event::Step { .. } => self.forge_write.as_ref(),
+            _ => None,
+        };
+        text.push_str(&Self::line(step, event, llm_digest, commit, forge_write)?);
         file.write_all(text.as_bytes())
             .with_context(|| format!("write {}", self.path.display()))
     }
@@ -430,6 +462,7 @@ impl Events {
         event: &Event,
         llm_digest: Option<&str>,
         commit: Option<&serde_json::Value>,
+        forge_write: Option<&ForgeWrite>,
     ) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
             at: instant(),
@@ -437,6 +470,7 @@ impl Events {
             event,
             llm_digest,
             commit,
+            forge_write,
         })
         .context("write an event")?;
         line.push('\n');

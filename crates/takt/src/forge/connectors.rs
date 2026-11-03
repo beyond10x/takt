@@ -96,8 +96,8 @@ use crate::scan::Scan;
 
 use super::{
     Checks, Exit, Failed, Forge, Head, IdentityScan, Outgoing, PullRequest, PullRequestState,
-    PullRequestView, Runner, commit_id, exact_ref, fresh, head_is_a_commit, is_object_id,
-    may_publish, push_over_https_with, write_request,
+    PullRequestView, Runner, WriteError, WriteOutcome, Written, commit_id, exact_ref, fresh,
+    head_is_a_commit, is_object_id, may_publish, push_over_https_with, write_request,
 };
 
 /// The program every line of the CLI route runs.
@@ -203,6 +203,50 @@ const REFUSALS_FORMAT: &str = "takt.connectors.refusals/1";
 /// made is replayed and never made twice.
 fn not_applied(classification: Option<&str>) -> bool {
     matches!(classification, Some("refused" | "not_attempted"))
+}
+
+/// The outcome class of `error`, the failure of a write sent through the instance: on the
+/// served route what its answer says ([`ServedRefused`]): `outcome_unknown` is `unknown`, a
+/// `mutation.classification` of `refused` or `not_attempted` is that class and any other
+/// `unknown`, and an answer with none is `refused` for a 4xx, the instance's refusal before any
+/// attempt (`approval_required`, `idempotency_conflict` and `unsupported` among them), else
+/// `unknown`; on the CLI route the failure envelope's code ([`Failed`], `<code>: `):
+/// `approval_required`, `unsupported`, `idempotency_conflict` and `conflict` are `refused`; a
+/// program that could not be started is `not_attempted`. Every other failure, a call that did
+/// not answer, an answer that does not read and `outcome_unknown` among them, is `unknown`.
+fn write_failure(error: anyhow::Error) -> WriteError {
+    if let Some(refusal) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<ServedRefused>())
+    {
+        let outcome = if refusal.is_outcome_unknown() {
+            WriteOutcome::Unknown
+        } else {
+            match refusal.classification.as_deref() {
+                Some("refused") => WriteOutcome::Refused,
+                Some("not_attempted") => WriteOutcome::NotAttempted,
+                Some(_) => WriteOutcome::Unknown,
+                None if (400..500).contains(&refusal.status) => WriteOutcome::Refused,
+                None => WriteOutcome::Unknown,
+            }
+        };
+        return WriteError::of(outcome, error);
+    }
+    let code = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<Failed>())
+        .and_then(|failed| {
+            failed
+                .stderr
+                .split_once(": ")
+                .map(|(code, _)| code.to_owned())
+        });
+    match code.as_deref() {
+        Some("approval_required" | "unsupported" | "idempotency_conflict" | "conflict") => {
+            WriteError::refused(error)
+        }
+        _ => super::run_failure(error),
+    }
 }
 
 /// The most bytes of a case's refusal record ([`ConnectorsForge::REFUSALS`]) that are read.
@@ -1168,14 +1212,23 @@ impl ConnectorsForge {
     /// The provider's `body` of `outcome`, an operation's result; a provider status outside
     /// 2xx is the error.
     fn body_of(&self, operation: &str, outcome: &Value) -> Result<Value> {
+        self.written_body(operation, outcome)
+            .map_err(anyhow::Error::from)
+    }
+
+    /// [`Self::body_of`] of a write, its failure classed: a provider status that is a 4xx is
+    /// `refused`, the provider's own refusal, and any other outside 2xx `unknown`.
+    fn written_body(&self, operation: &str, outcome: &Value) -> Written<Value> {
         match outcome["status"].as_u64() {
-            Some(200..=299) | None => {}
-            Some(status) => bail!(
-                "{} reported the provider's status {status}",
-                self.named(operation)
-            ),
+            Some(200..=299) | None => Ok(outcome["body"].clone()),
+            Some(status) => Err(super::by_status(
+                u16::try_from(status).ok(),
+                anyhow!(
+                    "{} reported the provider's status {status}",
+                    self.named(operation)
+                ),
+            )),
         }
-        Ok(outcome["body"].clone())
     }
 
     /// Invokes the write `operation` once on `input` for the case whose artifacts directory is
@@ -1191,6 +1244,10 @@ impl ConnectorsForge {
     /// reads the pull request ([`Self::settle_unknown`]): merged since is the merge applied and
     /// nothing is sent, open and unmerged at the head named is the merge not applied and it goes
     /// under a fresh key, once per process, and anything else is no merge.
+    ///
+    /// A failure says its outcome class: `not_attempted` before anything is sent, then what the
+    /// answer says ([`write_failure`], [`Self::written_body`]), the class of the answer kept
+    /// when its refusal or its key cannot be recorded.
     fn write(
         &self,
         tree: &Path,
@@ -1198,19 +1255,20 @@ impl ConnectorsForge {
         operation: &'static str,
         input: &Value,
         merging: Option<(u64, &str)>,
-    ) -> Result<Value> {
+    ) -> Written<Value> {
         let Route::Served {
             endpoint,
             loopback,
             revision,
         } = &self.route
         else {
-            return self.invoke(tree, operation, input);
+            let outcome = self.outcome(tree, operation, input)?;
+            return self.written_body(operation, &outcome);
         };
         if !self.unkeyed.get() {
             let case = case_of(dir);
             let first = idempotency_key(&case, operation, revision, input, 0);
-            let mut refusals = refusals_in(dir)?;
+            let mut refusals = refusals_in(dir).map_err(WriteError::not_attempted)?;
             let mut refused = refusals.refused.get(&first).copied().unwrap_or(0);
             let mut key = idempotency_key(&case, operation, revision, input, refused);
             if let Some((number, head)) = merging
@@ -1220,18 +1278,20 @@ impl ConnectorsForge {
                     return Ok(merged);
                 }
                 refused = refused.checked_add(1).ok_or_else(|| {
-                    anyhow!(
+                    WriteError::not_attempted(anyhow!(
                         "pull request {number}'s merge has used every key its record can count; nothing was sent"
-                    )
+                    ))
                 })?;
                 let fresh = idempotency_key(&case, operation, revision, input, refused);
                 refusals.refused.insert(first.clone(), refused);
                 refusals.unknown.insert(key, Some(fresh.clone()));
-                record_refusals(dir, &refusals).with_context(|| {
-                    format!(
-                        "pull request {number} reads open at {head} after a merge answered outcome_unknown, and the fresh key could not be recorded; nothing was sent"
-                    )
-                })?;
+                record_refusals(dir, &refusals)
+                    .with_context(|| {
+                        format!(
+                            "pull request {number} reads open at {head} after a merge answered outcome_unknown, and the fresh key could not be recorded; nothing was sent"
+                        )
+                    })
+                    .map_err(WriteError::not_attempted)?;
                 key = fresh;
             }
             let outcome =
@@ -1249,53 +1309,72 @@ impl ConnectorsForge {
                 };
                 if merging.is_some() && refusal.is_some_and(ServedRefused::is_outcome_unknown) {
                     refusals.unknown.entry(key).or_insert(None);
-                    record_refusals(dir, &refusals).with_context(|| {
-                        format!(
-                            "{} answered outcome_unknown, and its key could not be recorded for the next attempt",
-                            self.named(operation)
-                        )
-                    })?;
+                    record_refusals(dir, &refusals)
+                        .with_context(|| {
+                            format!(
+                                "{} answered outcome_unknown, and its key could not be recorded for the next attempt",
+                                self.named(operation)
+                            )
+                        })
+                        .map_err(WriteError::unknown)?;
                 } else if not_applied(classification) {
+                    let class = if classification == Some("refused") {
+                        WriteOutcome::Refused
+                    } else {
+                        WriteOutcome::NotAttempted
+                    };
                     refusals.refused.insert(first, refused.saturating_add(1));
-                    record_refusals(dir, &refusals).with_context(|| {
-                        format!(
-                            "{} was not applied, and its refusal could not be recorded for the next attempt",
-                            self.named(operation)
-                        )
-                    })?;
+                    record_refusals(dir, &refusals)
+                        .with_context(|| {
+                            format!(
+                                "{} was not applied, and its refusal could not be recorded for the next attempt",
+                                self.named(operation)
+                            )
+                        })
+                        .map_err(|error| WriteError::of(class, error))?;
                 }
-                return self.body_of(operation, &outcome?["result"]);
+                return self.written_body(operation, &outcome.map_err(write_failure)?["result"]);
             }
         }
-        let outcome = self.served_invoke(endpoint, *loopback, revision, operation, input, None)?;
-        self.body_of(operation, &outcome)
+        let outcome = self
+            .served_invoke(endpoint, *loopback, revision, operation, input, None)
+            .map_err(write_failure)?;
+        self.written_body(operation, &outcome)
     }
 
-    /// Invokes `operation` once on `input`, unkeyed: the operation's result.
-    fn outcome(&self, tree: &Path, operation: &'static str, input: &Value) -> Result<Value> {
+    /// Invokes `operation` once on `input`, unkeyed: the operation's result. A failure of a write
+    /// says its outcome class: `not_attempted` while the operation is described, then how the
+    /// call ended ([`super::run_failure`], [`write_failure`]).
+    fn outcome(&self, tree: &Path, operation: &'static str, input: &Value) -> Written<Value> {
         let outcome = match &self.route {
             Route::Cli => {
-                let (schema, revision) = self.described(tree, operation)?;
+                let (schema, revision) = self
+                    .described(tree, operation)
+                    .map_err(WriteError::not_attempted)?;
                 let input = input.to_string();
-                let (line, exit) = self.cli_exit(
-                    tree,
-                    operation,
-                    &[
-                        "--schema",
-                        &schema,
-                        "--revision",
-                        &revision,
-                        "--input-json",
-                        &input,
-                    ],
-                )?;
-                Self::cli_answer(line, &exit)?["result"].clone()
+                let (line, exit) = self
+                    .cli_exit(
+                        tree,
+                        operation,
+                        &[
+                            "--schema",
+                            &schema,
+                            "--revision",
+                            &revision,
+                            "--input-json",
+                            &input,
+                        ],
+                    )
+                    .map_err(super::run_failure)?;
+                Self::cli_answer(line, &exit).map_err(write_failure)?["result"].clone()
             }
             Route::Served {
                 endpoint,
                 loopback,
                 revision,
-            } => self.served_invoke(endpoint, *loopback, revision, operation, input, None)?,
+            } => self
+                .served_invoke(endpoint, *loopback, revision, operation, input, None)
+                .map_err(write_failure)?,
         };
         Ok(outcome)
     }
@@ -1404,7 +1483,9 @@ impl ConnectorsForge {
     /// merge not applied, `None`, and it goes under a fresh key, at most once per process for the
     /// write whose first key is `first`. Closed, merged at another head, locked (a merge in
     /// progress on gitlab), open at another head, or a second unknown in this
-    /// process is no merge, and the error names what the read showed.
+    /// process is no merge, and the error names what the read showed: `unknown` while the merge
+    /// under `key` may still be applied (locked, a second unknown), else `not_attempted`, nothing
+    /// having been sent.
     fn settle_unknown(
         &self,
         tree: &Path,
@@ -1412,7 +1493,8 @@ impl ConnectorsForge {
         key: &str,
         number: u64,
         head: &str,
-    ) -> Result<Option<Value>> {
+    ) -> Written<Option<Value>> {
+        let not_sent = |error: anyhow::Error| Err(WriteError::not_attempted(error));
         let read = || -> Result<(PullRequestView, bool)> {
             match self.connector {
                 Connector::Gitlab => {
@@ -1423,21 +1505,25 @@ impl ConnectorsForge {
                 Connector::Github => Ok((self.view(tree, number)?, false)),
             }
         };
-        let (view, locked) = read().with_context(|| {
-            format!(
-                "read pull request {number} again after a merge of it answered outcome_unknown under {key}; nothing was sent"
-            )
-        })?;
+        let (view, locked) = read()
+            .with_context(|| {
+                format!(
+                    "read pull request {number} again after a merge of it answered outcome_unknown under {key}; nothing was sent"
+                )
+            })
+            .map_err(WriteError::not_attempted)?;
         if locked {
-            bail!(
+            return Err(WriteError::unknown(anyhow!(
                 "whether pull request {number} was merged is not known (outcome_unknown): it reads locked, a merge in progress, after the merge under {key}; nothing was sent again, and a later run reads it again"
-            );
+            )));
         }
         match view.state {
-            PullRequestState::Merged if view.head.sha != head => bail!(
-                "pull request {number} reads merged at the head {}, not {head}, the head the merge under {key} named; that merge is not this one, and nothing was merged",
-                view.head.sha
-            ),
+            PullRequestState::Merged if view.head.sha != head => {
+                return not_sent(anyhow!(
+                    "pull request {number} reads merged at the head {}, not {head}, the head the merge under {key} named; that merge is not this one, and nothing was merged",
+                    view.head.sha
+                ));
+            }
             PullRequestState::Merged => {
                 return Ok(Some(json!({
                     "merged": true,
@@ -1447,29 +1533,32 @@ impl ConnectorsForge {
                     ),
                 })));
             }
-            PullRequestState::Closed => bail!(
-                "pull request {number} reads closed and not merged after a merge of it answered outcome_unknown under {key}; nothing was merged"
-            ),
+            PullRequestState::Closed => {
+                return not_sent(anyhow!(
+                    "pull request {number} reads closed and not merged after a merge of it answered outcome_unknown under {key}; nothing was merged"
+                ));
+            }
             PullRequestState::Open => {}
         }
         if view.head.sha != head {
-            bail!(
+            return not_sent(anyhow!(
                 "pull request {number} reads open at the head {}, not {head}, after a merge of it answered outcome_unknown under {key}; nothing was merged",
                 view.head.sha
-            );
+            ));
         }
         if !self.retried.borrow_mut().insert(first.to_owned()) {
-            bail!(
+            return Err(WriteError::unknown(anyhow!(
                 "whether pull request {number} was merged is not known (outcome_unknown): the merge under {key}, the fresh key this run took, was answered so too; it reads open at {head}, nothing was sent again, and a later run reads it again"
-            );
+            )));
         }
         Ok(None)
     }
 
     /// A merge of `number` that failed: no merge, and the pull request is read again before any
     /// further write. A merge the instance answered `outcome_unknown` may have been made, and
-    /// is read again before any further write all the same.
-    fn merge_failed(&self, number: u64, error: anyhow::Error) -> anyhow::Error {
+    /// is read again before any further write all the same. The failure's outcome class is
+    /// kept.
+    fn merge_failed(&self, number: u64, error: WriteError) -> WriteError {
         self.reread.borrow_mut().insert(number);
         if error
             .downcast_ref::<ServedRefused>()
@@ -1834,7 +1923,7 @@ impl ConnectorsForge {
     /// Merges change request `number` at `head` with the pipeline the checks were read on: the
     /// reading kept by [`Forge::checks`] when it is of `head`, else a reading made now, which
     /// must be of `head` too; a head with none is refused with no merge invoked.
-    fn merge_gitlab(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<Value> {
+    fn merge_gitlab(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Written<Value> {
         let held = self
             .bound
             .borrow()
@@ -1844,12 +1933,16 @@ impl ConnectorsForge {
         let pipeline = match held {
             Some(id) => id,
             None => {
-                let (_, read_on, pipeline) = self.read_checks(tree, number)?;
+                let (_, read_on, pipeline) = self
+                    .read_checks(tree, number)
+                    .map_err(WriteError::not_attempted)?;
                 match pipeline {
                     Some(id) if read_on == head => id,
-                    _ => bail!(
-                        "no checks were read on the head {head} of change request {number}, whose head is {read_on}; nothing was merged"
-                    ),
+                    _ => {
+                        return Err(WriteError::not_attempted(anyhow!(
+                            "no checks were read on the head {head} of change request {number}, whose head is {read_on}; nothing was merged"
+                        )));
+                    }
                 }
             }
         };
@@ -1871,17 +1964,17 @@ impl ConnectorsForge {
             && state != "merged"
         {
             self.reread.borrow_mut().insert(number);
-            bail!(
+            return Err(WriteError::unknown(anyhow!(
                 "{} did not merge change request {number}: its state is {state}",
                 self.named(MERGE)
-            );
+            )));
         }
         Ok(body)
     }
 
     /// Merges pull request `number` at `head`: `pull_request.merge` sends the head's sha, which
     /// GitHub compares with the pull request's head.
-    fn merge_github(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<Value> {
+    fn merge_github(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Written<Value> {
         let (owner, repo) = self.repository();
         let body = self
             .write(
@@ -1899,14 +1992,14 @@ impl ConnectorsForge {
             .map_err(|error| self.merge_failed(number, error))?;
         if body["merged"] != true {
             self.reread.borrow_mut().insert(number);
-            bail!(
+            return Err(WriteError::unknown(anyhow!(
                 "{} did not merge pull request {number}: {}",
                 self.named(PULL_MERGE),
                 body["message"].as_str().map_or_else(
                     || "the answer does not say `merged: true`".to_owned(),
                     bounded
                 )
-            );
+            )));
         }
         Ok(body)
     }
@@ -2085,18 +2178,26 @@ impl Forge for ConnectorsForge {
         )
     }
 
-    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
-        may_publish(&self.scan, &request.branch)?;
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let output = fresh(dir.join(Self::RESPONSE))?;
-        write_request(dir, request)?;
-        let head = exact_ref(tree, &format!("refs/heads/{}", request.branch)).ok_or_else(|| {
-            anyhow!(
-                "{} names no commit; no pull request was opened",
-                request.branch
-            )
-        })?;
-        self.read_again(tree, None)?;
+    /// What is checked, written and read before the write fails with nothing sent; the write
+    /// is classed by how it ended ([`write_failure`]); an answer without a number is `unknown`,
+    /// since the pull request may be open.
+    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Written<u64> {
+        let (output, head) = (|| -> Result<_> {
+            may_publish(&self.scan, &request.branch)?;
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            let output = fresh(dir.join(Self::RESPONSE))?;
+            write_request(dir, request)?;
+            let head =
+                exact_ref(tree, &format!("refs/heads/{}", request.branch)).ok_or_else(|| {
+                    anyhow!(
+                        "{} names no commit; no pull request was opened",
+                        request.branch
+                    )
+                })?;
+            self.read_again(tree, None)?;
+            Ok((output, head))
+        })()
+        .map_err(WriteError::not_attempted)?;
         let (operation, input, number) = match self.connector {
             Connector::Gitlab => (
                 CREATE,
@@ -2146,13 +2247,16 @@ impl Forge for ConnectorsForge {
                     error
                 }
             })?;
-        std::fs::write(&output, serde_json::to_vec_pretty(&body)?)
-            .with_context(|| format!("write the response {}", output.display()))?;
+        std::fs::write(
+            &output,
+            serde_json::to_vec_pretty(&body).map_err(anyhow::Error::from)?,
+        )
+        .with_context(|| format!("write the response {}", output.display()))?;
         body[number].as_u64().ok_or_else(|| {
-            anyhow!(
+            WriteError::unknown(anyhow!(
                 "{} reported no {number}: no pull request number",
                 self.named(operation)
-            )
+            ))
         })
     }
 
@@ -2188,17 +2292,24 @@ impl Forge for ConnectorsForge {
 
     /// Merges at `head`, after every pull request a merge failed on is read again: on gitlab
     /// with the pipeline the checks were read on, on github with the head's sha. A merge that
-    /// fails is no merge.
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
-        self.read_again(tree, Some((number, head)))?;
+    /// fails is no merge; one whose answer was lost, or did not say merged, is `unknown`.
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Written<()> {
+        let output = (|| -> Result<_> {
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
+            self.read_again(tree, Some((number, head)))?;
+            Ok(output)
+        })()
+        .map_err(WriteError::not_attempted)?;
         let body = match self.connector {
             Connector::Gitlab => self.merge_gitlab(tree, dir, number, head)?,
             Connector::Github => self.merge_github(tree, dir, number, head)?,
         };
-        std::fs::write(&output, serde_json::to_vec_pretty(&body)?)
-            .with_context(|| format!("write the response {}", output.display()))?;
+        std::fs::write(
+            &output,
+            serde_json::to_vec_pretty(&body).map_err(anyhow::Error::from)?,
+        )
+        .with_context(|| format!("write the response {}", output.display()))?;
         Ok(())
     }
 

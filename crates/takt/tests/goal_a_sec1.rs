@@ -326,7 +326,7 @@ impl Forge for FirstMergeFails {
         tree: &Path,
         dir: &Path,
         request: &PullRequest,
-    ) -> anyhow::Result<u64> {
+    ) -> takt::forge::Written<u64> {
         self.inner.open_pull_request(tree, dir, request)
     }
     fn pull_request(&self, tree: &Path, number: u64) -> anyhow::Result<PullRequestView> {
@@ -335,9 +335,11 @@ impl Forge for FirstMergeFails {
     fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
         self.inner.checks(tree, number)
     }
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
         if !self.failed.replace(true) {
-            return Err(anyhow!("the forge answered 502 Bad Gateway"));
+            return Err(takt::forge::WriteError::unknown(anyhow!(
+                "the forge answered 502 Bad Gateway"
+            )));
         }
         self.inner.merge(tree, dir, number, head)
     }
@@ -348,7 +350,7 @@ impl Forge for FirstMergeFails {
         number: u64,
         head: &str,
         _message: &MergeMessage,
-    ) -> anyhow::Result<()> {
+    ) -> takt::forge::Written<()> {
         self.merge(tree, dir, number, head)
     }
     fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
