@@ -84,7 +84,7 @@ for `_`; those eight have no flag.
 | `iterations` | integer: stop after this many steps |
 | `hours` | number: stop after this many hours |
 | `tokens` | whole number above zero: stop once the harness reported this many tokens, as `--tokens`; with neither, 3000000 |
-| `harness` | string: `claude`, `codex`, `harness` or `none`; default `claude` |
+| `harness` | string: `claude`, `codex`, `harness` or `none`; default `claude`. Or a mapping, metaharness's session request under `metaharness run`'s own names: `kind` (`claude`, `codex` or `b10x`, for `harness`), `effort`, `max-turns`, `max-budget-usd`, `strict-version` and `context`, each carried to the session. metaharness reads the mapping and checks it for the kind before any case opens, and its own message refuses a value of the wrong type or a setting the kind does not take (`max-turns` and `max-budget-usd` under `codex`, `effort` and `max-budget-usd` under `b10x`). `max-budget-usd` is a number or a decimal string of US dollars, no finer than one micro-dollar; `context` lists files of the repository its index tracks, each as one plain relative path, and any other path is refused naming it. Any other key is refused naming it: the confinement keys as takt's, the endpoint keys as the `model` and `llm` section's. `--harness` wins over `kind` |
 | `model` | string: the harness's model, when it takes one; with an `llm` section under `--harness harness`, the route or alias of that section it names, whose endpoint, wire and upstream model the session uses |
 | `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
 | `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
@@ -716,11 +716,11 @@ What the console prints: [The console](../guides/run-a-story.md#the-console) and
 | `--harness-program <PATH>` | an absolute path: the program every step starts, in place of the one found on `PATH`; `opened` records its path, its sha256 and its `--version` line; refused when it is not absolute, and with `--harness none`, which starts no session |
 | `--model <MODEL>` | the harness's model, when it takes one; under `--harness harness` a route of the `llm` section, when the run has one |
 | `--llm-config <FILE>` | an `llm.routes/1` document (`.toml`, `.yaml` or `.yml`) that replaces the run file's `llm` section; with or without `--config` |
-| `--effort <LEVEL>` | the reasoning effort, as `metaharness run --effort`; refused until takt's launch carries it |
+| `--effort <LEVEL>` | the reasoning effort, as `metaharness run --effort`: Claude Code's `--effort`, Codex's `model_reasoning_effort`; refused under `--harness harness` |
 | `--max-turns <N>` | a ceiling on the session's turns, as `metaharness run --max-turns`; refused under `--harness codex`, whose launch takes no turn ceiling |
-| `--max-budget-usd <USD>` | a ceiling in US dollars on the session's spend, as `metaharness run --max-budget-usd`; refused until takt's launch carries it |
-| `--strict-version` | refuse before the run when the vendor version is outside metaharness's pin; refused until takt's launch carries it |
-| `--context <FILE>` | a file whose text the prompt carries, repeatable, as `metaharness run --context`; refused until takt's launch carries it |
+| `--max-budget-usd <USD>` | a ceiling in US dollars on the session's spend, as `metaharness run --max-budget-usd`, no finer than one micro-dollar; Claude Code's only, refused under `--harness codex` and `--harness harness` |
+| `--strict-version` | refuse before the run when the vendor version is outside metaharness's pin, as `metaharness run --strict-version`; carried to the session and to takt's own check before the first step |
+| `--context <FILE>` | a file whose text the session is handed, repeatable, as `metaharness run --context`: a file of the repository its index tracks, as one plain relative path; any other path is refused naming it |
 
 | `--endpoint-file <PATH>` | the endpoint file |
 | `--model-endpoint <URL>` | the endpoint's base URL |
@@ -730,7 +730,7 @@ What the console prints: [The console](../guides/run-a-story.md#the-console) and
 | `--api-key-secret <NS/NAME>` | a secret's name; takt reads no secret |
 | `--endpoint-token-env <NAME>` | a variable holding the key; `openai-responses` only |
 
-The five flags above that name a session setting (`--effort`, `--max-turns`, `--max-budget-usd`, `--strict-version`, `--context`) take the run file's `harness` mapping's keys under the same names, and a flag wins over the same key in the file. A session setting, from the file's mapping or from a flag, is refused with `--harness none`, which starts no session, unless its only key is `kind`. `max-turns` is a whole number above zero, in the file or on the command line.
+The five flags above that name a session setting (`--effort`, `--max-turns`, `--max-budget-usd`, `--strict-version`, `--context`) take the run file's `harness` mapping's keys under the same names, and a flag wins over the same key in the file. A session setting, from the file's mapping or from a flag, is refused with `--harness none`, which starts no session, unless its only key is `kind`. `max-turns` is a whole number above zero, in the file or on the command line. The file's mapping and the flags over it pass metaharness's own check for the harness before any case opens; a refusal the flags cause names them as the command line's.
 
 The names above are metaharness's and llm's; the old names `--endpoint-base-url`,
 `--endpoint-wire`, `--endpoint-model` (the same flag as `--model`), `--endpoint-token-file`,
