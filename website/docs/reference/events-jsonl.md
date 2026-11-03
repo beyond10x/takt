@@ -27,7 +27,8 @@ A field added to an event later is optional, so older lines still read.
 |---|---|---|
 | `opened` | `case`, `protocol`, `story`?, `inputs` (`name=value`), `base`? (the commit the case's branch forked from), `binary`? (as `takt --version` prints it: `<sha>`, `<sha>-dirty` or `unknown revision`), `layers`? (layer name to revision, read from what ran and never typed: `takt`, the binary's revision; written, empty or not, by every run from 0.6.0 on; a line without it reads as layers not recorded), `confinement`? (`none` or `substrate`, the adapter every child of the run starts through), `substrate`? (the [Substrate](/docs/concepts/glossary#substrate) adapter the test command runs through: `adapter`, `inner`? (the one `systemd` wraps), `families`, `facts`, and `declared_insecure`? with its reason under `none`; a line without it was written before it), `endpoint`? (a `--harness harness` run only: `base_url`, `wire`, `model` and the credential by reference, a token file's path as `~/…` under HOME and its pointer, a secret's namespace and name, or a variable's name; never a token), `records`? (`default` or `trial`, the profile the case keeps its decisions under; a scenario run or an improvement case says `trial` whatever was asked; a line without it was written before the profile and reads as every decision kept), `scan`? (the scan adapter, `unset` or `none`; a line of 0.23.0 or earlier may say `gates`) | a run opened or resumed the case |
 | `decision` | `seq`, `file` (the decision file in the case), `frontier` | [Canon](/docs/concepts/glossary#canon) evaluated the case |
-| `step` | `by` (`validator` or `harness`), `name`, `action`, `summary`, `tokens`?, `usage`? (`input`, `output`, `cache_read`, `cache_creation`), `revision`? (a [validator](/docs/concepts/glossary#validator)'s observed revision), `model`?, `version`? (the [harness](/docs/concepts/glossary#harness) program's own version, as its stream stated it), `cost_usd`?, `duration_ms`?, `api_ms`?, `turns`?, `started_at`?, `transcript`? (the step's transcript, relative to the transcripts directory: `<repo>/<case>/run-<r>/step-<n>.jsonl`), `transcript_refused`? (why takt kept none, such as a file already at that path or a link on the way) | a step ended |
+| `step` | `by` (`validator` or `harness`), `name`, `action`, `summary`, `tokens`?, `usage`? (`input`, `output`, `cache_read`, `cache_creation`), `revision`? (a [validator](/docs/concepts/glossary#validator)'s observed revision), `model`?, `version`? (the [harness](/docs/concepts/glossary#harness) program's own version, as its stream stated it), `cost_usd`?, `duration_ms`?, `api_ms`?, `turns`?, `started_at`?, `transcript`? (the step's transcript, relative to the transcripts directory: `<repo>/<case>/run-<r>/step-<n>.jsonl`), `transcript_refused`? (why takt kept none, such as a file already at that path or a link on the way), `forge_write`? (the [forge](/docs/concepts/glossary#forge) write a `pr.open` or `repository.merge` step attempted: `outcome`, one of `applied`, `refused`, `not_attempted` or `unknown`; `pull_request`?, its number; `head`?, the head it named) | a step ended |
+| `forge.sending` | `name` (the validator), `action` (`pr.open` or `repository.merge`), `forge_write` (`outcome` `unknown`, `pull_request`? (none for an open, which has no number yet), `head`) | a validator is about to send a forge write, before the request leaves; the step's own line, with the answer's class, follows it |
 | `effect` | `paths`, `revision`? | a judgement step committed files, or changed none |
 | `evidence` | `id`, `kind`, `result`?, `path` | a validator wrote an [evidence](/docs/concepts/glossary#evidence) record under the case |
 | `store_evidence` | `story`, `kind`, `reference`, `observed_at`, `commit`? | evidence was written on the [story](/docs/concepts/glossary#story) in the planning store |
@@ -42,6 +43,32 @@ A field added to an event later is optional, so older lines still read.
 
 `?` marks a field that is absent, never 0, when its source did not state it.
 
+## Forge writes
+
+A forge write's `outcome` says what the forge's answer tells:
+
+- `applied`: the forge answered that it did the write.
+- `refused`: the forge answered and did not do it.
+- `not_attempted`: nothing was sent.
+- `unknown`: the request may have reached the forge, and no answer says what it did. A timeout or
+  a lost connection is `unknown`, and so is any failure that an adapter cannot classify.
+
+The `forge.sending` line goes into the record before the request leaves. If the run ends between
+the send and the answer (a crash, a kill or an interrupt), the record still says `unknown`.
+
+A merge recorded `unknown` or `applied` is never sent again for that pull request and head. The
+newest `forge_write` of `repository.merge` for the pull request and head is the one that decides,
+whether it is on a `forge.sending` line or a `step` line. A step that sent nothing
+(`not_attempted`) does not end it. It ends only when a read of the forge finds the pull request
+merged (a `merge_observation` of `merged`), closed (`closed`), or at another head. While the
+forge reads the pull request open at that head, the step sends nothing and waits. It also pushes
+nothing that would move the head: neither takt's riders nor a base update. At the budget,
+the run stops `Waiting`, and its last step names the pull request so that a person can merge or
+close it.
+
+An open is read back the same way. Before `pr.open` opens a pull request, it asks the forge for
+one already open for the case's branch, and takes that one instead of opening a second.
+
 ## The stop line
 
 `stop` opens with the stop's name, followed by its detail in parentheses. 0.14.0 added no event
@@ -51,7 +78,7 @@ kind: its two new stops are `stop` lines like the others, and so is 0.19.0's
 | name | the run stopped because | exit |
 |---|---|---|
 | `Completed` | the [protocol](/docs/concepts/glossary#protocol)'s outcome is legitimate, `Completed (<outcome>)`; the only stop with `completed: true` | 0 |
-| `Iterations`, `Hours`, `Tokens`, `ActiveTime` | the budget ended | 3 |
+| `Iterations`, `Hours`, `Tokens`, `Usd`, `ActiveTime` | the budget ended | 3 |
 | `NothingAdmissible`, `StepRefused`, `NoProgress` | no admissible step, a step refused, or nothing changed | 3 |
 | `RedBase` | the case's first `tests.run` failed before any step changed the base | 3 |
 | `RepeatedTestFailure` | two `tests.run` results in a row, each at a new revision, failed the same tests ([what counts](../concepts/how-a-run-ends.md#what-counts-as-an-attempt)) | 3 |

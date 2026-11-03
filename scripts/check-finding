@@ -358,15 +358,18 @@ for ((i = 0; i < ${#checkout_urls[@]}; i++)); do
         usage "--checkout $url=${checkout_paths[i]}: the predicate names ${repository:-no repository}, not $url"
 done
 
-# The toolchain a build calls, as `takt promote` resolves it (crates/takt/src/promotion.rs,
-# `Confinement::toolchain`): rustup's home (RUSTUP_HOME, else ~/.rustup), the
-# `default_toolchain` its settings.toml names, and that toolchain's directory under
-# `toolchains/`, by its name or the one directory named by it and a target triple; its
-# `bin/cargo` and `bin/rustc` executable and its `lib/rustlib` there. Never one PATH, a
-# `rust-toolchain.toml` of the revision or RUSTUP_TOOLCHAIN picks. Prints the directory, or
-# says what is missing and fails.
+# The toolchain a build calls, as `takt promote` resolves it (crates/takt/src/confinement.rs,
+# `toolchain`, which `Confinement` in crates/takt/src/promotion.rs holds): rustup's home
+# (RUSTUP_HOME, else ~/.rustup), the `default_toolchain` its settings.toml names, and that
+# toolchain's directory under `toolchains/`, by its name or the one directory named by it and a
+# target triple, whose `bin/cargo` and `bin/rustc` are executable; then resolved as rustc
+# resolves its sysroot, to the directory above the real path of its `bin/rustc`, so a toolchain
+# directory of links (a test binary's own rustup home) is the directory holding the real one,
+# which the build binds whole, with `bin/cargo` and `bin/rustc` executable and `lib/rustlib`
+# there too. Never one PATH, a `rust-toolchain.toml` of the revision or RUSTUP_TOOLCHAIN picks.
+# Prints the directory, or says what is missing and fails.
 toolchain_dir() {
-    local rustup_home=${RUSTUP_HOME:-} settings name line dir found=()
+    local rustup_home=${RUSTUP_HOME:-} settings name line dir real found=()
     [[ $rustup_home == /* ]] || rustup_home=$HOME/.rustup
     settings=$rustup_home/settings.toml
     [[ -r $settings ]] ||
@@ -389,8 +392,16 @@ toolchain_dir() {
             fail "rustup's default toolchain $name ($settings) matches ${#found[@]} directories under $rustup_home/toolchains, not one"
         dir=${found[0]}
     fi
+    [[ -x $dir/bin/cargo && -x $dir/bin/rustc ]] ||
+        fail "the toolchain $dir (rustup's default, $settings) has no executable bin/cargo and bin/rustc"
+    real=$(readlink -f -- "$dir/bin/rustc") && [[ $real == /* ]] ||
+        fail "resolve $dir/bin/rustc, the toolchain's rustc, to its real path"
+    real=${real%/*}
+    [[ -n ${real%/*} ]] ||
+        fail "the toolchain's rustc $dir/bin/rustc resolves into $real, which is in no toolchain's bin"
+    dir=${real%/*}
     [[ -x $dir/bin/cargo && -x $dir/bin/rustc && -d $dir/lib/rustlib ]] ||
-        fail "the toolchain $dir (rustup's default, $settings) has no executable bin/cargo and bin/rustc, or no lib/rustlib"
+        fail "the toolchain $dir (rustup's default, $settings, as its rustc resolves) has no executable bin/cargo and bin/rustc, or no lib/rustlib"
     printf '%s\n' "$dir"
 }
 

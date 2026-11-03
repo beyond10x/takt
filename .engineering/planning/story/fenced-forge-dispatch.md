@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:fenced-forge-dispatch
 kind: story
-status: active
+status: implemented
 title: pr.open and repository.merge record an outcome class; unknown is resolved by a read
 summary: applied, refused, not_attempted or unknown; a write that may have been sent is never sent again
 relations:
@@ -12,10 +12,28 @@ relations:
 - depends_on: story:pr-open-not-idempotent-on-resume
 - depends_on: story:forge-preflight
 - depends_on: story:an-unattended-run-merges-under-a-delegated-grant
-revision: 5
+scope:
+- confidence: inferred
+  path: crates/takt/src/events.rs
+- confidence: cited
+  path: crates/takt/src/forge.rs
+- confidence: cited
+  path: crates/takt/src/forge/command.rs
+- confidence: cited
+  path: crates/takt/src/forge/connectors.rs
+- confidence: cited
+  path: crates/takt/src/forge/gitlab.rs
+- confidence: cited
+  path: crates/takt/src/forge/local.rs
+- confidence: cited
+  path: crates/takt/src/validator.rs
+- confidence: inferred
+  path: crates/takt/tests/fenced_forge_dispatch.rs
+revision: 14
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:22:43Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-29T21:22:43Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-03T20:34:36Z", actor: "human:timo", revision: 14, decided_on: {"recorded":{"test_result":1,"review_outcome":4,"verification":1}}}
 ---
 # Story: fenced-forge-dispatch
 

@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-03T20:17:48Z",
+  "actor": "human:timo",
+  "artifact": "story:fenced-forge-dispatch",
+  "kind": "story",
+  "revision": 13,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:w50-adv-a-1",
+    "reference": "43fb9ed6b",
+    "review": "review-result:w50-adv-a-1",
+    "outcome": "fixed"
+  }
+}

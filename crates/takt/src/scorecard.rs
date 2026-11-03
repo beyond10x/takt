@@ -105,8 +105,10 @@ pub const BINARY_FILE: &str = "binary.txt";
 
 /// Each metric with the version of its definition. A changed definition takes the next
 /// version, so a comparison with a scorecard saved under the previous one prints both figures.
-/// The outcome is at version 3: `Unperformable` ranks with the budget stops and a [`DISK_LOW`]
-/// trial takes no rank, so a takt that knows version 2 refuses a scorecard saved under it.
+/// The outcome is at version 4: at version 3 `Unperformable` ranks with the budget stops and a
+/// [`DISK_LOW`] trial takes no rank, so a takt that knows version 2 refuses a scorecard saved
+/// under it; at version 4 `Usd` ranks with the budget stops too (story:bench-subset-and-budget),
+/// so a takt that knows version 3 refuses a scorecard saved under it.
 /// `tokens` is at version 2: a run whose harness step recorded no tokens, or 0, has unknown
 /// tokens (`null`), where version 1 summed the step as 0; a takt that knows version 1 refuses
 /// a scorecard saved under it, and a baseline saved under it is compared only after
@@ -120,7 +122,7 @@ pub const BINARY_FILE: &str = "binary.txt";
 /// by it ([`TOKEN_TOLERANCE_PERCENT`]), and a takt that does not know it refuses a scorecard
 /// saved under it, as this one refuses a promotion on a scorecard saved without it.
 pub const METRICS: [(&str, u32); 9] = [
-    ("outcome", 3),
+    ("outcome", 4),
     ("steps", 1),
     ("tokens", 2),
     ("refusals", 1),
@@ -633,7 +635,7 @@ pub fn scenario_of(case: &str) -> Option<&str> {
 }
 
 /// An outcome's rank, higher better: `accepted`; an approval or a wait (`ApprovalRequired`,
-/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`) and `Unperformable`;
+/// `Waiting`); a budget stop (`Iterations`, `Hours`, `Tokens`, `Usd`) and `Unperformable`;
 /// `NoProgress`, and with it every other stop (`NothingAdmissible`, `StepRefused`, another
 /// outcome); an error, no stop, or a held-out check that did not pass ([`FAILED`]).
 ///
@@ -651,7 +653,7 @@ pub fn rank(outcome: &str) -> u8 {
     match outcome {
         "accepted" => 4,
         "ApprovalRequired" | "Waiting" => 3,
-        "Iterations" | "Hours" | "Tokens" | "Unperformable" => 2,
+        "Iterations" | "Hours" | "Tokens" | "Usd" | "Unperformable" => 2,
         "error" | "unfinished" | FAILED => 0,
         "NoProgress" | "ActiveTime" => 1,
         _ => 1,

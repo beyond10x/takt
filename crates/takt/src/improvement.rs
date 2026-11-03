@@ -57,7 +57,7 @@ pub const SCORECARDS: &str = "takt/scorecards";
 /// the script adds its digest here once it is reviewed (`tests/self_improvement.rs` holds this
 /// tree's script to the list). A digest no review passed is not kept (story:wave-35-review-fixes,
 /// L8).
-pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 2] = [
+pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 3] = [
     // The script of story:check-finding-run-step-confined and the stories after it, up to the
     // one that builds and runs under Seatbelt on macOS, whose predicate there
     // has the binary, clone and home by their real paths.
@@ -66,6 +66,10 @@ pub const CONFINED_CHECK_FINDING_SHA256S: [&str; 2] = [
     // profile and write neither of the user's directories under `/var/folders`, the predicate's
     // TMPDIR a directory in its home (story:wave-35-review-fixes).
     "59080409aa503149e36af07bffad3e5ff0c8781adf5fce602614ae05bd198e3e",
+    // The same script whose toolchain is the directory above the real path of its `bin/rustc`,
+    // as `crate::confinement::toolchain` resolves it, so a toolchain directory of links is bound
+    // whole (wave 50).
+    "af0e8417f1823f08e6b27e874eec7d3c57d6973ee06d1a5de99bf5fc6fc89493",
 ];
 
 /// The file under a turn's `artifacts/` holding the sha256 of the takt `scripts/check-finding`

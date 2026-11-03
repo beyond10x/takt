@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T17:25:42Z",
+  "actor": "human:timo",
+  "artifact": "story:release-publishes-the-image",
+  "kind": "story",
+  "revision": 12,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "built in 1d1e4554c (2026-11-02), an ancestor of 0.27.0 and 0.28.0: release.yml job image needs provenance, gate, darwin, build and alone holds packages: write (release.yml:122-133); image.yml builds linux/amd64 with REVISION, checks takt --version and the revision label, refuses an existing version before and after the build, pushes and reads back (image.yml:58-150); the pull_request trigger on Dockerfile, .dockerignore, image.yml builds with contents: read and no push; actions pinned by 40-hex commit, base images by sha256 (Dockerfile:1-2); README.md:42, AGENTS.md:62-69, container-image.md:13-16 and install.md name the image; the GitHub package lists versions 0.27.0 and 0.28.0, visibility public, read 2026-11-03",
+    "reference": "1d1e4554c"
+  }
+}

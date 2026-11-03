@@ -298,7 +298,7 @@ impl Forge for Flaky {
         tree: &Path,
         dir: &Path,
         request: &takt::forge::PullRequest,
-    ) -> anyhow::Result<u64> {
+    ) -> takt::forge::Written<u64> {
         self.memory.open_pull_request(tree, dir, request)
     }
     fn pull_request(&self, tree: &Path, number: u64) -> anyhow::Result<PullRequestView> {
@@ -319,7 +319,7 @@ impl Forge for Flaky {
     fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
         self.memory.checks(tree, number)
     }
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
         self.memory.merge(tree, dir, number, head)
     }
     fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {

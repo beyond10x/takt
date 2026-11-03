@@ -87,6 +87,9 @@ pub enum Stop {
     Hours(f64),
     /// The token budget is spent.
     Tokens(u64),
+    /// The dollar budget is spent ([`Run::stop_at_usd`]): the cost the harness reported for
+    /// the run's steps reached it, read before a step.
+    Usd(f64),
     /// The active-time budget is spent ([`Run::cap_active_time`]): the run's wall time less its
     /// waits on the forge reached the budget, read before a step.
     ActiveTime {
@@ -258,7 +261,7 @@ pub const REPEATED_GATE_FAILURES: u64 = 3;
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 17] = [
+pub const STOP_KINDS: [&str; 18] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -276,6 +279,7 @@ pub const STOP_KINDS: [&str; 17] = [
     "SetupFailed",
     "Declined",
     "RepeatedGateFailure",
+    "Usd",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -284,6 +288,15 @@ fn bytes_shown(bytes: u64) -> String {
         "{bytes} bytes ({:.2} GiB)",
         bytes as f64 / f64::from(1_u32 << 30)
     )
+}
+
+/// `dollars` in whole micro-dollars, rounded once to the nearest, so a dollar budget and the
+/// costs summed against it compare as integers ([`Stop::Usd`]): ten reported costs of 0.1 reach
+/// 1 exactly, where their binary floating-point sum falls short. None for a negative, NaN or
+/// infinite figure, which is no cost; a figure past the largest saturates.
+#[must_use]
+pub fn micro_dollars(dollars: f64) -> Option<u64> {
+    (dollars.is_finite() && dollars >= 0.0).then(|| (dollars * 1e6).round() as u64)
 }
 
 impl std::fmt::Display for Stop {
@@ -297,6 +310,7 @@ impl std::fmt::Display for Stop {
             Stop::Iterations(n) => write!(f, "Iterations ({n})"),
             Stop::Hours(h) => write!(f, "Hours ({h})"),
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
+            Stop::Usd(usd) => write!(f, "Usd ({usd})"),
             Stop::ActiveTime {
                 budget,
                 active,
@@ -1378,6 +1392,14 @@ impl Turn<'_, '_> {
     /// failed on in `failed`.
     fn host_stop(&mut self) -> Option<LoomHostStop> {
         let turn = self;
+        if let Err(error) = turn.run.say_cost_unreported(&mut *turn.out) {
+            let detail = format!("{error:#}");
+            turn.failed = Some(error);
+            return Some(LoomHostStop {
+                name: "takt".to_owned(),
+                detail: cjson::Value::Text(detail),
+            });
+        }
         let stop = match turn.run.budget_spent() {
             Some(stop) => (stop, true),
             None if matches!(turn.taker, Taker::Nobody) => return None,
@@ -2241,6 +2263,29 @@ fn snapshot_without(dir: &Path, without: Option<&Path>) -> Result<BTreeMap<PathB
         walk(dir, dir, without, &mut entries)?;
     }
     Ok(entries)
+}
+
+/// `kept` with `appended`, the lines the run itself appended to the run record at `events` (a
+/// path relative to the tree) during an observation ([`crate::events::Sending`]), so the
+/// observation is not taken to have written them, and putting its change back keeps them.
+fn admit_appended(kept: &mut BTreeMap<PathBuf, Entry>, events: &Path, appended: &str) {
+    if appended.is_empty() {
+        return;
+    }
+    match kept.get_mut(events) {
+        Some(Entry::File { bytes, .. }) => bytes.extend_from_slice(appended.as_bytes()),
+        // Not a file the run appends to: left as it was, for the cases guard to name.
+        Some(_) => {}
+        None => {
+            kept.insert(
+                events.to_path_buf(),
+                Entry::File {
+                    bytes: appended.as_bytes().to_vec(),
+                    executable: false,
+                },
+            );
+        }
+    }
 }
 
 /// The paths at which two snapshots differ: added, removed or changed, in path order.
@@ -7721,6 +7766,17 @@ fn outside_named(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
+/// How a refusal names `paths` of [`Outside`] that changed during a step: takt cannot tell a
+/// step's write outside the tree from another process's (an install the step did not make), so
+/// it names them as of unknown origin, never as the step's, and the step is still refused
+/// (story:an-unrelated-program-install-refuses-no-step).
+fn outside_unattributed(paths: &[PathBuf]) -> String {
+    format!(
+        "what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there changed during the step, origin unknown: the step or another process: {}",
+        outside_named(paths)
+    )
+}
+
 /// A key path of a manifest read strictly: bare keys (`A-Za-z0-9_-`) and quoted keys holding no
 /// escape, joined by dots with optional white space; `None` for anything else, an escape in a
 /// key among it, which the scanner cannot read with certainty.
@@ -9507,6 +9563,13 @@ pub struct Run<'a> {
     started: Instant,
     /// The active-time budget, in seconds: none until [`Run::cap_active_time`] gives one.
     active_cap: Option<u64>,
+    /// The dollar budget, as given and in micro-dollars ([`micro_dollars`]): none until
+    /// [`Run::stop_at_usd`] gives one.
+    usd_cap: Option<(f64, u64)>,
+    /// Whether a harness step of this invocation recorded no cost, and whether the run has said
+    /// so ([`Run::say_cost_unreported`]).
+    cost_unreported: std::cell::Cell<bool>,
+    cost_unreported_said: bool,
     /// How long the run has paused on the forge so far: the waits its active time leaves out.
     waited: Duration,
     options: RunOptions,
@@ -9522,9 +9585,9 @@ pub struct Run<'a> {
     /// The console the run prints for a person ([`crate::console`]), set by [`Run::console`];
     /// while none, the run prints every decision's full `frontier:` line and no header.
     console: Option<crate::console::Console>,
-    /// The dollars the run's steps reported they cost, summed as each step is recorded; none
-    /// while no step reported a cost. Read by [`Run::cost_usd`].
-    cost_usd: std::cell::Cell<Option<f64>>,
+    /// The micro-dollars the run's steps reported they cost ([`micro_dollars`]), summed as each
+    /// step is recorded; none while no step reported a cost. Read by [`Run::cost_usd`].
+    cost_usd: std::cell::Cell<Option<u64>>,
     /// The commits the run's steps made, and the paths they committed. Read by
     /// [`Run::commits`].
     commits: u64,
@@ -9863,6 +9926,9 @@ impl<'a> Run<'a> {
             store: None,
             started: Instant::now(),
             active_cap: None,
+            usd_cap: None,
+            cost_unreported: std::cell::Cell::new(false),
+            cost_unreported_said: false,
             waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
@@ -10164,6 +10230,9 @@ impl<'a> Run<'a> {
             store: None,
             started: Instant::now(),
             active_cap: None,
+            usd_cap: None,
+            cost_unreported: std::cell::Cell::new(false),
+            cost_unreported_said: false,
             waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
@@ -10547,6 +10616,12 @@ impl<'a> Run<'a> {
         {
             return Some(Stop::Tokens(t));
         }
+        // A cost no step reported is unknown, never 0, and stops nothing.
+        if let Some((usd, micros)) = self.usd_cap
+            && self.cost_usd.get().is_some_and(|cost| cost >= micros)
+        {
+            return Some(Stop::Usd(usd));
+        }
         if let Some(budget) = self.active_cap {
             let active = self.active_time();
             if active.as_secs_f64() >= budget as f64 {
@@ -10580,6 +10655,34 @@ impl<'a> Run<'a> {
     #[must_use]
     pub fn waited(&self) -> Duration {
         self.waited
+    }
+
+    /// Stops the run [`Stop::Usd`] once the dollars its harness steps reported they cost
+    /// ([`Run::cost_usd`], this invocation's) reach `dollars`: read before every step, as the
+    /// token budget is, so a step under way runs to its end. A harness that reports no cost
+    /// leaves the cost unknown, which stops nothing, and the run says so once
+    /// ([`Run::say_cost_unreported`]). Without this call no cost stops the run. The CLI calls
+    /// it with `--usd`. The budget and every cost are compared in whole micro-dollars
+    /// ([`micro_dollars`]); a budget that is no such figure (negative, NaN, infinite) is 0, spent
+    /// once any cost is reported.
+    pub fn stop_at_usd(&mut self, dollars: f64) {
+        self.usd_cap = Some((dollars, micro_dollars(dollars).unwrap_or(0)));
+    }
+
+    /// Says once, on `out`, that a harness step reported no cost, when the run has a dollar
+    /// budget: that budget cannot stop what it cannot count.
+    fn say_cost_unreported(&mut self, out: &mut dyn Write) -> Result<()> {
+        if let Some((usd, _)) = self.usd_cap
+            && self.cost_unreported.get()
+            && !self.cost_unreported_said
+        {
+            self.cost_unreported_said = true;
+            writeln!(
+                out,
+                "usd: a harness step reported no cost; the dollar budget of {usd} counts only the costs reported"
+            )?;
+        }
+        Ok(())
     }
 
     /// For a run given no approval gate, the gate its case's protocol names for the case's
@@ -10619,7 +10722,7 @@ impl<'a> Run<'a> {
     /// lines it recorded; none when no step reported one.
     #[must_use]
     pub fn cost_usd(&self) -> Option<f64> {
-        self.cost_usd.get()
+        self.cost_usd.get().map(|micros| micros as f64 / 1e6)
     }
 
     /// The commits the run's steps made, and how many paths they committed, each path once.
@@ -11605,10 +11708,15 @@ impl<'a> Run<'a> {
                 transcript_refused,
             },
         )?;
-        // The run's cost is the sum over the step lines it recorded.
-        if let Some(cost) = cost {
-            self.cost_usd
-                .set(Some(self.cost_usd.get().unwrap_or(0.0) + cost));
+        // The run's cost is the sum over the step lines it recorded, in whole micro-dollars, each
+        // cost rounded once here; a harness step that reported none, or a negative one (no cost
+        // either), adds nothing and is said once ([`Run::say_cost_unreported`]).
+        if let Some(micros) = cost.and_then(micro_dollars) {
+            self.cost_usd.set(Some(
+                self.cost_usd.get().unwrap_or(0).saturating_add(micros),
+            ));
+        } else if by == "harness" {
+            self.cost_unreported.set(true);
         }
         Ok(())
     }
@@ -11976,17 +12084,37 @@ impl<'a> Run<'a> {
             return Ok(Taken::Stop(Stop::StepRefused(why)));
         }
         let checkpoint = self.checkpoint(false)?;
-        let kept = snapshot_cases(&self.tree)?;
+        let mut kept = snapshot_cases(&self.tree)?;
         let globs = self.judge_list()?.unwrap_or_default();
         let (surface, surface_kept) =
             JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
+        // A forge write the observation sends is recorded `unknown` in the run record before it
+        // leaves (`forge.sending`), through this, the run's own, for this step.
+        let sending = std::rc::Rc::new(crate::events::Sending::new(
+            events,
+            self.steps,
+            validator.name(),
+            validator.action(),
+        ));
+        validator.record_sends(Some(std::rc::Rc::clone(&sending)));
         let began = Instant::now();
         let observed = validator
             .observe_within(&self.tree, &revision, seq, self.deadline())
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+        validator.record_sends(None);
         let failed = validator.take_failed();
         let gates = validator.take_obligations();
+        let write = validator.take_forge_write();
         let returned = Instant::now();
+        // Those lines are the run's, not the observation's: kept in the cases directory like
+        // the rest of the run record, whatever the observation's change is put back to.
+        if let Ok(case) = self.case.dir.strip_prefix(&self.tree) {
+            admit_appended(
+                &mut kept,
+                &case.join(crate::events::EVENTS_FILE),
+                &sending.appended(),
+            );
+        }
         // The way to the case's directory is read before anything is written under it: a test
         // command that put a link on it (`.takt`, a cases root) is refused and undone below.
         let way = self.case.check_way().err();
@@ -12080,22 +12208,39 @@ impl<'a> Run<'a> {
                 outside.push(path);
             }
         }
-        outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
         if let Some(way) = &way {
             outside.push(format!("{way:#}"));
         }
-        if !foreign.is_empty() || !outside.is_empty() {
+        if !foreign.is_empty() || !outside.is_empty() || !outside_moved.is_empty() {
             let lock_remedy = untracked_cargo_lock(&self.tree, &change.paths);
             let left = undo_step(&self.tree, &kept_all)?.left;
             foreign.extend(outside);
-            foreign.extend(left.iter().map(|path| {
-                format!("not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
-            }));
-            let mut why = format!(
+            // What the observation is known to have written (in the tree, its cases directory,
+            // git's own files) apart from what changed outside the tree meanwhile, whose origin
+            // takt cannot tell: the observation's or another process's.
+            let wrote = format!(
                 "{} wrote what its validator does not: {}",
                 validator.action(),
                 foreign.join(", ")
             );
+            let mut parts = Vec::new();
+            if !foreign.is_empty() {
+                parts.push(wrote);
+            }
+            if !outside_moved.is_empty() {
+                parts.push(outside_unattributed(&outside_moved));
+            }
+            if !left.is_empty() {
+                parts.push(format!(
+                    "not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}",
+                    outside_named(&left)
+                ));
+            }
+            let mut why = if foreign.is_empty() {
+                format!("{}: {}", validator.action(), parts.join("; "))
+            } else {
+                parts.join("; ")
+            };
             if lock_remedy {
                 why.push_str(&format!("; {CARGO_LOCK_REMEDY}"));
             }
@@ -12105,7 +12250,7 @@ impl<'a> Run<'a> {
             // Written after the cases directory was put back, which would take a
             // line written before it along.
             self.stepped(
-                events,
+                &events.writing(write.as_ref()),
                 SteppedBy::Validator(Some(&revision)),
                 validator.name(),
                 validator.action(),
@@ -12132,7 +12277,7 @@ impl<'a> Run<'a> {
                 validator.action()
             );
             self.stepped(
-                events,
+                &events.writing(write.as_ref()),
                 SteppedBy::Validator(Some(&revision)),
                 validator.name(),
                 validator.action(),
@@ -12156,10 +12301,29 @@ impl<'a> Run<'a> {
         } else {
             Ok(())
         };
-        let (observation, waits) = observed?;
+        let (observation, waits) = match observed {
+            Ok(observed) => observed,
+            // A forge write sent before the observation failed is on the step's line: a merge
+            // whose answer was lost says it may have been applied.
+            Err(error) => {
+                if write
+                    .as_ref()
+                    .is_some_and(|write| write.outcome != crate::forge::WriteOutcome::NotAttempted)
+                {
+                    self.stepped(
+                        &events.writing(write.as_ref()),
+                        SteppedBy::Validator(Some(&revision)),
+                        validator.name(),
+                        validator.action(),
+                        "nothing recorded",
+                    )?;
+                }
+                return Err(error);
+            }
+        };
         ignore?;
         self.stepped(
-            events,
+            &events.writing(write.as_ref()),
             SteppedBy::Validator(Some(&revision)),
             validator.name(),
             validator.action(),
@@ -13804,10 +13968,12 @@ impl<'a> Run<'a> {
             let moved = undo()?;
             // What is still not as it was is behind a link, never written through.
             let left = outside_before.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
+            // takt cannot tell the step's write there from another process's: the step is
+            // refused, and the paths are named as of unknown origin, not as the step's.
             let mut why = format!(
-                "{} changed what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there: {}",
+                "{}: {}",
                 report.action,
-                outside_named(&outside_changed)
+                outside_unattributed(&outside_changed)
             );
             if !left.is_empty() {
                 why.push_str(&format!(

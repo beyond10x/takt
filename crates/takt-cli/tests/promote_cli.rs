@@ -2043,7 +2043,7 @@ fn a_series_start_copy_of_another_revision_rule_or_definition_is_refused_naming_
         ),
         (
             "definition",
-            "\"outcome\": 3,".to_owned(),
+            "\"outcome\": 4,".to_owned(),
             "\"outcome\": 1,".to_owned(),
             "metric outcome is at definition version 1".to_owned(),
         ),
@@ -3828,7 +3828,7 @@ fn outcome_at(
 ) -> PathBuf {
     let mut text = fs::read_to_string(scorecard).expect("the scorecard");
     let to = format!("\"outcome\": {version},");
-    for (from, to) in [("\"outcome\": 3,", to.as_str())].iter().chain(edits) {
+    for (from, to) in [("\"outcome\": 4,", to.as_str())].iter().chain(edits) {
         assert_eq!(text.matches(from).count(), 1, "{from} in {text}");
         text = text.replace(from, to);
     }
@@ -3905,20 +3905,20 @@ fn a_v1_outcome_baseline_is_rebaselined_and_a_candidate_judged_against_it() {
 
 /// story:outcome-metric-takes-version-3, acceptance 3: a baseline saved under the outcome
 /// definition of version 2, before `Unperformable` and `DiskLow` changed what the ranks mean,
-/// judges no candidate under version 3; after `--rebaseline` with the baseline revision's
-/// scorecard under version 3 a candidate is judged against it.
+/// judges no candidate under a later version (4 today); after `--rebaseline` with the baseline
+/// revision's scorecard under the current version a candidate is judged against it.
 #[test]
-fn a_v2_outcome_baseline_is_compared_with_a_v3_candidate_only_after_a_rebaseline() {
+fn a_v2_outcome_baseline_is_compared_with_a_current_candidate_only_after_a_rebaseline() {
     let world = World::new("rebaseline-v2", BASELINE_TOKENS, FIVE_APPROVALS);
     let v2 = outcome_at(&world, &world.baseline, "v2", 2, &[]);
     world.record_baseline_of(&v2);
     let card = world.candidate_card("candidate", BASELINE_TOKENS, FIVE_APPROVALS);
     let text = fs::read_to_string(&card).expect("the candidate");
-    assert_eq!(text.matches("\"outcome\": 3,").count(), 1, "{text}");
+    assert_eq!(text.matches("\"outcome\": 4,").count(), 1, "{text}");
     let (code, out, err) = world.promote(&card, &["--dry-run"]);
     assert_eq!(code, 1, "{out}{err}");
     assert!(
-        err.contains("metric outcome is at definition version 2; this takt knows version 3"),
+        err.contains("metric outcome is at definition version 2; this takt knows version 4"),
         "{err}"
     );
     let (code, out, err) = rebaseline(&world, &world.baseline);
@@ -4607,7 +4607,7 @@ fn as_saved_before(world: &World, scorecard: &Path, label: &str) -> PathBuf {
             in_held = key.ends_with('{');
             continue;
         }
-        kept.push(line.replace("\"outcome\": 3,", "\"outcome\": 1,"));
+        kept.push(line.replace("\"outcome\": 4,", "\"outcome\": 1,"));
     }
     let mut joined = kept.join("\n") + "\n";
     while joined.contains(",\n    }") {

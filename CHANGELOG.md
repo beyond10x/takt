@@ -6,6 +6,35 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-03
+
+`takt run --usd` stops a run on the cost its harness reports, and each pull-request open and merge records whether the forge applied it, refused it, was never asked or may have been.
+
+### Added
+
+- `takt run --usd <dollars>` stops the run `Usd (<dollars>)`, exit 3, before the next step once the cost its harness steps reported in this invocation reaches the budget.
+- The costs and the budget are counted in whole micro-dollars, so ten steps of 0.1 reach a budget of 1.
+- A harness step that reports no cost counts as none, and the run says once that the budget counts only the costs reported.
+- A `--usd` that is not a finite number of at least 0.000001 does not parse, exit 2.
+- `pr.open` and `repository.merge` record their forge write on the step's line in `events.jsonl`: `forge_write`, with the pull request and head.
+- Its outcome is `applied`, `refused`, `not_attempted` or `unknown`.
+- A write whose answer was lost is `unknown`; the next step reads the forge to resolve it and never sends it again, and an unknown merge is never resolved into a merge without the grant.
+- The write is recorded `unknown` before it leaves, so a crash between the send and its answer leaves it held.
+- A merge held `unknown` or `applied` is not sent again, no rider is pushed and no base updated, until a read finds it merged, closed or at another head.
+- While the forge reads it open at that head the run waits, and at the budget it stops `Waiting` naming the pull request.
+- Library: `Forge::open_pull_request`, `merge` and `merge_with` return `Written<T>`, with the new `WriteOutcome`, `WriteError` and `NotStarted`.
+- Library: `events::ForgeWrite`, `Validator::take_forge_write` (with a default), and `Memory::merge_answer` and `MergeAnswer` for a merge applied and then lost.
+
+### Changed
+
+- The scorecard ranks `Usd` with the other budget stops, and the outcome metric moves to definition version 4.
+- A baseline saved under version 3 is not compared; `takt promote --rebaseline` records it under version 4.
+- A step that changes a program or import directory outside the tree still stops `StepRefused`.
+- The refusal names such a path as changed during the step, of unknown origin (the step or another process), apart from what the step wrote in the tree.
+- A confined build binds the toolchain its `bin/rustc` resolves to, the sysroot rustc itself uses; an ordinary rustup install binds the same directory as before.
+- takt's own tests read a cargo home, a rustup home and program directories of their own, so a program another process installs while they run does not stop them.
+- `scripts/check-finding` binds the toolchain its `bin/rustc` resolves to, as a confined build does.
+
 ## [0.28.0] - 2026-11-03
 
 The token rule of `takt promote` and `takt scorecard --against` compares tokens per model request, and the wait on the forge starts at 2 s instead of 30 s.
@@ -1003,7 +1032,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.28.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.29.0...HEAD
+[0.29.0]: https://github.com/beyond10x/takt/compare/0.28.0...0.29.0
 [0.28.0]: https://github.com/beyond10x/takt/compare/0.27.0...0.28.0
 [0.27.0]: https://github.com/beyond10x/takt/compare/0.26.0...0.27.0
 [0.26.0]: https://github.com/beyond10x/takt/compare/0.25.0...0.26.0

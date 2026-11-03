@@ -20,7 +20,9 @@ use std::rc::Rc;
 
 use anyhow::{anyhow, bail};
 use takt::case::Branch;
-use takt::forge::{Checks, Forge, Head, PullRequest, PullRequestState, PullRequestView};
+use takt::forge::{
+    Checks, Forge, Head, PullRequest, PullRequestState, PullRequestView, WriteError,
+};
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::validator::{CiRead, PrOpen, Validator};
 use takt::{Run, RunOptions, Stop};
@@ -186,7 +188,12 @@ impl Forge for Shared {
         Ok(())
     }
 
-    fn open_pull_request(&self, _: &Path, _: &Path, request: &PullRequest) -> anyhow::Result<u64> {
+    fn open_pull_request(
+        &self,
+        _: &Path,
+        _: &Path,
+        request: &PullRequest,
+    ) -> takt::forge::Written<u64> {
         let github = &self.0;
         github
             .lines
@@ -194,10 +201,14 @@ impl Forge for Shared {
             .push(format!("open {} {}", request.branch, request.base));
         let head = request.branch.clone();
         if github.pulls.borrow().iter().any(|pull| pull.head == head) {
-            bail!("422 Unprocessable Entity: Validation Failed; {EXISTS} for owner:{head}.");
+            return Err(WriteError::refused(anyhow!(
+                "422 Unprocessable Entity: Validation Failed; {EXISTS} for owner:{head}."
+            )));
         }
         if github.fail.replace(false) {
-            bail!("502 Bad Gateway: the response was lost");
+            return Err(WriteError::unknown(anyhow!(
+                "502 Bad Gateway: the response was lost"
+            )));
         }
         let number = 7 + github.pulls.borrow().len() as u64;
         github.pulls.borrow_mut().push(Pull {
@@ -209,7 +220,9 @@ impl Forge for Shared {
             if github.dark_after_lost.get() {
                 github.lists_fail.set(true);
             }
-            bail!("502 Bad Gateway: the response was lost");
+            return Err(WriteError::unknown(anyhow!(
+                "502 Bad Gateway: the response was lost"
+            )));
         }
         Ok(number)
     }
@@ -265,8 +278,10 @@ impl Forge for Shared {
         Ok(Checks::Pass)
     }
 
-    fn merge(&self, _: &Path, _: &Path, number: u64, _: &str) -> anyhow::Result<()> {
-        bail!("the double merges nothing: #{number}")
+    fn merge(&self, _: &Path, _: &Path, number: u64, _: &str) -> takt::forge::Written<()> {
+        Err(WriteError::not_attempted(anyhow!(
+            "the double merges nothing: #{number}"
+        )))
     }
 }
 

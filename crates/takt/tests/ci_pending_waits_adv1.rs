@@ -251,7 +251,7 @@ impl Forge for AlwaysPending {
         tree: &Path,
         dir: &Path,
         request: &PullRequest,
-    ) -> anyhow::Result<u64> {
+    ) -> takt::forge::Written<u64> {
         self.memory.open_pull_request(tree, dir, request)
     }
 
@@ -268,7 +268,7 @@ impl Forge for AlwaysPending {
         self.memory.checks(tree, number)
     }
 
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
         self.memory.merge(tree, dir, number, head)
     }
 }

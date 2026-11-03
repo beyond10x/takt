@@ -20,6 +20,9 @@ use serde::{Deserialize, Serialize};
 /// The file in the case directory that holds the run record.
 pub const EVENTS_FILE: &str = "events.jsonl";
 
+/// The `event` of [`Event::ForgeSending`]'s line.
+pub const FORGE_SENDING: &str = "forge.sending";
+
 /// Who refused: the kernel, or the planning store through its own verb.
 pub const BY_TAKT: &str = "takt";
 /// The planning store refused a write, its words verbatim.
@@ -269,6 +272,18 @@ pub enum Event {
     },
     /// The run pauses on the forge for `seconds`, then observes the actions `on` again.
     Waiting { on: Vec<String>, seconds: f64 },
+    /// A forge write a validator is about to send, written before the request leaves: the
+    /// validator, its action and the write, `unknown`, about the pull request it concerns (none
+    /// for an open, which has no number yet) and the head it names. The step's own line follows
+    /// with the answer's class; a run that ends between the send and the answer (a crash, a
+    /// kill, an interrupt) leaves this line, so the write stays `unknown` and the next run reads
+    /// the forge before it sends again ([`Sending`]).
+    #[serde(rename = "forge.sending")]
+    ForgeSending {
+        name: String,
+        action: String,
+        forge_write: ForgeWrite,
+    },
     /// A declared setup command ran when the case opened, before the red-base check: its name,
     /// its argument list, the case's base commit it ran at, the code it ended with (none when a
     /// signal ended it, it could not be started or its time ran out), its duration in
@@ -304,8 +319,21 @@ pub enum Event {
     },
 }
 
+/// The forge write a validator step attempted, as its `step` line records it (`forge_write`):
+/// the outcome class ([`crate::forge::WriteOutcome`]), the pull request it concerned when one
+/// was known, and the head the step read it at, or pushed for it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForgeWrite {
+    pub outcome: crate::forge::WriteOutcome,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pull_request: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub head: Option<String>,
+}
+
 /// One line of the file: the instant, the step, the event.
-/// On a run's `opened` line, the digest of the `llm.routes/1` document the run ran under.
+/// On a run's `opened` line, the digest of the `llm.routes/1` document the run ran under; on a
+/// `step` line, the forge write the step attempted, when it attempted one.
 #[derive(Serialize)]
 struct Line<'a> {
     at: String,
@@ -316,12 +344,15 @@ struct Line<'a> {
     llm_digest: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     commit: Option<&'a serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forge_write: Option<&'a ForgeWrite>,
 }
 
 /// The run record of one case.
 #[derive(Debug, Clone)]
 pub struct Events {
     path: PathBuf,
+    forge_write: Option<ForgeWrite>,
 }
 
 impl Events {
@@ -330,6 +361,17 @@ impl Events {
     pub fn new(case_dir: &Path) -> Self {
         Self {
             path: case_dir.join(EVENTS_FILE),
+            forge_write: None,
+        }
+    }
+
+    /// The same record, its `step` lines carrying `write` as their `forge_write` member, none
+    /// when `write` is `None`; every other line is written as [`Events::emit`] writes it.
+    #[must_use]
+    pub fn writing(&self, write: Option<&ForgeWrite>) -> Self {
+        Self {
+            path: self.path.clone(),
+            forge_write: write.cloned(),
         }
     }
 
@@ -346,14 +388,14 @@ impl Events {
     /// the reader knows the torn one was skipped. A symbolic link at the path is refused, never
     /// written through ([`Events::open`]).
     pub fn emit(&self, step: u64, event: &Event) -> Result<()> {
-        self.append(step, event, None, None)
+        self.append(step, event, None, None).map(drop)
     }
 
     /// Appends the `opened` line of a run: `event` as [`Events::emit`] appends it, with the digest
     /// of the `llm.routes/1` document the run ran under as its `llm_digest` member; no member when
     /// the run had no such document.
     pub fn emit_opened(&self, step: u64, event: &Event, llm_digest: Option<&str>) -> Result<()> {
-        self.append(step, event, llm_digest, None)
+        self.append(step, event, llm_digest, None).map(drop)
     }
 
     /// [`Events::emit_opened`], the line also carrying `commit`, the commit style in effect
@@ -365,18 +407,19 @@ impl Events {
         llm_digest: Option<&str>,
         commit: &serde_json::Value,
     ) -> Result<()> {
-        self.append(step, event, llm_digest, Some(commit))
+        self.append(step, event, llm_digest, Some(commit)).map(drop)
     }
 
     /// The write [`Events::emit`] and [`Events::emit_opened`] make: `event` at `step`, after the
-    /// torn line ends when there is one.
+    /// torn line ends when there is one. Answers the text appended, the torn line's end and its
+    /// `skipped` line included.
     fn append(
         &self,
         step: u64,
         event: &Event,
         llm_digest: Option<&str>,
         commit: Option<&serde_json::Value>,
-    ) -> Result<()> {
+    ) -> Result<String> {
         let mut file = self
             .open(
                 std::fs::OpenOptions::new()
@@ -399,11 +442,17 @@ impl Events {
                 },
                 None,
                 None,
+                None,
             )?);
         }
-        text.push_str(&Self::line(step, event, llm_digest, commit)?);
+        let forge_write = match event {
+            Event::Step { .. } => self.forge_write.as_ref(),
+            _ => None,
+        };
+        text.push_str(&Self::line(step, event, llm_digest, commit, forge_write)?);
         file.write_all(text.as_bytes())
-            .with_context(|| format!("write {}", self.path.display()))
+            .with_context(|| format!("write {}", self.path.display()))?;
+        Ok(text)
     }
 
     /// Opens the record with `options`, never through a symbolic link at its path
@@ -430,6 +479,7 @@ impl Events {
         event: &Event,
         llm_digest: Option<&str>,
         commit: Option<&serde_json::Value>,
+        forge_write: Option<&ForgeWrite>,
     ) -> Result<String> {
         let mut line = serde_json::to_string(&Line {
             at: instant(),
@@ -437,6 +487,7 @@ impl Events {
             event,
             llm_digest,
             commit,
+            forge_write,
         })
         .context("write an event")?;
         line.push('\n');
@@ -567,6 +618,61 @@ impl Events {
             n = last + 1;
         }
         Ok(read)
+    }
+}
+
+/// Where a validator records a forge write before it sends it
+/// ([`crate::validator::Validator::record_sends`]): the case's run record and the step the write
+/// belongs to, so the line is the run's own. What it appends is kept, so after the observation
+/// the run admits exactly those lines in the cases directory and nothing else.
+#[derive(Debug)]
+pub struct Sending {
+    events: Events,
+    step: u64,
+    name: String,
+    action: String,
+    appended: std::cell::RefCell<String>,
+}
+
+impl Sending {
+    /// For the step `step` of the validator `name`, whose action is `action`, appending to
+    /// `events`.
+    #[must_use]
+    pub fn new(events: &Events, step: u64, name: &str, action: &str) -> Self {
+        Self {
+            events: events.writing(None),
+            step,
+            name: name.to_owned(),
+            action: action.to_owned(),
+            appended: std::cell::RefCell::new(String::new()),
+        }
+    }
+
+    /// Appends the [`Event::ForgeSending`] line of a write about to be sent about
+    /// `pull_request` at `head`, as `unknown`. When it fails, nothing may be sent.
+    pub fn sending(&self, pull_request: Option<u64>, head: &str) -> Result<()> {
+        let text = self.events.append(
+            self.step,
+            &Event::ForgeSending {
+                name: self.name.clone(),
+                action: self.action.clone(),
+                forge_write: ForgeWrite {
+                    outcome: crate::forge::WriteOutcome::Unknown,
+                    pull_request,
+                    head: Some(head.to_owned()),
+                },
+            },
+            None,
+            None,
+        )?;
+        self.appended.borrow_mut().push_str(&text);
+        Ok(())
+    }
+
+    /// The text [`Self::sending`] appended, in order; empty when it appended none.
+    #[must_use]
+    pub fn appended(&self) -> String {
+        self.appended.borrow().clone()
     }
 }
 
