@@ -670,9 +670,11 @@ impl ScenarioRunArgs {
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return self
-                .looping
-                .configured(takt::run_config::RunConfig::default(), matches);
+            return self.looping.configured(
+                takt::run_config::RunConfig::default(),
+                matches,
+                &self.repo,
+            );
         };
         let file = takt::run_config::RunConfig::read(path)?;
         if file.story.is_some() {
@@ -683,7 +685,7 @@ impl ScenarioRunArgs {
         }
         self.declared_scan = file.scan;
         self.forge_settings = file.forge_settings();
-        self.looping.configured(file, matches)?;
+        self.looping.configured(file, matches, &self.repo)?;
         Ok(())
     }
 }
@@ -835,9 +837,11 @@ impl RunArgs {
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return self
-                .looping
-                .configured(takt::run_config::RunConfig::default(), matches);
+            return self.looping.configured(
+                takt::run_config::RunConfig::default(),
+                matches,
+                &self.repo,
+            );
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
         if let Some(story) = file.story.take()
@@ -851,18 +855,20 @@ impl RunArgs {
         self.declared_scan = file.scan;
         self.protocol_settings = file.protocol_settings.clone();
         self.forge_settings = file.forge_settings();
-        self.looping.configured(file, matches)?;
+        self.looping.configured(file, matches, &self.repo)?;
         Ok(())
     }
 }
 
 impl LoopArgs {
     /// Fills each loop flag `matches` did not take from the command line with `file`'s value,
-    /// when it sets it, for `takt run` and `takt scenario run` alike.
+    /// when it sets it, for `takt run` and `takt scenario run` alike. The session settings are
+    /// checked by metaharness for a session in `repo` ([`takt::run_config::SessionRequest::with_flags`]).
     fn configured(
         &mut self,
         mut file: takt::run_config::RunConfig,
         matches: &clap::ArgMatches,
+        repo: &Path,
     ) -> Result<()> {
         if let Some(path) = &self.llm_config {
             file.set_llm_file(path)?;
@@ -902,6 +908,7 @@ impl LoopArgs {
             base,
             &looping.harness,
             looping.session_flags(),
+            repo,
         )?;
         // The file's endpoint is b10x-harness's: under another harness, which a flag may have
         // chosen over the file's, it is left out rather than refused as a flag nobody gave.
@@ -1163,7 +1170,7 @@ struct LoopArgs {
     #[arg(long, value_name = "FILE")]
     llm_config: Option<PathBuf>,
     /// The reasoning effort the session asks of the model, in the vendor's own vocabulary, as
-    /// `metaharness run --effort` takes it. Refused until takt's launch carries it.
+    /// `metaharness run --effort` takes it. Refused under `--harness harness`.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
     /// A ceiling on the session's turns, as `metaharness run --max-turns` takes it. Refused under
@@ -1171,15 +1178,15 @@ struct LoopArgs {
     #[arg(long, value_name = "N")]
     max_turns: Option<u32>,
     /// A ceiling in US dollars on what the session may spend, as `metaharness run
-    /// --max-budget-usd` takes it. Refused until takt's launch carries it.
+    /// --max-budget-usd` takes it, no finer than one micro-dollar. Claude Code's only.
     #[arg(long, value_name = "USD")]
     max_budget_usd: Option<String>,
     /// Refuse before the run when the installed vendor version is outside metaharness's pin, as
-    /// `metaharness run --strict-version` takes it. Refused until takt's launch carries it.
+    /// `metaharness run --strict-version` takes it.
     #[arg(long)]
     strict_version: bool,
-    /// A file whose text the prompt carries, as `metaharness run --context` takes it, repeatable.
-    /// Refused until takt's launch carries it.
+    /// A file whose text the session is handed, as `metaharness run --context` takes it,
+    /// repeatable: a file the repository's index tracks, as one plain relative path.
     #[arg(long, value_name = "FILE")]
     context: Vec<PathBuf>,
     #[command(flatten)]
@@ -2625,12 +2632,14 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         if let Some(program) = &looping.harness_program {
             session.program = program.to_string_lossy().into_owned();
         }
-        if let Some(max_turns) = looping
-            .session
-            .as_ref()
-            .and_then(|request| request.max_turns())
-        {
-            session.max_turns = max_turns;
+        if let Some(request) = &looping.session {
+            if let Some(max_turns) = request.max_turns() {
+                session.max_turns = max_turns;
+            }
+            session.effort = request.effort().map(str::to_owned);
+            session.max_budget_micro_usd = request.max_budget_micro_usd();
+            session.strict_version = request.strict_version();
+            session.requested_context = request.context();
         }
         session.check_program()?;
         Ok(session)

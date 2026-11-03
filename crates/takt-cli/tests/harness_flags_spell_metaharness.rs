@@ -232,6 +232,12 @@ fn max_turns_under_codex_is_refused_before_any_case_opens() {
     assert!(said.contains("the command line's --max-turns"), "{said}");
     assert!(said.contains("codex"), "{said}");
     assert!(!said.contains("in its `harness` mapping"), "{said}");
+    assert!(
+        said.contains(
+            "the run asked for --max-turns and the pinned codex exec has no way to express it"
+        ),
+        "metaharness's own refusal: {said}"
+    );
 }
 
 /// A session setting given under `--harness none` would start no session and be dropped, so it is
@@ -257,43 +263,47 @@ fn max_turns_flag_over_a_codex_file_is_refused_before_any_case_opens() {
     assert!(!said.contains("in its `harness` mapping"), "{said}");
 }
 
-/// Each of the four flags takt's launch does not carry yet is refused as the file's key is, by
-/// name, before any case opens.
+/// Each of the four flags once refused as not carried by takt's launch is carried now: the run is
+/// not refused for it, and a case opens.
 #[test]
-fn a_flag_not_carried_yet_is_refused_before_any_case_opens() {
+fn a_flag_once_not_carried_is_carried_and_a_case_opens() {
     let cases: [(&str, &[&str]); 4] = [
         ("effort", &["--effort", "high"]),
         ("max-budget-usd", &["--max-budget-usd", "2"]),
         ("strict-version", &["--strict-version"]),
-        ("context", &["--context", "notes.md"]),
+        ("context", &["--context", "README.md"]),
     ];
     for (key, flags) in cases {
-        let world = World::new(&format!("not-carried-{key}"));
+        let world = World::new(&format!("carried-{key}"));
         let config = world.file("run.yaml", &run_file(""));
         let output = world.run(&config, flags);
-        let said = world.assert_refused(&output);
-        assert!(said.contains(&format!("`{key}`")), "{said}");
-        assert!(
-            said.contains("refused rather than run without it"),
-            "{said}"
-        );
+        let said = text(&output);
+        assert!(!said.contains("does not carry"), "{key}: {said}");
+        assert!(world.cases().exists(), "{key}: a case was opened: {said}");
     }
 }
 
-/// `takt scenario run` takes the same flags, so the refusal of one is the same before the
-/// scenario is read.
+/// `takt scenario run` takes the same flags through the same check, so a flag metaharness refuses
+/// for the harness is refused before the scenario is read.
 #[test]
-fn scenario_run_refuses_a_flag_not_carried_yet_before_anything_opens() {
-    let world = World::new("scenario-not-carried");
+fn scenario_run_refuses_a_flag_metaharness_refuses_before_anything_opens() {
+    let world = World::new("scenario-kind-check");
     let output = Command::new(env!("CARGO_BIN_EXE_takt"))
         .args(["scenario", "run", "--repo"])
         .arg(world.repo())
-        .args(["1", "--max-budget-usd", "2"])
+        .args(["1", "--harness", "codex", "--max-budget-usd", "2"])
         .env("XDG_STATE_HOME", world.0.join("xdg-state"))
         .output()
         .expect("takt runs");
     let said = world.assert_refused(&output);
-    assert!(said.contains("`max-budget-usd`"), "{said}");
+    assert!(
+        said.contains("the command line's --max-budget-usd"),
+        "{said}"
+    );
+    assert!(
+        said.contains("the run asked for --max-budget-usd and the pinned codex exec"),
+        "metaharness's own refusal: {said}"
+    );
 }
 
 /// `takt run --help` and `takt scenario run --help` list all five flags by name.
