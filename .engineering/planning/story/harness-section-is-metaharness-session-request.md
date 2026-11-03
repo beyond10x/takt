@@ -14,22 +14,26 @@ relations:
 - depends_on: story:one-run-file-for-host-and-loom-agent
 scope:
 - confidence: cited
-  path: Cargo.lock
-- confidence: cited
-  path: Cargo.toml
-- confidence: cited
   path: crates/takt-cli/src/main.rs
+- confidence: cited
+  path: crates/takt-cli/tests/harness_flags_spell_metaharness.rs
+- confidence: cited
+  path: crates/takt-cli/tests/run_config_harness_section.rs
 - confidence: cited
   path: crates/takt/src/harness.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
+- confidence: inferred
+  path: crates/takt/tests/harness_preflight.rs
+- confidence: inferred
+  path: crates/takt/tests/harness_proposes.rs
 - confidence: cited
   path: ess/domains/takt.yaml
 - confidence: cited
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 8
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":6}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":6}}}
@@ -106,9 +110,33 @@ that writes the argv it was started with to a file.
 
 ## Scope
 
-- `crates/takt/src/run_config.rs`, `crates/takt/src/harness.rs` (`SessionExecutor` construction, `harness.rs:527-640`),
-  `crates/takt-cli/src/main.rs` (`harness_of`), `Cargo.toml`, `Cargo.lock`, `ess/domains/takt.yaml`,
-  `ess/ess-inputs.yaml`, `website/docs/reference/configuration.md`.
+Derived 2026-11-04 by `story-scoper` at 1c3ba5178, for the remaining work only (acceptance 1, 4 and 5, carrying the
+four keys refused as not carried yet, the documentation). Each line is **cited** (read from the story or the tree) or
+**inferred**.
+
+- `crates/takt/src/run_config.rs:589-641`: `not_carried_yet`, `refused_setting`, `HARNESS_KEYS_NOT_CARRIED`,
+  `CODEX_MAX_TURNS_REFUSED`, `CODEX_FLAG_MAX_TURNS_REFUSED`; these give way to metaharness's `RunSpec::from_document`
+  (acceptance 4) and `metaharness::check_spec` (acceptance 5) — cited
+- `crates/takt/src/run_config.rs:476-543` (`SessionRequest`, `with_flags`) and `:754-809` (`session_request`) — cited
+- `crates/takt/src/harness.rs:278-407` (`SessionHarness` fields and `SessionHarness::of`) and `:905-1007` (the
+  executor's construction, where `SessionExecutor::with_overrides` goes) — cited
+- `crates/takt-cli/src/main.rs:2621-2637` (`harness_of`, which copies only `max_turns` today), `:892-905`
+  (`configured`) and `:1164-1183` (`LoopArgs` doc strings) — cited
+- Upstream at the pins already in `Cargo.lock`: loom 0.52.0 `SessionOverrides` and `SessionExecutor::with_overrides`
+  (`crates/loom-session-executor/src/lib.rs:355-370`, `:1070`); metaharness 0.23.0 `check_spec`
+  (`crates/metaharness/src/builder.rs:1868`, Codex's `--max-turns` among its per-kind refusals, `:1857`) and
+  `RunSpec::from_document` (`crates/metaharness-protocol/src/spec_document.rs:220`). No pin moves: `Cargo.toml` and
+  `Cargo.lock` leave the scope — cited
+- Tests: `crates/takt-cli/tests/run_config_harness_section.rs` (new acceptance 1, 4, 5 cases;
+  `a_key_not_carried_yet_is_refused_not_dropped` `:260` and `codex_max_turns_is_refused_not_dropped` `:275` change);
+  `crates/takt-cli/tests/harness_flags_spell_metaharness.rs` (`:263` and `:286` break once the refusal is lifted,
+  `:227` takes metaharness's text) — cited
+- Also likely: `crates/takt/tests/harness_preflight.rs` (`strict_version_makes_h9_stop_first`, `:247`),
+  `crates/takt/tests/harness_proposes.rs`, `ess/domains/takt.yaml:831-852` — inferred
+- `website/docs/reference/configuration.md:87` and `:715-735`; `ess/ess-inputs.yaml` — cited
+- Shared with story:harness-flags-spell-metaharness-names: flags and file keys pass one check (`with_flags` calls
+  `refused_setting`, `run_config.rs:512-516`), so lifting the refusal for one lifts it for the other — cited
+- Confidence: high.
 
 ## Status
 

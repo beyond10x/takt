@@ -827,13 +827,13 @@ types:
 
   # Whose a refused harness setting is: takt's own, or the run's (its `model` and its `llm`
   # section). Declared ahead of the code.
-  # read from: .engineering/planning/story/harness-section-is-metaharness-session-request.md:75
+  # read from: .engineering/planning/story/harness-section-is-metaharness-session-request.md:79
   - name: takt.work.HarnessSettingOwner
     kind: enum
     variants: [takt, run]
 
   # A harness setting refused before any case opens: the key refused, and whose it is.
-  # read from: .engineering/planning/story/harness-section-is-metaharness-session-request.md:75
+  # read from: .engineering/planning/story/harness-section-is-metaharness-session-request.md:79
   - name: takt.work.HarnessSettingRefused
     kind: struct
     fields:
@@ -846,7 +846,7 @@ types:
   # mapping, metaharness's session request under its own names, admitted in six keys with the rest
   # refused (takt.work.HarnessSettingRefused). ESS unions are tagged, so the two shapes are one
   # opaque value here. Declared ahead of the code.
-  # read from: .engineering/planning/story/harness-section-is-metaharness-session-request.md:74-75
+  # read from: .engineering/planning/story/harness-section-is-metaharness-session-request.md:78-79
   - name: takt.work.HarnessSetting
     kind: newtype
     of: Json

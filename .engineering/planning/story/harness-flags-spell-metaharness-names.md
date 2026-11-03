@@ -14,13 +14,15 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
-- confidence: inferred
-  path: crates/takt-cli/tests
+- confidence: cited
+  path: crates/takt-cli/tests/harness_flags_spell_metaharness.rs
+- confidence: cited
+  path: crates/takt/src/run_config.rs
 - confidence: cited
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 7
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
@@ -72,8 +74,22 @@ of story:harness-section-is-metaharness-session-request.
 
 ## Scope
 
-- `crates/takt-cli/src/main.rs` (`LoopArgs`), `crates/takt-cli/tests/`, `website/docs/reference/configuration.md`,
-  `ess/ess-inputs.yaml`.
+Derived 2026-11-04 by `story-scoper` at 1c3ba5178. What is left once
+story:harness-section-is-metaharness-session-request has merged: the observables, the help text and the Codex flag's
+message. Each line is **cited** (read from the story or the tree) or **inferred**.
+
+- `crates/takt-cli/tests/harness_flags_spell_metaharness.rs:260-297`: the two refusal cases become acceptance 1's
+  per-flag observables on `takt run` and `takt scenario run`; `:224-235`, `:249-258` take metaharness's refusal
+  (acceptance 3); `:81-98` (the doubles) need a Codex double that copies its generated configuration and a version
+  outside metaharness's pin for `--strict-version` — cited
+- `crates/takt-cli/src/main.rs:1165-1184` (`LoopArgs` doc comments, the `--help` text) — cited
+- `crates/takt/src/run_config.rs:603` (`CODEX_FLAG_MAX_TURNS_REFUSED`) and `:617-624`; `:571-573` (`--max-budget-usd`
+  enters as a string where a file gives a number); `:577-584` (`--context` paths, which Loom takes only as plain
+  relative paths of copied files) — cited for the lines, inferred for what changes
+- `ess/ess-inputs.yaml:6`, `website/docs/reference/configuration.md:719-723`, `:733` — cited
+- Shared with story:harness-section-is-metaharness-session-request: `run_config.rs:499-641`, `main.rs` `harness_of`
+  and `LoopArgs`, `harness.rs` `SessionHarness`, `ess/ess-inputs.yaml`, `configuration.md` — cited
+- Confidence: medium; how much is left depends on how the section story writes `refused_setting` and `harness_of`.
 
 ## Status
 
