@@ -1426,12 +1426,14 @@ const EXIT_USAGE: u8 = 2;
 /// The token budget of a run that names none, by `--tokens` or its run file's `tokens`.
 const DEFAULT_TOKENS: u64 = 3_000_000;
 
-/// `--usd`: a finite number of dollars above zero; anything else does not parse, exit 2.
+/// `--usd`: a finite number of dollars that is at least one micro-dollar once rounded to whole
+/// micro-dollars, as the run counts them ([`takt::run::micro_dollars`]); anything else does not
+/// parse, exit 2.
 fn dollars(text: &str) -> std::result::Result<f64, String> {
     text.parse::<f64>()
         .ok()
-        .filter(|usd| usd.is_finite() && *usd > 0.0)
-        .ok_or_else(|| "a dollar budget is a finite number above 0".to_owned())
+        .filter(|usd| takt::run::micro_dollars(*usd).is_some_and(|micros| micros > 0))
+        .ok_or_else(|| "a dollar budget is a finite number of at least 0.000001".to_owned())
 }
 /// Exit 3: the run stopped on a budget, with nothing more it may do, or on the tests: red at the
 /// base, or failing the same tests again.

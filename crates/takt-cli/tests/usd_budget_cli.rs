@@ -161,7 +161,7 @@ fn a_run_stops_once_the_cost_the_harness_reports_reaches_the_dollar_budget() {
         "the run stops after the step that brings the cost to the budget, not before\n{said}"
     );
     assert!(
-        !stdout.contains("reports no cost"),
+        !stdout.contains("reported no cost"),
         "a harness that reports its cost is not said to report none\n{said}"
     );
 }
@@ -183,10 +183,10 @@ fn a_harness_that_reports_no_cost_never_stops_on_the_dollar_budget() {
     );
     assert_eq!(
         format!("{stdout}{stderr}")
-            .matches("reports no cost")
+            .matches("reported no cost")
             .count(),
         1,
-        "the run says once that the harness reports no cost\n{said}"
+        "the run says once that a harness step reported no cost (story:bench-subset-and-budget)\n{said}"
     );
 }
 
