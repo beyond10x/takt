@@ -313,6 +313,7 @@ fn write_opened_case(dir: &Path, case: &str) {
                 duration_ms: None,
                 api_ms: None,
                 turns: None,
+                requests: Some(1),
                 started_at: None,
                 transcript: None,
                 transcript_refused: None,

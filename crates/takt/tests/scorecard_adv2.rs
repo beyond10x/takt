@@ -1,7 +1,8 @@
 //! Adversary pass 2 on story:scorecard-reader, after correction 1, held to the rule
 //! story:promotion decided: the case is the unit of comparison and a scenario is worse when,
 //! at some outcome rank, its cases at that rank or better fall short of the saved share by more
-//! than a margin of one case, or when its median of tokens exceeds the saved maximum. Two
+//! than a margin of one case, or (since story:the-token-rule-holds-for-an-unchanged-binary) when
+//! its median of tokens per model request exceeds the saved side's by more than 5 %. Two
 //! properties are asked of that rule: a scorecard compared with itself is never worse, and a
 //! candidate worse by two cases of one scenario (none better) always is; one case worse is the
 //! margin. Records are written through `takt::events`, as the run loop writes them.
@@ -75,6 +76,7 @@ fn judged(tokens: u64) -> Event {
         duration_ms: None,
         api_ms: None,
         turns: None,
+        requests: Some(1),
         started_at: None,
         transcript: None,
         transcript_refused: None,
@@ -367,6 +369,7 @@ fn row(case: &str, outcome: &str) -> Row {
         outcome: outcome.to_owned(),
         steps: 1,
         tokens: Some(100),
+        requests: Some(1),
         refusals: 0,
         no_progress: u64::from(outcome == "NoProgress"),
         errors: u64::from(outcome == "error"),

@@ -103,6 +103,7 @@ fn scenario_one_with_its_grant(repo: &Path, case: &str) {
         duration_ms: None,
         api_ms: None,
         turns: None,
+        requests: Some(1),
         started_at: None,
         transcript: None,
         transcript_refused: None,

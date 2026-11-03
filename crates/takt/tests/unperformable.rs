@@ -325,6 +325,7 @@ fn an_unperformable_stop_is_no_completion() {
         }),
         steps: 3,
         tokens: Some(0),
+        requests: Some(1),
         refusals: 0,
         no_progress: 0,
         errors: 0,

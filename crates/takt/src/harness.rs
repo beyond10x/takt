@@ -89,8 +89,9 @@ pub struct StepReport {
 /// (ADR 0101: the `harness` layer's revision, read from the stream of the step that ran and
 /// never from a call of the program outside a step; Claude Code: `claude_code_version` of the
 /// `system`/`init` event that opens its stream), the cost in dollars, the call's duration and
-/// its time in the API in milliseconds, the turns, and the instant the call started (stamped
-/// by takt, as [`crate::events::instant`] writes one).
+/// its time in the API in milliseconds, the turns, the model requests its stream shows
+/// ([`requests_in`]), and the instant the call started (stamped by takt, as
+/// [`crate::events::instant`] writes one).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CallReport {
     pub model: Option<String>,
@@ -99,6 +100,7 @@ pub struct CallReport {
     pub duration_ms: Option<u64>,
     pub api_ms: Option<u64>,
     pub turns: Option<u64>,
+    pub requests: Option<u64>,
     pub started_at: Option<String>,
 }
 
@@ -1117,6 +1119,7 @@ impl Harness for SessionHarness {
             duration_ms: report.duration_ms,
             api_ms: report.api_ms,
             turns: report.turns,
+            requests: requests_in(&report.transcript),
             started_at: Some(started_at),
         });
         // An `AGENTS.md` left out for Codex to load itself, which its rollout shows it did not
@@ -1186,32 +1189,8 @@ impl Harness for SessionHarness {
 /// its own. None when no message reported a token.
 #[must_use]
 pub fn claude_usage_so_far(transcript: &[u8]) -> Option<crate::events::TokenUsage> {
-    let mut by_message: Vec<(Option<String>, &serde_json::Map<String, serde_json::Value>)> =
-        Vec::new();
-    let lines: Vec<serde_json::Value> = transcript
-        .split(|byte| *byte == b'\n')
-        .filter_map(|line| serde_json::from_slice(line).ok())
-        .collect();
-    for line in &lines {
-        let (id, usage) = if line["type"] == "assistant" {
-            (&line["message"]["id"], &line["message"]["usage"])
-        } else if line["event"] == "usage" {
-            (&line["request_id"], &line["usage"])
-        } else {
-            continue;
-        };
-        let Some(usage) = usage.as_object() else {
-            continue;
-        };
-        let id = id.as_str().map(str::to_owned);
-        match by_message
-            .iter_mut()
-            .find(|(seen, _)| id.is_some() && *seen == id)
-        {
-            Some(entry) => entry.1 = usage,
-            None => by_message.push((id, usage)),
-        }
-    }
+    let lines = transcript_lines(transcript);
+    let by_message = messages(&lines);
     let component = |usage: &serde_json::Map<String, serde_json::Value>, key: &str| {
         usage
             .get(key)
@@ -1237,6 +1216,58 @@ pub fn claude_usage_so_far(transcript: &[u8]) -> Option<crate::events::TokenUsag
                 .saturating_add(component(usage, "cache_creation_input_tokens")),
         });
     (usage.total() > 0).then_some(usage)
+}
+
+/// The model requests a session's `transcript` shows: its messages that reported a usage,
+/// each counted once as [`claude_usage_so_far`] counts it (Claude Code's assistant messages by
+/// their id, metaharness's `usage` events by their request id, a record without an id on its
+/// own). One message is one request to the model, whatever number of tool calls it carried,
+/// which `num_turns` counts otherwise. None when the transcript shows none, never 0.
+#[must_use]
+pub fn requests_in(transcript: &[u8]) -> Option<u64> {
+    let requests = messages(&transcript_lines(transcript)).len() as u64;
+    (requests > 0).then_some(requests)
+}
+
+/// A transcript's lines that read as JSON, in order; any other line is skipped.
+fn transcript_lines(transcript: &[u8]) -> Vec<serde_json::Value> {
+    transcript
+        .split(|byte| *byte == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
+        .collect()
+}
+
+/// Each model message of a transcript's `lines` with the usage it reported, in the order the
+/// messages first appear: an assistant message's `usage` (Claude Code's own stream,
+/// `message.usage`), or a `usage` event's (metaharness's events). A message written over
+/// several records repeats its usage on each, so the last record of a message id (a request
+/// id) is the one kept; a record without an id is a message on its own.
+fn messages(
+    lines: &[serde_json::Value],
+) -> Vec<(Option<&str>, &serde_json::Map<String, serde_json::Value>)> {
+    let mut by_message: Vec<(Option<&str>, &serde_json::Map<String, serde_json::Value>)> =
+        Vec::new();
+    for line in lines {
+        let (id, usage) = if line["type"] == "assistant" {
+            (&line["message"]["id"], &line["message"]["usage"])
+        } else if line["event"] == "usage" {
+            (&line["request_id"], &line["usage"])
+        } else {
+            continue;
+        };
+        let Some(usage) = usage.as_object() else {
+            continue;
+        };
+        let id = id.as_str();
+        match by_message
+            .iter_mut()
+            .find(|(seen, _)| id.is_some() && *seen == id)
+        {
+            Some(entry) => entry.1 = usage,
+            None => by_message.push((id, usage)),
+        }
+    }
+    by_message
 }
 
 /// The `commit` member of the reply a session ended with, read from its `transcript` (one JSON
@@ -3603,7 +3634,11 @@ impl Harness for ClaudeCode {
         } else {
             &output.stdout
         };
-        let call = Self::call(&doc, Self::version(front), started_at);
+        let mut call = Self::call(&doc, Self::version(front), started_at);
+        // The stream's messages are its requests; a cut stream lost some, so it shows none.
+        call.requests = (!output.stdout_cut)
+            .then(|| requests_in(&output.stdout))
+            .flatten();
         let (action, summary) = Self::parse(result)?;
         self.reported.set(usage);
         *self.call.borrow_mut() = Some(call);
@@ -3642,7 +3677,7 @@ impl ClaudeCode {
     /// result does not state it: `modelUsage`'s keys as the model (several joined with `+`),
     /// `total_cost_usd`, `duration_ms`, `duration_api_ms` and `num_turns`; `version` is what
     /// [`Self::version`] read from the stream's start; `started_at` is the instant takt started
-    /// the child.
+    /// the child. The requests are the stream's, not the result's ([`requests_in`]).
     fn call(doc: &serde_json::Value, version: Option<String>, started_at: String) -> CallReport {
         let model = doc["modelUsage"].as_object().and_then(|models| {
             let names: Vec<&str> = models.keys().map(String::as_str).collect();
@@ -3655,6 +3690,7 @@ impl ClaudeCode {
             duration_ms: doc["duration_ms"].as_u64(),
             api_ms: doc["duration_api_ms"].as_u64(),
             turns: doc["num_turns"].as_u64(),
+            requests: None,
             started_at: Some(started_at),
         }
     }

@@ -173,6 +173,7 @@ fn scorecard(revision: &str, outcome: &str, binary: &str) -> Scorecard {
                 }),
                 steps: 4,
                 tokens: Some(1000),
+                requests: Some(1),
                 refusals: 0,
                 no_progress: 0,
                 errors: 0,

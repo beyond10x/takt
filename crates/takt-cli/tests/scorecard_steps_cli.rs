@@ -77,11 +77,36 @@ fn side(name: &str, side: &str) -> Scratch {
             .join(CASES_DIR)
             .join(case.file_name().expect("a case name"));
         fs::create_dir_all(&to).expect("the case directory");
-        for file in ["events.jsonl", "held-out.txt"] {
-            fs::copy(case.join(file), to.join(file)).expect("a fixture file");
-        }
+        fs::copy(case.join("held-out.txt"), to.join("held-out.txt")).expect("a fixture file");
+        fs::write(
+            to.join("events.jsonl"),
+            one_request_a_step(&case.join("events.jsonl")),
+        )
+        .expect("the record");
     }
     repo
+}
+
+/// The fixture's record at `path`, each harness step's line given `requests: 1`. The 0.3.0
+/// runs were recorded before a step line carried its model requests, and the token rule
+/// divides by them (story:the-token-rule-holds-for-an-unchanged-binary): read as one request
+/// a step, the run-level rule judges tokens per harness step. Every other field is the
+/// record's.
+fn one_request_a_step(path: &Path) -> String {
+    fs::read_to_string(path)
+        .expect("a fixture record")
+        .lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
+            if value["event"] == "step"
+                && value["by"] != "validator"
+                && value.get("requests").is_none()
+            {
+                value["requests"] = 1.into();
+            }
+            format!("{value}\n")
+        })
+        .collect()
 }
 
 /// The trigger's scorecard, saved under `saves`.

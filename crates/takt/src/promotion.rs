@@ -3279,9 +3279,11 @@ mod tests {
         let card = Scorecard::load(shown).expect("the fixture reads");
         assert_eq!(card.metrics.get("step_tokens"), Some(&2));
         known_metrics_of(&card, shown, &METRICS).expect("this takt reads it");
-        // Its tokens at the version that takt knows, so step_tokens alone is the refusal.
+        // Its tokens at the version that takt knows, and without the later `requests`, so
+        // step_tokens alone is the refusal.
         let mut known_tokens = card.clone();
         known_tokens.metrics.insert("tokens".to_owned(), 1);
+        known_tokens.metrics.remove("requests");
         let refused = known_metrics_of(&known_tokens, shown, &METRICS_BEFORE_STEP_TOKENS)
             .expect_err("a takt not knowing step_tokens refuses it")
             .to_string();
@@ -3303,6 +3305,30 @@ mod tests {
         assert!(
             newer_definition(&card, &before),
             "a rebaseline under step_tokens starts a new series"
+        );
+    }
+
+    /// story:the-token-rule-holds-for-an-unchanged-binary: the token rule divides by a run's
+    /// model requests, a metric of its own, `requests` v1, so a stored scorecard saved before
+    /// runs recorded them is refused by this takt, never judged as if each case made none.
+    #[test]
+    fn this_takt_refuses_a_scorecard_saved_before_requests() {
+        let shown = Path::new(SAVED_V3);
+        let card = Scorecard::load(shown).expect("the fixture reads");
+        assert_eq!(card.metrics.get("requests"), Some(&1));
+        known_metrics_of(&card, shown, &METRICS).expect("this takt reads it");
+        let mut before = card.clone();
+        before.metrics.remove("requests");
+        let refused = known_metrics_of(&before, shown, &METRICS)
+            .expect_err("this takt refuses a scorecard from before requests")
+            .to_string();
+        assert!(
+            refused.contains("metric requests has no definition version"),
+            "{refused}"
+        );
+        assert!(
+            newer_definition(&card, &before),
+            "a scorecard under requests is under a newer definition"
         );
     }
 
