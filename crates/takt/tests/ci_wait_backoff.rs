@@ -1,7 +1,7 @@
 //! story:ci-wait-watches-the-check: the wait on the forge starts short and grows. A run whose
 //! pull request's checks stay pending waits the run's first interval ([`Run::poll`], 2 s by
 //! default), then half as long again each consecutive wait on the same awaited set, up to the
-//! cap (15 s by default, the same multiple of the first interval for a test's shorter one);
+//! cap (4.5 s by default, the same multiple of the first interval for a test's shorter one);
 //! a change of the awaited set or of the head the forge reports starts it again at the first
 //! interval, and every wait is still cut to what is left of the hour budget. So a `ci_result`
 //! follows the checks' completion within one current interval, and a CI that never reports
@@ -228,13 +228,15 @@ fn worked_case(repo: &Path) -> String {
     id
 }
 
-/// The double: its checks pending until `green_at` (never, when none), then passing; the
+/// The double: its checks pending until `green_at` (never, when none), then passing, or, made
+/// by [`Watched::green_after_first_read`], pending until that long after the first read; the
 /// `n`-th read of the pull request (from 1) reports the head `heads[n - 1]` on the case's
 /// branch where that is set, as a forge whose pull request lags the push, and the head
 /// pushed otherwise.
 struct Watched {
     memory: Rc<Memory>,
-    green_at: Option<SystemTime>,
+    green_at: Cell<Option<SystemTime>>,
+    green_after: Option<Duration>,
     heads: Vec<Option<String>>,
     views: Cell<usize>,
     reads: RefCell<Vec<(Instant, Checks)>>,
@@ -247,10 +249,19 @@ impl Watched {
                 checks: Checks::Pass,
                 ..Memory::default()
             }),
-            green_at,
+            green_at: Cell::new(green_at),
+            green_after: None,
             heads,
             views: Cell::new(0),
             reads: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Checks that pass `after` the first read of them, which finds them pending.
+    fn green_after_first_read(after: Duration) -> Self {
+        Self {
+            green_after: Some(after),
+            ..Self::new(None, Vec::new())
         }
     }
 }
@@ -306,7 +317,12 @@ impl Forge for Watched {
 
     fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
         self.memory.checks(tree, number)?;
-        let checks = match self.green_at {
+        if let Some(after) = self.green_after
+            && self.green_at.get().is_none()
+        {
+            self.green_at.set(Some(SystemTime::now() + after));
+        }
+        let checks = match self.green_at.get() {
             Some(at) if SystemTime::now() >= at => Checks::Pass,
             _ => Checks::Pending,
         };
@@ -380,9 +396,9 @@ fn evidence(repo: &Path, id: &str, kind: &str) -> Vec<(PathBuf, serde_json::Valu
 }
 
 /// The waits a backoff from `first` gives, `n` of them: half as long again each, capped at
-/// 7.5 times `first` (the default's 15 s over its 2 s).
+/// 2.25 times `first` (the default's 4.5 s over its 2 s).
 fn grown(first: Duration, n: usize) -> Vec<f64> {
-    let cap = first.as_secs_f64() * 7.5;
+    let cap = first.as_secs_f64() * 2.25;
     let mut wait = first.as_secs_f64();
     let mut all = Vec::new();
     for _ in 0..n {
@@ -399,7 +415,7 @@ fn close(a: &[f64], b: &[f64]) -> bool {
 /// Checks that stay pending: each wait is half as long again as the one before, from the first
 /// interval up to the cap and then at the cap, every one on `ci.read`.
 #[test]
-fn the_wait_grows_from_two_seconds_to_fifteen() {
+fn the_wait_grows_from_two_seconds_to_four_and_a_half() {
     let repo = repository("grows");
     let id = worked_case(&repo);
     let forge = Rc::new(Watched::new(None, Vec::new()));
@@ -529,6 +545,63 @@ fn ci_result_follows_completion_within_one_interval() {
     );
 }
 
+/// Checks that pass at any instant of a grid after their first read, under a scaled backoff
+/// (100 ms, capped at 225 ms): every `ci_result` record is written within one cap of the
+/// instant, beside the time the run spends between two reads on its own (the longest gap
+/// between two reads less the wait between them) and 20 ms for the write.
+#[test]
+fn ci_result_follows_any_completion_within_one_cap() {
+    let first = Duration::from_millis(100);
+    let cap = first.mul_f64(2.25);
+    let mut late = Vec::new();
+    for (n, offset) in (50..=1250).step_by(150).enumerate() {
+        let repo = repository(&format!("grid-{n}"));
+        let id = worked_case(&repo);
+        let forge = Rc::new(Watched::green_after_first_read(Duration::from_millis(
+            offset,
+        )));
+
+        let (stop, text) = resumed_run(
+            &repo,
+            &id,
+            options(Some(60), None),
+            forge.clone(),
+            &Gatekeeper::default(),
+            Some(first),
+        );
+
+        assert_eq!(
+            stop,
+            Ok(Stop::ApprovalRequired(vec!["repository.merge".to_owned()])),
+            "{text}"
+        );
+        let ci = evidence(&repo, &id, "ci_result");
+        assert_eq!(ci.len(), 1, "{text}");
+        let written = fs::metadata(&ci[0].0)
+            .and_then(|meta| meta.modified())
+            .expect("a modification time");
+        let green_at = forge.green_at.get().expect("the checks were read");
+        let after = written.duration_since(green_at).unwrap_or_default();
+        let reads = forge.reads.borrow();
+        let waited: Vec<f64> = waits(&repo, &id).iter().map(|(_, s)| *s).collect();
+        let own = reads
+            .windows(2)
+            .zip(&waited)
+            .map(|(pair, wait)| {
+                (pair[1].0 - pair[0].0).saturating_sub(Duration::from_secs_f64(*wait))
+            })
+            .max()
+            .unwrap_or_default();
+        if after > cap + own + Duration::from_millis(20) {
+            late.push((offset, after, own, waited));
+        }
+    }
+    assert!(
+        late.is_empty(),
+        "ci_result later than one cap {cap:?} after the checks passed, as (ms after the first read, how late, the run's own time between reads, the waits): {late:?}, story:ci-wait-watches-the-check"
+    );
+}
+
 /// Checks that never report, under an hour budget: the run stops `Waiting` on `ci.read` with
 /// `Hours` spent, its waits grown and the last cut to what was left. The budget runs from the
 /// resume, so on a loaded host it can run out before the run reads the checks at all: that
@@ -571,7 +644,7 @@ fn a_ci_that_never_reports_ends_at_the_hour_budget() {
         );
         let waits: Vec<f64> = waits(&repo, &id).iter().map(|(_, s)| *s).collect();
         assert!(waits.len() >= 2, "{waits:?}\n{text}");
-        let cap = first.as_secs_f64() * 7.5;
+        let cap = first.as_secs_f64() * 2.25;
         assert!(
             waits.iter().all(|wait| *wait <= cap + 1e-9),
             "a wait past the cap {cap} s: {waits:?}, story:ci-wait-watches-the-check"
@@ -588,10 +661,10 @@ fn a_ci_that_never_reports_ends_at_the_hour_budget() {
     );
 }
 
-/// The default backoff, exactly: 2, 3, 4.5, 6.75, 10.125, then 15 s from there on; a run's
-/// backoff is it unless its poll is set, and a set poll scales it, the cap 7.5 times the poll.
+/// The default backoff, exactly: 2, 3, then 4.5 s from there on; a run's
+/// backoff is it unless its poll is set, and a set poll scales it, the cap 2.25 times the poll.
 #[test]
-fn the_default_backoff_is_two_seconds_growing_by_half_to_fifteen() {
+fn the_default_backoff_is_two_seconds_growing_by_half_to_four_and_a_half() {
     let backoff = Backoff::DEFAULT;
     let mut wait = backoff.start();
     let mut seen = Vec::new();
@@ -600,23 +673,22 @@ fn the_default_backoff_is_two_seconds_growing_by_half_to_fifteen() {
         wait = backoff.after(wait);
     }
     let ms = |ms: u64| Duration::from_millis(ms);
-    let micros = |us: u64| Duration::from_micros(us);
     assert_eq!(
         seen,
         vec![
             ms(2000),
             ms(3000),
             ms(4500),
-            ms(6750),
-            micros(10_125_000),
-            ms(15_000),
-            ms(15_000),
-            ms(15_000),
+            ms(4500),
+            ms(4500),
+            ms(4500),
+            ms(4500),
+            ms(4500),
         ],
         "story:ci-wait-watches-the-check"
     );
     assert_eq!(Backoff::scaled(ms(2000)), Backoff::DEFAULT);
-    assert_eq!(Backoff::scaled(ms(4)).cap, ms(30));
+    assert_eq!(Backoff::scaled(ms(4)).cap, ms(9));
     assert_eq!(
         Backoff::scaled(Duration::MAX).after(Duration::MAX),
         Duration::MAX

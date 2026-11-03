@@ -6,7 +6,7 @@
 //! of `glab` and git's HTTPS push first on every child's program path: the `glab`
 //! double answers the merge request's reads from a script of head pipelines, one line a read.
 //! A library test, not one of the binary: `takt run` waits [`takt::run::Backoff::DEFAULT`], 2 s
-//! growing to 15 s, between two reads and has no flag to shorten it, so only [`Run::poll`], the
+//! growing to 4.5 s, between two reads and has no flag to shorten it, so only [`Run::poll`], the
 //! backoff's first interval, makes a run of several
 //! reads take milliseconds. Nothing here reaches a host.
 
