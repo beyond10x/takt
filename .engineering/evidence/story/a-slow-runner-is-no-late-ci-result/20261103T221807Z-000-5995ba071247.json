@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T22:18:07Z",
+  "actor": "human:timo",
+  "artifact": "story:a-slow-runner-is-no-late-ci-result",
+  "kind": "story",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "red, not a pass: the 0.29.0 release run's darwin test-library job, first attempt; ci_wait_backoff.rs:599 panicked, the record 679.16 ms after green against an allowance of 225 + 427.37 + 20 = 672.37 ms; the third red at this site",
+    "reference": "f1be2f3560edca8e84060977eceb1afe13c8cd98"
+  }
+}
