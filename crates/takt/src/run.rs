@@ -2265,6 +2265,29 @@ fn snapshot_without(dir: &Path, without: Option<&Path>) -> Result<BTreeMap<PathB
     Ok(entries)
 }
 
+/// `kept` with `appended`, the lines the run itself appended to the run record at `events` (a
+/// path relative to the tree) during an observation ([`crate::events::Sending`]), so the
+/// observation is not taken to have written them, and putting its change back keeps them.
+fn admit_appended(kept: &mut BTreeMap<PathBuf, Entry>, events: &Path, appended: &str) {
+    if appended.is_empty() {
+        return;
+    }
+    match kept.get_mut(events) {
+        Some(Entry::File { bytes, .. }) => bytes.extend_from_slice(appended.as_bytes()),
+        // Not a file the run appends to: left as it was, for the cases guard to name.
+        Some(_) => {}
+        None => {
+            kept.insert(
+                events.to_path_buf(),
+                Entry::File {
+                    bytes: appended.as_bytes().to_vec(),
+                    executable: false,
+                },
+            );
+        }
+    }
+}
+
 /// The paths at which two snapshots differ: added, removed or changed, in path order.
 fn differing(before: &BTreeMap<PathBuf, Entry>, after: &BTreeMap<PathBuf, Entry>) -> Vec<PathBuf> {
     before
@@ -12061,18 +12084,37 @@ impl<'a> Run<'a> {
             return Ok(Taken::Stop(Stop::StepRefused(why)));
         }
         let checkpoint = self.checkpoint(false)?;
-        let kept = snapshot_cases(&self.tree)?;
+        let mut kept = snapshot_cases(&self.tree)?;
         let globs = self.judge_list()?.unwrap_or_default();
         let (surface, surface_kept) =
             JudgeSurface::read(&self.runs(), globs, &self.modules, &self.tree)?;
+        // A forge write the observation sends is recorded `unknown` in the run record before it
+        // leaves (`forge.sending`), through this, the run's own, for this step.
+        let sending = std::rc::Rc::new(crate::events::Sending::new(
+            events,
+            self.steps,
+            validator.name(),
+            validator.action(),
+        ));
+        validator.record_sends(Some(std::rc::Rc::clone(&sending)));
         let began = Instant::now();
         let observed = validator
             .observe_within(&self.tree, &revision, seq, self.deadline())
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
+        validator.record_sends(None);
         let failed = validator.take_failed();
         let gates = validator.take_obligations();
         let write = validator.take_forge_write();
         let returned = Instant::now();
+        // Those lines are the run's, not the observation's: kept in the cases directory like
+        // the rest of the run record, whatever the observation's change is put back to.
+        if let Ok(case) = self.case.dir.strip_prefix(&self.tree) {
+            admit_appended(
+                &mut kept,
+                &case.join(crate::events::EVENTS_FILE),
+                &sending.appended(),
+            );
+        }
         // The way to the case's directory is read before anything is written under it: a test
         // command that put a link on it (`.takt`, a cases root) is refused and undone below.
         let way = self.case.check_way().err();
