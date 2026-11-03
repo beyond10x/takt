@@ -7734,6 +7734,17 @@ fn outside_named(paths: &[PathBuf]) -> String {
         .join(", ")
 }
 
+/// How a refusal names `paths` of [`Outside`] that changed during a step: takt cannot tell a
+/// step's write outside the tree from another process's (an install the step did not make), so
+/// it names them as of unknown origin, never as the step's, and the step is still refused
+/// (story:an-unrelated-program-install-refuses-no-step).
+fn outside_unattributed(paths: &[PathBuf]) -> String {
+    format!(
+        "what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there changed during the step, origin unknown: the step or another process: {}",
+        outside_named(paths)
+    )
+}
+
 /// A key path of a manifest read strictly: bare keys (`A-Za-z0-9_-`) and quoted keys holding no
 /// escape, joined by dots with optional white space; `None` for anything else, an escape in a
 /// key among it, which the scanner cannot read with certainty.
@@ -12140,22 +12151,39 @@ impl<'a> Run<'a> {
                 outside.push(path);
             }
         }
-        outside.extend(outside_moved.iter().map(|path| path.display().to_string()));
         if let Some(way) = &way {
             outside.push(format!("{way:#}"));
         }
-        if !foreign.is_empty() || !outside.is_empty() {
+        if !foreign.is_empty() || !outside.is_empty() || !outside_moved.is_empty() {
             let lock_remedy = untracked_cargo_lock(&self.tree, &change.paths);
             let left = undo_step(&self.tree, &kept_all)?.left;
             foreign.extend(outside);
-            foreign.extend(left.iter().map(|path| {
-                format!("not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}", path.display())
-            }));
-            let mut why = format!(
+            // What the observation is known to have written (in the tree, its cases directory,
+            // git's own files) apart from what changed outside the tree meanwhile, whose origin
+            // takt cannot tell: the observation's or another process's.
+            let wrote = format!(
                 "{} wrote what its validator does not: {}",
                 validator.action(),
                 foreign.join(", ")
             );
+            let mut parts = Vec::new();
+            if !foreign.is_empty() {
+                parts.push(wrote);
+            }
+            if !outside_moved.is_empty() {
+                parts.push(outside_unattributed(&outside_moved));
+            }
+            if !left.is_empty() {
+                parts.push(format!(
+                    "not put back (a program or import directory takt never writes, a link on its way, or a file too large to keep a copy of): {}",
+                    outside_named(&left)
+                ));
+            }
+            let mut why = if foreign.is_empty() {
+                format!("{}: {}", validator.action(), parts.join("; "))
+            } else {
+                parts.join("; ")
+            };
             if lock_remedy {
                 why.push_str(&format!("; {CARGO_LOCK_REMEDY}"));
             }
@@ -13864,10 +13892,12 @@ impl<'a> Run<'a> {
             let moved = undo()?;
             // What is still not as it was is behind a link, never written through.
             let left = outside_before.differing(&Outside::read(&self.tree, &self.outside_dirs)?);
+            // takt cannot tell the step's write there from another process's: the step is
+            // refused, and the paths are named as of unknown origin, not as the step's.
             let mut why = format!(
-                "{} changed what cargo or rustup reads outside the tree, a program on `PATH`, or what Python imports from there: {}",
+                "{}: {}",
                 report.action,
-                outside_named(&outside_changed)
+                outside_unattributed(&outside_changed)
             );
             if !left.is_empty() {
                 why.push_str(&format!(
