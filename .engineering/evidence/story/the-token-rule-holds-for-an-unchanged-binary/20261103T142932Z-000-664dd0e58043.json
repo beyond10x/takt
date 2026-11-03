@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-03T14:29:32Z",
+  "actor": "human:timo",
+  "artifact": "story:the-token-rule-holds-for-an-unchanged-binary",
+  "kind": "story",
+  "revision": 11,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:w49-adversary-c-pass-1",
+    "review": "review-result:w49-adversary-c-pass-1",
+    "outcome": "fixed"
+  }
+}

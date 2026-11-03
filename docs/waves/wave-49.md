@@ -1,6 +1,6 @@
 # Wave 49: tests first, the CI wait watches the check, the token rule, the docs site
 
-Stage: **dispatched**. `wave/49` branches from 97c56193, 0.27.0's merge. Skill version 0.26.0
+Stage: **reviewed**; the full gate runs next. `wave/49` branches from 97c56193, 0.27.0's merge. Skill version 0.26.0
 (aep:implementing, wave mode). Approved: approval-record:wave-49-four-stories.
 
 ## Selection
@@ -14,10 +14,10 @@ one after the other.
 
 | unit | story | objective | scope | stage |
 |---|---|---|---|---|
-| a | story:story-delivery-tests-first | the acceptance still open after `story.delivery/3`: the gate deferred at a red revision, tests optional | inferred | dispatched |
-| b | story:ci-wait-watches-the-check | `ci.wait` polls `gh pr checks` at 2 s growing to 15 s; `Run::POLL` goes | cited | after a merges |
-| c | story:the-token-rule-holds-for-an-unchanged-binary | the token rule tolerates run-to-run variance and refuses a 10 % per-request regression | inferred | dispatched |
-| d | story:docs-site-with-sidebar | the site at 5d8adae0 checked against the acceptance; no code | cited | coordinator |
+| a | story:story-delivery-tests-first | the acceptance still open after `story.delivery/3`: the gate deferred at a red revision, tests optional | inferred | merged, adversary pass 1 fixed |
+| b | story:ci-wait-watches-the-check | `ci.wait` reads the forge at 2 s growing to 4.5 s; `Run::POLL` goes | cited | merged, adversary pass 1 fixed |
+| c | story:the-token-rule-holds-for-an-unchanged-binary | the token rule tolerates run-to-run variance and refuses a 10 % per-request regression | inferred | merged, adversary pass 1 fixed |
+| d | story:docs-site-with-sidebar | the site at 5d8adae0 checked against the acceptance; no code | cited | implemented |
 
 | unit | agent | branch | tree | build dir | scratch root |
 |---|---|---|---|---|---|

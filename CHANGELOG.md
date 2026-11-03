@@ -19,8 +19,9 @@ The token rule of `takt promote` and `takt scorecard --against` compares tokens 
 ### Changed
 
 - Worse on tokens now means the median tokens per model request exceed the saved side's by more than 5 %.
+- Request counts are read from Claude Code, metaharness, Codex and b10x-harness transcripts, and exactly 5 % over still holds.
 - An unchanged binary is no longer refused on run-to-run drift, and a request 10 % dearer still is.
-- A baseline recorded before 0.28.0 has no request counts and is refused, as unknown tokens are; record it again.
+- A baseline recorded before 0.28.0 has no request counts and is refused, as unknown tokens are; `takt promote --baseline-only` records a new one over it.
 - The wait on the forge for CI starts at 2 s and grows by half per wait to at most 4.5 s, instead of a fixed 30 s.
 - The wait resets when the awaited actions or the pull request's head change, and still ends at the `--hours` budget.
 - `takt run --help` says under `--iterations` that every read of the forge is a step, so a wait for CI is better bounded by `--hours`.
