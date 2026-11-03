@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:ci-wait-watches-the-check
 kind: story
-status: active
+status: implemented
 title: takt waits for CI by watching the check, not by fixed 30 s sleeps
 relations:
 - decomposes: epic:composable-agentic-work
@@ -17,10 +17,11 @@ scope:
   path: crates/takt/tests/ci_wait_backoff.rs
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 13
+revision: 14
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T23:34:16Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T23:34:16Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-03T15:07:43Z", actor: "human:timo", revision: 14, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 ## Outcome
 
