@@ -332,6 +332,13 @@ fn a_red_revision_runs_no_gate() {
         "the red revision is not among the earlier ones: {earlier:?}\n{text}"
     );
     let deferred = events(&case_dir, "gate.deferred");
+    // The revision the gate ran at is never said to be one it did not run at.
+    assert!(
+        !deferred
+            .iter()
+            .any(|line| line["revision"] == handed_over.as_str()),
+        "a deferral at the handed-over revision: {deferred:?}\n{text}"
+    );
     for revision in &earlier {
         let lines: Vec<&serde_json::Value> = deferred
             .iter()

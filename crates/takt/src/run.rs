@@ -1403,6 +1403,15 @@ impl Turn<'_, '_> {
     }
 }
 
+/// The gate's deferrals of a run ([`Run::defer_gate`]): the revisions the case's record already
+/// says one for, and the revision the gate waits at now, with the claims its precondition lacks
+/// there, said once the case leaves it with no gate record there.
+#[derive(Default)]
+struct Deferral {
+    said: BTreeSet<String>,
+    pending: Option<(String, Vec<String>)>,
+}
+
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
 /// at its subject's current revision, and it has not already observed there without a record.
 /// An evidence record that does not read is an error naming its file, never an answer.
@@ -10892,9 +10901,13 @@ impl<'a> Run<'a> {
         // `error` line and the case let go before the panic goes on: the record ends, and the
         // case is not left held; unless the way to the case directory holds a link or a part
         // that is not a directory, when neither is done (`unrecorded`).
+        // A deferral of the gate still pending when the loop stops is said before the stop is
+        // recorded ([`Run::defer_gate`]).
+        let mut deferral = Deferral::default();
         let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_held(&events, out).and_then(|stop| {
+            self.run_held(&events, &mut deferral, out).and_then(|stop| {
                 self.case.check_way()?;
+                self.say_deferral(&mut deferral, &events, out)?;
                 self.close(&events, &stop, out).map(|()| stop)
             })
         })) {
@@ -11392,18 +11405,20 @@ impl<'a> Run<'a> {
         )
     }
 
-    /// Says, once per revision, that the repository's gate does not run there: the run has a
-    /// `gate.run` validator, `decision` finds its action `blocked` by a precondition the case's
-    /// inputs leave open (under `gate_on: after_handover` of `story.delivery/3`, until the tests
-    /// pass and the change is handed over), and no gate record is at the subject's current
-    /// revision. Records a `gate.deferred` line first, then prints
-    /// `gate.run: deferred (precondition <claims> not true at <rev>)`, `<claims>` the claims the
-    /// decision gives as not true. Never evidence: no record is written, so no claim moves.
+    /// Says, once per revision, that the repository's gate did not run there, when the case
+    /// leaves the revision or the run stops at it ([`Run::say_deferral`]): the run has a
+    /// `gate.run` validator, the last decision at the gate validator's subject's revision found
+    /// its action `blocked` by a precondition the case's inputs leave open (under
+    /// `gate_on: after_handover` of `story.delivery/3`, until the tests pass and the change is
+    /// handed over) with no gate record there. A revision the gate runs at in the same run,
+    /// after its hand-over, is never deferred, though the gate waited there. `pending` holds
+    /// that revision and the claims the decision there gives as not true until the move or the
+    /// stop. Never evidence: no record is written, so no claim moves.
     fn defer_gate(
         &self,
         decision: &crate::Decision,
         shape: &Shape,
-        deferred_at: &mut BTreeSet<String>,
+        deferral: &mut Deferral,
         events: &Events,
         out: &mut dyn Write,
     ) -> Result<()> {
@@ -11411,15 +11426,23 @@ impl<'a> Run<'a> {
         let Some(gate) = self.validators.iter().find(|v| v.action() == action) else {
             return Ok(());
         };
-        if decision.actions.get(action).map(String::as_str) != Some("blocked")
-            || shape.blocked_for_good.contains(action)
+        let revision = self.case.revision(gate.subject());
+        if deferral
+            .pending
+            .as_ref()
+            .is_some_and(|(at, _)| Some(at) != revision.as_ref())
         {
-            return Ok(());
+            self.say_deferral(deferral, events, out)?;
         }
-        let Some(revision) = self.case.revision(gate.subject()) else {
+        let Some(revision) = revision else {
             return Ok(());
         };
-        if deferred_at.contains(&revision) || self.case.has_evidence(gate.kind(), gate.subject())? {
+        if decision.actions.get(action).map(String::as_str) != Some("blocked")
+            || shape.blocked_for_good.contains(action)
+            || deferral.said.contains(&revision)
+            || self.case.has_evidence(gate.kind(), gate.subject())?
+        {
+            deferral.pending = None;
             return Ok(());
         }
         let doc: serde_json::Value =
@@ -11436,11 +11459,32 @@ impl<'a> Run<'a> {
             .filter(|reason| reason["value"] != "true")
             .filter_map(|reason| reason["claim"].as_str().map(str::to_owned))
             .collect();
+        deferral.pending = Some((revision, unmet));
+        Ok(())
+    }
+
+    /// Says the pending deferral of [`Run::defer_gate`], if any and not said already at its
+    /// revision: records a `gate.deferred` line first, then prints
+    /// `gate.run: deferred (precondition <claims> not true at <rev>)`, `<claims>` the claims
+    /// the decision there gave as not true, `<rev>` the revision's first eight characters.
+    fn say_deferral(
+        &self,
+        deferral: &mut Deferral,
+        events: &Events,
+        out: &mut dyn Write,
+    ) -> Result<()> {
+        let Some((left, unmet)) = deferral.pending.take() else {
+            return Ok(());
+        };
+        if deferral.said.contains(&left) {
+            return Ok(());
+        }
+        let action = crate::validator::GateRun::ACTION;
         events.emit(
             self.steps,
             &Event::GateDeferred {
                 action: action.to_owned(),
-                revision: revision.clone(),
+                revision: left.clone(),
                 unmet: unmet.clone(),
             },
         )?;
@@ -11452,9 +11496,9 @@ impl<'a> Run<'a> {
         writeln!(
             out,
             "{action}: deferred (precondition {claims}not true at {})",
-            short(&revision)
+            short(&left)
         )?;
-        deferred_at.insert(revision);
+        deferral.said.insert(left);
         Ok(())
     }
 
@@ -12266,7 +12310,12 @@ impl<'a> Run<'a> {
     }
 
     /// The loop, the case held.
-    fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
+    fn run_held(
+        &mut self,
+        events: &Events,
+        deferral: &mut Deferral,
+        out: &mut dyn Write,
+    ) -> Result<Stop> {
         let inputs: Vec<String> = self
             .options
             .inputs
@@ -12442,16 +12491,19 @@ impl<'a> Run<'a> {
         let mut said_may: Option<Vec<String>> = None;
         let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
         // The revisions whose gate deferral the case's record already holds, an earlier run's
-        // among them: one `gate.deferred` line per revision ([`Run::defer_gate`]). A record that
-        // does not read holds none here, so a resumed run may say a deferral again; the record's
-        // own error is the store's writes' to report ([`Run::close`]), never a stop of the loop.
-        let mut deferred_at: BTreeSet<String> = events
-            .read()
-            .unwrap_or_default()
-            .iter()
-            .filter(|line| line["event"] == "gate.deferred")
-            .filter_map(|line| line["revision"].as_str().map(str::to_owned))
-            .collect();
+        // among them: one `gate.deferred` line per revision ([`Run::defer_gate`]). Read line by
+        // line, a line that does not read skipped ([`Events::read_readable`]): the record's own
+        // error is the store's writes' to report ([`Run::close`]), never a stop of the loop, and
+        // it hides no deferral already said.
+        *deferral = Deferral {
+            said: events
+                .read_readable()?
+                .iter()
+                .filter(|line| line["event"] == "gate.deferred")
+                .filter_map(|line| line["revision"].as_str().map(str::to_owned))
+                .collect(),
+            pending: None,
+        };
         let keeps_state = self.harness.keeps_state();
         // The validators that observed without writing a record, each with the revision it
         // observed at: not due again there, because the next observation would end the same
@@ -12555,7 +12607,7 @@ impl<'a> Run<'a> {
                 .cloned()
                 .collect();
             if open {
-                self.defer_gate(&decision, &shape, &mut deferred_at, events, out)?;
+                self.defer_gate(&decision, &shape, deferral, events, out)?;
             }
             // A deterministic step first: a validator due at this decision.
             let mut due = None;
