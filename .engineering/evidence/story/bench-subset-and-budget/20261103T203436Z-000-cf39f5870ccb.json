@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T20:34:36Z",
+  "actor": "human:timo",
+  "artifact": "story:bench-subset-and-budget",
+  "kind": "story",
+  "revision": 15,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "local staged full gate of wave/50 at 82c9133ce (stages.tsv, 7 stages, cold, discard-cache between): ess validate, check-citations, release-notes, fmt, clippy --workspace -D warnings exit 0; b10x-takt and b10x-takt-cli tests 2907 passed, 2 failed, 13 ignored. The 2 (harness_proposes::a_scripted_proposal_of_a_refused_path_leaves_the_tree_unchanged, decline_adv1::a_decline_after_a_kept_edit_holds_on_resume) failed only with a relative . entry on the operator's PATH: red 3 of 3 with it, green with relative entries removed (11 and 14 passed), filed as story:a-relative-path-entry-is-no-test-program-directory.",
+    "reference": "82c9133ce"
+  }
+}

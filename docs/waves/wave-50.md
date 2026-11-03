@@ -1,6 +1,6 @@
 # Wave 50: the forge write outcome, the dollar budget, the unrelated install, the image
 
-Stage: **gating**. `wave/50` branches from 40843ed9, 0.28.0's merge. Skill version 0.26.0
+Stage: **delivered to the pull request**. `wave/50` branches from 40843ed9, 0.28.0's merge. Skill version 0.26.0
 (aep:implementing, wave mode). Approved: approval-record:wave-50-four-stories. Release: 0.29.0.
 
 ## Selection
@@ -52,4 +52,6 @@ unit b; `scripts/check-finding` bound a toolchain of links after unit c.
 
 Filed as drafts, outside the wave (tag `from-finding`):
 story:program-rewritten-through-a-link-refuses-the-step,
-story:merge-is-not-sent-after-a-merged-read, story:pr-open-cut-off-by-a-crash-is-read-back.
+story:merge-is-not-sent-after-a-merged-read, story:pr-open-cut-off-by-a-crash-is-read-back,
+story:a-relative-path-entry-is-no-test-program-directory (from the full gate: two cases red only
+with a relative `.` entry on the operator's `PATH`).
