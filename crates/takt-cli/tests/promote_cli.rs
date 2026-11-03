@@ -816,6 +816,67 @@ fn baseline_only_records_the_first_baseline_and_installs_nothing() {
     );
 }
 
+/// story:the-token-rule-holds-for-an-unchanged-binary: a stored baseline whose scorecard
+/// predates the model requests (saved without the metric `requests`, its runs recording none)
+/// can be compared with no candidate and rebaselined over none of its runs, so `--baseline-only`
+/// records a new baseline from fresh runs over it, saying so, and that baseline starts the
+/// series; over a baseline that records the requests it is still refused, naming the exception.
+#[test]
+fn baseline_only_replaces_a_baseline_that_predates_the_requests() {
+    let world = World::new("before-requests", BASELINE_TOKENS, FIVE_APPROVALS);
+    let mut before: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&world.baseline).expect("the baseline"))
+            .expect("the baseline is JSON");
+    before["metrics"]
+        .as_object_mut()
+        .expect("metrics")
+        .remove("requests");
+    for row in before["rows"].as_array_mut().expect("rows") {
+        row.as_object_mut().expect("a row").remove("requests");
+    }
+    let old = world.outer.join("baseline-before-requests.json");
+    write(
+        &old,
+        &serde_json::to_string_pretty(&before).expect("the old scorecard"),
+    );
+    world.record_baseline_of(&old);
+    world.install_stand_in(&world.revision);
+    let fresh = world.candidate_card("fresh", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&fresh, &["--baseline-only"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "the baseline {BASELINE_REVISION} at 2026-10-17T12:00:00Z"
+        )) && out.contains("predates the model requests")
+            && out.contains("the fresh runs start a new series"),
+        "{out}"
+    );
+    let record = world.record(&format!("{}.json", world.revision));
+    assert!(record.contains("\"kind\": \"baseline\""), "{record}");
+    assert!(
+        world
+            .records()
+            .contains(&format!("{}.scorecard.json", world.revision)),
+        "{:?}",
+        world.records()
+    );
+
+    let world = World::new("after-requests", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    world.install_stand_in(&world.revision);
+    let fresh = world.candidate_card("fresh", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&fresh, &["--baseline-only"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("holds a baseline already")
+            && err.contains(
+                "records another only over a baseline whose scorecard predates the model requests"
+            ),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing is written");
+}
+
 /// `--baseline-only` records the scorecard of the installed revision: with no binary at
 /// `<root>/bin/takt`, or one naming another revision, it is refused naming them (probe N14).
 #[test]

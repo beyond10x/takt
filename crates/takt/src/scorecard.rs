@@ -959,9 +959,78 @@ fn median2(values: &[u64]) -> i128 {
     }
 }
 
+/// A case's tokens per model request as the fraction `(tokens, requests)`, exactly; `0/1` for a
+/// case of no request, which made no harness step and spent nothing.
+fn per_request(case: &Case) -> (u128, u128) {
+    if case.requests == 0 {
+        (0, 1)
+    } else {
+        (u128::from(case.tokens), u128::from(case.requests))
+    }
+}
+
+/// Twice the median of `cases`' tokens per request as a fraction `(numerator, denominator)`,
+/// exactly; `0/1` for no case; none when the fraction does not fit 128 bits.
+fn median2_per_request(cases: &[Case]) -> Option<(u128, u128)> {
+    let mut sorted: Vec<(u128, u128)> = cases.iter().map(per_request).collect();
+    // Each side of a fraction is below 2^64, so the cross products fit.
+    sorted.sort_unstable_by(|(a, b), (c, d)| (a * d).cmp(&(c * b)));
+    let n = sorted.len();
+    if n == 0 {
+        return Some((0, 1));
+    }
+    if n % 2 == 1 {
+        let (tokens, requests) = sorted[n / 2];
+        return Some((2 * tokens, requests));
+    }
+    let ((a, b), (c, d)) = (sorted[n / 2 - 1], sorted[n / 2]);
+    Some((
+        a.checked_mul(d)?.checked_add(c.checked_mul(b)?)?,
+        b.checked_mul(d)?,
+    ))
+}
+
+/// The token rule: whether `candidate`'s median over cases of tokens per model request exceeds
+/// `saved`'s by more than [`TOKEN_TOLERANCE_PERCENT`], compared exactly as fractions
+/// cross-multiplied, so a candidate exactly 5 % over holds and one a fraction of a token more is
+/// over. Exact while the products fit 128 bits (per case, tokens below 2^59 at a million
+/// requests); past that the medians are compared as floating point.
+fn over_tolerance(candidate: &[Case], saved: &[Case]) -> bool {
+    let tolerance = 100 + u128::from(TOKEN_TOLERANCE_PERCENT);
+    let exact = || {
+        let (cn, cd) = median2_per_request(candidate)?;
+        let (sn, sd) = median2_per_request(saved)?;
+        let left = cn.checked_mul(sd)?.checked_mul(100)?;
+        let right = sn.checked_mul(cd)?.checked_mul(tolerance)?;
+        Some(left > right)
+    };
+    exact().unwrap_or_else(|| {
+        #[allow(clippy::cast_precision_loss)]
+        let median = |cases: &[Case]| {
+            let mut values: Vec<f64> = cases
+                .iter()
+                .map(|case| {
+                    let (tokens, requests) = per_request(case);
+                    tokens as f64 / requests as f64
+                })
+                .collect();
+            values.sort_unstable_by(f64::total_cmp);
+            let n = values.len();
+            match n {
+                0 => 0.0,
+                _ if n % 2 == 1 => values[n / 2],
+                _ => f64::midpoint(values[n / 2 - 1], values[n / 2]),
+            }
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let tolerance = tolerance as f64;
+        100.0 * median(candidate) > tolerance * median(saved)
+    })
+}
+
 /// A case's tokens per model request in thousandths of a token, rounded down, at most
 /// `u64::MAX`; 0 for a case of no request, which made no harness step and spent nothing. The
-/// token rule's figure ([`TOKEN_TOLERANCE_PERCENT`]).
+/// figure the token rule prints; it compares [`over_tolerance`]'s exact fractions.
 fn milli_per_request(case: &Case) -> u64 {
     if case.requests == 0 {
         return 0;
@@ -1779,15 +1848,15 @@ impl Scorecard {
                     half(difference)
                 )?;
             }
-            // The token rule: the medians of tokens per request, each held doubled in
-            // thousandths of a token, compared cross-multiplied so nothing is rounded but the
-            // thousandths; not applied while either definition it reads changed.
+            // The token rule: the medians of tokens per request, compared exactly
+            // ([`over_tolerance`]); the thousandths are only printed. Not applied while either
+            // definition it reads changed.
             if !changed("tokens") && !changed("requests") {
                 let per_request = |cases: &[Case]| {
                     median2(&cases.iter().map(milli_per_request).collect::<Vec<_>>())
                 };
                 let (saved_per, per) = (per_request(&baseline), per_request(&candidate));
-                if 100 * per > (100 + i128::from(TOKEN_TOLERANCE_PERCENT)) * saved_per {
+                if over_tolerance(&candidate, &baseline) {
                     over_tokens = true;
                     writeln!(
                         out,

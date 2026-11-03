@@ -1218,14 +1218,34 @@ pub fn claude_usage_so_far(transcript: &[u8]) -> Option<crate::events::TokenUsag
     (usage.total() > 0).then_some(usage)
 }
 
-/// The model requests a session's `transcript` shows: its messages that reported a usage,
-/// each counted once as [`claude_usage_so_far`] counts it (Claude Code's assistant messages by
-/// their id, metaharness's `usage` events by their request id, a record without an id on its
-/// own). One message is one request to the model, whatever number of tool calls it carried,
-/// which `num_turns` counts otherwise. None when the transcript shows none, never 0.
+/// The model requests a session's `transcript` shows, whichever program wrote it: its messages
+/// that reported a usage, each counted once as [`claude_usage_so_far`] counts it (Claude Code's
+/// assistant messages by their id, metaharness's `usage` events by their request id, a record
+/// without an id on its own); Codex's rollout, its `token_count` events whose running total
+/// (`info.total_token_usage`) moved, one after each model response, so a repeated event that
+/// reports no new usage counts nothing; and b10x-harness's record, its `usage` records (`kind`),
+/// one a model response. One message is one request to the model, whatever number of tool
+/// calls it carried, which `num_turns` counts otherwise. None when the transcript shows none,
+/// never 0.
 #[must_use]
 pub fn requests_in(transcript: &[u8]) -> Option<u64> {
-    let requests = messages(&transcript_lines(transcript)).len() as u64;
+    let lines = transcript_lines(transcript);
+    let mut total = None;
+    let mut codex = 0_u64;
+    for line in &lines {
+        let payload = &line["payload"];
+        if line["type"] == "event_msg" && payload["type"] == "token_count" {
+            let running = &payload["info"]["total_token_usage"];
+            if running.is_object() && total != Some(running) {
+                codex += 1;
+                total = Some(running);
+            }
+        }
+    }
+    let harness = lines.iter().filter(|line| line["kind"] == "usage").count() as u64;
+    let requests = (messages(&lines).len() as u64)
+        .saturating_add(codex)
+        .saturating_add(harness);
     (requests > 0).then_some(requests)
 }
 
