@@ -13,15 +13,15 @@ relations:
 - depends_on: story:takt-ships-default-protocol-settings
 - depends_on: story:the-run-file-sets-protocol-settings
 scope:
-- confidence: inferred
-  path: Cargo.toml
-- confidence: inferred
+- confidence: cited
+  path: crates/takt/src/events.rs
+- confidence: cited
   path: crates/takt/src/run.rs
-- confidence: inferred
-  path: crates/takt/src/validator.rs
-- confidence: inferred
+- confidence: cited
+  path: crates/takt/tests/gate_deferral.rs
+- confidence: cited
   path: ess/domains/takt.yaml
-revision: 10
+revision: 18
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 4}

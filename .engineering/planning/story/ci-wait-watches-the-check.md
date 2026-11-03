@@ -11,13 +11,13 @@ relations:
 - depends_on: story:story-delivery-tests-first
 - informed_by: story:no-repush-after-head-lag
 scope:
-- confidence: inferred
-  path: crates/takt/src/forge.rs
 - confidence: cited
   path: crates/takt/src/run.rs
-- confidence: inferred
-  path: protocols/story-delivery/2.yaml
-revision: 6
+- confidence: cited
+  path: crates/takt/tests/ci_wait_backoff.rs
+- confidence: cited
+  path: ess/domains/takt.yaml
+revision: 13
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-18T23:34:16Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-18T23:34:16Z", actor: "human:timo", revision: 3}
@@ -53,3 +53,19 @@ Owner decision of 2026-10-19 ("takt needs some protocol node which waits on PR/M
 Acceptance, added to the one above: a run where `gh` is absent exits before the first step naming it; the harness invocation's tool list contains no shell.
 
 Ordering: after story:story-delivery-tests-first, which writes `story.delivery/2`; `ci.wait` is an action of that protocol.
+
+## Decided in wave 49
+
+Wave 49, the coordinator's decision inside the approved wave (2026-11-03):
+
+- The `gh` parts of the Design (a `gh` preflight, `gh pr view`, `gh pr checks` as takt's child)
+  are superseded: GitHub is reached through the Connectors forge (`crates/takt/src/forge/connectors.rs`,
+  wave 48) and the command forge, and credentials never enter takt's children. takt takes no `gh`
+  dependency; the forge seam `Forge::checks` stays.
+- Delivered: the forge wait is a backoff, 2 s growing 1.5x per consecutive wait on the same
+  awaited set to a 15 s cap, reset when the awaited set or the reported head changes, cut to the
+  `--hours` budget; `Run::POLL` (30 s) is gone (`crates/takt/tests/ci_wait_backoff.rs`).
+- Not in this change: per-check name, state and link on `ci_result` (needs the evidence format and
+  every forge adapter; story:ci-progress-events covers per-check states). The 5-run measurement
+  against the real forge is a trial, left to the trial agent.
+- `protocols/story-delivery/2.yaml` needed no change; `ci.read` is already taken by takt.

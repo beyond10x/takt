@@ -8,7 +8,7 @@ summary: Three levels (work, takt, the loop), four agent roles, a pinned judge, 
 relations:
 - serves: vision:safe-agentic-coding
 - informed_by: epic:composable-agentic-work
-revision: 20
+revision: 22
 ---
 # Design: recursive self-improvement of takt
 
@@ -127,13 +127,15 @@ it added is judged against it (story:promotion-judged-against-the-series-baselin
 one-case-worse steps cannot add up across back-to-back promotions. The `scorecard.compare`
 validator of a turn judges against the turn's baseline only.
 
-Promotion defaults, changeable by the owner: no scenario's outcome worse; the median of tokens at
-most the baseline plus 10 %; no daily cap: the owner removed the one-promotion-a-day default on 2026-10-19 so improvement trials run back to back (story:promotion-without-daily-cap), and a cap may return after 1.0. A metric's definition is a judge
+Promotion defaults, changeable by the owner: no scenario's outcome worse; the median of tokens per model request at
+most the saved median plus 5 % (below); no daily cap: the owner removed the one-promotion-a-day default on 2026-10-19 so improvement trials run back to back (story:promotion-without-daily-cap), and a cap may return after 1.0. A metric's definition is a judge
 surface; for one cycle after a change the previous definition's numbers are printed beside the
 new ones, so a metric cannot be redefined to look better.
 
 
 Open question, from the first recorded improvement turn (2026-10-18): at n=3 the token default trips on run-to-run noise. On scenario 1 with an unchanged harness, six takt runs at two revisions spread from 106,003 to 167,249 tokens; the turn's candidate, which changed only help text, had a median 24 % over its baseline because two of its three runs hit the known `repository.inspect` NoProgress (story:no-inspect-for-stateless-harness). `takt scorecard --against` therefore prints n and the minimum, median and maximum per side and flags only worse outcomes (story:scorecard-reader); which token rule promotion applies (a larger n, a spread-aware rule, or tokens per accepted unit with the known waste removed) is decided below.
+
+Closed 2026-11-03 (story:the-token-rule-holds-for-an-unchanged-binary): promotion judges tokens per model request. A scenario is worse on tokens when the candidate's median over its cases of (case tokens / case model requests) exceeds the saved side's same median by more than 5 %, the `tokens` and `requests` definitions unchanged. The median-over-saved-maximum rule refused an unchanged binary: measured again, it moved about 3.4 % a request with the harness's own drift and by whole requests a case. The per-request figure absorbs the request count, and a request 10 % dearer is still over. A run's requests are the model messages its harness steps' streams show (metric `requests` v1), not `num_turns`. A case whose requests are unknown refuses the comparison, as unknown tokens do, so a baseline recorded before runs carried them must be recorded again.
 
 
 Outcomes are compared by dominance (story:scorecard-reader, wave 10): per scenario the candidate is worse when, for some outcome rank, its share of cases at that rank or better is below the baseline's; a median rank missed regressions in fewer than half a scenario's cases (68 of 200 seeded worse candidates passed in its adversary pass). Dominance is strict, so a re-run of unchanged code with one flaky outcome, such as the `repository.inspect` NoProgress that scenario 1 hit in 3 of 6 runs, reports worse. How many trials promotion needs, and whether it re-runs or allows a margin, is decided with the token rule above.
