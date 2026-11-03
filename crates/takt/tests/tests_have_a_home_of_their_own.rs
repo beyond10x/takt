@@ -65,9 +65,25 @@ fn no_program_directory_the_guard_reads_is_shared_with_another_process() {
             root.display()
         );
     }
+    // Every rustup toolchain's `bin` the guard reads (`$RUSTUP_HOME`, else `~/.rustup`), as
+    // `program_dirs` finds it.
+    let rustup = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rustup")));
+    if let Some(Ok(toolchains)) = rustup.map(|rustup| std::fs::read_dir(rustup.join("toolchains")))
+    {
+        for toolchain in toolchains.flatten() {
+            let Ok(bin) = std::fs::canonicalize(toolchain.path().join("bin")) else {
+                continue;
+            };
+            if bin.is_dir() && !bin.starts_with(&root) && writable(&bin) {
+                shared.push(format!("{} (a rustup toolchain's bin)", bin.display()));
+            }
+        }
+    }
     assert!(
         shared.is_empty(),
-        "PATH holds directories another process can write: {shared:?}"
+        "the guard reads program directories another process can write: {shared:?}"
     );
 }
 

@@ -1766,7 +1766,8 @@ pub fn developer_programs() -> Option<PathBuf> {
 /// `PATH`: under rustup's home (`RUSTUP_HOME`, else `~/.rustup`), the channel `tree`'s
 /// `rust-toolchain.toml` or `rust-toolchain` names when it names one, else the
 /// `default_toolchain` rustup's `settings.toml` names; that toolchain's directory under
-/// `toolchains/` (by its name, or the one directory named by it and a target triple), canonical.
+/// `toolchains/` (by its name, or the one directory named by it and a target triple), resolved
+/// as rustc resolves its sysroot: the directory above the real path of its `bin/rustc`.
 /// Its `bin/cargo` and the sibling `bin/rustc` must be executable files and `lib/rustlib` must
 /// exist; anything missing is an error naming it. A confined run installs no toolchain.
 ///
@@ -1844,6 +1845,29 @@ pub fn toolchain(tree: Option<&Path>) -> anyhow::Result<PathBuf> {
             );
         }
     }
+    // The toolchain is the one its rustc runs from: rustc finds its sysroot from its own
+    // executable's real path, so a toolchain directory of links (a test binary's own rustup
+    // home) is resolved to the directory that holds the real one, which a confined build binds.
+    let rustc = toolchain.join("bin/rustc");
+    let resolved = rustc
+        .canonicalize()
+        .with_context(|| format!("resolve {}", rustc.display()))?;
+    let Some(toolchain) = resolved.parent().and_then(Path::parent) else {
+        bail!(
+            "the toolchain's rustc {} resolves to {}, which is in no toolchain's bin",
+            rustc.display(),
+            resolved.display()
+        );
+    };
+    for binary in ["bin/cargo", "bin/rustc"] {
+        if !is_executable(&toolchain.join(binary)) {
+            bail!(
+                "the toolchain {} ({}) has no executable {binary}; a confined build calls the toolchain's own cargo and its sibling rustc, never a rustup proxy or one on PATH",
+                toolchain.display(),
+                from.display()
+            );
+        }
+    }
     if !toolchain.join("lib/rustlib").is_dir() {
         bail!(
             "the toolchain {} ({}) has no lib/rustlib",
@@ -1851,9 +1875,7 @@ pub fn toolchain(tree: Option<&Path>) -> anyhow::Result<PathBuf> {
             from.display()
         );
     }
-    toolchain
-        .canonicalize()
-        .with_context(|| format!("resolve {}", toolchain.display()))
+    Ok(toolchain.to_path_buf())
 }
 
 /// The channel `tree`'s `rust-toolchain.toml` (or `rust-toolchain`) names, and that file: none

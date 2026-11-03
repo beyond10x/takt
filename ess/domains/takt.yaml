@@ -5142,7 +5142,9 @@ entities:
   # through a link, what a step made there removed, and the run stops naming it; a change in a
   # program directory, a step's or another session's install, is left exactly as it is, no
   # file removed and no directory it made removed, and the run stops naming the changed
-  # program; a file past 1 MiB is named as not put back. What Python loads code from outside
+  # program as changed during the step, of unknown origin (the step or another process), since
+  # takt cannot tell a step's write there from another process's, never as written by the step;
+  # a file past 1 MiB is named as not put back. What Python loads code from outside
   # the tree is held the same way, left as it is and named: each `PYTHONPATH` entry and
   # `PYTHONHOME`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX` or `PYTHONSTARTUP` value the script
   # sets, on a line or exported, or takt inherits, and every `sys.path` entry, site directory
