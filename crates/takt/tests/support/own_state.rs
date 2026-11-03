@@ -14,9 +14,9 @@
 //!   that does not hold their fixtures' pinned protocol revision.
 //!
 //! The rustup home the step guard also reads (`program_dirs` in `crates/takt/src/run.rs`) is
-//! not made private: the confined test command runs the toolchain bound read-only by its
-//! canonical path, and a toolchain made of links to the real one is not whole inside that
-//! bind.
+//! made private by `own_home.rs`, a toolchain there made of links to the real one but its
+//! `bin`. A confined test command still runs a whole toolchain: it binds the one the
+//! toolchain's `bin/rustc` resolves to (`confinement::toolchain`), the real one, read-only.
 //!
 //! `own_home.rs` includes this module, so every test file that has program directories of its
 //! own has this state of its own too.

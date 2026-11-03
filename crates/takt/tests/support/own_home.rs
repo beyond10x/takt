@@ -1,11 +1,12 @@
 //! A test binary's own program directories: before `main`, while the process has one thread,
 //! every directory on `PATH` that this user can write is replaced by a private directory of
 //! links to its programs, and `CARGO_HOME` is set to a private directory that links to every
-//! entry of the cargo home but `bin`, which is that private copy too. A run's step guard reads
-//! the program directories from this process's environment (`program_dirs` in
+//! entry of the cargo home but `bin`, which is that private copy too; `RUSTUP_HOME` likewise, to
+//! a private directory whose toolchains each link every entry but `bin`, a private copy. A run's
+//! step guard reads the program directories from this process's environment (`program_dirs` in
 //! `crates/takt/src/run.rs`), as does every `takt` this binary starts, so a program another
-//! process installs into the real `~/.cargo/bin` or any other directory on the user's `PATH`
-//! while a test runs reaches no step of it
+//! process installs into the real `~/.cargo/bin`, a real toolchain's `bin` or any other
+//! directory on the user's `PATH` while a test runs reaches no step of it
 //! (story:an-unrelated-program-install-refuses-no-step). A step that writes into one of the
 //! private directories is still seen, as it was in the real one. Every test file that runs a
 //! step under the guard includes this module (`tests_have_a_home_of_their_own.rs`).
@@ -145,6 +146,64 @@ fn isolate() -> std::io::Result<()> {
         None => None,
     };
 
+    // The rustup home the guard reads (`RUSTUP_HOME`, else `~/.rustup`): when there is one to
+    // read, a private one in its place, every entry linked but `toolchains`, which is a private
+    // directory holding each toolchain as a private directory too: every entry linked but
+    // `bin`, which is copied. A rustup proxy finds the toolchain's programs through the links,
+    // and rustc its sysroot through its own executable's real path; a confined build binds the
+    // toolchain its `bin/rustc` resolves to (`confinement::toolchain`), the real one.
+    let rustup = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".rustup")));
+    let own_rustup = match rustup {
+        Some(rustup) => {
+            let own = root.join("rustup-home");
+            std::fs::create_dir(&own)?;
+            if rustup.is_dir() {
+                for entry in std::fs::read_dir(&rustup)? {
+                    let path = entry?.path();
+                    let Some(name) = path.file_name() else {
+                        continue;
+                    };
+                    if name == "toolchains" && path.is_dir() {
+                        let toolchains = own.join(name);
+                        std::fs::create_dir(&toolchains)?;
+                        for toolchain in std::fs::read_dir(&path)? {
+                            let toolchain = toolchain?.path();
+                            let Some(named) = toolchain.file_name() else {
+                                continue;
+                            };
+                            if !toolchain.is_dir() {
+                                std::os::unix::fs::symlink(&toolchain, toolchains.join(named))?;
+                                continue;
+                            }
+                            let own_toolchain = toolchains.join(named);
+                            std::fs::create_dir(&own_toolchain)?;
+                            for part in std::fs::read_dir(&toolchain)? {
+                                let part = part?.path();
+                                let Some(called) = part.file_name() else {
+                                    continue;
+                                };
+                                if called == "bin" && part.is_dir() {
+                                    std::os::unix::fs::symlink(
+                                        copy_of(&part)?,
+                                        own_toolchain.join(called),
+                                    )?;
+                                } else {
+                                    std::os::unix::fs::symlink(&part, own_toolchain.join(called))?;
+                                }
+                            }
+                        }
+                    } else {
+                        std::os::unix::fs::symlink(&path, own.join(name))?;
+                    }
+                }
+            }
+            Some(own)
+        }
+        None => None,
+    };
+
     // `PATH` with each directory this user can write replaced by its copy; one with no `PATH`
     // keeps none.
     let path = match std::env::var_os("PATH") {
@@ -171,6 +230,9 @@ fn isolate() -> std::io::Result<()> {
     unsafe {
         if let Some(own_cargo) = &own_cargo {
             std::env::set_var("CARGO_HOME", own_cargo);
+        }
+        if let Some(own_rustup) = &own_rustup {
+            std::env::set_var("RUSTUP_HOME", own_rustup);
         }
         if let Some(path) = &path {
             std::env::set_var("PATH", path);
