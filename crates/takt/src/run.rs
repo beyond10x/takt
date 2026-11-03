@@ -9480,7 +9480,8 @@ pub struct Run<'a> {
     /// The harness's bracketed verdict the console last printed after a step's summary
     /// ([`said_line`]).
     said_verdict: Option<String>,
-    /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
+    /// How long the run first waits on the forge before it observes again, the first interval
+    /// of its [`Backoff`] ([`Backoff::scaled`]): [`Backoff::DEFAULT`]'s, 2 s, unless set.
     pub poll: Duration,
     /// The revision the running binary was built from, as its `--version` prints it, recorded
     /// on the `opened` line; none unless the caller sets it, since this library does not know
@@ -9566,10 +9567,58 @@ pub struct Run<'a> {
     commit_plan: Option<crate::commit_style::Plan>,
 }
 
-impl<'a> Run<'a> {
-    /// How long a run waits on the forge before it observes again, by default: thirty seconds.
-    pub const POLL: Duration = Duration::from_secs(30);
+/// How the wait on the forge grows: `first`, then `factor` times the last wait for each
+/// consecutive wait on the same awaited set, never past `cap`. The run starts again at `first`
+/// when the awaited set, or what one of its observations reported, changes; every wait is cut
+/// to what is left of the hour budget besides ([`Run::poll`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Backoff {
+    /// The first wait.
+    pub first: Duration,
+    /// What each consecutive wait multiplies the last by.
+    pub factor: f64,
+    /// The longest wait.
+    pub cap: Duration,
+}
 
+impl Backoff {
+    /// The run's backoff unless [`Run::poll`] is set: 2 s, half as long again each wait, at
+    /// most 15 s; so 2, 3, 4.5, 6.75, 10.125, then 15 s.
+    pub const DEFAULT: Self = Self {
+        first: Duration::from_secs(2),
+        factor: 1.5,
+        cap: Duration::from_secs(15),
+    };
+
+    /// [`Backoff::DEFAULT`] from `first`: the same factor, and the cap the same multiple of
+    /// `first` as the default's of its own, 7.5 times. What a test's shorter poll waits.
+    #[must_use]
+    pub fn scaled(first: Duration) -> Self {
+        let ratio = Self::DEFAULT.cap.as_secs_f64() / Self::DEFAULT.first.as_secs_f64();
+        Self {
+            first,
+            factor: Self::DEFAULT.factor,
+            cap: Duration::try_from_secs_f64(first.as_secs_f64() * ratio).unwrap_or(Duration::MAX),
+        }
+    }
+
+    /// The first wait, never past the cap.
+    #[must_use]
+    pub fn start(&self) -> Duration {
+        self.first.min(self.cap)
+    }
+
+    /// The wait after `last` on the same awaited set: `factor` times it, never past the cap; a
+    /// product too large for a [`Duration`] is the cap. Nothing here panics.
+    #[must_use]
+    pub fn after(&self, last: Duration) -> Duration {
+        Duration::try_from_secs_f64(last.as_secs_f64() * self.factor)
+            .unwrap_or(self.cap)
+            .min(self.cap)
+    }
+}
+
+impl<'a> Run<'a> {
     /// Opens the case on the intent in `options` and prepares the run.
     pub fn open(
         tree: &Path,
@@ -9806,7 +9855,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             said_verdict: None,
-            poll: Self::POLL,
+            poll: Backoff::DEFAULT.first,
             binary: None,
             llm_digest: None,
             set_aside,
@@ -10107,7 +10156,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             said_verdict: None,
-            poll: Self::POLL,
+            poll: Backoff::DEFAULT.first,
             binary: None,
             llm_digest: None,
             set_aside,
@@ -10850,18 +10899,25 @@ impl<'a> Run<'a> {
         Ok(None)
     }
 
-    /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
-    /// what is left of the hour budget. `None` for a run with neither a step nor an hour
-    /// budget: it has nothing to wait in, and a wait without a bound would never end. What is
-    /// left of an hour budget too large for a [`Duration`], infinite among them, saturates and
-    /// leaves the poll as it is; nothing here panics.
-    fn pause(&self) -> Option<Duration> {
+    /// The backoff the run waits on the forge by: [`Backoff::scaled`] from [`Run::poll`], which
+    /// is [`Backoff::DEFAULT`] unless the poll was set.
+    #[must_use]
+    pub fn backoff(&self) -> Backoff {
+        Backoff::scaled(self.poll)
+    }
+
+    /// How long the run waits on the forge before it observes again: `interval`, the wait its
+    /// [`Run::backoff`] has reached, cut to what is left of the hour budget. `None` for a run
+    /// with neither a step nor an hour budget: it has nothing to wait in, and a wait without a
+    /// bound would never end. What is left of an hour budget too large for a [`Duration`],
+    /// infinite among them, saturates and leaves the interval as it is; nothing here panics.
+    fn pause(&self, interval: Duration) -> Option<Duration> {
         if self.options.iterations.is_none() && self.options.hours.is_none() {
             return None;
         }
         Some(match self.time_left() {
-            Some(left) => self.poll.min(left),
-            None => self.poll,
+            Some(left) => interval.min(left),
+            None => interval,
         })
     }
 
@@ -12516,6 +12572,15 @@ impl<'a> Run<'a> {
         // judgement step is offered, because what is missing is not the harness's to make; when
         // every wait is local, the run stops at once instead.
         let mut awaited: Vec<(String, String, String, Option<String>)> = Vec::new();
+        // What each waiting validator's last observation said, by its name: the head the forge
+        // reports among it, so a new head is a new awaited set for the backoff.
+        let mut said: BTreeMap<String, String> = BTreeMap::new();
+        // The awaited set the run last paused on, with what each of its observations said, and
+        // the interval it paused (before the hour budget cut it): the next pause on the same
+        // set grows from it ([`Backoff::after`]), one on another starts again.
+        type PausedOn = Vec<(String, String, String, String)>;
+        let backoff = self.backoff();
+        let mut paused_on: Option<(PausedOn, Duration)> = None;
         // Whether the story's records were written before a granted step this run.
         let mut recorded_before = false;
         let all_local = |awaited: &[(String, String, String, Option<String>)]| {
@@ -12640,17 +12705,36 @@ impl<'a> Run<'a> {
             // the run pauses and observes it again, offering no judgement step meanwhile. A run
             // with no step or hour budget has nothing to wait in and stops waiting at once; the
             // case stays open for the next run, as it does when every wait left is on something
-            // local. A budget spent stops the wait first.
+            // local. A budget spent stops the wait first. The pause is the run's backoff: its
+            // first interval, then longer for each consecutive pause on the same awaited set
+            // with the same observations, and its first again once either changed.
             if open && due.is_none() {
                 awaited.retain(|(_, action, _, _)| admissible.contains(action));
                 if !awaited.is_empty() {
                     if let Some(stop) = self.budget_spent() {
                         return Ok(waiting(&awaited, Some(stop)));
                     }
-                    let pause = self.pause().filter(|_| !all_local(&awaited));
+                    let mut set: PausedOn = awaited
+                        .iter()
+                        .map(|(name, action, revision, _)| {
+                            (
+                                name.clone(),
+                                action.clone(),
+                                revision.clone(),
+                                said.get(name).cloned().unwrap_or_default(),
+                            )
+                        })
+                        .collect();
+                    set.sort();
+                    let interval = match &paused_on {
+                        Some((last_set, last)) if *last_set == set => backoff.after(*last),
+                        _ => backoff.start(),
+                    };
+                    let pause = self.pause(interval).filter(|_| !all_local(&awaited));
                     let Some(pause) = pause else {
                         return Ok(waiting(&awaited, None));
                     };
+                    paused_on = Some((set, interval));
                     let on: Vec<&str> = awaited
                         .iter()
                         .map(|(_, action, _, _)| action.as_str())
@@ -12838,6 +12922,7 @@ impl<'a> Run<'a> {
                         observed_without_record
                             .insert((validator.name().to_owned(), revision.clone()));
                         if waits {
+                            said.insert(validator.name().to_owned(), observation.summary.clone());
                             awaited.push((
                                 validator.name().to_owned(),
                                 validator.action().to_owned(),
