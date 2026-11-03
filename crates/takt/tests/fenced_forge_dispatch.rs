@@ -6,7 +6,9 @@
 //!
 //! Every case but the last runs the built-in `story.delivery/1` with the in-memory forge
 //! ([`Memory`]), its checks passing: a first run that stops at the gate, the operator's grant,
-//! and the runs that follow; each reads the step's line of the record. The last holds the
+//! and the runs that follow; each reads the step's line of the record. The rider case takes its
+//! story from a fixture store, so takt's riders for it are written above the head a merge
+//! named. The last holds the
 //! command forge to each way a merge fails, through a scripted runner and the process runner on
 //! a local program. Nothing leaves the machine.
 
@@ -28,9 +30,10 @@ use takt::forge::command::{CommandForge, ForgeCommands};
 use takt::forge::{
     Checks, Exit, Forge, Limits, Memory, MergeAnswer, Process, Runner, TimedOut, WriteOutcome,
 };
+use takt::frontier::{Aep, approve};
 use takt::harness::{Harness, StepContext, StepReport};
 use takt::scan::Scan;
-use takt::validator::{CiRead, PrMerged, PrOpen, Validator};
+use takt::validator::{ChangeRead, CiRead, Observation, PrMerged, PrOpen, TestsRun, Validator};
 use takt::{Run, RunOptions, Stop};
 
 /// The protocol under test, the engineering protocols' built-in.
@@ -221,7 +224,11 @@ impl Ran {
 /// The case `id` resumed over `memory`, as the next `takt run` on it would be, waiting on the
 /// forge for `poll` between observations.
 fn resumed(tree: &Path, id: &str, memory: &Rc<Memory>, poll: Duration) -> Ran {
-    let forge: Rc<dyn Forge> = memory.clone();
+    resumed_through(tree, id, memory.clone(), poll)
+}
+
+/// [`resumed`] through `forge`.
+fn resumed_through(tree: &Path, id: &str, forge: Rc<dyn Forge>, poll: Duration) -> Ran {
     let validators = validators(forge);
     let mut run =
         Run::resume(tree, options(id), id, &NoHarness, &validators).expect("the case resumes");
@@ -282,6 +289,16 @@ fn merge_calls(memory: &Memory) -> usize {
         .borrow()
         .iter()
         .filter(|call| call.starts_with("merge #"))
+        .count()
+}
+
+/// How many pushes the double was asked for.
+fn pushes(memory: &Memory) -> usize {
+    memory
+        .calls
+        .borrow()
+        .iter()
+        .filter(|call| call.starts_with("push"))
         .count()
 }
 
@@ -436,11 +453,13 @@ fn a_pr_open_that_is_applied_records_its_number() {
 }
 
 /// The security boundary: a merge whose answer was lost without the forge applying it leaves the
-/// pull request open at the head it named. The next run's step that reads it so sends no merge,
-/// records `not_attempted` saying why and waits on the forge; only a later observation, under
-/// the same grant, sends the merge, and it is applied.
+/// pull request open at the head it named. No merge is sent for it again: every later step that
+/// reads it so sends nothing, records `not_attempted` saying why and waits on the forge, and at
+/// the budget the run stops waiting, naming the pull request and that its merge was sent with
+/// its outcome unknown. Once a person merges it on the forge, the next run reads it merged and
+/// records `merged`: one merge call across the three runs.
 #[test]
-fn an_unknown_merge_read_open_at_its_head_sends_nothing_in_that_step_and_says_why() {
+fn an_unknown_merge_read_open_at_its_head_is_never_sent_again_and_says_why() {
     let tree = scratch("unapplied");
     let memory = Rc::new(Memory {
         checks: Checks::Pass,
@@ -460,10 +479,9 @@ fn an_unknown_merge_read_open_at_its_head_sends_nothing_in_that_step_and_says_wh
     assert_eq!(merge_calls(&memory), 1);
 
     let next = resumed(&tree, "unapplied", &memory, Duration::from_millis(5));
-    assert_eq!(
-        next.stop,
-        Ok(Stop::Completed("accepted".to_owned())),
-        "{}",
+    assert!(
+        matches!(&next.stop, Ok(Stop::Waiting { on, .. }) if on == &["repository.merge"]),
+        "the run stops waiting at its budget: {}",
         next.said()
     );
     let merges = steps(&case_dir, "repository.merge");
@@ -471,20 +489,478 @@ fn an_unknown_merge_read_open_at_its_head_sends_nothing_in_that_step_and_says_wh
         .iter()
         .map(|line| line["forge_write"]["outcome"].as_str().unwrap_or("absent"))
         .collect();
-    assert_eq!(
-        outcomes,
-        ["unknown", "not_attempted", "applied"],
-        "{}\n{merges:#?}",
+    assert!(
+        outcomes.len() > 2
+            && outcomes[0] == "unknown"
+            && outcomes[1..]
+                .iter()
+                .all(|outcome| *outcome == "not_attempted"),
+        "story:fenced-forge-dispatch: every step after the unknown merge sends nothing: {outcomes:?}\n{}",
         next.said()
     );
-    let why = merges[1]["summary"].as_str().expect("a summary");
+    for merge in &merges[1..] {
+        let why = merge["summary"].as_str().expect("a summary");
+        assert!(
+            why.contains("pull request #1")
+                && why.contains("was sent and its outcome is not known")
+                && why.contains("nothing sent"),
+            "the step says why it sent nothing: {why}"
+        );
+        assert_eq!(merge["forge_write"]["head"], revision.as_str());
+    }
     assert!(
-        why.contains("unknown") && why.contains("nothing sent"),
-        "the step says why it sent nothing: {why}"
+        next.text.contains("pull request #1 at its head")
+            && next.text.contains("was sent and its outcome is not known"),
+        "what the run printed names the pull request and its unknown merge: {}",
+        next.said()
     );
-    assert_eq!(merges[1]["forge_write"]["head"], revision.as_str());
-    assert_eq!(merge_calls(&memory), 2, "{:#?}", memory.calls.borrow());
-    assert_eq!(merge_observations(&case_dir), ["merged"], "{}", next.said());
+    assert_eq!(
+        merge_calls(&memory),
+        1,
+        "story:fenced-forge-dispatch: a merge recorded unknown and read open at its head is never sent again: {:#?}",
+        memory.calls.borrow()
+    );
+    assert!(merge_observations(&case_dir).is_empty(), "{}", next.said());
+
+    // A person merges it on the forge; the next run reads it merged and sends nothing.
+    memory.merged.borrow_mut().push(1);
+    let last = resumed(&tree, "unapplied", &memory, Duration::from_millis(5));
+    assert_eq!(
+        last.stop,
+        Ok(Stop::Completed("accepted".to_owned())),
+        "{}",
+        last.said()
+    );
+    assert_eq!(merge_observations(&case_dir), ["merged"], "{}", last.said());
+    assert_eq!(
+        merge_calls(&memory),
+        1,
+        "story:fenced-forge-dispatch: one merge call across the three runs: {:#?}",
+        memory.calls.borrow()
+    );
+}
+
+/// [`Memory`], every pull request read behind its base, as GitHub's `mergeable_state` `behind`
+/// reads one whose base has commits its head does not hold.
+struct Behind(Rc<Memory>);
+
+impl Forge for Behind {
+    fn name(&self) -> &str {
+        "behind"
+    }
+
+    fn scan_outgoing(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        outgoing: &takt::forge::Outgoing<'_>,
+    ) -> anyhow::Result<()> {
+        self.0.scan_outgoing(tree, dir, outgoing)
+    }
+
+    fn push(&self, tree: &Path, branch: &str) -> anyhow::Result<()> {
+        self.0.push(tree, branch)
+    }
+
+    fn push_revision(&self, tree: &Path, branch: &str, revision: &str) -> anyhow::Result<()> {
+        self.0.push_revision(tree, branch, revision)
+    }
+
+    fn open_pull_request(
+        &self,
+        tree: &Path,
+        dir: &Path,
+        request: &takt::forge::PullRequest,
+    ) -> takt::forge::Written<u64> {
+        self.0.open_pull_request(tree, dir, request)
+    }
+
+    fn pull_request(
+        &self,
+        tree: &Path,
+        number: u64,
+    ) -> anyhow::Result<takt::forge::PullRequestView> {
+        self.0.pull_request(tree, number)
+    }
+
+    fn behind_base(&self, _: &Path, _: u64) -> anyhow::Result<Option<bool>> {
+        Ok(Some(true))
+    }
+
+    fn checks(&self, tree: &Path, number: u64) -> anyhow::Result<Checks> {
+        self.0.checks(tree, number)
+    }
+
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
+        self.0.merge(tree, dir, number, head)
+    }
+
+    fn target_tip(&self, tree: &Path, base: &str) -> anyhow::Result<String> {
+        self.0.target_tip(tree, base)
+    }
+}
+
+/// The fence holds against a base update: a merge whose answer was lost without the forge
+/// applying it, then the base moves on and the forge reads the pull request behind it, open at
+/// the head the merge named. While that merge may still land, the next run makes no update of
+/// the base, pushes nothing and sends no merge: each step says why and waits, and the run stops
+/// waiting at its budget. One merge call across the runs, the head the one first pushed.
+#[test]
+fn an_unknown_merge_is_not_sent_again_over_a_base_update() {
+    let tree = scratch("behind");
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let (revision, case_dir) = granted(&tree, "behind", &memory);
+    *memory.merge_answer.borrow_mut() = MergeAnswer::AnswerLost;
+    let first = resumed(&tree, "behind", &memory, Duration::from_millis(5));
+    assert_eq!(
+        steps(&case_dir, "repository.merge")[0]["forge_write"]["outcome"],
+        "unknown",
+        "{}",
+        first.said()
+    );
+    assert_eq!(merge_calls(&memory), 1, "{:#?}", memory.calls.borrow());
+
+    // The base moves on by a commit the pull request's head does not hold.
+    git(&tree, &["checkout", "-q", "main"]);
+    fs::write(tree.join("upstream.txt"), "the base moved\n").expect("a file");
+    git(&tree, &["add", "upstream.txt"]);
+    git(&tree, &["commit", "-q", "-m", "the base moves on"]);
+    git(&tree, &["checkout", "-q", "takt/behind"]);
+    let pushed_before = pushes(&memory);
+
+    let next = resumed_through(
+        &tree,
+        "behind",
+        Rc::new(Behind(memory.clone())),
+        Duration::from_millis(5),
+    );
+    let outcomes: Vec<String> = steps(&case_dir, "repository.merge")
+        .iter()
+        .map(|line| {
+            line["forge_write"]["outcome"]
+                .as_str()
+                .unwrap_or("absent")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        merge_calls(&memory),
+        1,
+        "story:fenced-forge-dispatch: a merge recorded unknown and read open at its head is never \
+         sent again, and no base update moves the head from under it; outcomes {outcomes:?}\n{}\n{:#?}",
+        next.said(),
+        memory.calls.borrow()
+    );
+    assert_eq!(
+        pushes(&memory),
+        pushed_before,
+        "story:fenced-forge-dispatch: nothing is pushed while the merge may land: {:#?}",
+        memory.calls.borrow()
+    );
+    assert_eq!(
+        memory.pushed.borrow().get("takt/behind"),
+        Some(&revision),
+        "the pull request's head is the one the merge named"
+    );
+    assert!(
+        matches!(&next.stop, Ok(Stop::Waiting { on, .. }) if on == &["repository.merge"]),
+        "the run stops waiting at its budget: {}",
+        next.said()
+    );
+    assert!(
+        next.text.contains("was sent and its outcome is not known"),
+        "{}",
+        next.said()
+    );
+    assert!(merge_observations(&case_dir).is_empty(), "{}", next.said());
+}
+
+/// The fixture stores, one directory each, relative to this crate.
+const FIXTURES: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
+
+/// The story the `one-ready` fixture store holds ready.
+const STORY: &str = "story:ready-one";
+
+fn copy_dir(from: &Path, to: &Path) {
+    fs::create_dir_all(to).expect("a directory");
+    for entry in fs::read_dir(from).expect("a readable fixture") {
+        let entry = entry.expect("an entry");
+        let target = to.join(entry.file_name());
+        if entry.file_type().expect("a file type").is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).expect("a copied file");
+        }
+    }
+}
+
+/// A scratch tree on `main` holding a committed copy of the `one-ready` store and a
+/// `check.txt` the story's work changes.
+fn story_scratch(name: &str) -> Scratch {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("fenced-{}-{name}", std::process::id()));
+    if dir.exists() {
+        fs::remove_dir_all(&dir).expect("a stale scratch tree is removed");
+    }
+    copy_dir(&Path::new(FIXTURES).join("one-ready"), &dir);
+    fs::write(dir.join("check.txt"), "broken\n").expect("a file");
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-q", "-m", "start"]);
+    Scratch(dir)
+}
+
+/// The options of a run that takes the store's next story.
+fn story_options() -> RunOptions {
+    RunOptions {
+        protocol: PROTOCOL.to_owned(),
+        intent: String::new(),
+        inputs: Vec::new(),
+        iterations: Some(8),
+        hours: None,
+        tokens: None,
+        case_id: None,
+        gate: Some("repository.merge".to_owned()),
+    }
+}
+
+/// Hands the work over and requests the merge gate as soon as each is offered, changing
+/// nothing.
+struct HandsOver;
+
+impl Harness for HandsOver {
+    fn name(&self) -> &str {
+        "hands-over"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        if context.approvals.contains(&"repository.merge".to_owned()) {
+            return Ok(StepReport {
+                action: "repository.merge".to_owned(),
+                summary: "merge it".to_owned(),
+                tokens: None,
+            });
+        }
+        if context.offered.contains(&"change.handover".to_owned()) {
+            return Ok(StepReport {
+                action: "change.handover".to_owned(),
+                summary: "hand it over".to_owned(),
+                tokens: None,
+            });
+        }
+        Err(anyhow!(
+            "the gate was not offered; a judgement step among {} is left",
+            context.offered.join(", ")
+        ))
+    }
+}
+
+/// `gate.run` without a gate: one `gate_result` pass at the revision.
+struct GatePass;
+
+impl Validator for GatePass {
+    fn name(&self) -> &str {
+        "record.gate-pass"
+    }
+
+    fn action(&self) -> &str {
+        "gate.run"
+    }
+
+    fn kind(&self) -> &str {
+        "gate_result"
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, _: &Path, revision: &str, seq: usize) -> Result<Observation, anyhow::Error> {
+        Ok(Observation {
+            summary: "pass".to_owned(),
+            records: vec![Record::new(
+                format!("gate-result-{seq}"),
+                self.kind(),
+                Some("pass".to_owned()),
+                self.subject(),
+                revision,
+                self.name(),
+            )],
+            artifact: None,
+        })
+    }
+}
+
+/// The validators of a story's delivery through `forge`, in the order the binary registers
+/// them: the tests validator, its command `true`, `change.read`, a gate that passes, and the
+/// forge's three.
+fn story_validators(forge: Rc<dyn Forge>) -> Vec<Box<dyn Validator>> {
+    vec![
+        Box::new(TestsRun::new("true").expect("a command")),
+        Box::new(ChangeRead),
+        Box::new(GatePass),
+        Box::new(PrOpen::new(forge.clone())),
+        Box::new(CiRead::new(forge.clone())),
+        Box::new(PrMerged::new(forge)),
+    ]
+}
+
+/// The store's story taken in `repo`, worked, run to the gate through `memory` and granted the
+/// merge through `store`: the case's id, its directory and the approval's commit, the head
+/// that carries the approval's rider above the revision granted.
+fn story_granted(repo: &Path, memory: &Rc<Memory>, store: &Aep) -> (String, PathBuf, String) {
+    let forge: Rc<dyn Forge> = memory.clone();
+    let validators = story_validators(forge);
+    let mut out = Vec::new();
+    let opened = Run::open_next(
+        repo,
+        story_options(),
+        store,
+        &HandsOver,
+        &validators,
+        &mut out,
+    )
+    .expect("the frontier answers")
+    .expect("the story is taken");
+    let id = opened.case.id.clone();
+    let dir = opened.case.dir.clone();
+    drop(opened);
+    fs::write(repo.join("check.txt"), "fixed\n").expect("a file");
+    git(repo, &["commit", "-q", "-am", "the work"]);
+    let mut run =
+        Run::resume(repo, story_options(), &id, &HandsOver, &validators).expect("the case resumes");
+    run.record_on(store);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).expect("the run stops without an error");
+    drop(run);
+    assert_eq!(
+        stop,
+        Stop::ApprovalRequired(vec!["repository.merge".to_owned()]),
+        "{}",
+        String::from_utf8_lossy(&out)
+    );
+    approve(repo, store, &id, "repository.merge", "human:operator").expect("the approval is given");
+    (id, dir, git(repo, &["rev-parse", "HEAD"]))
+}
+
+/// The story case `id` in `repo` resumed through `memory`, given `store` or not, waiting on the
+/// forge for 5 ms between observations.
+fn resumed_story(repo: &Path, id: &str, memory: &Rc<Memory>, store: Option<&Aep>) -> Ran {
+    let forge: Rc<dyn Forge> = memory.clone();
+    let validators = story_validators(forge);
+    let mut run =
+        Run::resume(repo, story_options(), id, &NoHarness, &validators).expect("the case resumes");
+    if let Some(store) = store {
+        run.record_on(store);
+    }
+    run.poll = Duration::from_millis(5);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+    Ran {
+        stop,
+        text: String::from_utf8(out).expect("utf-8"),
+    }
+}
+
+/// The fence holds against takt's riders: a run not given the store sends the merge at the head
+/// that carries the approval's rider, and its answer is lost without the forge applying it. The
+/// next run, given the store, writes the story's `test_result` and its move above that head,
+/// riders to push while the forge reads the pull request open at the head the merge named.
+/// While that merge may still land, the run pushes no rider and sends no merge: each step says
+/// why and waits, and the run stops waiting at its budget. One merge call across the runs, the
+/// head the one the merge named.
+#[test]
+fn an_unknown_merge_is_not_sent_again_over_a_rider_push() {
+    let repo = story_scratch("rider");
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let store = Aep::default();
+    let (id, case_dir, approved) = story_granted(&repo, &memory, &store);
+    let branch = format!("takt/{id}");
+    *memory.merge_answer.borrow_mut() = MergeAnswer::AnswerLost;
+
+    let first = resumed_story(&repo, &id, &memory, None);
+    let merges = steps(&case_dir, "repository.merge");
+    assert_eq!(
+        merges[0]["forge_write"]["outcome"],
+        "unknown",
+        "{}\n{merges:#?}",
+        first.said()
+    );
+    assert_eq!(
+        merges[0]["forge_write"]["head"],
+        approved.as_str(),
+        "{merges:#?}"
+    );
+    assert_eq!(merge_calls(&memory), 1, "{:#?}", memory.calls.borrow());
+    assert_eq!(
+        memory.pushed.borrow().get(&branch),
+        Some(&approved),
+        "{}",
+        first.said()
+    );
+    let pushed_before = pushes(&memory);
+
+    let next = resumed_story(&repo, &id, &memory, Some(&store));
+    let riders: Vec<String> = git(&repo, &["log", "--format=%s", &format!("{approved}..HEAD")])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(
+        riders,
+        [
+            takt::frontier::implemented_subject(STORY),
+            takt::frontier::test_result_subject(STORY)
+        ],
+        "the store's riders are written above the head the merge named: {}",
+        next.said()
+    );
+    let outcomes: Vec<String> = steps(&case_dir, "repository.merge")
+        .iter()
+        .map(|line| {
+            line["forge_write"]["outcome"]
+                .as_str()
+                .unwrap_or("absent")
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        merge_calls(&memory),
+        1,
+        "story:fenced-forge-dispatch: a merge recorded unknown and read open at its head is never \
+         sent again, and no rider push moves the head from under it; outcomes {outcomes:?}\n{}\n{:#?}",
+        next.said(),
+        memory.calls.borrow()
+    );
+    assert_eq!(
+        pushes(&memory),
+        pushed_before,
+        "story:fenced-forge-dispatch: no rider is pushed while the merge may land: {:#?}",
+        memory.calls.borrow()
+    );
+    assert_eq!(
+        memory.pushed.borrow().get(&branch),
+        Some(&approved),
+        "the pull request's head is the one the merge named"
+    );
+    assert!(
+        matches!(&next.stop, Ok(Stop::Waiting { on, .. }) if on == &["repository.merge"]),
+        "the run stops waiting at its budget: {}",
+        next.said()
+    );
+    assert!(
+        next.text.contains("was sent and its outcome is not known")
+            && next.text.contains("riders above it")
+            && next.text.contains("are not pushed"),
+        "{}",
+        next.said()
+    );
+    assert!(merge_observations(&case_dir).is_empty(), "{}", next.said());
 }
 
 /// The security boundary: resolving an `unknown` never merges without the grant. With the
