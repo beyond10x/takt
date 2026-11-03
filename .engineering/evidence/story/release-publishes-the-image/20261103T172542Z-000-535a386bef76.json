@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T17:25:42Z",
+  "actor": "human:timo",
+  "artifact": "story:release-publishes-the-image",
+  "kind": "story",
+  "revision": 12,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "release runs of 0.27.0 (41432901115) and 0.28.0 (41667833256) green, each with the job Publish the image / takt / image (publish) success; the build job skipped on a tag as designed",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/41667833256/job/126072361418"
+  }
+}

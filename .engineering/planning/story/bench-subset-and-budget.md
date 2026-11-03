@@ -11,8 +11,16 @@ relations:
 - depends_on: story:bench-task-protocol
 scope:
 - confidence: inferred
+  path: crates/takt-cli/src/main.rs
+- confidence: inferred
+  path: crates/takt/src/harness.rs
+- confidence: inferred
+  path: crates/takt/src/run.rs
+- confidence: inferred
+  path: crates/takt/src/scorecard.rs
+- confidence: inferred
   path: docs/bench
-revision: 11
+revision: 15
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-29T21:22:41Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-29T21:22:42Z", actor: "human:timo", revision: 11, decided_on: {"recorded":{"review_outcome":1}}}
