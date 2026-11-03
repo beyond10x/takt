@@ -34,6 +34,7 @@ A field added to an event later is optional, so older lines still read.
 | `store_move` | `story`, `to`, `commit`? | the story moved in the planning store |
 | `refusal` | `by` (`takt` or `store`), `reason` (verbatim) | a step was discarded, or a write refused |
 | `decline` | `reason` (the step's summary), `case_revision` (`r<n>`) | a judgement step named `decline`, changing no file; a record line, not evidence |
+| `gate.deferred` | `action` (`gate.run`), `revision`, `unmet` (the claims the decision gives as not true) | the gate's precondition did not hold at the revision, as under `gate_on: after_handover` before the hand-over, so the gate did not run there; once per revision, a record line, never evidence and never a pass |
 | `waiting` | `on` (actions), `seconds` | the run paused on the [forge](/docs/concepts/glossary#forge) before observing again |
 | `error` | `error` | the run ended on an error, or met one while recording an accepted case |
 | `skipped` | `line`, `reason` | an earlier line was cut short and is skipped on read |
