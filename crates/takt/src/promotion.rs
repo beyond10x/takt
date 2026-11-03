@@ -2643,13 +2643,23 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
     }
     if request.baseline_only {
         if let Some(base) = existing.iter().rfind(|record| record.kind != Kind::Refused) {
-            bail!(
-                "the store {} holds a baseline already: {} at {} ({})",
-                store.display(),
+            if !predates_requests(store, base)? {
+                bail!(
+                    "the store {} holds a baseline already: {} at {} ({}); --baseline-only records another only over a baseline whose scorecard predates the model requests (saved without the metric requests, or a scenario run that recorded none), which no candidate can be compared with",
+                    store.display(),
+                    base.revision,
+                    base.promoted_at,
+                    record_path(store, base).display()
+                );
+            }
+            writeln!(
+                out,
+                "the baseline {} at {} ({}) predates the model requests: its scorecard copy {} cannot be compared under the token rule, nor rebaselined over its runs; the fresh runs start a new series",
                 base.revision,
                 base.promoted_at,
-                record_path(store, base).display()
-            );
+                record_path(store, base).display(),
+                copy_path(store, base).display()
+            )?;
         }
         match &stated {
             Some(digest) => {
@@ -2902,6 +2912,20 @@ pub fn promote(request: &Request<'_>, out: &mut dyn Write) -> Result<Outcome> {
         None => {}
     }
     Ok(Outcome::Promoted(record))
+}
+
+/// Whether the stored scorecard copy of `record` predates the model requests: saved without the
+/// metric `requests`, or holding a scenario run that recorded none. No candidate can be
+/// compared with it under the token rule, nor can a rebaseline re-read its runs into one, so
+/// `--baseline-only` records a new baseline from fresh runs over it
+/// (story:the-token-rule-holds-for-an-unchanged-binary). A copy that does not read is an error.
+fn predates_requests(store: &Path, record: &Promotion) -> Result<bool> {
+    let card = Scorecard::load(&copy_path(store, record))?;
+    Ok(!card.metrics.contains_key("requests")
+        || card
+            .rows
+            .iter()
+            .any(|row| row.scenario.is_some() && row.requests.is_none()))
 }
 
 /// The store's scorecard copy of `record`, the `what` a candidate is compared with (the

@@ -8,7 +8,9 @@
 //!
 //! The figures are shaped like the story's: a saved side of median 122,355 tokens over seven
 //! requests a case with a spread of 563, and a candidate whose median of 122,415 lies above the
-//! saved maximum while its tokens per request do not move.
+//! saved maximum while its tokens per request do not move. They are shaped after the recorded
+//! 0.2.2 and 44f96a48 scorecards, not read from them: those predate the requests and cannot be
+//! compared.
 
 #[path = "support/own_home.rs"]
 mod own_home;
