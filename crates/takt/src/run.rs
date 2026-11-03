@@ -9583,15 +9583,15 @@ pub struct Backoff {
 
 impl Backoff {
     /// The run's backoff unless [`Run::poll`] is set: 2 s, half as long again each wait, at
-    /// most 15 s; so 2, 3, 4.5, 6.75, 10.125, then 15 s.
+    /// most 4.5 s, so checks that complete are next read at most 4.5 s later: 2, 3, then 4.5 s.
     pub const DEFAULT: Self = Self {
         first: Duration::from_secs(2),
         factor: 1.5,
-        cap: Duration::from_secs(15),
+        cap: Duration::from_millis(4500),
     };
 
     /// [`Backoff::DEFAULT`] from `first`: the same factor, and the cap the same multiple of
-    /// `first` as the default's of its own, 7.5 times. What a test's shorter poll waits.
+    /// `first` as the default's of its own, 2.25 times. What a test's shorter poll waits.
     #[must_use]
     pub fn scaled(first: Duration) -> Self {
         let ratio = Self::DEFAULT.cap.as_secs_f64() / Self::DEFAULT.first.as_secs_f64();

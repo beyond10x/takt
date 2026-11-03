@@ -1106,7 +1106,8 @@ fn parsed() -> Result<Cli> {
 /// What a run's loop is given, a scenario run's as a plain run's.
 #[derive(clap::Args)]
 struct LoopArgs {
-    /// Stop after this many steps.
+    /// Stop after this many steps. Every read of the forge is a step, each one while the run
+    /// waits for CI among them, so a wait for CI is better bounded by --hours.
     #[arg(long)]
     iterations: Option<u64>,
     /// Stop after this many hours.
