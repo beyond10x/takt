@@ -51,7 +51,7 @@ kind: its two new stops are `stop` lines like the others, and so is 0.19.0's
 | name | the run stopped because | exit |
 |---|---|---|
 | `Completed` | the [protocol](/docs/concepts/glossary#protocol)'s outcome is legitimate, `Completed (<outcome>)`; the only stop with `completed: true` | 0 |
-| `Iterations`, `Hours`, `Tokens`, `ActiveTime` | the budget ended | 3 |
+| `Iterations`, `Hours`, `Tokens`, `Usd`, `ActiveTime` | the budget ended | 3 |
 | `NothingAdmissible`, `StepRefused`, `NoProgress` | no admissible step, a step refused, or nothing changed | 3 |
 | `RedBase` | the case's first `tests.run` failed before any step changed the base | 3 |
 | `RepeatedTestFailure` | two `tests.run` results in a row, each at a new revision, failed the same tests ([what counts](../concepts/how-a-run-ends.md#what-counts-as-an-attempt)) | 3 |

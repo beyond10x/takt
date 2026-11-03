@@ -87,6 +87,9 @@ pub enum Stop {
     Hours(f64),
     /// The token budget is spent.
     Tokens(u64),
+    /// The dollar budget is spent ([`Run::stop_at_usd`]): the cost the harness reported for
+    /// the run's steps reached it, read before a step.
+    Usd(f64),
     /// The active-time budget is spent ([`Run::cap_active_time`]): the run's wall time less its
     /// waits on the forge reached the budget, read before a step.
     ActiveTime {
@@ -258,7 +261,7 @@ pub const REPEATED_GATE_FAILURES: u64 = 3;
 /// The outcome a run record gives each stop but `Completed`, whose outcome is the one it names:
 /// the word its display opens with. `tests/stop_kinds.rs` matches every variant into this list
 /// and fails to compile when one is added without its name here.
-pub const STOP_KINDS: [&str; 17] = [
+pub const STOP_KINDS: [&str; 18] = [
     "ApprovalRequired",
     "NothingAdmissible",
     "Iterations",
@@ -276,6 +279,7 @@ pub const STOP_KINDS: [&str; 17] = [
     "SetupFailed",
     "Declined",
     "RepeatedGateFailure",
+    "Usd",
 ];
 
 /// `bytes` as a [`Stop::DiskLow`] names them: the count, then in GiB to two places.
@@ -297,6 +301,7 @@ impl std::fmt::Display for Stop {
             Stop::Iterations(n) => write!(f, "Iterations ({n})"),
             Stop::Hours(h) => write!(f, "Hours ({h})"),
             Stop::Tokens(t) => write!(f, "Tokens ({t})"),
+            Stop::Usd(usd) => write!(f, "Usd ({usd})"),
             Stop::ActiveTime {
                 budget,
                 active,
@@ -1378,6 +1383,14 @@ impl Turn<'_, '_> {
     /// failed on in `failed`.
     fn host_stop(&mut self) -> Option<LoomHostStop> {
         let turn = self;
+        if let Err(error) = turn.run.say_cost_unreported(&mut *turn.out) {
+            let detail = format!("{error:#}");
+            turn.failed = Some(error);
+            return Some(LoomHostStop {
+                name: "takt".to_owned(),
+                detail: cjson::Value::Text(detail),
+            });
+        }
         let stop = match turn.run.budget_spent() {
             Some(stop) => (stop, true),
             None if matches!(turn.taker, Taker::Nobody) => return None,
@@ -9507,6 +9520,12 @@ pub struct Run<'a> {
     started: Instant,
     /// The active-time budget, in seconds: none until [`Run::cap_active_time`] gives one.
     active_cap: Option<u64>,
+    /// The dollar budget: none until [`Run::stop_at_usd`] gives one.
+    usd_cap: Option<f64>,
+    /// Whether a harness step of this invocation recorded no cost, and whether the run has said
+    /// so ([`Run::say_cost_unreported`]).
+    cost_unreported: std::cell::Cell<bool>,
+    cost_unreported_said: bool,
     /// How long the run has paused on the forge so far: the waits its active time leaves out.
     waited: Duration,
     options: RunOptions,
@@ -9863,6 +9882,9 @@ impl<'a> Run<'a> {
             store: None,
             started: Instant::now(),
             active_cap: None,
+            usd_cap: None,
+            cost_unreported: std::cell::Cell::new(false),
+            cost_unreported_said: false,
             waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
@@ -10164,6 +10186,9 @@ impl<'a> Run<'a> {
             store: None,
             started: Instant::now(),
             active_cap: None,
+            usd_cap: None,
+            cost_unreported: std::cell::Cell::new(false),
+            cost_unreported_said: false,
             waited: Duration::ZERO,
             outside: Outside::read(tree, &outside_dirs)?,
             outside_dirs,
@@ -10547,6 +10572,12 @@ impl<'a> Run<'a> {
         {
             return Some(Stop::Tokens(t));
         }
+        // A cost no step reported is unknown, never 0, and stops nothing.
+        if let Some(usd) = self.usd_cap
+            && self.cost_usd.get().is_some_and(|cost| cost >= usd)
+        {
+            return Some(Stop::Usd(usd));
+        }
         if let Some(budget) = self.active_cap {
             let active = self.active_time();
             if active.as_secs_f64() >= budget as f64 {
@@ -10580,6 +10611,32 @@ impl<'a> Run<'a> {
     #[must_use]
     pub fn waited(&self) -> Duration {
         self.waited
+    }
+
+    /// Stops the run [`Stop::Usd`] once the dollars its harness steps reported they cost
+    /// ([`Run::cost_usd`], this invocation's) reach `dollars`: read before every step, as the
+    /// token budget is, so a step under way runs to its end. A harness that reports no cost
+    /// leaves the cost unknown, which stops nothing, and the run says so once
+    /// ([`Run::say_cost_unreported`]). Without this call no cost stops the run. The CLI calls
+    /// it with `--usd`.
+    pub fn stop_at_usd(&mut self, dollars: f64) {
+        self.usd_cap = Some(dollars);
+    }
+
+    /// Says once, on `out`, that the harness reports no cost, when the run has a dollar budget
+    /// and a harness step of it recorded none: that budget cannot stop what it cannot count.
+    fn say_cost_unreported(&mut self, out: &mut dyn Write) -> Result<()> {
+        if let Some(usd) = self.usd_cap
+            && self.cost_unreported.get()
+            && !self.cost_unreported_said
+        {
+            self.cost_unreported_said = true;
+            writeln!(
+                out,
+                "usd: the harness reports no cost; the dollar budget of {usd} counts only the costs reported"
+            )?;
+        }
+        Ok(())
     }
 
     /// For a run given no approval gate, the gate its case's protocol names for the case's
@@ -11605,10 +11662,13 @@ impl<'a> Run<'a> {
                 transcript_refused,
             },
         )?;
-        // The run's cost is the sum over the step lines it recorded.
+        // The run's cost is the sum over the step lines it recorded; a harness step that
+        // reported none adds nothing and is said once ([`Run::say_cost_unreported`]).
         if let Some(cost) = cost {
             self.cost_usd
                 .set(Some(self.cost_usd.get().unwrap_or(0.0) + cost));
+        } else if by == "harness" {
+            self.cost_unreported.set(true);
         }
         Ok(())
     }

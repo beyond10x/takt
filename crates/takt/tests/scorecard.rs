@@ -953,13 +953,18 @@ fn outcomes_rank_in_the_order_the_story_gives() {
         ["accepted", "accepted"],
         ["ApprovalRequired", "Waiting"],
         ["Iterations", "Tokens"],
-        ["Hours", "Hours"],
+        ["Hours", "Usd"],
         ["NoProgress", "NoProgress"],
         ["error", "error"],
     ];
     assert_eq!(rank("ApprovalRequired"), rank("Waiting"));
     assert_eq!(rank("Iterations"), rank("Hours"));
     assert_eq!(rank("Hours"), rank("Tokens"));
+    assert_eq!(
+        rank("Usd"),
+        rank("Tokens"),
+        "the dollar budget ranks with the budget stops (story:bench-subset-and-budget)"
+    );
     for pair in order.windows(2) {
         for high in pair[0] {
             for low in pair[1] {
@@ -972,7 +977,16 @@ fn outcomes_rank_in_the_order_the_story_gives() {
     assert!(rank("accepted") > rank("ApprovalRequired"));
     assert!(rank("Waiting") > rank("Iterations"));
     assert!(rank("Tokens") > rank("NoProgress"));
+    assert!(rank("Usd") > rank("NoProgress"));
     assert!(rank("NoProgress") > rank("error"));
+}
+
+/// The outcome metric takes its next version with `Usd` among the budget stops, so a takt
+/// that knows version 3 refuses a scorecard saved under it (story:bench-subset-and-budget).
+#[test]
+fn the_outcome_metric_is_at_version_4_since_usd_ranks_with_the_budget_stops() {
+    use takt::scorecard::METRICS;
+    assert!(METRICS.contains(&("outcome", 4)), "{METRICS:?}");
 }
 
 /// The third check: against a saved scorecard whose token definition is another version, both

@@ -1121,6 +1121,13 @@ struct LoopArgs {
     /// exit 3. Not given, the run file's `tokens`, else 3000000: no run goes unbounded.
     #[arg(long, value_name = "N", default_value_t = DEFAULT_TOKENS)]
     tokens: u64,
+    /// Stop once the cost the harness reported for this invocation's steps reaches this many
+    /// dollars, its `total_cost_usd`, read before every step, so a step under way runs to its
+    /// end; the run stops `Usd (<DOLLARS>)`, exit 3. A number above zero; another value does
+    /// not parse, exit 2. A harness that reports no cost leaves the cost unknown: this stops
+    /// nothing it did not report, and the run says so once.
+    #[arg(long, value_name = "DOLLARS", value_parser = dollars, allow_negative_numbers = true)]
+    usd: Option<f64>,
     /// Stop once the run's active time, its wall time less the time it waits on the forge
     /// between two reads, reaches this many seconds; read before every step, so a step under way
     /// runs to its end. The run stops `ActiveTime` naming the budget, the active time and the
@@ -1418,6 +1425,14 @@ const EXIT_REFUSED: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 /// The token budget of a run that names none, by `--tokens` or its run file's `tokens`.
 const DEFAULT_TOKENS: u64 = 3_000_000;
+
+/// `--usd`: a finite number of dollars above zero; anything else does not parse, exit 2.
+fn dollars(text: &str) -> std::result::Result<f64, String> {
+    text.parse::<f64>()
+        .ok()
+        .filter(|usd| usd.is_finite() && *usd > 0.0)
+        .ok_or_else(|| "a dollar budget is a finite number above 0".to_owned())
+}
 /// Exit 3: the run stopped on a budget, with nothing more it may do, or on the tests: red at the
 /// base, or failing the same tests again.
 const EXIT_STOPPED: u8 = 3;
@@ -1444,7 +1459,7 @@ const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it; or stopped: SetupFailed (<name> exited <code>): a command of the run file's `setup` list did not end 0 when the case opened, before the red-base check and any model call; its output is kept under the state directory
   2  the arguments do not parse, or the run file's `tokens` is no whole number above zero or its `forge_endpoint` no `https://` URL nor `http://` to a loopback host (the file and the line named), before any case opens
-  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, Usd, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and the next run resumes it
@@ -1458,7 +1473,7 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate)
   1  refused before the run (an argument, the repository, the scenario, its seed, its story not ready there, its trial base or its case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it
   2  the arguments do not parse, or the run file's `tokens` is no whole number above zero or its `forge_endpoint` no `https://` URL nor `http://` to a loopback host (the file and the line named), before any case opens
-  3  stopped: a budget (Iterations, Hours, Tokens, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
+  3  stopped: a budget (Iterations, Hours, Tokens, Usd, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and `takt run --case <case>` resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
   6  stopped: Waiting (<actions>; <the budget spent>, no step or hour budget, or locally: <what it waits for>): the run waited on the forge (checks still running, a pull request's head behind the push, a merge held for a required check) and its budget (--iterations, --hours) ended first, or it had none to wait in; or it waits on something local (a saved scorecard, a promoted binary, a merge into the local main) and stopped at once after the step that observed it, naming the file it reads, with no pause and no observation again; nothing recorded for it, the case stays open and `takt run --case <case>` resumes the case
@@ -3542,6 +3557,9 @@ fn finish(
     run.take_default_gate();
     if let Some(seconds) = looping.active_seconds {
         run.cap_active_time(seconds);
+    }
+    if let Some(usd) = looping.usd {
+        run.stop_at_usd(usd);
     }
     run.stop_when_unperformable();
     run.console(console_of(

@@ -61,6 +61,7 @@ The reason is on stderr and no step was taken. Exit 2 is a command line that doe
 | `Iterations (<n>)` | `--iterations`: steps taken |
 | `Hours (<h>)` | `--hours`: wall time |
 | `Tokens (<n>)` | `--tokens`, or the run file's `tokens`: tokens the [harness](/docs/concepts/glossary#harness) reported; with neither, 3000000 |
+| `Usd (<dollars>)` | `--usd`: the cost the harness reported, its `total_cost_usd`; a harness that reports no cost is never stopped by it, and the run says so once |
 | `ActiveTime (…)` | `--active-seconds`: wall time less the time spent waiting on the [forge](/docs/concepts/glossary#forge) |
 
 A budget is read before each step, so a step under way runs to its end. The next run starts with

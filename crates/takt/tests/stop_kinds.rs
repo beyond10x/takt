@@ -74,6 +74,7 @@ stops! {
         Stop::Declined("AGENTS.md forbids it".to_owned());
     Stop::RepeatedGateFailure { .. } => Some(STOP_KINDS[16]),
         Stop::RepeatedGateFailure { gates: vec!["format".to_owned()], count: 3 };
+    Stop::Usd(_) => Some(STOP_KINDS[17]), Stop::Usd(0.03);
 }
 
 /// A stop of every variant, one per row and each of its own row's variant; each display opens
