@@ -1,8 +1,9 @@
 //! story:promotion through the binary: `takt promote` installs a takt built from a revision only
 //! when its saved scorecard shows no scenario worse than the promoted baseline's under the
-//! scorecard's rule (a margin of one case at any outcome rank, the median of tokens within the
-//! baseline's maximum), and writes a record under `$XDG_STATE_HOME/takt/promotions/` naming
-//! the revision the installed `takt --version` prints, as many a day as hold, one at a time;
+//! scorecard's rule (a margin of one case at any outcome rank, the median of tokens per model
+//! request within 5 % of the baseline's), and writes a record under
+//! `$XDG_STATE_HOME/takt/promotions/` naming the revision the installed `takt --version`
+//! prints, as many a day as hold, one at a time;
 //! a worse candidate is refused, recorded and not judged again; `--baseline-only`
 //! records the first baseline and installs nothing; `--dry-run` writes and installs nothing.
 //! The build runs confined through a Substrate adapter, so nothing the commit runs reads a
@@ -281,6 +282,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 duration_ms: None,
                 api_ms: None,
                 turns: None,
+                requests: Some(1),
                 started_at: None,
                 transcript: None,
                 transcript_refused: None,
@@ -2078,8 +2080,9 @@ fn a_link_planted_where_the_replaced_binary_is_kept_is_replaced() {
     assert_eq!(fs::read(&kept).ok(), Some(replaced));
 }
 
-/// Two cases worse at a rank, or a median of tokens over the baseline's maximum, refuse the
-/// candidate: nothing installed, a refusal recorded, and the same revision not judged again.
+/// Two cases worse at a rank, or a median of tokens per request more than 5 % over the
+/// baseline's, refuse the candidate: nothing installed, a refusal recorded, and the same
+/// revision not judged again.
 #[test]
 fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
     let world = World::new("refused", BASELINE_TOKENS, FIVE_APPROVALS);
@@ -2114,7 +2117,9 @@ fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
     let (code, out, err) = world.promote(&over, &[]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(
-        out.contains("median tokens 140000 exceeds the saved maximum 138160"),
+        out.contains(
+            "median tokens per request 140000.0 exceeds the saved median 122361.0 by more than 5 %"
+        ),
         "{out}"
     );
     world.assert_untouched();

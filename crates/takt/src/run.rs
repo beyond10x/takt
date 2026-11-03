@@ -11504,8 +11504,8 @@ impl<'a> Run<'a> {
 
     /// Records a step: by a validator, with the revision it observed, or by the harness, with
     /// the tokens it reported, their components and what it reported about the call (the
-    /// model, cost, duration, API time, turns and start, each only when stated); which one,
-    /// the action, what it reported.
+    /// model, cost, duration, API time, turns, requests and start, each only when stated);
+    /// which one, the action, what it reported.
     fn stepped(
         &self,
         events: &Events,
@@ -11543,6 +11543,7 @@ impl<'a> Run<'a> {
                 duration_ms: call.duration_ms,
                 api_ms: call.api_ms,
                 turns: call.turns,
+                requests: call.requests,
                 started_at: call.started_at,
                 transcript,
                 transcript_refused,

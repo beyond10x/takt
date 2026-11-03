@@ -69,11 +69,36 @@ fn side(name: &str, side: &str) -> Scratch {
             .join(CASES_DIR)
             .join(case.file_name().expect("a case name"));
         fs::create_dir_all(&to).expect("the case directory");
-        for file in ["events.jsonl", "held-out.txt"] {
-            fs::copy(case.join(file), to.join(file)).expect("a fixture file");
-        }
+        fs::copy(case.join("held-out.txt"), to.join("held-out.txt")).expect("a fixture file");
+        fs::write(
+            to.join("events.jsonl"),
+            one_request_a_step(&case.join("events.jsonl")),
+        )
+        .expect("the record");
     }
     repo
+}
+
+/// The fixture's record at `path`, each harness step's line given `requests: 1`. The 0.3.0
+/// runs were recorded before a step line carried its model requests, and the token rule
+/// divides by them (story:the-token-rule-holds-for-an-unchanged-binary): read as one request
+/// a step, the run-level rule judges tokens per harness step. Every other field is the
+/// record's.
+fn one_request_a_step(path: &Path) -> String {
+    fs::read_to_string(path)
+        .expect("a fixture record")
+        .lines()
+        .map(|line| {
+            let mut value: serde_json::Value = serde_json::from_str(line).expect("a JSON line");
+            if value["event"] == "step"
+                && value["by"] != "validator"
+                && value.get("requests").is_none()
+            {
+                value["requests"] = 1.into();
+            }
+            format!("{value}\n")
+        })
+        .collect()
 }
 
 fn actions(names: &[&str]) -> Vec<String> {
@@ -83,7 +108,8 @@ fn actions(names: &[&str]) -> Vec<String> {
 /// Acceptance 3: re-judging candidate 1 of the 0.3.0 cycle from its recorded rollouts reports
 /// it better on `change.handover`, every candidate case below the trigger's cheapest; and the
 /// run-level result, which the whole-run rule alone judged, is not worse: outcomes held, its
-/// token median 67628 under the trigger's maximum 84088, though 598 above the trigger's median.
+/// median of tokens 598 above the trigger's and its tokens per request within the 5 % the rule
+/// allows, each recorded harness step read as one request ([`one_request_a_step`]).
 #[test]
 fn candidate_1_of_the_0_3_0_cycle_is_better_on_change_handover_and_not_worse_on_the_run() {
     let (baseline, candidate) = (side("cycle", "baseline"), side("cycle", "candidate"));
@@ -159,6 +185,7 @@ fn row(n: usize, outcome: &str, tokens: u64, steps: &[(&str, u64)]) -> Row {
         held_out: None,
         steps: steps.len() as u64,
         tokens: Some(tokens),
+        requests: Some(1),
         refusals: 0,
         no_progress: 0,
         errors: 0,
@@ -201,8 +228,8 @@ fn saved() -> Scorecard {
     )
 }
 
-/// Acceptance 2: better on its step and worse on the run (its token median over the saved
-/// maximum) is refused, naming both.
+/// Acceptance 2: better on its step and worse on the run (its median tokens per request more
+/// than 5 % over the saved side's) is refused, naming both.
 #[test]
 fn better_on_its_steps_but_worse_on_the_run_is_refused_naming_both() {
     let candidate = card(

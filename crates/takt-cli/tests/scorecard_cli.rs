@@ -133,6 +133,7 @@ fn run_made_with(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Optio
                 duration_ms: None,
                 api_ms: None,
                 turns: None,
+                requests: Some(1),
                 started_at: None,
                 transcript: None,
                 transcript_refused: None,
@@ -223,8 +224,8 @@ const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// `--save` with `--revision` writes the scorecard named by that revision, and says so;
 /// `--against` it, five cases a side as the rule needs, a scenario one of whose cases stopped
-/// `NoProgress` and whose median of tokens is over the saved maximum is worse, exit 3; one whose
-/// cases were accepted under it is not, exit 0.
+/// `NoProgress` and whose median of tokens per request is more than 5 % over the saved median is
+/// worse, exit 3; one whose cases were accepted under it is not, exit 0.
 #[test]
 fn save_then_against_marks_a_worse_scenario_and_exits_3() {
     /// Five scenario 1 cases from trial `from`, each at `tokens`, the last stopped `last` and
@@ -275,11 +276,11 @@ fn save_then_against_marks_a_worse_scenario_and_exits_3() {
         &saved.display().to_string(),
     ]);
     assert_eq!(code, 3, "{text}{stderr}");
-    // One case lowered is within the rule's margin of one; the median of tokens over the saved
-    // maximum is what marks the scenario worse.
+    // One case lowered is within the rule's margin of one; the median of tokens per request more
+    // than 5 % over the saved median is what marks the scenario worse.
     for line in [
-        "rule  trials 5 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum",
-        "scenario 1  median tokens 650 exceeds the saved maximum 500",
+        "rule  trials 5 a scenario  margin 1 case  tokens worse when the median tokens per request exceeds the saved median by more than 5 %",
+        "scenario 1  median tokens per request 650.0 exceeds the saved median 500.0 by more than 5 %",
         "scenario 1  outcomes by rank held  tokens over  worse",
     ] {
         assert!(text.contains(line), "{line} in {text}");
@@ -910,6 +911,7 @@ fn run_with_layers(repo: &Path, case: &str, layers: &[(&str, &str)], model: Opti
                 duration_ms: None,
                 api_ms: None,
                 turns: None,
+                requests: Some(1),
                 started_at: None,
                 transcript: None,
                 transcript_refused: None,

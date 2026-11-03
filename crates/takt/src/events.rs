@@ -152,8 +152,9 @@ pub enum Event {
     /// 0: the model, the harness program's own version as its stream stated it (the `harness`
     /// layer's revision, ADR 0101; Claude Code: `claude_code_version` of its `system`/`init`
     /// event), the cost in dollars, the call's duration and its time in the API in
-    /// milliseconds, the turns, and the instant the call started, which precedes the line's
-    /// `at`; and the path of its transcript relative to the transcripts directory,
+    /// milliseconds, the turns, the model requests its stream shows
+    /// ([`crate::harness::requests_in`]), and the instant the call started, which precedes the
+    /// line's `at`; and the path of its transcript relative to the transcripts directory,
     /// `<repo>/<case>/run-<r>/step-<n>.jsonl`, when takt kept one
     /// ([`crate::harness::keep_transcript`]), or why it kept none (`transcript_refused`, its
     /// paths relative too: a file already at that path, which is never overwritten, or a link
@@ -181,6 +182,8 @@ pub enum Event {
         api_ms: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         turns: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requests: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         started_at: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]

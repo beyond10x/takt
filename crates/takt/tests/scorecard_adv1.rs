@@ -79,6 +79,7 @@ fn judged(tokens: u64) -> Event {
         duration_ms: None,
         api_ms: None,
         turns: None,
+        requests: Some(1),
         started_at: None,
         transcript: None,
         transcript_refused: None,

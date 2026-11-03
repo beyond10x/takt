@@ -32,9 +32,12 @@ Decided on 2026-10-18:
   `NoProgress` and every other stop, then an error. The candidate is worse at a rank when its cases
   at that rank or better fall short of the baseline's share by more than one case. At n = 5, one
   flaky case passes; two cases worse at any rank fail.
-- **Tokens**: worse when the candidate's median exceeds the baseline's maximum. The rule tolerates
-  the spread one unchanged harness shows on scenario 1 (106,003 to 167,249 tokens) and still
-  catches a shift of the whole distribution.
+- **Tokens**: worse when the candidate's median over its cases of tokens per model request exceeds
+  the baseline's by more than 5 % (decided 2026-11-03; until then the candidate's median of tokens
+  against the baseline's maximum). An unchanged binary measured again moves by about 3.4 % a
+  request and by whole requests a case, which refused it under the old rule; a request 10 % dearer
+  is still over. A case whose runs did not record their requests refuses the comparison, as one of
+  unknown tokens does.
 - **Missing**: worse when the saved scorecard has a scenario this one has no run of.
 - **No re-run**: a candidate that fails is not judged again until it changes, or until `--rejudge`
   brings a scorecard of new runs.
