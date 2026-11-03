@@ -19,6 +19,9 @@ takt's releases.
 - `pr.open` and `repository.merge` record their forge write on the step's line in `events.jsonl`: `forge_write`, with the pull request and head.
 - Its outcome is `applied`, `refused`, `not_attempted` or `unknown`.
 - A write whose answer was lost is `unknown`; the next step reads the forge to resolve it and never sends it again, and an unknown merge is never resolved into a merge without the grant.
+- The write is recorded `unknown` before it leaves, so a crash between the send and its answer leaves it held.
+- A merge held `unknown` or `applied` is not sent again, no rider is pushed and no base updated, until a read finds it merged, closed or at another head.
+- While the forge reads it open at that head the run waits, and at the budget it stops `Waiting` naming the pull request.
 - Library: `Forge::open_pull_request`, `merge` and `merge_with` return `Written<T>`, with the new `WriteOutcome`, `WriteError` and `NotStarted`.
 - Library: `events::ForgeWrite`, `Validator::take_forge_write` (with a default), and `Memory::merge_answer` and `MergeAnswer` for a merge applied and then lost.
 
@@ -30,6 +33,7 @@ takt's releases.
 - The refusal names such a path as changed during the step, of unknown origin (the step or another process), apart from what the step wrote in the tree.
 - A confined build binds the toolchain its `bin/rustc` resolves to, the sysroot rustc itself uses; an ordinary rustup install binds the same directory as before.
 - takt's own tests read a cargo home, a rustup home and program directories of their own, so a program another process installs while they run does not stop them.
+- `scripts/check-finding` binds the toolchain its `bin/rustc` resolves to, as a confined build does.
 
 ## [0.28.0] - 2026-11-03
 
