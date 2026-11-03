@@ -1438,8 +1438,10 @@ impl takt::forge::Forge for RouteDown {
         _: &Path,
         _: &Path,
         _: &takt::forge::PullRequest,
-    ) -> anyhow::Result<u64> {
-        anyhow::bail!("the route is down")
+    ) -> takt::forge::Written<u64> {
+        Err(takt::forge::WriteError::not_attempted(anyhow::anyhow!(
+            "the route is down"
+        )))
     }
     fn pull_request(&self, _: &Path, _: u64) -> anyhow::Result<takt::forge::PullRequestView> {
         anyhow::bail!("the route is down")
@@ -1447,8 +1449,10 @@ impl takt::forge::Forge for RouteDown {
     fn checks(&self, _: &Path, _: u64) -> anyhow::Result<takt::forge::Checks> {
         anyhow::bail!("the route is down")
     }
-    fn merge(&self, _: &Path, _: &Path, _: u64, _: &str) -> anyhow::Result<()> {
-        anyhow::bail!("the route is down")
+    fn merge(&self, _: &Path, _: &Path, _: u64, _: &str) -> takt::forge::Written<()> {
+        Err(takt::forge::WriteError::not_attempted(anyhow::anyhow!(
+            "the route is down"
+        )))
     }
     fn target_tip(&self, _: &Path, base: &str) -> anyhow::Result<String> {
         anyhow::bail!("the route is down; no tip of {base} was read")

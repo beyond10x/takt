@@ -11986,6 +11986,7 @@ impl<'a> Run<'a> {
             .with_context(|| format!("{} ({})", validator.action(), validator.name()));
         let failed = validator.take_failed();
         let gates = validator.take_obligations();
+        let write = validator.take_forge_write();
         let returned = Instant::now();
         // The way to the case's directory is read before anything is written under it: a test
         // command that put a link on it (`.takt`, a cases root) is refused and undone below.
@@ -12105,7 +12106,7 @@ impl<'a> Run<'a> {
             // Written after the cases directory was put back, which would take a
             // line written before it along.
             self.stepped(
-                events,
+                &events.writing(write.as_ref()),
                 SteppedBy::Validator(Some(&revision)),
                 validator.name(),
                 validator.action(),
@@ -12132,7 +12133,7 @@ impl<'a> Run<'a> {
                 validator.action()
             );
             self.stepped(
-                events,
+                &events.writing(write.as_ref()),
                 SteppedBy::Validator(Some(&revision)),
                 validator.name(),
                 validator.action(),
@@ -12156,10 +12157,29 @@ impl<'a> Run<'a> {
         } else {
             Ok(())
         };
-        let (observation, waits) = observed?;
+        let (observation, waits) = match observed {
+            Ok(observed) => observed,
+            // A forge write sent before the observation failed is on the step's line: a merge
+            // whose answer was lost says it may have been applied.
+            Err(error) => {
+                if write
+                    .as_ref()
+                    .is_some_and(|write| write.outcome != crate::forge::WriteOutcome::NotAttempted)
+                {
+                    self.stepped(
+                        &events.writing(write.as_ref()),
+                        SteppedBy::Validator(Some(&revision)),
+                        validator.name(),
+                        validator.action(),
+                        "nothing recorded",
+                    )?;
+                }
+                return Err(error);
+            }
+        };
         ignore?;
         self.stepped(
-            events,
+            &events.writing(write.as_ref()),
             SteppedBy::Validator(Some(&revision)),
             validator.name(),
             validator.action(),

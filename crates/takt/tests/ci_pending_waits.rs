@@ -234,7 +234,7 @@ impl Forge for PendingFor {
         tree: &Path,
         dir: &Path,
         request: &PullRequest,
-    ) -> anyhow::Result<u64> {
+    ) -> takt::forge::Written<u64> {
         self.memory.open_pull_request(tree, dir, request)
     }
 
@@ -252,7 +252,7 @@ impl Forge for PendingFor {
         Ok(Checks::Pending)
     }
 
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
         self.memory.merge(tree, dir, number, head)
     }
 }
@@ -601,7 +601,7 @@ impl Forge for Lagging {
         tree: &Path,
         dir: &Path,
         request: &PullRequest,
-    ) -> anyhow::Result<u64> {
+    ) -> takt::forge::Written<u64> {
         self.memory.open_pull_request(tree, dir, request)
     }
 
@@ -625,7 +625,7 @@ impl Forge for Lagging {
         self.memory.checks(tree, number)
     }
 
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
         self.memory.merge(tree, dir, number, head)
     }
 }
@@ -930,7 +930,7 @@ impl Forge for RefusesFor {
         tree: &Path,
         dir: &Path,
         request: &PullRequest,
-    ) -> anyhow::Result<u64> {
+    ) -> takt::forge::Written<u64> {
         self.memory.open_pull_request(tree, dir, request)
     }
 
@@ -942,11 +942,11 @@ impl Forge for RefusesFor {
         self.memory.checks(tree, number)
     }
 
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
         let left = self.refusals.get();
         if left > 0 {
             self.refusals.set(left - 1);
-            return Err((self.refusal)(number));
+            return Err(takt::forge::WriteError::refused((self.refusal)(number)));
         }
         self.memory.merge(tree, dir, number, head)
     }

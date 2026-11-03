@@ -22,8 +22,8 @@ use super::credential::CredentialSource;
 use super::{
     Checks, Exit, Failed, Forge, Head, IdentityScan, MERGE_REQUEST, MERGE_RESPONSE, Outgoing,
     PUBLISHED, PUSH_ENV, Process, PullRequest, PullRequestState, PullRequestView, REQUEST,
-    RESPONSE, Runner, exact_ref, fresh, head_is_a_commit, is_object_id, may_publish,
-    push_over_https_with, reading_of, without_userinfo,
+    RESPONSE, Runner, WriteError, Written, exact_ref, fresh, head_is_a_commit, is_object_id,
+    may_publish, push_over_https_with, reading_of, without_userinfo,
 };
 
 /// The host and the full project path (`group/sub/repo`) an `origin` URL names, in the forms git
@@ -129,6 +129,20 @@ fn answer_of(argv: &[String], exit: &Exit) -> Result<serde_json::Value> {
         bail!("`{}` failed: {}", argv.join(" "), failure_of(exit));
     }
     reading_of(argv, exit)
+}
+
+/// [`answer_of`] for a write, its failure classed: a call the host answered with a 4xx, the
+/// status on standard error, is `refused`; any other call that did not exit 0 (a 5xx, a glab
+/// that failed without naming a status, a signal) and an answer that does not read are
+/// `unknown`, since the host may have taken the request.
+fn written_answer(argv: &[String], exit: &Exit) -> Written<serde_json::Value> {
+    if !exit.success() {
+        return Err(super::by_status(
+            super::http_status_in(&exit.stderr),
+            anyhow!("`{}` failed: {}", argv.join(" "), failure_of(exit)),
+        ));
+    }
+    Ok(reading_of(argv, exit)?)
 }
 
 /// What a `glab api` that did not exit 0 said, on one line: how it exited, the `message` (else
@@ -666,20 +680,29 @@ impl Forge for Glab {
         Ok(IdentityScan::NotScanned(self.scan.not_scanned()))
     }
 
-    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
-        may_publish(&self.scan, &request.branch)?;
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let output = fresh(dir.join(Self::RESPONSE))?;
-        let (input, _) = Self::write_request(dir, request)?;
-        let (argv, exit) = self.exchange(tree, "POST", &self.open_path(), Some(&input))?;
+    /// What is checked and written before the call fails with nothing sent; the call is classed
+    /// by how it ended ([`super::run_failure`], [`written_answer`]); an answer without a number
+    /// is `unknown`, since the merge request may be open.
+    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Written<u64> {
+        let (output, input) = (|| -> Result<_> {
+            may_publish(&self.scan, &request.branch)?;
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            let output = fresh(dir.join(Self::RESPONSE))?;
+            let (input, _) = Self::write_request(dir, request)?;
+            Ok((output, input))
+        })()
+        .map_err(WriteError::not_attempted)?;
+        let (argv, exit) = self
+            .exchange(tree, "POST", &self.open_path(), Some(&input))
+            .map_err(super::run_failure)?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
-        let response = answer_of(&argv, &exit)?;
+        let response = written_answer(&argv, &exit)?;
         response["iid"].as_u64().ok_or_else(|| {
-            anyhow!(
+            WriteError::unknown(anyhow!(
                 "the response {} has no iid: no merge request number",
                 output.display()
-            )
+            ))
         })
     }
 
@@ -707,27 +730,38 @@ impl Forge for Glab {
         checks_of(&argv, &document)
     }
 
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let input = dir.join(Self::MERGE_BODY);
-        let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
-        // The head to match: GitLab refuses the merge when the merge request's head is no longer
-        // this commit, so what is merged is what was read and recorded, never a later push.
-        let document = serde_json::json!({ "sha": head });
-        let bytes = serde_json::to_vec_pretty(&document).context("serialize the merge request")?;
-        std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
-        let (argv, exit) = self.exchange(tree, "PUT", &self.merge_path(number), Some(&input))?;
+    /// What is written before the call fails with nothing sent; the call is classed by how it
+    /// ended ([`super::run_failure`], [`written_answer`]); an answer that does not say `merged`
+    /// is `unknown`, read back by the step.
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Written<()> {
+        let (input, output) = (|| -> Result<_> {
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            let input = dir.join(Self::MERGE_BODY);
+            let output = fresh(dir.join(Self::MERGE_RESPONSE))?;
+            // The head to match: GitLab refuses the merge when the merge request's head is no
+            // longer this commit, so what is merged is what was read and recorded, never a
+            // later push.
+            let document = serde_json::json!({ "sha": head });
+            let bytes =
+                serde_json::to_vec_pretty(&document).context("serialize the merge request")?;
+            std::fs::write(&input, bytes).with_context(|| format!("write {}", input.display()))?;
+            Ok((input, output))
+        })()
+        .map_err(WriteError::not_attempted)?;
+        let (argv, exit) = self
+            .exchange(tree, "PUT", &self.merge_path(number), Some(&input))
+            .map_err(super::run_failure)?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
-        let response = answer_of(&argv, &exit)?;
+        let response = written_answer(&argv, &exit)?;
         if response["state"] != "merged" {
-            bail!(
+            return Err(WriteError::unknown(anyhow!(
                 "{} did not merge merge request !{number}: {}",
                 argv.join(" "),
                 response["message"]
                     .as_str()
                     .unwrap_or("the response does not say `state: merged`")
-            );
+            )));
         }
         Ok(())
     }

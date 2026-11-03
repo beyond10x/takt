@@ -26,8 +26,8 @@ use crate::scan::Scan;
 
 use super::{
     Checks, Exit, Failed, Forge, Head, IdentityScan, MERGE_REQUEST, MERGE_RESPONSE, Outgoing,
-    PUSH_ENV, PullRequest, PullRequestState, PullRequestView, RESPONSE, Runner, fresh,
-    head_is_a_commit, is_object_id, may_publish, push_over_https, write_request,
+    PUSH_ENV, PullRequest, PullRequestState, PullRequestView, RESPONSE, Runner, WriteError,
+    Written, fresh, head_is_a_commit, is_object_id, may_publish, push_over_https, write_request,
 };
 
 /// An action of the forge and the entry of `forge_commands` that performs it.
@@ -690,25 +690,33 @@ impl Forge for CommandForge {
         )
     }
 
-    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64> {
-        may_publish(&self.scan, &request.branch)?;
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let output = fresh(dir.join(RESPONSE))?;
-        write_request(dir, request)?;
-        let body = dir.join(Self::BODY);
-        std::fs::write(&body, &request.body)
-            .with_context(|| format!("write {}", body.display()))?;
-        let body = body.display().to_string();
-        let exit = self.run(
-            Entry::Open,
-            tree,
-            &[
-                ("branch", &request.branch),
-                ("base", &request.base),
-                ("title", &request.title),
-                ("body_file", &body),
-            ],
-        )?;
+    /// What is checked and written before `open` runs fails with nothing sent; `open` itself is
+    /// classed by how it ended ([`write_failure`]); after it exited 0, a number that does not
+    /// read or read back is `unknown`, since the request may be open.
+    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Written<u64> {
+        let body = (|| -> Result<_> {
+            may_publish(&self.scan, &request.branch)?;
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            let output = fresh(dir.join(RESPONSE))?;
+            write_request(dir, request)?;
+            let body = dir.join(Self::BODY);
+            std::fs::write(&body, &request.body)
+                .with_context(|| format!("write {}", body.display()))?;
+            Ok((output, body.display().to_string()))
+        })();
+        let (output, body) = body.map_err(WriteError::not_attempted)?;
+        let exit = self
+            .run(
+                Entry::Open,
+                tree,
+                &[
+                    ("branch", &request.branch),
+                    ("base", &request.base),
+                    ("title", &request.title),
+                    ("body_file", &body),
+                ],
+            )
+            .map_err(write_failure)?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
         let number = self.number_of(&exit.stdout)?;
@@ -727,7 +735,8 @@ impl Forge for CommandForge {
                     "`read` reports request {number} as {} with the head {}, not an open request for {}; none is recorded",
                     view.state, view.head.branch, request.branch
                 )
-            });
+            })
+            .map_err(WriteError::unknown);
         }
         Ok(number)
     }
@@ -805,21 +814,45 @@ impl Forge for CommandForge {
         checks_of(&Self::json(Entry::Checks, &exit)?)
     }
 
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()> {
-        std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-        let input = dir.join(MERGE_REQUEST);
-        let output = fresh(dir.join(MERGE_RESPONSE))?;
-        let document = serde_json::json!({ "number": number, "sha": head });
-        std::fs::write(&input, serde_json::to_vec_pretty(&document)?)
-            .with_context(|| format!("write {}", input.display()))?;
-        let exit = self.run(
-            Entry::Merge,
-            tree,
-            &[("number", &number.to_string()), ("head", head)],
-        )?;
+    /// What is written before `merge` runs fails with nothing sent; `merge` itself is classed by
+    /// how it ended ([`write_failure`]); a response that cannot be kept after it exited 0 is
+    /// `unknown`.
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Written<()> {
+        let output = (|| -> Result<_> {
+            std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            let input = dir.join(MERGE_REQUEST);
+            let output = fresh(dir.join(MERGE_RESPONSE))?;
+            let document = serde_json::json!({ "number": number, "sha": head });
+            std::fs::write(&input, serde_json::to_vec_pretty(&document)?)
+                .with_context(|| format!("write {}", input.display()))?;
+            Ok(output)
+        })()
+        .map_err(WriteError::not_attempted)?;
+        let exit = self
+            .run(
+                Entry::Merge,
+                tree,
+                &[("number", &number.to_string()), ("head", head)],
+            )
+            .map_err(write_failure)?;
         std::fs::write(&output, &exit.stdout)
             .with_context(|| format!("write the response {}", output.display()))?;
         Ok(())
+    }
+}
+
+/// The class of `error`, the failure of a write entry [`CommandForge::run`] ran: `refused` for
+/// an exit the run file lists in `refused_exit` ([`ForgeRefused`]); `not_attempted` for an entry
+/// the file does not name ([`ForgeEntryMissing`]) or a program that could not be started;
+/// `unknown` for any other exit ([`ForgeFailed`]), a timeout or a signal, since a command the
+/// file names may have sent the request before it failed.
+fn write_failure(error: anyhow::Error) -> WriteError {
+    if error.chain().any(|cause| cause.is::<ForgeRefused>()) {
+        WriteError::refused(error)
+    } else if error.chain().any(|cause| cause.is::<ForgeEntryMissing>()) {
+        WriteError::not_attempted(error)
+    } else {
+        super::run_failure(error)
     }
 }
 

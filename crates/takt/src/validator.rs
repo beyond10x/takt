@@ -134,6 +134,13 @@ pub trait Validator {
     fn take_obligations(&self) -> Option<Vec<crate::obligations::Obligation>> {
         None
     }
+    /// The forge write the last observation attempted and its outcome class
+    /// ([`crate::events::ForgeWrite`]), taken once: the run writes it on the observation's
+    /// `step` line, also when the observation ended on an error after the write was sent. None
+    /// by default, and for an observation that attempted no forge write.
+    fn take_forge_write(&self) -> Option<crate::events::ForgeWrite> {
+        None
+    }
     /// The gates document this validator evaluates, relative to the tree: its gates are the
     /// repository's obligations, read from the case's base revision. None by default.
     fn gates_document(&self) -> Option<&Path> {
@@ -3817,9 +3824,16 @@ fn above(revision: &str, head: &str) -> String {
 /// would publish ([`Forge::scan_outgoing`]): every commit of the head pushed the remote does
 /// not hold, with its author, committer, message and diff, and, when the pull request is
 /// opened, its title and body; a refused scan pushes nothing, opens nothing and writes no record.
+/// The step's line carries the open's outcome class ([`Validator::take_forge_write`]):
+/// `applied` with the number opened, the open's own class when it failed and one was found open
+/// after it, and `not_attempted` for a pull request found open before one was opened. A failed
+/// open with none found keeps no class, so its step writes no line and the open sent again
+/// carries the same body.
 pub struct PrOpen {
     /// The forge the push and the pull request go through.
     pub forge: Rc<dyn Forge>,
+    /// The forge write of the last observation, taken by the run.
+    write: RefCell<Option<crate::events::ForgeWrite>>,
 }
 
 impl PrOpen {
@@ -3831,8 +3845,24 @@ impl PrOpen {
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
-        Self { forge }
+        Self {
+            forge,
+            write: RefCell::new(None),
+        }
     }
+}
+
+/// The forge write of a step: `outcome` on pull request `number`, when one is known, at `head`.
+fn forge_write(
+    outcome: crate::forge::WriteOutcome,
+    number: Option<u64>,
+    head: &str,
+) -> Option<crate::events::ForgeWrite> {
+    Some(crate::events::ForgeWrite {
+        outcome,
+        pull_request: number,
+        head: Some(head.to_owned()),
+    })
 }
 
 impl std::fmt::Debug for PrOpen {
@@ -4140,6 +4170,10 @@ impl Validator for PrOpen {
             .map(|(observation, _)| observation)
     }
 
+    fn take_forge_write(&self) -> Option<crate::events::ForgeWrite> {
+        self.write.take()
+    }
+
     /// Waits on the forge when the pull request's head, on the case's branch, is not yet at
     /// the head pushed: the forge moves it after the push, without a commit.
     fn observe_waiting(
@@ -4148,6 +4182,7 @@ impl Validator for PrOpen {
         revision: &str,
         seq: usize,
     ) -> Result<(Observation, bool)> {
+        self.write.replace(None);
         let dir = current(tree)?;
         // `HEAD` is the implementation revision, or takt's riders on top of it
         // (`approvals_only`); `HEAD` is what is pushed, so the pull request carries the
@@ -4314,6 +4349,11 @@ impl Validator for PrOpen {
                 })? {
                 Some(number) => {
                     branch.pull_request = Some(number);
+                    self.write.replace(forge_write(
+                        crate::forge::WriteOutcome::NotAttempted,
+                        Some(number),
+                        &head,
+                    ));
                     read(
                         number,
                         &format!(
@@ -4327,6 +4367,11 @@ impl Validator for PrOpen {
                 {
                     Ok(number) => {
                         branch.pull_request = Some(number);
+                        self.write.replace(forge_write(
+                            crate::forge::WriteOutcome::Applied,
+                            Some(number),
+                            &head,
+                        ));
                         (
                             Some(PullRequestState::Open),
                             format!(
@@ -4338,9 +4383,12 @@ impl Validator for PrOpen {
                     }
                     // An open that failed may have opened it all the same, its answer lost:
                     // the forge's open pull request for the case's branch is taken, and with
-                    // none the failure stands.
+                    // none the failure stands. Then the step keeps no write and writes no line,
+                    // so the next open sends the body this one sent (its steps counted from the
+                    // record), which a keyed forge replays.
                     Err(error) => {
-                        let error = error.context(format!(
+                        let outcome = error.outcome();
+                        let error = error.into_error().context(format!(
                             "open the pull request for {name} through the forge {forge}"
                         ));
                         let number = match self.forge.find_open_pull_request(
@@ -4355,6 +4403,8 @@ impl Validator for PrOpen {
                             ),
                         };
                         branch.pull_request = Some(number);
+                        self.write
+                            .replace(forge_write(outcome, Some(number), &head));
                         read(
                             number,
                             &format!("opening one failed, and found open for {name}: "),
@@ -4607,9 +4657,18 @@ impl Validator for CiRead {
 /// `artifacts/merged-head-<seq>.json`. A pull request already merged is recorded without a
 /// second merge; one the forge still reports open after the merge writes no record, because a
 /// claim that could not be observed stays unknown.
+///
+/// The step's line carries the merge's outcome class ([`Validator::take_forge_write`]) once
+/// the pull request was read: the class the forge's merge reported, and `not_attempted` for a
+/// step that sent none. A merge an earlier step recorded `unknown`, of the same pull request
+/// at the head the forge still reports it open at, is not sent again in the step that reads
+/// it so: the step records why, sends nothing and waits, and a later observation merges under
+/// the grant. One the forge reports merged is recorded merged, with no merge sent.
 pub struct PrMerged {
     /// The forge the merge goes through and the state is read from.
     pub forge: Rc<dyn Forge>,
+    /// The forge write of the last observation, taken by the run.
+    write: RefCell<Option<crate::events::ForgeWrite>>,
 }
 
 impl PrMerged {
@@ -4621,8 +4680,36 @@ impl PrMerged {
     /// Over `forge`.
     #[must_use]
     pub fn new(forge: Rc<dyn Forge>) -> Self {
-        Self { forge }
+        Self {
+            forge,
+            write: RefCell::new(None),
+        }
     }
+
+    /// Records this observation's forge write: `outcome` on pull request `number` at `head`.
+    fn wrote(&self, outcome: crate::forge::WriteOutcome, number: u64, head: &str) {
+        self.write.replace(forge_write(outcome, Some(number), head));
+    }
+}
+
+/// Whether the last `repository.merge` step in the case's run record that carries a forge write
+/// sent the merge of pull request `number` at `head` and has no answer (`unknown`).
+fn unknown_merge_of(dir: &Path, number: u64, head: &str) -> Result<bool> {
+    let lines = crate::events::Events::new(dir).read_readable()?;
+    Ok(lines
+        .iter()
+        .rev()
+        .filter(|line| {
+            line["event"] == "step"
+                && line["by"] == "validator"
+                && line["action"] == PrMerged::ACTION
+        })
+        .find_map(|line| line.get("forge_write"))
+        .is_some_and(|write| {
+            write["outcome"] == crate::forge::WriteOutcome::Unknown.as_str()
+                && write["pull_request"] == number
+                && write["head"] == head
+        }))
 }
 
 /// The judge allow-list: the paths that are not judge surfaces, every other path being one,
@@ -5549,17 +5636,23 @@ impl Validator for PrMerged {
             .map(|(observation, _)| observation)
     }
 
+    fn take_forge_write(&self) -> Option<crate::events::ForgeWrite> {
+        self.write.take()
+    }
+
     fn observe_waiting(
         &self,
         tree: &Path,
         revision: &str,
         seq: usize,
     ) -> Result<(Observation, bool)> {
+        self.write.replace(None);
         let dir = current(tree)?;
         let mut branch = Branch::read(&dir)?;
         // The case's branch, from the case id: not the `name` of a file a harness can write.
         let name = branch_of(&dir)?;
         let forge = self.forge.name();
+        let not_sent = crate::forge::WriteOutcome::NotAttempted;
         let nothing = |summary: String| Observation {
             summary,
             records: Vec::new(),
@@ -5591,6 +5684,8 @@ impl Validator for PrMerged {
             .forge
             .pull_request(tree, number)
             .with_context(|| format!("read pull request #{number} through the forge {forge}"))?;
+        // Nothing is sent until the merge below is.
+        self.wrote(not_sent, number, &view.head.sha);
         // The head last pushed, the revision itself, or another head of the revision with only
         // takt's riders and recorded base updates above it: `branch.yaml` names the head before
         // it is pushed, so a push the forge never took, or one it has not moved the pull
@@ -5706,6 +5801,7 @@ impl Validator for PrMerged {
                     view = self.forge.pull_request(tree, number).with_context(|| {
                         format!("read pull request #{number} through the forge {forge}")
                     })?;
+                    self.wrote(not_sent, number, &view.head.sha);
                     if view.head.branch != name || view.head.sha != local {
                         // The case's branch at another commit: the forge has not moved the
                         // pull request to the push yet, and is waited on.
@@ -5748,7 +5844,7 @@ impl Validator for PrMerged {
                 // base refuses to merge, is brought up to date by takt itself: the tip the guard
                 // judged merged into it, recorded and pushed. At most once in a pass; a base
                 // that moves again is the next pass's.
-                if let Some(stop) = self.update_base(
+                let updated = self.update_base(
                     tree,
                     &dir,
                     &mut branch,
@@ -5759,7 +5855,9 @@ impl Validator for PrMerged {
                         tip: &judged,
                     },
                     &mut view,
-                )? {
+                );
+                self.wrote(not_sent, number, &view.head.sha);
+                if let Some(stop) = updated? {
                     return Ok(stop);
                 }
                 // CI was read on the revision; a head carrying takt's riders above it
@@ -5810,6 +5908,23 @@ impl Validator for PrMerged {
                 if let Some(stop) = off_base(&view.head.sha) {
                     return Ok(stop);
                 }
+                // A merge an earlier step sent at this head and recorded `unknown` may still
+                // land, and the forge reports the pull request open at that head: this step
+                // sends no second merge on that ground, says why and waits; the next
+                // observation, under the same grant, merges.
+                if unknown_merge_of(&dir, number, &view.head.sha).with_context(|| {
+                    format!(
+                        "read the case's run record before the merge of pull request #{number}; nothing merged"
+                    )
+                })? {
+                    return Ok((
+                        nothing(format!(
+                            "the merge of pull request #{number} at its head {} sent in an earlier step has no answer (unknown), and {forge} reports it open at that head; nothing sent in this step, the next observation merges it under the grant; the claim stays unknown",
+                            short(&view.head.sha)
+                        )),
+                        true,
+                    ));
+                }
                 // A read of the checks can answer for another head than the one merged (a
                 // forge whose checks lag the push): the forge then refuses the merge for its
                 // required check, and that refusal is nothing merged, waited on like pending
@@ -5821,14 +5936,24 @@ impl Validator for PrMerged {
                     &view.head.sha,
                     authority.decision(self.action()),
                 )?;
-                if let Err(error) = self.forge.merge_with(
+                let merged = self.forge.merge_with(
                     tree,
                     &dir.join("artifacts"),
                     number,
                     &view.head.sha,
                     &message,
-                ) {
-                    if crate::forge::refused_for_a_pending_check(&error) {
+                );
+                self.wrote(
+                    merged
+                        .as_ref()
+                        .map_or_else(crate::forge::WriteError::outcome, |()| {
+                            crate::forge::WriteOutcome::Applied
+                        }),
+                    number,
+                    &view.head.sha,
+                );
+                if let Err(error) = merged {
+                    if crate::forge::refused_for_a_pending_check(error.error()) {
                         return Ok((
                             nothing(format!(
                                 "the forge {forge} refused the merge of pull request #{number} at its head {} for a required check that has not reported ({}); nothing merged, the claim stays unknown",
@@ -5840,7 +5965,7 @@ impl Validator for PrMerged {
                     }
                     // A base another writer moved after the guard judged it: nothing merged,
                     // and the next run judges the merge again on the base where it is now.
-                    if crate::forge::local::refused_for_a_moved_base(&error) {
+                    if crate::forge::local::refused_for_a_moved_base(error.error()) {
                         return Ok((
                             nothing(format!(
                                 "the forge {forge} refused the merge of pull request #{number} at its head {}, because {target} moved after the judge guard judged it ({}); nothing merged, the claim stays unknown",
@@ -5850,7 +5975,7 @@ impl Validator for PrMerged {
                             true,
                         ));
                     }
-                    return Err(error.context(format!(
+                    return Err(error.into_error().context(format!(
                         "merge pull request #{number} through the forge {forge}"
                     )));
                 }

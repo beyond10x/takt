@@ -156,6 +156,176 @@ impl fmt::Display for Failed {
 
 impl std::error::Error for Failed {}
 
+/// The outcome class of a forge write ([`Forge::open_pull_request`], [`Forge::merge`]), as the
+/// adapter that made it can tell: the forge answered it done (`applied`), answered and did not
+/// apply it (`refused`), nothing was sent (`not_attempted`), or the request may have reached the
+/// forge and no answer says what it did (`unknown`: a timeout, a child killed past its limit or
+/// by a signal, a lost connection, a 5xx, an answer that does not read). An adapter that cannot
+/// tell says `unknown`. A step records it on its line ([`crate::events::ForgeWrite`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WriteOutcome {
+    Applied,
+    Refused,
+    NotAttempted,
+    Unknown,
+}
+
+impl WriteOutcome {
+    /// The class as the record writes it: `applied`, `refused`, `not_attempted` or `unknown`.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Applied => "applied",
+            Self::Refused => "refused",
+            Self::NotAttempted => "not_attempted",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl fmt::Display for WriteOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A forge write that failed, with its outcome class: `refused`, `not_attempted` or `unknown`,
+/// never `applied`. Shown as its error is and read through to it, so a caller reads the forge's
+/// words as before, and `?` in a function answering [`anyhow::Error`] passes that error on as
+/// it is. An error no adapter classified is `unknown` ([`From`]): a write that may have been
+/// sent is never taken for one that was not.
+#[derive(Debug)]
+pub struct WriteError {
+    outcome: WriteOutcome,
+    error: anyhow::Error,
+}
+
+/// What a forge write answers: its value, or the failure and its class ([`WriteError`]).
+pub type Written<T> = std::result::Result<T, WriteError>;
+
+impl WriteError {
+    /// `error`, the write answered and not applied.
+    pub fn refused(error: impl Into<anyhow::Error>) -> Self {
+        Self::of(WriteOutcome::Refused, error)
+    }
+
+    /// `error`, the write not sent.
+    pub fn not_attempted(error: impl Into<anyhow::Error>) -> Self {
+        Self::of(WriteOutcome::NotAttempted, error)
+    }
+
+    /// `error`, the write perhaps sent and no answer saying what it did.
+    pub fn unknown(error: impl Into<anyhow::Error>) -> Self {
+        Self::of(WriteOutcome::Unknown, error)
+    }
+
+    /// `error` of the class `outcome`; an `applied` one is `unknown`, since a failure is never
+    /// a write applied.
+    pub fn of(outcome: WriteOutcome, error: impl Into<anyhow::Error>) -> Self {
+        let outcome = if outcome == WriteOutcome::Applied {
+            WriteOutcome::Unknown
+        } else {
+            outcome
+        };
+        Self {
+            outcome,
+            error: error.into(),
+        }
+    }
+
+    /// The class.
+    #[must_use]
+    pub fn outcome(&self) -> WriteOutcome {
+        self.outcome
+    }
+
+    /// The error.
+    #[must_use]
+    pub fn error(&self) -> &anyhow::Error {
+        &self.error
+    }
+
+    /// The error, the class dropped.
+    #[must_use]
+    pub fn into_error(self) -> anyhow::Error {
+        self.error
+    }
+
+    /// The error with `context` around it, the class kept.
+    #[must_use]
+    pub fn context<C>(self, context: C) -> Self
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        Self {
+            outcome: self.outcome,
+            error: self.error.context(context),
+        }
+    }
+}
+
+impl From<anyhow::Error> for WriteError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::unknown(error)
+    }
+}
+
+impl From<WriteError> for anyhow::Error {
+    fn from(error: WriteError) -> Self {
+        error.error
+    }
+}
+
+impl std::ops::Deref for WriteError {
+    type Target = anyhow::Error;
+
+    fn deref(&self) -> &anyhow::Error {
+        &self.error
+    }
+}
+
+impl fmt::Display for WriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if f.alternate() {
+            write!(f, "{:#}", self.error)
+        } else {
+            write!(f, "{}", self.error)
+        }
+    }
+}
+
+/// The class of `error`, the failure of a line a forge write ran: `not_attempted` for a program
+/// that could not be started ([`NotStarted`]), so nothing was sent; `unknown` for any other (a
+/// timeout, a signal, output held open), since the program may have sent the request.
+pub(crate) fn run_failure(error: anyhow::Error) -> WriteError {
+    if error.chain().any(|cause| cause.is::<NotStarted>()) {
+        WriteError::not_attempted(error)
+    } else {
+        WriteError::unknown(error)
+    }
+}
+
+/// The HTTP status `text` names as `HTTP <status>`, the way a forge program reports the answer
+/// it got (`glab api`'s `(HTTP 405)`); none when it names none.
+pub(crate) fn http_status_in(text: &str) -> Option<u16> {
+    text.match_indices("HTTP ").find_map(|(at, word)| {
+        let rest = &text[at + word.len()..];
+        let digits = rest.chars().take_while(char::is_ascii_digit).count();
+        (digits == 3).then(|| rest[..3].parse().ok()).flatten()
+    })
+}
+
+/// The class of a write the forge answered with the HTTP status `status`, which did not apply
+/// it: `refused` for a 4xx, the forge's own refusal; `unknown` for anything else, a 5xx among
+/// them, which a gateway answers for a request the host may have taken.
+pub(crate) fn by_status(status: Option<u16>, error: impl Into<anyhow::Error>) -> WriteError {
+    match status {
+        Some(400..=499) => WriteError::refused(error),
+        _ => WriteError::unknown(error),
+    }
+}
+
 /// How the forge words the state of a required check that has not reported, after `is` or
 /// `are`.
 const CHECK_PENDING: [&str; 4] = ["expected", "in progress", "pending", "queued"];
@@ -379,8 +549,10 @@ pub trait Forge {
     }
     /// Opens the pull request `request` describes, for a head branch already pushed (`pr.open`
     /// scans it, [`Self::scan_outgoing`], and pushes it first); `dir` is where the adapter keeps
-    /// what it sent and what came back, when it keeps anything. The pull request's number.
-    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Result<u64>;
+    /// what it sent and what came back, when it keeps anything. The pull request's number; a
+    /// failure says its outcome class ([`WriteError`]), `unknown` when the request may have
+    /// reached the forge.
+    fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Written<u64>;
     /// The number of the open pull request whose head is `branch` and whose base is `base`, as
     /// the forge reports it now; none when there is none. `pr.open` reads it before it opens a
     /// pull request and after an open that failed, so a run resumed after a lost answer takes
@@ -408,8 +580,10 @@ pub trait Forge {
     /// Merges pull request `number`, whose head must still be `head`: a head that moved since it
     /// was read is refused, not merged. `dir` is where the adapter keeps what it sent and what
     /// came back, when it keeps anything. What the merge made of the pull request is read back
-    /// through [`Self::pull_request`]; the merge itself answers nothing a validator records.
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Result<()>;
+    /// through [`Self::pull_request`]; the merge itself answers nothing a validator records but
+    /// its outcome class on a failure ([`WriteError`]), `unknown` when the request may have
+    /// reached the forge.
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> Written<()>;
     /// [`Self::merge`], the merge commit saying `message`, for an adapter that is told what its
     /// merge commit says. By default `message` is not read, and the forge's own message stands.
     fn merge_with(
@@ -419,7 +593,7 @@ pub trait Forge {
         number: u64,
         head: &str,
         message: &MergeMessage,
-    ) -> Result<()> {
+    ) -> Written<()> {
         let _ = message;
         self.merge(tree, dir, number, head)
     }
@@ -537,6 +711,27 @@ impl fmt::Display for TimedOut {
 }
 
 impl std::error::Error for TimedOut {}
+
+/// The error [`run_child`] answers for a child it could not start, shown as `run <program>`,
+/// the reason its source: nothing ran, so nothing the program would have sent left the machine.
+#[derive(Debug)]
+pub struct NotStarted {
+    /// The program.
+    pub program: String,
+    source: std::io::Error,
+}
+
+impl fmt::Display for NotStarted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "run {}", self.program)
+    }
+}
+
+impl std::error::Error for NotStarted {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
 
 impl Finished {
     /// Whether the process exited 0.
@@ -1351,8 +1546,10 @@ pub fn run_child_keeping_head(
                 std::thread::sleep(Duration::from_millis(2));
             }
             Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("run {}", command.get_program().to_string_lossy()));
+                return Err(anyhow::Error::new(NotStarted {
+                    program: command.get_program().to_string_lossy().into_owned(),
+                    source: error,
+                }));
             }
         }
     };
@@ -1799,9 +1996,13 @@ pub fn without_userinfo(url: &str) -> String {
 /// request it opened has the head it was opened for, at the revision last pushed for that
 /// branch (the tree's `HEAD` at the push), unless `head` says otherwise; one it merged is
 /// `merged` from then on. A merge whose head is not the revision last pushed for the branch is
-/// refused, as the API refuses one given a head to match.
+/// refused, as the API refuses one given a head to match; a pull request it never opened is not
+/// merged and nothing is sent. How the next merge is answered is `merge_answer`.
 #[derive(Debug, Default)]
 pub struct Memory {
+    /// How the double answers the next merge it is asked for, [`MergeAnswer::Merged`] again
+    /// once it has.
+    pub merge_answer: RefCell<MergeAnswer>,
     /// What `checks` answers for a pull request it opened.
     pub checks: Checks,
     /// The state `pull_request` answers for a pull request it opened and has not merged.
@@ -1817,6 +2018,20 @@ pub struct Memory {
     pub pushed: RefCell<BTreeMap<String, String>>,
     /// The pull requests merged, by number.
     pub merged: RefCell<Vec<u64>>,
+}
+
+/// How [`Memory`] answers a merge it is asked for and whose head matches.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum MergeAnswer {
+    /// Merged, and the answer arrives: `applied`.
+    #[default]
+    Merged,
+    /// Merged, and the answer lost to a timeout: `unknown`, the pull request merged.
+    MergedAnswerLost,
+    /// Not merged, and the answer lost to a timeout: `unknown`, the pull request still open.
+    AnswerLost,
+    /// Refused in the forge's words, nothing merged: `refused`.
+    Refused(String),
 }
 
 impl Memory {
@@ -1861,7 +2076,7 @@ impl Forge for Memory {
         Ok(())
     }
 
-    fn open_pull_request(&self, _: &Path, _: &Path, request: &PullRequest) -> Result<u64> {
+    fn open_pull_request(&self, _: &Path, _: &Path, request: &PullRequest) -> Written<u64> {
         let mut opened = self.opened.borrow_mut();
         opened.push(request.clone());
         let number = opened.len() as u64;
@@ -1899,19 +2114,33 @@ impl Forge for Memory {
         Ok(self.checks)
     }
 
-    fn merge(&self, _: &Path, _: &Path, number: u64, head: &str) -> Result<()> {
-        let index = self.index(number)?;
+    fn merge(&self, _: &Path, _: &Path, number: u64, head: &str) -> Written<()> {
+        let index = self.index(number).map_err(WriteError::not_attempted)?;
         self.calls.borrow_mut().push(format!("merge #{number}"));
         let branch = self.opened.borrow()[index].branch.clone();
         let pushed = self.pushed.borrow().get(&branch).cloned();
         if pushed.as_deref() != Some(head) {
-            bail!(
+            return Err(WriteError::refused(anyhow!(
                 "pull request #{number} has the head {branch} at {}, not {head}; not merged",
                 pushed.as_deref().unwrap_or("nothing pushed")
-            );
+            )));
         }
-        self.merged.borrow_mut().push(number);
-        Ok(())
+        match self.merge_answer.replace(MergeAnswer::Merged) {
+            MergeAnswer::Merged => {
+                self.merged.borrow_mut().push(number);
+                Ok(())
+            }
+            MergeAnswer::MergedAnswerLost => {
+                self.merged.borrow_mut().push(number);
+                Err(WriteError::unknown(anyhow!(
+                    "the merge of pull request #{number} timed out; its answer was lost"
+                )))
+            }
+            MergeAnswer::AnswerLost => Err(WriteError::unknown(anyhow!(
+                "the merge of pull request #{number} timed out; its answer was lost"
+            ))),
+            MergeAnswer::Refused(words) => Err(WriteError::refused(anyhow!("{words}"))),
+        }
     }
 
     /// The tree's own `refs/heads/<base>`: the double's repository is the tree. Not logged, so

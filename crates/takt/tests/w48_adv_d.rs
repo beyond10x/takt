@@ -1003,6 +1003,7 @@ impl Lost {
     fn resume(&self) -> anyhow::Result<()> {
         self.process()
             .merge(&self.tree, &self.case, NUMBER, &self.head)
+            .map_err(anyhow::Error::from)
     }
 
     fn world(&self, change: impl FnOnce(&mut World)) {

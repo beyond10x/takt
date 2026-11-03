@@ -312,7 +312,7 @@ impl Forge for Real {
         tree: &Path,
         dir: &Path,
         request: &PullRequest,
-    ) -> anyhow::Result<u64> {
+    ) -> takt::forge::Written<u64> {
         self.memory.open_pull_request(tree, dir, request)
     }
 
@@ -333,11 +333,11 @@ impl Forge for Real {
         })
     }
 
-    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> anyhow::Result<()> {
+    fn merge(&self, tree: &Path, dir: &Path, number: u64, head: &str) -> takt::forge::Written<()> {
         if self.require_checks && !self.green.borrow().iter().any(|green| green == head) {
-            bail!(
+            return Err(takt::forge::WriteError::refused(anyhow!(
                 "PUT /repos/o/r/pulls/{number}/merge exited 1: 405 Required status check \"takt / task check\" is expected"
-            );
+            )));
         }
         self.memory.merge(tree, dir, number, head)
     }
