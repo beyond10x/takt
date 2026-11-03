@@ -31,8 +31,8 @@ pins already in `Cargo.lock` carry what they need (loom 0.52.0 `SessionOverrides
 
 | unit | story | objective | scope | stage |
 |---|---|---|---|---|
-| a | story:harness-section-is-metaharness-session-request | `effort`, `max-budget-usd`, `strict-version` and `context` reach the session through Loom's overrides; a bad value and a per-kind refusal are metaharness's own words, before any case opens | cited | proposed |
-| b | story:harness-flags-spell-metaharness-names | each flag's observable on `takt run` and `takt scenario run`; `--harness codex --max-turns` refused in metaharness's words; help and reference without "refused until" | cited, one line inferred | proposed |
+| a | story:harness-section-is-metaharness-session-request | `effort`, `max-budget-usd`, `strict-version` and `context` reach the session through Loom's overrides; a bad value and a per-kind refusal are metaharness's own words, before any case opens | cited | merged at 470afdf57 and, after review fixes, at 16d44a200; tree cache discarded |
+| b | story:harness-flags-spell-metaharness-names | each flag's observable on `takt run` and `takt scenario run`; `--harness codex --max-turns` refused in metaharness's words; help and reference without "refused until" | cited, one line inferred | implementing, base 16d44a200 |
 
 | unit | agent | branch | tree | build dir | scratch root |
 |---|---|---|---|---|---|
@@ -66,6 +66,19 @@ Targeted tests:
 Gate: once both units are in, on `wave/51`, one stage at a time with `worktree discard-cache` between stages:
 `task check-static`, then `task test-library`, then `task test-cli`, each step's own exit status recorded here. Then
 one pull request through the bot route, its merge, the tag and the release.
+
+## Reviews
+
+| review | unit | outcome |
+|---|---|---|
+| review-result:w51-sec-a-1 | a | fixed: a context file whose text has a credential's shape is refused before any case opens |
+| review-result:w51-adv-a-1 | a | fixed: the scenario seed is the tree a context path is checked against; metaharness's byte cap and text rule apply before any case opens; a budget number below 1e-5; a refusal names only the refused flags |
+
+Unit a's correction is attacked again by unit b's adversary pass, which runs against `wave/51` with both units in.
+
+Filed as drafts, outside the wave (tag `from-finding`):
+story:the-refused-path-proposal-case-holds-on-every-host (from unit a's red run on the unchanged base: one
+`harness_proposes` case red on the wave's host, green in CI at the same source).
 
 Commits this wave makes: the opening store and page commit, one or more commits per unit, the merges into `wave/51`,
 the review and evidence store commits, the release prepare, one pull request and its merge to `main`, the tag.
