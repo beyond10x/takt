@@ -11392,6 +11392,72 @@ impl<'a> Run<'a> {
         )
     }
 
+    /// Says, once per revision, that the repository's gate does not run there: the run has a
+    /// `gate.run` validator, `decision` finds its action `blocked` by a precondition the case's
+    /// inputs leave open (under `gate_on: after_handover` of `story.delivery/3`, until the tests
+    /// pass and the change is handed over), and no gate record is at the subject's current
+    /// revision. Records a `gate.deferred` line first, then prints
+    /// `gate.run: deferred (precondition <claims> not true at <rev>)`, `<claims>` the claims the
+    /// decision gives as not true. Never evidence: no record is written, so no claim moves.
+    fn defer_gate(
+        &self,
+        decision: &crate::Decision,
+        shape: &Shape,
+        deferred_at: &mut BTreeSet<String>,
+        events: &Events,
+        out: &mut dyn Write,
+    ) -> Result<()> {
+        let action = crate::validator::GateRun::ACTION;
+        let Some(gate) = self.validators.iter().find(|v| v.action() == action) else {
+            return Ok(());
+        };
+        if decision.actions.get(action).map(String::as_str) != Some("blocked")
+            || shape.blocked_for_good.contains(action)
+        {
+            return Ok(());
+        }
+        let Some(revision) = self.case.revision(gate.subject()) else {
+            return Ok(());
+        };
+        if deferred_at.contains(&revision) || self.case.has_evidence(gate.kind(), gate.subject())? {
+            return Ok(());
+        }
+        let doc: serde_json::Value =
+            serde_json::from_str(&decision.json).context("read the decision document")?;
+        let entry = match &doc["actions"] {
+            serde_json::Value::Object(map) => map.get(action),
+            serde_json::Value::Array(list) => list.iter().find(|entry| entry["id"] == action),
+            _ => None,
+        };
+        let unmet: Vec<String> = entry
+            .and_then(|entry| entry["reasons"].as_array())
+            .into_iter()
+            .flatten()
+            .filter(|reason| reason["value"] != "true")
+            .filter_map(|reason| reason["claim"].as_str().map(str::to_owned))
+            .collect();
+        events.emit(
+            self.steps,
+            &Event::GateDeferred {
+                action: action.to_owned(),
+                revision: revision.clone(),
+                unmet: unmet.clone(),
+            },
+        )?;
+        let claims = if unmet.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", unmet.join(", "))
+        };
+        writeln!(
+            out,
+            "{action}: deferred (precondition {claims}not true at {})",
+            short(&revision)
+        )?;
+        deferred_at.insert(revision);
+        Ok(())
+    }
+
     /// Records a step: by a validator, with the revision it observed, or by the harness, with
     /// the tokens it reported, their components and what it reported about the call (the
     /// model, cost, duration, API time, turns and start, each only when stated); which one,
@@ -12375,6 +12441,17 @@ impl<'a> Run<'a> {
         // then `may now:` only when the set changes.
         let mut said_may: Option<Vec<String>> = None;
         let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
+        // The revisions whose gate deferral the case's record already holds, an earlier run's
+        // among them: one `gate.deferred` line per revision ([`Run::defer_gate`]). A record that
+        // does not read holds none here, so a resumed run may say a deferral again; the record's
+        // own error is the store's writes' to report ([`Run::close`]), never a stop of the loop.
+        let mut deferred_at: BTreeSet<String> = events
+            .read()
+            .unwrap_or_default()
+            .iter()
+            .filter(|line| line["event"] == "gate.deferred")
+            .filter_map(|line| line["revision"].as_str().map(str::to_owned))
+            .collect();
         let keeps_state = self.harness.keeps_state();
         // The validators that observed without writing a record, each with the revision it
         // observed at: not due again there, because the next observation would end the same
@@ -12477,6 +12554,9 @@ impl<'a> Run<'a> {
                 .filter(|a| keeps_state || shape.for_stateless(a))
                 .cloned()
                 .collect();
+            if open {
+                self.defer_gate(&decision, &shape, &mut deferred_at, events, out)?;
+            }
             // A deterministic step first: a validator due at this decision.
             let mut due = None;
             // After a stop on the case's tests, its tests are observed again first, its record

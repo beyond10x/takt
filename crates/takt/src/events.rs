@@ -252,6 +252,17 @@ pub enum Event {
         reason: String,
         case_revision: String,
     },
+    /// The repository's gate did not run at `revision`, the current revision of the gate
+    /// validator's subject, because the precondition of its action (`action`, `gate.run`) does
+    /// not hold there: `unmet` names the claims the decision gives as not true, in its order.
+    /// Written once per revision, at the first decision there that blocks the action while
+    /// no gate record is at that revision. A record line, never evidence, and never a pass.
+    #[serde(rename = "gate.deferred")]
+    GateDeferred {
+        action: String,
+        revision: String,
+        unmet: Vec<String>,
+    },
     /// The run pauses on the forge for `seconds`, then observes the actions `on` again.
     Waiting { on: Vec<String>, seconds: f64 },
     /// A declared setup command ran when the case opened, before the red-base check: its name,
