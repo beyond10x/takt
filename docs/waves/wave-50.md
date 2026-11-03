@@ -7,8 +7,10 @@ Stage: **dispatched**. `wave/50` branches from 40843ed9, 0.28.0's merge. Skill v
 
 `aep plan artifact waves --kind story --status active` (aep 0.79.0) after the wave's scope
 entries, verbatim in the approval record. story:bench-subset-and-budget and
-story:an-unrelated-program-install-refuses-no-step collide on `crates/takt/src/run.rs`: unit b
-starts from `wave/50` after unit c has merged. story:release-publishes-the-image was built and
+story:an-unrelated-program-install-refuses-no-step collide on `crates/takt/src/run.rs`; they run at
+once, the file split by function (b: the `Stop` enum and the budget checks; c: the step guard
+and its refusal text), with a `git merge-tree` dry run before the first of them merges; this
+replaces the order the approval record names, to run the two at once. story:release-publishes-the-image was built and
 released before the wave (1d1e4554c, 0.27.0 and 0.28.0); the wave checked its acceptance against
 the tree and moved it with no code.
 
@@ -17,8 +19,8 @@ the tree and moved it with no code.
 | unit | story | objective | scope | stage |
 |---|---|---|---|---|
 | a | story:fenced-forge-dispatch | `pr.open` and `repository.merge` record `applied`, `refused`, `not_attempted` or `unknown`; a merge `unknown` is read, never sent again | cited | dispatched |
-| b | story:bench-subset-and-budget | `--usd` stops a run on the cost the harness reports, `stopped: Usd (<dollars>)` | inferred | waits for c |
-| c | story:an-unrelated-program-install-refuses-no-step | the guard tests have a home of their own; a write takt cannot attribute is decided and tested | inferred | dispatched |
+| b | story:bench-subset-and-budget | `--usd` stops a run on the cost the harness reports, `stopped: Usd (<dollars>)` | inferred | merged |
+| c | story:an-unrelated-program-install-refuses-no-step | the guard tests have a home of their own; a write takt cannot attribute is decided and tested | inferred | merged |
 | d | story:release-publishes-the-image | built and released before the wave; acceptance checked, no code | cited | implemented |
 
 | unit | agent | branch | tree | build dir | scratch root |
