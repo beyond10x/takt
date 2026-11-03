@@ -252,11 +252,12 @@ pub enum Event {
         reason: String,
         case_revision: String,
     },
-    /// The repository's gate did not run at `revision`, the current revision of the gate
-    /// validator's subject, because the precondition of its action (`action`, `gate.run`) does
-    /// not hold there: `unmet` names the claims the decision gives as not true, in its order.
-    /// Written once per revision, at the first decision there that blocks the action while
-    /// no gate record is at that revision. A record line, never evidence, and never a pass.
+    /// The repository's gate did not run at `revision`, a revision of the gate validator's
+    /// subject, because the precondition of its action (`action`, `gate.run`) did not hold
+    /// there: `unmet` names the claims the last decision there gave as not true, in its order.
+    /// Written once per revision, an earlier run's line counting, when the case moves on from
+    /// the revision with no gate record there, or the run stops at it; a later run may still
+    /// run the gate at a revision a stop deferred. A record line, never evidence, never a pass.
     #[serde(rename = "gate.deferred")]
     GateDeferred {
         action: String,
@@ -458,6 +459,29 @@ impl Events {
         Ok(Some(
             bytes.iter().filter(|byte| **byte == b'\n').count() + 1,
         ))
+    }
+
+    /// Every line that reads as JSON, in order, each other line skipped, wherever it is and
+    /// whatever made it unreadable; none when there is no file. For a reader that only looks
+    /// lines up, such as the loop's deferrals already said ([`Event::GateDeferred`]): one line
+    /// that does not read hides no other. A symbolic link at the path is refused, never read
+    /// through ([`Events::open`]).
+    pub fn read_readable(&self) -> Result<Vec<serde_json::Value>> {
+        let mut bytes = Vec::new();
+        match self.open(std::fs::OpenOptions::new().read(true)) {
+            Ok(mut file) => {
+                file.read_to_end(&mut bytes)
+                    .with_context(|| format!("read {}", self.path.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", self.path.display()));
+            }
+        }
+        Ok(bytes
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+            .collect())
     }
 
     /// Every line written so far, each read as JSON, in order; none before the first. Blank
