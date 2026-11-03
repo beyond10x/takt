@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T20:17:57Z",
+  "actor": "human:timo",
+  "artifact": "story:fenced-forge-dispatch",
+  "kind": "story",
+  "revision": 13,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "VERIFIED: at 43fb9ed6b (wave/50 after the correction) cargo test -p b10x-takt --test fenced_forge_dispatch 8 passed (the rider-push case added after: 9 in the implementor's run, red with the rider hold taken out), w50_adv_forge_write 5 passed (3/2 before the correction), w50_sec_forge_write 1 passed (0/1 before), self_improvement 31; -p b10x-takt-cli --test self_improvement_cli 51 passed (33 red before the check-finding toolchain fix). The four acceptance cases are the first four tests of fenced_forge_dispatch.rs, each read from the step's events.jsonl line.",
+    "reference": "43fb9ed6b"
+  }
+}

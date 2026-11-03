@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-03T18:19:41Z",
+  "actor": "human:timo",
+  "artifact": "story:bench-subset-and-budget",
+  "kind": "story",
+  "revision": 15,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:w50-adv-b-1",
+    "reference": "763a3dad2",
+    "review": "review-result:w50-adv-b-1",
+    "outcome": "fixed"
+  }
+}

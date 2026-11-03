@@ -1,0 +1,15 @@
+{
+  "at": "2026-11-03T18:41:37Z",
+  "actor": "human:timo",
+  "artifact": "story:an-unrelated-program-install-refuses-no-step",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:w50-adv-c-1",
+    "reference": "a980b7a07",
+    "review": "review-result:w50-adv-c-1",
+    "outcome": "fixed"
+  }
+}
