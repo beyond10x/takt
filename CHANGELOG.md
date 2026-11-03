@@ -6,6 +6,25 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-03
+
+The token rule of `takt promote` and `takt scorecard --against` compares tokens per model request, and the wait on the forge starts at 2 s instead of 30 s.
+
+### Added
+
+- A run records `gate.deferred` in `events.jsonl` when it leaves a revision at which the gate's precondition kept it from running.
+- The run prints `gate.run: deferred (precondition <claims> not true at <rev>)` there; a deferral is never a pass.
+- A run records each harness step's model requests (metric `requests` v1), the distinct model messages its stream shows.
+
+### Changed
+
+- Worse on tokens now means the median tokens per model request exceed the saved side's by more than 5 %.
+- An unchanged binary is no longer refused on run-to-run drift, and a request 10 % dearer still is.
+- A baseline recorded before 0.28.0 has no request counts and is refused, as unknown tokens are; record it again.
+- The wait on the forge for CI starts at 2 s and grows by half per wait to at most 15 s, instead of a fixed 30 s.
+- The wait resets when the awaited actions or the pull request's head change, and still ends at the `--hours` budget.
+- CI checks the specification with ess 0.84.0.
+
 ## [0.27.0] - 2026-11-02
 
 Every release now publishes the container image `ghcr.io/beyond10x/takt:<version>` (linux/amd64).
@@ -982,7 +1001,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.27.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.28.0...HEAD
+[0.28.0]: https://github.com/beyond10x/takt/compare/0.27.0...0.28.0
 [0.27.0]: https://github.com/beyond10x/takt/compare/0.26.0...0.27.0
 [0.26.0]: https://github.com/beyond10x/takt/compare/0.25.0...0.26.0
 [0.25.0]: https://github.com/beyond10x/takt/compare/0.24.0...0.25.0
