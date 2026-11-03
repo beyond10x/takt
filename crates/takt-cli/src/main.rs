@@ -833,15 +833,16 @@ impl RunArgs {
     /// when the file sets it; without `--config`, nothing changes. The file's `story` names
     /// the work only when no flag does (--story, --intent, --case), and is kept with the file
     /// it came from, so a refusal names that file; a run that opens no story (a
-    /// `self.improvement/1` turn) leaves it out.
+    /// `self.improvement/1` turn) leaves it out. The session's `context` files are checked
+    /// against the work tree, whose files the session's copy holds.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return self.looping.configured(
-                takt::run_config::RunConfig::default(),
-                matches,
-                &self.repo,
-            );
+            self.looping
+                .configured(takt::run_config::RunConfig::default(), matches, &self.repo)?;
+            return self
+                .looping
+                .check_context(&takt::run_config::ContextTree::WorkTree(&self.repo));
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
         if let Some(story) = file.story.take()
@@ -856,11 +857,20 @@ impl RunArgs {
         self.protocol_settings = file.protocol_settings.clone();
         self.forge_settings = file.forge_settings();
         self.looping.configured(file, matches, &self.repo)?;
-        Ok(())
+        self.looping
+            .check_context(&takt::run_config::ContextTree::WorkTree(&self.repo))
     }
 }
 
 impl LoopArgs {
+    /// The session's `context` files checked against `tree`, the tree the case's session copies
+    /// ([`takt::run_config::SessionRequest::check_context`]); with no session, nothing.
+    fn check_context(&self, tree: &takt::run_config::ContextTree<'_>) -> Result<()> {
+        self.session
+            .as_ref()
+            .map_or(Ok(()), |session| session.check_context(tree))
+    }
+
     /// Fills each loop flag `matches` did not take from the command line with `file`'s value,
     /// when it sets it, for `takt run` and `takt scenario run` alike. The session settings are
     /// checked by metaharness for a session in `repo` ([`takt::run_config::SessionRequest::with_flags`]).
@@ -3951,6 +3961,14 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             repo.display()
         )
     })?;
+    // The session's `context` files are checked against the seed, the tree the case is cut
+    // from, before anything is cut or opened.
+    looping
+        .check_context(&takt::run_config::ContextTree::Revision {
+            repo: &repo,
+            revision: &seed,
+        })
+        .with_context(|| format!("scenario {}", scenario.id))?;
     // The identity the trial's commits carry: the one given, else the one `--declared-on`
     // configures (the pinned seed predates any such file); none under a forge, which pushes
     // them, is refused before anything is fetched, cut or pushed.
