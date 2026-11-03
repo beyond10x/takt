@@ -830,12 +830,13 @@ fn help_names_the_corpus_refusals() {
     }
 }
 
-/// story:outcome-metric-takes-version-3, acceptance 1: `Unperformable` ranking with the budget
-/// stops and a `DiskLow` trial taking no rank changed what the outcome ranks mean, so the outcome
-/// metric is at definition version 3: `takt scorecard` prints `outcome v3` and a saved scorecard
-/// records it.
+/// story:outcome-metric-takes-version-3, acceptance 1, then story:bench-subset-and-budget:
+/// `Unperformable` ranking with the budget stops and a `DiskLow` trial taking no rank changed
+/// what the outcome ranks mean (version 3), and so did `Usd` ranking with the budget stops, so
+/// the outcome metric is at definition version 4: `takt scorecard` prints `outcome v4` and a
+/// saved scorecard records it.
 #[test]
-fn the_outcome_metric_is_printed_and_saved_at_definition_version_3() {
+fn the_outcome_metric_is_printed_and_saved_at_definition_version_4() {
     let repo = repository(
         "outcome-v3",
         &[("scenario-1-trial-1", 1200, "Completed (accepted)")],
@@ -849,12 +850,16 @@ fn the_outcome_metric_is_printed_and_saved_at_definition_version_3() {
     assert!(
         definitions
             .split(", ")
-            .any(|definition| definition == "outcome v3"),
+            .any(|definition| definition == "outcome v4"),
         "{definitions}"
     );
     let saves = scratch("outcome-v3-saves");
     let card = fs::read_to_string(saved(&repo, &saves)).expect("the saved scorecard");
-    assert_eq!(card.matches("\"outcome\": 3,").count(), 1, "{card}");
+    assert_eq!(
+        card.matches("\"outcome\": 4,").count(),
+        1,
+        "the outcome metric is saved at version 4 (story:bench-subset-and-budget)\n{card}"
+    );
 }
 
 /// As [`run_made_with`], the `opened` line carrying `layers` and the step reporting `model`.

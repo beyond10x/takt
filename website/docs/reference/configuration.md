@@ -686,6 +686,7 @@ full text of each, and the [exit codes](./exit-codes.md) are generated from the 
 | `--iterations <N>` | stop after this many steps |
 | `--hours <H>` | stop after this many hours |
 | `--tokens <N>` | stop once the harness reported this many tokens; default 3000000, or the run file's `tokens` |
+| `--usd <DOLLARS>` | stop `Usd (<dollars>)` once the cost the harness reported reaches this many dollars; a harness that reports no cost is never stopped by it, and the run says so once |
 | `--active-seconds <S>` | stop once active time (wall time less waits on the forge) reaches this |
 | `--min-free-gib <GIB>` | stop `DiskLow` under this much free disk; default 10; `0` turns the check off |
 
