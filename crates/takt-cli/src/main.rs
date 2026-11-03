@@ -1180,23 +1180,29 @@ struct LoopArgs {
     #[arg(long, value_name = "FILE")]
     llm_config: Option<PathBuf>,
     /// The reasoning effort the session asks of the model, in the vendor's own vocabulary, as
-    /// `metaharness run --effort` takes it. Refused under `--harness harness`.
+    /// `metaharness run --effort` takes it: Claude Code's `--effort`, Codex's
+    /// `model_reasoning_effort`. The run file's `harness` mapping's `effort`; the flag wins over
+    /// it. Refused under `--harness harness`.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
-    /// A ceiling on the session's turns, as `metaharness run --max-turns` takes it. Refused under
-    /// `--harness codex`, whose launch takes no turn ceiling.
+    /// A ceiling on the session's turns, as `metaharness run --max-turns` takes it, in place of
+    /// the default 40. The run file's `harness` mapping's `max-turns`; the flag wins over it.
+    /// Refused under `--harness codex`, whose launch takes no turn ceiling.
     #[arg(long, value_name = "N")]
     max_turns: Option<u32>,
     /// A ceiling in US dollars on what the session may spend, as `metaharness run
-    /// --max-budget-usd` takes it, no finer than one micro-dollar. Claude Code's only.
+    /// --max-budget-usd` takes it, no finer than one micro-dollar. The run file's `harness`
+    /// mapping's `max-budget-usd`; the flag wins over it. Claude Code's only.
     #[arg(long, value_name = "USD")]
     max_budget_usd: Option<String>,
-    /// Refuse before the run when the installed vendor version is outside metaharness's pin, as
-    /// `metaharness run --strict-version` takes it.
+    /// Stop the run `HarnessUnqualified` before a session starts when the installed vendor
+    /// version is outside metaharness's pin, as `metaharness run --strict-version` takes it. The
+    /// run file's `harness` mapping's `strict-version`; the flag wins over it.
     #[arg(long)]
     strict_version: bool,
     /// A file whose text the session is handed, as `metaharness run --context` takes it,
-    /// repeatable: a file the repository's index tracks, as one plain relative path.
+    /// repeatable: a file the repository's index tracks, as one plain relative path. The run
+    /// file's `harness` mapping's `context`; the flag wins over it.
     #[arg(long, value_name = "FILE")]
     context: Vec<PathBuf>,
     #[command(flatten)]
