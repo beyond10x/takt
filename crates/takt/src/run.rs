@@ -290,6 +290,15 @@ fn bytes_shown(bytes: u64) -> String {
     )
 }
 
+/// `dollars` in whole micro-dollars, rounded once to the nearest, so a dollar budget and the
+/// costs summed against it compare as integers ([`Stop::Usd`]): ten reported costs of 0.1 reach
+/// 1 exactly, where their binary floating-point sum falls short. None for a negative, NaN or
+/// infinite figure, which is no cost; a figure past the largest saturates.
+#[must_use]
+pub fn micro_dollars(dollars: f64) -> Option<u64> {
+    (dollars.is_finite() && dollars >= 0.0).then(|| (dollars * 1e6).round() as u64)
+}
+
 impl std::fmt::Display for Stop {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -9531,8 +9540,9 @@ pub struct Run<'a> {
     started: Instant,
     /// The active-time budget, in seconds: none until [`Run::cap_active_time`] gives one.
     active_cap: Option<u64>,
-    /// The dollar budget: none until [`Run::stop_at_usd`] gives one.
-    usd_cap: Option<f64>,
+    /// The dollar budget, as given and in micro-dollars ([`micro_dollars`]): none until
+    /// [`Run::stop_at_usd`] gives one.
+    usd_cap: Option<(f64, u64)>,
     /// Whether a harness step of this invocation recorded no cost, and whether the run has said
     /// so ([`Run::say_cost_unreported`]).
     cost_unreported: std::cell::Cell<bool>,
@@ -9552,9 +9562,9 @@ pub struct Run<'a> {
     /// The console the run prints for a person ([`crate::console`]), set by [`Run::console`];
     /// while none, the run prints every decision's full `frontier:` line and no header.
     console: Option<crate::console::Console>,
-    /// The dollars the run's steps reported they cost, summed as each step is recorded; none
-    /// while no step reported a cost. Read by [`Run::cost_usd`].
-    cost_usd: std::cell::Cell<Option<f64>>,
+    /// The micro-dollars the run's steps reported they cost ([`micro_dollars`]), summed as each
+    /// step is recorded; none while no step reported a cost. Read by [`Run::cost_usd`].
+    cost_usd: std::cell::Cell<Option<u64>>,
     /// The commits the run's steps made, and the paths they committed. Read by
     /// [`Run::commits`].
     commits: u64,
@@ -10584,8 +10594,8 @@ impl<'a> Run<'a> {
             return Some(Stop::Tokens(t));
         }
         // A cost no step reported is unknown, never 0, and stops nothing.
-        if let Some(usd) = self.usd_cap
-            && self.cost_usd.get().is_some_and(|cost| cost >= usd)
+        if let Some((usd, micros)) = self.usd_cap
+            && self.cost_usd.get().is_some_and(|cost| cost >= micros)
         {
             return Some(Stop::Usd(usd));
         }
@@ -10629,22 +10639,24 @@ impl<'a> Run<'a> {
     /// token budget is, so a step under way runs to its end. A harness that reports no cost
     /// leaves the cost unknown, which stops nothing, and the run says so once
     /// ([`Run::say_cost_unreported`]). Without this call no cost stops the run. The CLI calls
-    /// it with `--usd`.
+    /// it with `--usd`. The budget and every cost are compared in whole micro-dollars
+    /// ([`micro_dollars`]); a budget that is no such figure (negative, NaN, infinite) is 0, spent
+    /// once any cost is reported.
     pub fn stop_at_usd(&mut self, dollars: f64) {
-        self.usd_cap = Some(dollars);
+        self.usd_cap = Some((dollars, micro_dollars(dollars).unwrap_or(0)));
     }
 
-    /// Says once, on `out`, that the harness reports no cost, when the run has a dollar budget
-    /// and a harness step of it recorded none: that budget cannot stop what it cannot count.
+    /// Says once, on `out`, that a harness step reported no cost, when the run has a dollar
+    /// budget: that budget cannot stop what it cannot count.
     fn say_cost_unreported(&mut self, out: &mut dyn Write) -> Result<()> {
-        if let Some(usd) = self.usd_cap
+        if let Some((usd, _)) = self.usd_cap
             && self.cost_unreported.get()
             && !self.cost_unreported_said
         {
             self.cost_unreported_said = true;
             writeln!(
                 out,
-                "usd: the harness reports no cost; the dollar budget of {usd} counts only the costs reported"
+                "usd: a harness step reported no cost; the dollar budget of {usd} counts only the costs reported"
             )?;
         }
         Ok(())
@@ -10687,7 +10699,7 @@ impl<'a> Run<'a> {
     /// lines it recorded; none when no step reported one.
     #[must_use]
     pub fn cost_usd(&self) -> Option<f64> {
-        self.cost_usd.get()
+        self.cost_usd.get().map(|micros| micros as f64 / 1e6)
     }
 
     /// The commits the run's steps made, and how many paths they committed, each path once.
@@ -11673,11 +11685,13 @@ impl<'a> Run<'a> {
                 transcript_refused,
             },
         )?;
-        // The run's cost is the sum over the step lines it recorded; a harness step that
-        // reported none adds nothing and is said once ([`Run::say_cost_unreported`]).
-        if let Some(cost) = cost {
-            self.cost_usd
-                .set(Some(self.cost_usd.get().unwrap_or(0.0) + cost));
+        // The run's cost is the sum over the step lines it recorded, in whole micro-dollars, each
+        // cost rounded once here; a harness step that reported none, or a negative one (no cost
+        // either), adds nothing and is said once ([`Run::say_cost_unreported`]).
+        if let Some(micros) = cost.and_then(micro_dollars) {
+            self.cost_usd.set(Some(
+                self.cost_usd.get().unwrap_or(0).saturating_add(micros),
+            ));
         } else if by == "harness" {
             self.cost_unreported.set(true);
         }

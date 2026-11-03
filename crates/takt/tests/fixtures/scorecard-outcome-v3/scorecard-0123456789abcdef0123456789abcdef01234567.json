@@ -5,7 +5,7 @@
   "metrics": {
     "errors": 1,
     "no_progress": 1,
-    "outcome": 4,
+    "outcome": 3,
     "refusals": 1,
     "requests": 1,
     "step_tokens": 2,

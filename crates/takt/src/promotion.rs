@@ -3217,11 +3217,18 @@ fn enough_trials(card: &Scorecard, base_card: &Scorecard, shown: &Path) -> Resul
 mod tests {
     use super::*;
 
-    /// A scorecard saved by this takt under its metric definitions, a run of which stopped
-    /// `DiskLow`.
+    /// A scorecard saved under the outcome metric's version 3, by the takt before
+    /// story:bench-subset-and-budget, a run of which stopped `DiskLow`.
     const SAVED_V3: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/scorecard-outcome-v3/scorecard-0123456789abcdef0123456789abcdef01234567.json"
+    );
+
+    /// The same scorecard saved by this takt under its metric definitions, the outcome at
+    /// version 4.
+    const SAVED_V4: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/scorecard-outcome-v4/scorecard-0123456789abcdef0123456789abcdef01234567.json"
     );
 
     /// The metric definitions of takt 0.2.3 and of 0fae6305, before `Unperformable` and
@@ -3267,7 +3274,7 @@ mod tests {
     /// which starts a new series.
     #[test]
     fn a_takt_knowing_tokens_v1_refuses_a_scorecard_saved_under_v2() {
-        let shown = Path::new(SAVED_V3);
+        let shown = Path::new(SAVED_V4);
         let card = Scorecard::load(shown).expect("the fixture reads");
         assert_eq!(card.metrics.get("tokens"), Some(&2));
         // Its outcome at the version that takt knows, so tokens alone is the refusal
@@ -3303,7 +3310,7 @@ mod tests {
     /// and a stored scorecard from before it is refused by this takt until a rebaseline.
     #[test]
     fn a_takt_not_knowing_step_tokens_refuses_a_scorecard_saved_under_it() {
-        let shown = Path::new(SAVED_V3);
+        let shown = Path::new(SAVED_V4);
         let card = Scorecard::load(shown).expect("the fixture reads");
         assert_eq!(card.metrics.get("step_tokens"), Some(&2));
         known_metrics_of(&card, shown, &METRICS).expect("this takt reads it");
@@ -3342,7 +3349,7 @@ mod tests {
     /// runs recorded them is refused by this takt, never judged as if each case made none.
     #[test]
     fn this_takt_refuses_a_scorecard_saved_before_requests() {
-        let shown = Path::new(SAVED_V3);
+        let shown = Path::new(SAVED_V4);
         let card = Scorecard::load(shown).expect("the fixture reads");
         assert_eq!(card.metrics.get("requests"), Some(&1));
         known_metrics_of(&card, shown, &METRICS).expect("this takt reads it");
@@ -3363,13 +3370,12 @@ mod tests {
 
     /// story:outcome-metric-takes-version-3, acceptance 2: the reading of a takt that knows
     /// version 2 refuses a scorecard saved under version 3 for that definition instead of
-    /// judging its `DiskLow` run under ranks it does not have. The fixture, at version 4 since
-    /// story:bench-subset-and-budget, is read with its outcome at version 3.
+    /// judging its `DiskLow` run under ranks it does not have.
     #[test]
     fn a_takt_knowing_outcome_v2_refuses_a_scorecard_saved_under_v3() {
         let shown = Path::new(SAVED_V3);
-        let mut card = Scorecard::load(shown).expect("the fixture reads");
-        card.metrics.insert("outcome".to_owned(), 3);
+        let card = Scorecard::load(shown).expect("the fixture reads");
+        assert_eq!(card.metrics.get("outcome"), Some(&3));
         let refused = known_metrics_of(&card, shown, &METRICS_V2)
             .expect_err("a takt knowing version 2 refuses it")
             .to_string();
@@ -3386,7 +3392,7 @@ mod tests {
     /// it instead of ranking its `Usd` runs with `NoProgress`.
     #[test]
     fn a_takt_knowing_outcome_v3_refuses_a_scorecard_saved_under_v4() {
-        let shown = Path::new(SAVED_V3);
+        let shown = Path::new(SAVED_V4);
         let card = Scorecard::load(shown).expect("the fixture reads");
         let known: BTreeMap<String, u32> = METRICS
             .iter()
