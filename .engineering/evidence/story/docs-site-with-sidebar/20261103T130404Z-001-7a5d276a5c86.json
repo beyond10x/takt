@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T13:04:04Z",
+  "actor": "human:timo",
+  "artifact": "story:docs-site-with-sidebar",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "site landed at 5d8adae0 (Docusaurus under website/, sidebar Start here, Concepts, Guides, Self-improvement, Reference, deployed from main); curl https://beyond10x.github.io/takt/ and /takt/protocols/ both 200 on 2026-11-03; Self-improvement nested under Project since 59da1845 (onboarding pass for 0.21.0)",
+    "reference": "5d8adae02"
+  }
+}

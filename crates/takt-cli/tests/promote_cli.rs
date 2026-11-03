@@ -1,8 +1,9 @@
 //! story:promotion through the binary: `takt promote` installs a takt built from a revision only
 //! when its saved scorecard shows no scenario worse than the promoted baseline's under the
-//! scorecard's rule (a margin of one case at any outcome rank, the median of tokens within the
-//! baseline's maximum), and writes a record under `$XDG_STATE_HOME/takt/promotions/` naming
-//! the revision the installed `takt --version` prints, as many a day as hold, one at a time;
+//! scorecard's rule (a margin of one case at any outcome rank, the median of tokens per model
+//! request within 5 % of the baseline's), and writes a record under
+//! `$XDG_STATE_HOME/takt/promotions/` naming the revision the installed `takt --version`
+//! prints, as many a day as hold, one at a time;
 //! a worse candidate is refused, recorded and not judged again; `--baseline-only`
 //! records the first baseline and installs nothing; `--dry-run` writes and installs nothing.
 //! The build runs confined through a Substrate adapter, so nothing the commit runs reads a
@@ -281,6 +282,7 @@ fn emit_run(repo: &Path, case: &str, tokens: u64, stop: &str, binary: Option<&st
                 duration_ms: None,
                 api_ms: None,
                 turns: None,
+                requests: Some(1),
                 started_at: None,
                 transcript: None,
                 transcript_refused: None,
@@ -812,6 +814,67 @@ fn baseline_only_records_the_first_baseline_and_installs_nothing() {
         err.contains("recorded already") && err.contains("as a baseline"),
         "{err}"
     );
+}
+
+/// story:the-token-rule-holds-for-an-unchanged-binary: a stored baseline whose scorecard
+/// predates the model requests (saved without the metric `requests`, its runs recording none)
+/// can be compared with no candidate and rebaselined over none of its runs, so `--baseline-only`
+/// records a new baseline from fresh runs over it, saying so, and that baseline starts the
+/// series; over a baseline that records the requests it is still refused, naming the exception.
+#[test]
+fn baseline_only_replaces_a_baseline_that_predates_the_requests() {
+    let world = World::new("before-requests", BASELINE_TOKENS, FIVE_APPROVALS);
+    let mut before: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&world.baseline).expect("the baseline"))
+            .expect("the baseline is JSON");
+    before["metrics"]
+        .as_object_mut()
+        .expect("metrics")
+        .remove("requests");
+    for row in before["rows"].as_array_mut().expect("rows") {
+        row.as_object_mut().expect("a row").remove("requests");
+    }
+    let old = world.outer.join("baseline-before-requests.json");
+    write(
+        &old,
+        &serde_json::to_string_pretty(&before).expect("the old scorecard"),
+    );
+    world.record_baseline_of(&old);
+    world.install_stand_in(&world.revision);
+    let fresh = world.candidate_card("fresh", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&fresh, &["--baseline-only"]);
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(&format!(
+            "the baseline {BASELINE_REVISION} at 2026-10-17T12:00:00Z"
+        )) && out.contains("predates the model requests")
+            && out.contains("the fresh runs start a new series"),
+        "{out}"
+    );
+    let record = world.record(&format!("{}.json", world.revision));
+    assert!(record.contains("\"kind\": \"baseline\""), "{record}");
+    assert!(
+        world
+            .records()
+            .contains(&format!("{}.scorecard.json", world.revision)),
+        "{:?}",
+        world.records()
+    );
+
+    let world = World::new("after-requests", BASELINE_TOKENS, FIVE_APPROVALS);
+    world.record_baseline();
+    world.install_stand_in(&world.revision);
+    let fresh = world.candidate_card("fresh", BASELINE_TOKENS, FIVE_APPROVALS);
+    let (code, out, err) = world.promote(&fresh, &["--baseline-only"]);
+    assert_eq!(code, 1, "{out}{err}");
+    assert!(
+        err.contains("holds a baseline already")
+            && err.contains(
+                "records another only over a baseline whose scorecard predates the model requests"
+            ),
+        "{err}"
+    );
+    assert_eq!(world.records(), baseline_files(), "nothing is written");
 }
 
 /// `--baseline-only` records the scorecard of the installed revision: with no binary at
@@ -2078,8 +2141,9 @@ fn a_link_planted_where_the_replaced_binary_is_kept_is_replaced() {
     assert_eq!(fs::read(&kept).ok(), Some(replaced));
 }
 
-/// Two cases worse at a rank, or a median of tokens over the baseline's maximum, refuse the
-/// candidate: nothing installed, a refusal recorded, and the same revision not judged again.
+/// Two cases worse at a rank, or a median of tokens per request more than 5 % over the
+/// baseline's, refuse the candidate: nothing installed, a refusal recorded, and the same
+/// revision not judged again.
 #[test]
 fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
     let world = World::new("refused", BASELINE_TOKENS, FIVE_APPROVALS);
@@ -2114,7 +2178,9 @@ fn a_worse_candidate_is_refused_recorded_and_not_judged_again() {
     let (code, out, err) = world.promote(&over, &[]);
     assert_eq!(code, 3, "{out}{err}");
     assert!(
-        out.contains("median tokens 140000 exceeds the saved maximum 138160"),
+        out.contains(
+            "median tokens per request 140000.0 exceeds the saved median 122361.0 by more than 5 %"
+        ),
         "{out}"
     );
     world.assert_untouched();

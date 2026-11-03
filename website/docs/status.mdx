@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.27.0, 2026-11-02 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.28.0, 2026-11-03 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
@@ -82,6 +82,7 @@ Each release in one line, from the changelog:
 | 0.25.0 | `forge: connectors` on a host with standing grants keys each open and merge with an `idempotency_key`, replays a lost answer and reads the pull request back after `outcome_unknown`, sending a merge read open at the same head once per run under a fresh key; a pull request behind its base gets the judged base tip merged in as takt's recorded merge commit, pushed and checked before the merge; `origin` may be a Connectors git relay on loopback, its refusals named with the ref and reason; git lines to a loopback relay run without global configuration or credentials; a push under git 2.56 moves no tracking ref; Loom 0.52.0 starts a keyless `--harness harness` session on a loopback endpoint |
 | 0.26.0 | `takt scorecard` refuses a `--repo` that is not an existing directory, exit 1 naming the path, and saves no scorecard |
 | 0.27.0 | every release publishes a linux/amd64 image, `ghcr.io/beyond10x/takt:<version>`, built from the tagged commit after its checks pass and never replaced; a pull request that changes the image builds it without pushing; the base images are pinned by digest |
+| 0.28.0 | the token rule compares tokens per model request within 5 %, so an unchanged binary is not refused on drift; the forge wait starts at 2 s and grows to 4.5 s instead of a fixed 30 s; a red revision records `gate.deferred` and runs no gate |
 
 ## Every story
 

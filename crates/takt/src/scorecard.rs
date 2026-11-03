@@ -27,13 +27,15 @@
 //! cases). Compared with a saved
 //! one, a scenario is worse when, for some outcome rank, the candidate's cases at that rank or
 //! better fall short of the saved share of its own n by more than the margin (at equal n: more
-//! than `margin` cases fewer), or when its median of tokens exceeds the saved maximum; a side
+//! than `margin` cases fewer), or when its median over cases of tokens per model request
+//! exceeds the saved side's by more than [`TOKEN_TOLERANCE_PERCENT`] (5 %); a side
 //! with fewer cases than the rule's trials, none included, gets no verdict, and so does a
-//! scenario with a `DiskLow` trial on either side, whatever the count ([`DISK_LOW`]). Tokens are
-//! printed per
-//! scenario and side as n, minimum, median and maximum over cases with the difference of the
-//! medians. A metric whose definition changed between the two is printed with both figures and
-//! does not make a scenario worse, but for one with no figure a case (`step_tokens`, by action),
+//! scenario with a `DiskLow` trial on either side, whatever the count ([`DISK_LOW`]). Tokens,
+//! and tokens per request, are printed per scenario and side as n, minimum, median and maximum
+//! over cases with the difference of the medians of tokens. A metric whose definition changed
+//! between the two is printed with both figures and does not make a scenario worse (the token
+//! rule is not applied when `tokens` or `requests` changed), but for one with no figure a case
+//! (`step_tokens`, by action),
 //! which prints none; outcomes are compared under the current definition whatever
 //! the saved one's version. The rule applied is printed with every comparison.
 //!
@@ -53,6 +55,16 @@
 //! unknown run tokens on either side is refused before anything is judged or printed, naming
 //! the case and the step ([`refuse_unknown_tokens`]). The record cannot tell a harness step
 //! relabelled `validator` from a validator's: it is read as the validator's 0.
+//!
+//! Tokens are judged per model request (story:the-token-rule-holds-for-an-unchanged-binary):
+//! a case's tokens total moves by a whole request (about 16.7k on scenario 1) whenever a step
+//! makes one more, and with the harness's own prompt growing between measurements, while its
+//! tokens per request move by a few per cent at most for an unchanged binary. A run's requests
+//! are the sum of its harness steps' `requests` ([`crate::harness::requests_in`]); a harness
+//! step that recorded none, or 0, leaves the run's requests unknown, never 0, and a comparison
+//! with a scenario case of unknown requests on either side is refused like one of unknown
+//! tokens, naming the case: a record or a saved scorecard from before the field compares with
+//! nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
@@ -103,8 +115,11 @@ pub const BINARY_FILE: &str = "binary.txt";
 /// and the rule that judges the steps a candidate targets with them
 /// ([`Scorecard::judge_steps`]); a takt that does not know it refuses a scorecard saved under
 /// it. At version 2 a harness step that recorded 0 leaves its action unknown too, where version
-/// 1 counted the 0.
-pub const METRICS: [(&str, u32); 8] = [
+/// 1 counted the 0. `requests` is a run's model requests, the sum of its harness steps'
+/// ([`Row::requests`]), unknown when a harness step recorded none, or 0; the token rule divides
+/// by it ([`TOKEN_TOLERANCE_PERCENT`]), and a takt that does not know it refuses a scorecard
+/// saved under it, as this one refuses a promotion on a scorecard saved without it.
+pub const METRICS: [(&str, u32); 9] = [
     ("outcome", 3),
     ("steps", 1),
     ("tokens", 2),
@@ -113,7 +128,16 @@ pub const METRICS: [(&str, u32); 8] = [
     ("errors", 1),
     ("wall", 1),
     ("step_tokens", 2),
+    ("requests", 1),
 ];
+
+/// The token rule's tolerance, in per cent: a scenario is worse on tokens when the median over
+/// its cases of tokens per model request (a case's tokens over its requests) exceeds the saved
+/// side's same median by more than this. An unchanged binary measured again moved by about
+/// 3.4 % a request with the harness's own drift, and by whole requests a case, which the
+/// per-request figure absorbs; a request 10 % dearer is over (decided 2026-11-03,
+/// story:the-token-rule-holds-for-an-unchanged-binary).
+pub const TOKEN_TOLERANCE_PERCENT: u32 = 5;
 
 /// The cases a side needs for the rank test of a targeted step ([`rank_test`]): five, the
 /// rule's trials, at which the one-sided exact test rejects equality at [`RANK_TEST_ALPHA`] for
@@ -165,6 +189,13 @@ pub struct Row {
     /// no tokens, or 0, which takt never writes: a missing record is never read as 0, which
     /// would read as a saving (metric `tokens` version 2).
     pub tokens: Option<u64>,
+    /// The model requests of the run: the sum of the `requests` its harness steps' lines
+    /// record (what each step's stream showed, [`crate::harness::requests_in`]); unknown
+    /// (none, saved as `null`) when a harness step of the run recorded none, or 0, and on a
+    /// file saved before it had the field: a missing record is never read as 0 (metric
+    /// `requests`). A run of no harness step made none.
+    #[serde(default)]
+    pub requests: Option<u64>,
     /// The run's `refusal` lines.
     pub refusals: u64,
     /// 1 when the run stopped `NoProgress`, else 0.
@@ -467,6 +498,12 @@ pub struct Case {
     /// The steps, by action, that leave a run's tokens unknown ([`Row::unknown_steps`]), over
     /// its runs; empty when every run's tokens are known.
     pub unknown_steps: BTreeSet<String>,
+    /// Its runs' model requests ([`Row::requests`]), summed over the runs whose requests are
+    /// known; no figure when `requests_unknown`, which a comparison refuses before reading it
+    /// ([`refuse_unknown_tokens`]).
+    pub requests: u64,
+    /// A run of it has unknown requests.
+    pub requests_unknown: bool,
     /// Its runs' refusals, summed.
     pub refusals: u64,
     /// 1 when its outcome is `NoProgress`, else 0.
@@ -501,9 +538,10 @@ impl Case {
                 })
             })
         };
-        let (steps, tokens, refusals, errors, wall_ms) = (
+        let (steps, tokens, requests, refusals, errors, wall_ms) = (
             sum(|run| run.steps),
             sum(|run| run.tokens.unwrap_or(0)),
+            sum(|run| run.requests.unwrap_or(0)),
             sum(|run| run.refusals),
             sum(|run| run.errors),
             sum(|run| run.wall_ms),
@@ -528,6 +566,8 @@ impl Case {
             steps,
             tokens,
             unknown_steps: runs.iter().flat_map(|run| run.unknown_steps()).collect(),
+            requests,
+            requests_unknown: runs.iter().any(|run| run.requests.is_none()),
             refusals,
             errors,
             wall_ms,
@@ -700,6 +740,11 @@ struct Span {
     tokens: u64,
     /// A harness step recorded no tokens, or 0: the run's tokens are unknown ([`Row::tokens`]).
     tokens_unknown: bool,
+    /// The `requests` the harness steps recorded, summed.
+    requests: u64,
+    /// A harness step recorded no `requests`, or 0: the run's requests are unknown
+    /// ([`Row::requests`]).
+    requests_unknown: bool,
     refusals: u64,
     errors: u64,
     saturated: bool,
@@ -747,6 +792,7 @@ impl Span {
             steps: self.steps,
             harness_steps: Some(self.harness_steps),
             tokens: (!self.tokens_unknown).then_some(self.tokens),
+            requests: (!self.requests_unknown).then_some(self.requests),
             refusals: self.refusals,
             errors: self.errors,
             wall_ms,
@@ -835,6 +881,15 @@ pub(crate) fn runs(case: &str, lines: &[serde_json::Value]) -> Vec<Row> {
                 }
                 let unknown = by_harness && reported.is_none_or(|n| n == 0);
                 span.tokens_unknown |= unknown;
+                // A harness step without its requests, or with 0, leaves the run's unknown.
+                if by_harness {
+                    match line["requests"].as_u64() {
+                        Some(requests) if requests > 0 => {
+                            count(&mut span.requests, requests, &mut span.saturated);
+                        }
+                        _ => span.requests_unknown = true,
+                    }
+                }
                 count(&mut span.tokens, tokens, &mut span.saturated);
                 if let Some(action) = line["action"].as_str() {
                     let at = span.step_tokens.entry(action.to_owned()).or_insert(Some(0));
@@ -865,6 +920,8 @@ fn figure(case: &Case, metric: &str) -> String {
         "steps" => case.steps.to_string(),
         "tokens" if !case.unknown_steps.is_empty() => "unknown".to_owned(),
         "tokens" => case.tokens.to_string(),
+        "requests" if case.requests_unknown => "unknown".to_owned(),
+        "requests" => case.requests.to_string(),
         "refusals" => case.refusals.to_string(),
         "no_progress" => case.no_progress.to_string(),
         "errors" => case.errors.to_string(),
@@ -881,6 +938,7 @@ fn number(case: &Case, metric: &str) -> Option<u64> {
         "outcome" => Some(u64::from(rank(&case.outcome))),
         "steps" => Some(case.steps),
         "tokens" => Some(case.tokens),
+        "requests" => Some(case.requests),
         "refusals" => Some(case.refusals),
         "no_progress" => Some(case.no_progress),
         "errors" => Some(case.errors),
@@ -899,6 +957,93 @@ fn median2(values: &[u64]) -> i128 {
     } else {
         i128::from(sorted[n / 2 - 1]) + i128::from(sorted[n / 2])
     }
+}
+
+/// A case's tokens per model request as the fraction `(tokens, requests)`, exactly; `0/1` for a
+/// case of no request, which made no harness step and spent nothing.
+fn per_request(case: &Case) -> (u128, u128) {
+    if case.requests == 0 {
+        (0, 1)
+    } else {
+        (u128::from(case.tokens), u128::from(case.requests))
+    }
+}
+
+/// Twice the median of `cases`' tokens per request as a fraction `(numerator, denominator)`,
+/// exactly; `0/1` for no case; none when the fraction does not fit 128 bits.
+fn median2_per_request(cases: &[Case]) -> Option<(u128, u128)> {
+    let mut sorted: Vec<(u128, u128)> = cases.iter().map(per_request).collect();
+    // Each side of a fraction is below 2^64, so the cross products fit.
+    sorted.sort_unstable_by(|(a, b), (c, d)| (a * d).cmp(&(c * b)));
+    let n = sorted.len();
+    if n == 0 {
+        return Some((0, 1));
+    }
+    if n % 2 == 1 {
+        let (tokens, requests) = sorted[n / 2];
+        return Some((2 * tokens, requests));
+    }
+    let ((a, b), (c, d)) = (sorted[n / 2 - 1], sorted[n / 2]);
+    Some((
+        a.checked_mul(d)?.checked_add(c.checked_mul(b)?)?,
+        b.checked_mul(d)?,
+    ))
+}
+
+/// The token rule: whether `candidate`'s median over cases of tokens per model request exceeds
+/// `saved`'s by more than [`TOKEN_TOLERANCE_PERCENT`], compared exactly as fractions
+/// cross-multiplied, so a candidate exactly 5 % over holds and one a fraction of a token more is
+/// over. Exact while the products fit 128 bits (per case, tokens below 2^59 at a million
+/// requests); past that the medians are compared as floating point.
+fn over_tolerance(candidate: &[Case], saved: &[Case]) -> bool {
+    let tolerance = 100 + u128::from(TOKEN_TOLERANCE_PERCENT);
+    let exact = || {
+        let (cn, cd) = median2_per_request(candidate)?;
+        let (sn, sd) = median2_per_request(saved)?;
+        let left = cn.checked_mul(sd)?.checked_mul(100)?;
+        let right = sn.checked_mul(cd)?.checked_mul(tolerance)?;
+        Some(left > right)
+    };
+    exact().unwrap_or_else(|| {
+        #[allow(clippy::cast_precision_loss)]
+        let median = |cases: &[Case]| {
+            let mut values: Vec<f64> = cases
+                .iter()
+                .map(|case| {
+                    let (tokens, requests) = per_request(case);
+                    tokens as f64 / requests as f64
+                })
+                .collect();
+            values.sort_unstable_by(f64::total_cmp);
+            let n = values.len();
+            match n {
+                0 => 0.0,
+                _ if n % 2 == 1 => values[n / 2],
+                _ => f64::midpoint(values[n / 2 - 1], values[n / 2]),
+            }
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let tolerance = tolerance as f64;
+        100.0 * median(candidate) > tolerance * median(saved)
+    })
+}
+
+/// A case's tokens per model request in thousandths of a token, rounded down, at most
+/// `u64::MAX`; 0 for a case of no request, which made no harness step and spent nothing. The
+/// figure the token rule prints; it compares [`over_tolerance`]'s exact fractions.
+fn milli_per_request(case: &Case) -> u64 {
+    if case.requests == 0 {
+        return 0;
+    }
+    let milli = u128::from(case.tokens) * 1000 / u128::from(case.requests);
+    u64::try_from(milli).unwrap_or(u64::MAX)
+}
+
+/// Half of `twice` thousandths of a token, as tokens to one decimal, rounded half up:
+/// `17479.3`.
+fn tenths(twice: i128) -> String {
+    let tenths = (twice.max(0) + 100) / 200;
+    format!("{}.{}", tenths / 10, tenths % 10)
 }
 
 /// Half of `twice`, exactly: `12`, `12.5`, `-0.5`.
@@ -962,8 +1107,10 @@ pub fn unnamed_in_a_mix(rows: &[Row]) -> Option<(String, &Row)> {
 /// Refuses a comparison of `sides`, each a scorecard with the name a refusal gives it, when a
 /// scenario case of any of them has unknown run tokens ([`Row::tokens`]), naming each such case
 /// and step as `<case> step <action> (<side>)`: a harness step that recorded no tokens is no
-/// saving, and nothing is judged on it. A case of no scenario is compared with nothing and
-/// refuses nothing.
+/// saving, and nothing is judged on it; then, the tokens known, when one has unknown model
+/// requests ([`Row::requests`]), naming each such case as `<case> (<side>)`: the token rule
+/// divides by them ([`TOKEN_TOLERANCE_PERCENT`]). A case of no scenario is compared with
+/// nothing and refuses nothing.
 pub fn refuse_unknown_tokens(sides: &[(&Scorecard, &str)]) -> Result<()> {
     let mut unknown: Vec<String> = Vec::new();
     for (card, side) in sides {
@@ -978,6 +1125,21 @@ pub fn refuse_unknown_tokens(sides: &[(&Scorecard, &str)]) -> Result<()> {
     if !unknown.is_empty() {
         bail!(
             "the run tokens are unknown in {}: a harness step of it recorded no tokens, or 0, and a missing record is never read as 0, which would read as a saving, so nothing is judged",
+            unknown.join(", ")
+        );
+    }
+    let unknown: Vec<String> = sides
+        .iter()
+        .flat_map(|(card, side)| {
+            card.cases()
+                .into_iter()
+                .filter(|case| case.scenario.is_some() && case.requests_unknown)
+                .map(move |case| format!("{} ({side})", case.case))
+        })
+        .collect();
+    if !unknown.is_empty() {
+        bail!(
+            "the model requests are unknown in {}: a harness step of it recorded no requests, or 0, or the scorecard was saved before runs recorded them, and tokens are judged per request, so nothing is judged; a missing count is never read as 0",
             unknown.join(", ")
         );
     }
@@ -1467,14 +1629,16 @@ impl Scorecard {
 
     /// Compares this scorecard with `saved`, scenario by scenario, over cases, under this
     /// scorecard's [`Rule`], printed first: each case and its outcome; each side's n and the
-    /// minimum, median and maximum of tokens, and the difference of the medians; both figures
+    /// minimum, median and maximum of tokens and of tokens per request, and the difference of
+    /// the medians of tokens; both figures
     /// of every metric whose definition's version differs, none for one with no figure a case
     /// (`step_tokens`, by action); each outcome rank at which the
     /// candidate falls short, with both counts; then the verdict. A scenario is worse when, for
     /// some rank, the candidate's cases at that rank or better fall short of the saved share of
     /// the candidate's n by more than the margin (at equal n: by more than `margin` cases),
-    /// under the current definition; when its median of tokens exceeds the saved maximum, the
-    /// token definition unchanged. A scorecard is never worse than itself; one case
+    /// under the current definition; when the median over its cases of tokens per model request
+    /// exceeds the saved side's by more than [`TOKEN_TOLERANCE_PERCENT`], the `tokens` and
+    /// `requests` definitions unchanged. A scorecard is never worse than itself; one case
     /// lowered is within a margin of one, two cases lowered in one scenario never are. The
     /// trials apply as a promotion applies them: a scenario the saved scorecard has with fewer
     /// cases than the rule's trials (`too few cases on the saved side (<n> of <trials>)`), and
@@ -1491,8 +1655,8 @@ impl Scorecard {
     /// scenario is named as well, as above, so neither refusal hides the other. A case a run of
     /// which disagrees with its held-out check is named so beside its outcome. A scenario case
     /// of either side whose run tokens are unknown refuses the comparison before anything is
-    /// printed, naming the case and the step ([`refuse_unknown_tokens`]). The number of
-    /// scenarios marked worse.
+    /// printed, naming the case and the step, and so does one whose model requests are unknown,
+    /// naming the case ([`refuse_unknown_tokens`]). The number of scenarios marked worse.
     pub fn against(&self, saved: &Scorecard, out: &mut dyn Write) -> Result<usize> {
         Ok(self.worse_against(saved, out)?.len())
     }
@@ -1520,7 +1684,7 @@ impl Scorecard {
         let Rule { trials, margin } = self.rule;
         writeln!(
             out,
-            "rule  trials {trials} a scenario  margin {margin} case{}  tokens worse when the median exceeds the saved maximum",
+            "rule  trials {trials} a scenario  margin {margin} case{}  tokens worse when the median tokens per request exceeds the saved median by more than {TOKEN_TOLERANCE_PERCENT} %",
             if margin == 1 { "" } else { "s" }
         )?;
         let (candidates, baselines) = (self.cases(), saved.cases());
@@ -1652,6 +1816,15 @@ impl Scorecard {
                     tokens.len(),
                     half(median2(&tokens))
                 )?;
+                let per: Vec<u64> = cases.iter().map(milli_per_request).collect();
+                writeln!(
+                    out,
+                    "scenario {scenario}  {side:<9}  n {}  tokens per request min {} median {} max {}",
+                    per.len(),
+                    tenths(2 * i128::from(per.iter().min().copied().unwrap_or(0))),
+                    tenths(median2(&per)),
+                    tenths(2 * i128::from(per.iter().max().copied().unwrap_or(0)))
+                )?;
             }
             let tokens_median =
                 |cases: &[Case]| median2(&cases.iter().map(|case| case.tokens).collect::<Vec<_>>());
@@ -1674,14 +1847,22 @@ impl Scorecard {
                     if difference >= 0 { "+" } else { "" },
                     half(difference)
                 )?;
-                let saved_max = baseline.iter().map(|case| case.tokens).max().unwrap_or(0);
-                // The median is held doubled; so is the maximum for the comparison.
-                if tokens > 2 * i128::from(saved_max) {
+            }
+            // The token rule: the medians of tokens per request, compared exactly
+            // ([`over_tolerance`]); the thousandths are only printed. Not applied while either
+            // definition it reads changed.
+            if !changed("tokens") && !changed("requests") {
+                let per_request = |cases: &[Case]| {
+                    median2(&cases.iter().map(milli_per_request).collect::<Vec<_>>())
+                };
+                let (saved_per, per) = (per_request(&baseline), per_request(&candidate));
+                if over_tolerance(&candidate, &baseline) {
                     over_tokens = true;
                     writeln!(
                         out,
-                        "scenario {scenario}  median tokens {} exceeds the saved maximum {saved_max}",
-                        half(tokens)
+                        "scenario {scenario}  median tokens per request {} exceeds the saved median {} by more than {TOKEN_TOLERANCE_PERCENT} %",
+                        tenths(per),
+                        tenths(saved_per)
                     )?;
                 }
             }

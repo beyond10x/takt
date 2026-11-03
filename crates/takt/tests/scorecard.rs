@@ -152,6 +152,7 @@ fn judged(usage: TokenUsage) -> Event {
         duration_ms: None,
         api_ms: None,
         turns: None,
+        requests: Some(1),
         started_at: None,
         transcript: None,
         transcript_refused: None,
@@ -173,6 +174,7 @@ fn observed() -> Event {
         duration_ms: None,
         api_ms: None,
         turns: None,
+        requests: None,
         started_at: None,
         transcript: None,
         transcript_refused: None,
@@ -824,8 +826,8 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
         "scenario-1-trial-3",
         &[vec![
             opened("scenario-1-trial-3"),
-            judged(usage(300, 50, 0, 0)),
-            stop("Completed (accepted)", 1, 350),
+            judged(usage(310, 50, 0, 0)),
+            stop("Completed (accepted)", 1, 360),
         ]],
     );
     let mut card = Scorecard::read(&candidate).expect("the scorecard reads");
@@ -850,10 +852,11 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
         "{text}"
     );
     // One case fewer at rank 4 (1 of 2 against 1 of 1) is within the margin of one; the median
-    // of tokens, 525, over the saved maximum, 500, is what makes the scenario worse.
+    // of tokens per request, 530 over one request a case, more than 5 % over the saved 500, is
+    // what makes the scenario worse.
     for line in [
-        "rule  trials 1 a scenario  margin 1 case  tokens worse when the median exceeds the saved maximum",
-        "scenario 1  median tokens 525 exceeds the saved maximum 500",
+        "rule  trials 1 a scenario  margin 1 case  tokens worse when the median tokens per request exceeds the saved median by more than 5 %",
+        "scenario 1  median tokens per request 530.0 exceeds the saved median 500.0 by more than 5 %",
         "scenario 1  outcomes by rank held  tokens over  worse",
     ] {
         assert!(text.contains(line), "{line} in {text}");
@@ -864,16 +867,16 @@ fn against_a_saved_accepted_scenario_a_no_progress_row_is_worse() {
         "{text}"
     );
     assert!(
-        text.contains("scenario 1  candidate  n 2  tokens min 350 median 525 max 700"),
+        text.contains("scenario 1  candidate  n 2  tokens min 360 median 530 max 700"),
         "{text}"
     );
-    assert!(text.contains("scenario 1  median tokens +25"), "{text}");
+    assert!(text.contains("scenario 1  median tokens +30"), "{text}");
 }
 
 /// Token totals of one scenario vary from run to run with no change, so with several runs a
 /// side the comparison prints, per scenario and side, n and the minimum, median and maximum of
-/// tokens, and the difference of the medians; a median within the saved maximum does not mark
-/// the scenario worse. The saved scorecard keeps every run's figures, so the spread can be read
+/// tokens, and the difference of the medians; a median of tokens per request within 5 % of the
+/// saved one does not mark the scenario worse, whatever the spread. The saved scorecard keeps every run's figures, so the spread can be read
 /// again.
 #[test]
 fn several_runs_a_side_print_the_token_spread_and_flag_no_row_on_tokens() {
@@ -913,7 +916,7 @@ fn several_runs_a_side_print_the_token_spread_and_flag_no_row_on_tokens() {
     assert_eq!(kept, [106_003, 167_249, 131_500]);
 
     let candidate = scratch("spread-candidate");
-    for (trial, tokens) in [(4, 160_000), (5, 120_000), (6, 140_250)] {
+    for (trial, tokens) in [(4, 160_000), (5, 120_000), (6, 135_250)] {
         accepted(&candidate, trial, tokens);
     }
     let mut card = Scorecard::read(&candidate).expect("the scorecard reads");
@@ -933,8 +936,9 @@ fn several_runs_a_side_print_the_token_spread_and_flag_no_row_on_tokens() {
     assert!(!text.contains(" or better "), "{text}");
     for line in [
         "scenario 1  saved      n 3  tokens min 106003 median 131500 max 167249",
-        "scenario 1  candidate  n 3  tokens min 120000 median 140250 max 160000",
-        "scenario 1  median tokens +8750",
+        "scenario 1  candidate  n 3  tokens min 120000 median 135250 max 160000",
+        "scenario 1  candidate  n 3  tokens per request min 120000.0 median 135250.0 max 160000.0",
+        "scenario 1  median tokens +3750",
     ] {
         assert!(text.contains(line), "{line} in {text}");
     }
@@ -1043,9 +1047,17 @@ fn each_metric_prints_its_own_medians_or_is_known_to_have_none() {
 
     /// The metrics no case has one figure of.
     const NO_FIGURE: [&str; 1] = ["step_tokens"];
-    // steps, tokens, refusals, no_progress, errors, wall_ms
-    let row = |case: &str, outcome: &str, figures: [u64; 6]| {
-        let [steps, tokens, refusals, no_progress, errors, wall_ms] = figures;
+    // steps, tokens, refusals, no_progress, errors, wall_ms, requests
+    let row = |case: &str, outcome: &str, figures: [u64; 7]| {
+        let [
+            steps,
+            tokens,
+            refusals,
+            no_progress,
+            errors,
+            wall_ms,
+            requests,
+        ] = figures;
         Row {
             case: case.to_owned(),
             scenario: Some("1".to_owned()),
@@ -1054,6 +1066,7 @@ fn each_metric_prints_its_own_medians_or_is_known_to_have_none() {
             held_out: None,
             steps,
             tokens: Some(tokens),
+            requests: Some(requests),
             refusals,
             no_progress,
             errors,
@@ -1078,12 +1091,12 @@ fn each_metric_prints_its_own_medians_or_is_known_to_have_none() {
     saved.rows.push(row(
         "scenario-1-trial-1",
         "NoProgress",
-        [5, 450, 8, 1, 6, 9000],
+        [5, 450, 8, 1, 6, 9000, 7],
     ));
     candidate.rows.push(row(
         "scenario-1-trial-2",
         "accepted",
-        [3, 500, 2, 0, 4, 7000],
+        [3, 500, 2, 0, 4, 7000, 11],
     ));
     // Each metric's figures, the saved side's and this side's, distinct from every other's.
     let figures: BTreeMap<&str, (u64, u64)> = BTreeMap::from([
@@ -1097,6 +1110,7 @@ fn each_metric_prints_its_own_medians_or_is_known_to_have_none() {
         ("no_progress", (1, 0)),
         ("errors", (6, 4)),
         ("wall", (9000, 7000)),
+        ("requests", (7, 11)),
     ]);
 
     let mut out = Vec::new();

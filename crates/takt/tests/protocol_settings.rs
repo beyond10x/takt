@@ -4,14 +4,29 @@
 //! input from the flag, a story tag, the run file or takt's default, and a case opened on the
 //! result records each value with its source in `case.yaml`. `software.change/1` declares
 //! `risk: [trivial, standard, elevated, critical]`.
+//!
+//! The run side (story:story-delivery-tests-first): a story case on `story.delivery/3` with the
+//! run file's `tests_first: optional` admits a harness that edits the implementation first; with
+//! takt's default, `required`, the protocol never offers that edit, and a harness that takes it
+//! anyway is refused with the change discarded.
 
+#[path = "support/own_home.rs"]
+mod own_home;
+
+use std::cell::{Cell, RefCell};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::rc::Rc;
 
 use takt::case::{CaseDir, CommitAs, settings_of};
-use takt::protocol::{Settings, SettingsRequest, Source, resolve_settings};
+use takt::evidence::Record;
+use takt::forge::{Checks, Forge, Memory};
+use takt::harness::{Harness, StepContext, StepReport};
+use takt::protocol::{Settings, SettingsRequest, Source, default_protocol, resolve_settings};
 use takt::run_config::{ProtocolSettings, RunConfig};
+use takt::validator::{ChangeRead, CiRead, Observation, PrOpen, Validator};
+use takt::{Run, RunOptions, Stop};
 
 /// A scratch directory under this crate's build directory, removed on drop.
 struct Scratch(PathBuf);
@@ -382,4 +397,266 @@ fn a_protocol_tag_overrides_the_key() {
         resolve(&file, None, &[], &["protocol:self.improvement/1"], true).expect_err("refused")
     );
     assert!(judge.contains("never on a story"), "{judge}");
+}
+
+/// The story's test file and its implementation file, for the run cases below.
+const TESTS: &str = "tests/remove_test.txt";
+const IMPLEMENTATION: &str = "src/remove.txt";
+
+/// Whether `path` is in the tree of `revision`.
+fn holds(tree: &Path, revision: &str, path: &str) -> bool {
+    Command::new("git")
+        .args(["cat-file", "-e", &format!("{revision}:{path}")])
+        .current_dir(tree)
+        .status()
+        .expect("git runs")
+        .success()
+}
+
+/// A validator of `action` that observes `pass` at every revision, but `fail` for `tests.run`
+/// when the revision holds the story's tests and not its implementation.
+struct Scripted {
+    action: &'static str,
+    kind: &'static str,
+    red: bool,
+}
+
+impl Validator for Scripted {
+    fn name(&self) -> &str {
+        self.action
+    }
+
+    fn action(&self) -> &str {
+        self.action
+    }
+
+    fn kind(&self) -> &str {
+        self.kind
+    }
+
+    fn subject(&self) -> &str {
+        "implementation"
+    }
+
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> anyhow::Result<Observation> {
+        let fails =
+            self.red && holds(tree, revision, TESTS) && !holds(tree, revision, IMPLEMENTATION);
+        let result = if fails { "fail" } else { "pass" };
+        Ok(Observation {
+            summary: result.to_owned(),
+            artifact: None,
+            records: vec![Record::new(
+                format!("{}-{seq}", self.kind),
+                self.kind,
+                Some(result.to_owned()),
+                self.subject(),
+                revision,
+                self.name(),
+            )],
+        })
+    }
+}
+
+/// A developer that edits the implementation first, at its first step, whether or not the
+/// step offers `implementation.edit`; then writes the story's tests when offered, and hands
+/// the change over. It keeps what each step was offered.
+struct ImplementationFirst {
+    steps: Cell<usize>,
+    offered: RefCell<Vec<Vec<String>>>,
+}
+
+impl Harness for ImplementationFirst {
+    fn name(&self) -> &str {
+        "implementation-first"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> anyhow::Result<StepReport> {
+        self.steps.set(self.steps.get() + 1);
+        self.offered.borrow_mut().push(context.offered.to_vec());
+        let offered = |action: &str| context.offered.iter().any(|offer| offer == action);
+        let write = |path: &str, action: &str| -> anyhow::Result<StepReport> {
+            let file = context.tree.join(path);
+            fs::create_dir_all(file.parent().expect("a parent"))?;
+            fs::write(&file, format!("{action}\n"))?;
+            Ok(StepReport {
+                action: action.to_owned(),
+                summary: format!("wrote {path}"),
+                tokens: Some(100),
+            })
+        };
+        if self.steps.get() == 1 {
+            return write(IMPLEMENTATION, "implementation.edit");
+        }
+        if !context.tree.join(TESTS).exists() && offered("tests.write") {
+            return write(TESTS, "tests.write");
+        }
+        let action = if context.approvals.iter().any(|a| a == "repository.merge") {
+            "repository.merge"
+        } else if offered("change.handover") {
+            "change.handover"
+        } else {
+            context
+                .offered
+                .first()
+                .map_or("repository.inspect", String::as_str)
+        };
+        Ok(StepReport {
+            action: action.to_owned(),
+            summary: "the change is complete".to_owned(),
+            tokens: Some(100),
+        })
+    }
+}
+
+/// A finished story run: its stop, what it printed, the forge's calls, what each step was
+/// offered, the case directory and the tree, kept until dropped.
+struct Delivered {
+    stop: Result<Stop, String>,
+    text: String,
+    calls: Vec<String>,
+    offered: Vec<Vec<String>>,
+    case_dir: PathBuf,
+    tree: Scratch,
+}
+
+/// A store story's run on the settings the run file `text` resolves to with no flag and no
+/// tag, by [`ImplementationFirst`]: the tests observed red until the implementation is there,
+/// the gate green, `pr.open` and `ci.read` on a fake forge whose checks pass, and
+/// `change.read`.
+fn delivered_on(name: &str, text: &str) -> Delivered {
+    let (_dir, file) = file_settings(name, "run.yaml", text);
+    let settings = resolve_settings(&SettingsRequest {
+        file: &file,
+        flag_protocol: None,
+        flag_inputs: &[],
+        tags: &[],
+        default_protocol: default_protocol(true),
+        file_protocol_applies: true,
+    })
+    .expect("the settings resolve");
+    assert_eq!(settings.protocol.id, "story.delivery/3");
+    let tree = repository(&format!("{name}-run"));
+    let memory = Rc::new(Memory {
+        checks: Checks::Pass,
+        ..Memory::default()
+    });
+    let forge: Rc<dyn Forge> = memory.clone();
+    let validators: Vec<Box<dyn Validator>> = vec![
+        Box::new(Scripted {
+            action: "tests.run",
+            kind: "test_result",
+            red: true,
+        }),
+        Box::new(Scripted {
+            action: "gate.run",
+            kind: "gate_result",
+            red: false,
+        }),
+        Box::new(PrOpen::new(forge.clone())),
+        Box::new(CiRead::new(forge)),
+        Box::new(ChangeRead),
+    ];
+    let options = RunOptions {
+        protocol: settings.spec.clone(),
+        intent: "remove a todo by its number".to_owned(),
+        inputs: settings.pairs(),
+        iterations: Some(40),
+        hours: None,
+        tokens: None,
+        case_id: Some(name.to_owned()),
+        gate: Some("repository.merge".to_owned()),
+    };
+    let harness = ImplementationFirst {
+        steps: Cell::new(0),
+        offered: RefCell::new(Vec::new()),
+    };
+    let mut run = Run::open(&tree, options, &harness, &validators).expect("the case opens");
+    let mut out = Vec::new();
+    let stop = run.run(&mut out).map_err(|error| format!("{error:#}"));
+    let case_dir = run.case.dir.clone();
+    drop(run);
+    let calls = memory.calls.borrow().clone();
+    Delivered {
+        stop,
+        text: String::from_utf8(out).expect("utf-8"),
+        calls,
+        offered: harness.offered.into_inner(),
+        case_dir,
+        tree,
+    }
+}
+
+/// The lines of the case's `events.jsonl` whose `event` is `event`.
+fn events_of(case_dir: &Path, event: &str) -> Vec<serde_json::Value> {
+    fs::read_to_string(case_dir.join("events.jsonl"))
+        .expect("events.jsonl")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("json"))
+        .filter(|line| line["event"] == event)
+        .collect()
+}
+
+/// With `protocols: {story.delivery: {tests_first: optional}}`, a harness that edits the
+/// implementation first is admitted: its first step is offered `implementation.edit`, the edit
+/// is kept on the case's branch, and the case records no refusal.
+#[test]
+fn tests_optional_admits_implementation_first() {
+    let run = delivered_on(
+        "optional",
+        "protocols: {story.delivery: {tests_first: optional}}\n",
+    );
+    let text = &run.text;
+    let yaml = fs::read_to_string(run.case_dir.join("case.yaml")).expect("case.yaml");
+    assert!(yaml.contains("tests_first: optional"), "{yaml}");
+    assert!(
+        run.offered
+            .first()
+            .is_some_and(|first| first.iter().any(|a| a == "implementation.edit")),
+        "the first step was not offered implementation.edit: {:?}\n{text}",
+        run.offered
+    );
+    let refusals = events_of(&run.case_dir, "refusal");
+    assert!(refusals.is_empty(), "{refusals:?}\n{text}");
+    assert!(!text.contains("refused:"), "{text}");
+    assert!(
+        holds(&run.tree, "HEAD", IMPLEMENTATION),
+        "the implementation edit was not kept: {text}"
+    );
+    assert!(
+        !matches!(run.stop, Ok(Stop::StepRefused(_))),
+        "{:?}\n{text}",
+        run.stop
+    );
+}
+
+/// With takt's default `tests_first: required`, the protocol does not offer
+/// `implementation.edit` before the story's tests are written and red; a harness that edits the
+/// implementation first anyway is refused as taking an action not offered, its edit discarded,
+/// the refusal recorded, and nothing reaches the forge.
+#[test]
+fn tests_required_refuses_implementation_first() {
+    let run = delivered_on("required", "iterations: 40\n");
+    let text = &run.text;
+    let yaml = fs::read_to_string(run.case_dir.join("case.yaml")).expect("case.yaml");
+    assert!(yaml.contains("tests_first: required"), "{yaml}");
+    let first = run.offered.first().expect("a step was taken");
+    assert!(
+        !first.iter().any(|a| a == "implementation.edit"),
+        "implementation.edit was offered before the tests: {first:?}\n{text}"
+    );
+    match &run.stop {
+        Ok(Stop::StepRefused(why)) => assert!(
+            why.contains("implementation.edit was not offered"),
+            "{why}\n{text}"
+        ),
+        other => panic!("not refused: {other:?}\n{text}"),
+    }
+    let refusals = events_of(&run.case_dir, "refusal");
+    assert_eq!(refusals.len(), 1, "{refusals:?}\n{text}");
+    assert!(
+        !holds(&run.tree, "HEAD", IMPLEMENTATION),
+        "the refused edit was kept: {text}"
+    );
+    assert!(run.calls.is_empty(), "{:?}\n{text}", run.calls);
 }

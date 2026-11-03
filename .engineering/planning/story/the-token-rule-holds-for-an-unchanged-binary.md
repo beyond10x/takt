@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-token-rule-holds-for-an-unchanged-binary
 kind: story
-status: active
+status: implemented
 title: The token rule does not refuse a candidate whose tokens per request equal the baseline's
 summary: 0.2.2 refused on tokens with byte-identical prompts; baseline max below today's median
 tags:
@@ -10,10 +10,26 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 4
+scope:
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: cited
+  path: crates/takt/src/events.rs
+- confidence: cited
+  path: crates/takt/src/harness.rs
+- confidence: cited
+  path: crates/takt/src/run.rs
+- confidence: cited
+  path: crates/takt/src/scorecard.rs
+- confidence: cited
+  path: crates/takt/tests/token_rule.rs
+- confidence: cited
+  path: ess/domains/takt.yaml
+revision: 12
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T16:18:10Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-10-19T16:18:10Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-03T15:07:43Z", actor: "human:timo", revision: 12, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}}
 ---
 # Story: the-token-rule-holds-for-an-unchanged-binary
 

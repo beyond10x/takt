@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:story-delivery-tests-first
 kind: story
-status: active
+status: implemented
 title: A story case writes its tests first and opens the pull request once
 tags:
 - priority:high
@@ -13,18 +13,19 @@ relations:
 - depends_on: story:takt-ships-default-protocol-settings
 - depends_on: story:the-run-file-sets-protocol-settings
 scope:
-- confidence: inferred
-  path: Cargo.toml
-- confidence: inferred
+- confidence: cited
+  path: crates/takt/src/events.rs
+- confidence: cited
   path: crates/takt/src/run.rs
-- confidence: inferred
-  path: crates/takt/src/validator.rs
-- confidence: inferred
+- confidence: cited
+  path: crates/takt/tests/gate_deferral.rs
+- confidence: cited
   path: ess/domains/takt.yaml
-revision: 10
+revision: 19
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-10-19T00:42:13Z", actor: "human:timo", revision: 4}
+- {from: "active", to: "implemented", at: "2026-11-03T15:07:42Z", actor: "human:timo", revision: 19, decided_on: {"recorded":{"test_result":1,"review_outcome":4}}}
 ---
 ## Outcome
 

@@ -1403,6 +1403,15 @@ impl Turn<'_, '_> {
     }
 }
 
+/// The gate's deferrals of a run ([`Run::defer_gate`]): the revisions the case's record already
+/// says one for, and the revision the gate waits at now, with the claims its precondition lacks
+/// there, said once the case leaves it with no gate record there.
+#[derive(Default)]
+struct Deferral {
+    said: BTreeSet<String>,
+    pending: Option<(String, Vec<String>)>,
+}
+
 /// Whether `validator` is due at a decision: its action is admissible, its evidence is missing
 /// at its subject's current revision, and it has not already observed there without a record.
 /// An evidence record that does not read is an error naming its file, never an answer.
@@ -9471,7 +9480,8 @@ pub struct Run<'a> {
     /// The harness's bracketed verdict the console last printed after a step's summary
     /// ([`said_line`]).
     said_verdict: Option<String>,
-    /// How long the run waits on the forge before it observes again: [`Run::POLL`] unless set.
+    /// How long the run first waits on the forge before it observes again, the first interval
+    /// of its [`Backoff`] ([`Backoff::scaled`]): [`Backoff::DEFAULT`]'s, 2 s, unless set.
     pub poll: Duration,
     /// The revision the running binary was built from, as its `--version` prints it, recorded
     /// on the `opened` line; none unless the caller sets it, since this library does not know
@@ -9557,10 +9567,58 @@ pub struct Run<'a> {
     commit_plan: Option<crate::commit_style::Plan>,
 }
 
-impl<'a> Run<'a> {
-    /// How long a run waits on the forge before it observes again, by default: thirty seconds.
-    pub const POLL: Duration = Duration::from_secs(30);
+/// How the wait on the forge grows: `first`, then `factor` times the last wait for each
+/// consecutive wait on the same awaited set, never past `cap`. The run starts again at `first`
+/// when the awaited set, or what one of its observations reported, changes; every wait is cut
+/// to what is left of the hour budget besides ([`Run::poll`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Backoff {
+    /// The first wait.
+    pub first: Duration,
+    /// What each consecutive wait multiplies the last by.
+    pub factor: f64,
+    /// The longest wait.
+    pub cap: Duration,
+}
 
+impl Backoff {
+    /// The run's backoff unless [`Run::poll`] is set: 2 s, half as long again each wait, at
+    /// most 4.5 s, so checks that complete are next read at most 4.5 s later: 2, 3, then 4.5 s.
+    pub const DEFAULT: Self = Self {
+        first: Duration::from_secs(2),
+        factor: 1.5,
+        cap: Duration::from_millis(4500),
+    };
+
+    /// [`Backoff::DEFAULT`] from `first`: the same factor, and the cap the same multiple of
+    /// `first` as the default's of its own, 2.25 times. What a test's shorter poll waits.
+    #[must_use]
+    pub fn scaled(first: Duration) -> Self {
+        let ratio = Self::DEFAULT.cap.as_secs_f64() / Self::DEFAULT.first.as_secs_f64();
+        Self {
+            first,
+            factor: Self::DEFAULT.factor,
+            cap: Duration::try_from_secs_f64(first.as_secs_f64() * ratio).unwrap_or(Duration::MAX),
+        }
+    }
+
+    /// The first wait, never past the cap.
+    #[must_use]
+    pub fn start(&self) -> Duration {
+        self.first.min(self.cap)
+    }
+
+    /// The wait after `last` on the same awaited set: `factor` times it, never past the cap; a
+    /// product too large for a [`Duration`] is the cap. Nothing here panics.
+    #[must_use]
+    pub fn after(&self, last: Duration) -> Duration {
+        Duration::try_from_secs_f64(last.as_secs_f64() * self.factor)
+            .unwrap_or(self.cap)
+            .min(self.cap)
+    }
+}
+
+impl<'a> Run<'a> {
     /// Opens the case on the intent in `options` and prepares the run.
     pub fn open(
         tree: &Path,
@@ -9797,7 +9855,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             said_verdict: None,
-            poll: Self::POLL,
+            poll: Backoff::DEFAULT.first,
             binary: None,
             llm_digest: None,
             set_aside,
@@ -10098,7 +10156,7 @@ impl<'a> Run<'a> {
             steps: 0,
             tokens: 0,
             said_verdict: None,
-            poll: Self::POLL,
+            poll: Backoff::DEFAULT.first,
             binary: None,
             llm_digest: None,
             set_aside,
@@ -10841,18 +10899,25 @@ impl<'a> Run<'a> {
         Ok(None)
     }
 
-    /// How long the run waits on the forge before it observes again: [`Run::poll`], cut to
-    /// what is left of the hour budget. `None` for a run with neither a step nor an hour
-    /// budget: it has nothing to wait in, and a wait without a bound would never end. What is
-    /// left of an hour budget too large for a [`Duration`], infinite among them, saturates and
-    /// leaves the poll as it is; nothing here panics.
-    fn pause(&self) -> Option<Duration> {
+    /// The backoff the run waits on the forge by: [`Backoff::scaled`] from [`Run::poll`], which
+    /// is [`Backoff::DEFAULT`] unless the poll was set.
+    #[must_use]
+    pub fn backoff(&self) -> Backoff {
+        Backoff::scaled(self.poll)
+    }
+
+    /// How long the run waits on the forge before it observes again: `interval`, the wait its
+    /// [`Run::backoff`] has reached, cut to what is left of the hour budget. `None` for a run
+    /// with neither a step nor an hour budget: it has nothing to wait in, and a wait without a
+    /// bound would never end. What is left of an hour budget too large for a [`Duration`],
+    /// infinite among them, saturates and leaves the interval as it is; nothing here panics.
+    fn pause(&self, interval: Duration) -> Option<Duration> {
         if self.options.iterations.is_none() && self.options.hours.is_none() {
             return None;
         }
         Some(match self.time_left() {
-            Some(left) => self.poll.min(left),
-            None => self.poll,
+            Some(left) => interval.min(left),
+            None => interval,
         })
     }
 
@@ -10892,9 +10957,13 @@ impl<'a> Run<'a> {
         // `error` line and the case let go before the panic goes on: the record ends, and the
         // case is not left held; unless the way to the case directory holds a link or a part
         // that is not a directory, when neither is done (`unrecorded`).
+        // A deferral of the gate still pending when the loop stops is said before the stop is
+        // recorded ([`Run::defer_gate`]).
+        let mut deferral = Deferral::default();
         let outcome = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            self.run_held(&events, out).and_then(|stop| {
+            self.run_held(&events, &mut deferral, out).and_then(|stop| {
                 self.case.check_way()?;
+                self.say_deferral(&mut deferral, &events, out)?;
                 self.close(&events, &stop, out).map(|()| stop)
             })
         })) {
@@ -11392,10 +11461,107 @@ impl<'a> Run<'a> {
         )
     }
 
+    /// Says, once per revision, that the repository's gate did not run there, when the case
+    /// leaves the revision or the run stops at it ([`Run::say_deferral`]): the run has a
+    /// `gate.run` validator, the last decision at the gate validator's subject's revision found
+    /// its action `blocked` by a precondition the case's inputs leave open (under
+    /// `gate_on: after_handover` of `story.delivery/3`, until the tests pass and the change is
+    /// handed over) with no gate record there. A revision the gate runs at in the same run,
+    /// after its hand-over, is never deferred, though the gate waited there. `pending` holds
+    /// that revision and the claims the decision there gives as not true until the move or the
+    /// stop. Never evidence: no record is written, so no claim moves.
+    fn defer_gate(
+        &self,
+        decision: &crate::Decision,
+        shape: &Shape,
+        deferral: &mut Deferral,
+        events: &Events,
+        out: &mut dyn Write,
+    ) -> Result<()> {
+        let action = crate::validator::GateRun::ACTION;
+        let Some(gate) = self.validators.iter().find(|v| v.action() == action) else {
+            return Ok(());
+        };
+        let revision = self.case.revision(gate.subject());
+        if deferral
+            .pending
+            .as_ref()
+            .is_some_and(|(at, _)| Some(at) != revision.as_ref())
+        {
+            self.say_deferral(deferral, events, out)?;
+        }
+        let Some(revision) = revision else {
+            return Ok(());
+        };
+        if decision.actions.get(action).map(String::as_str) != Some("blocked")
+            || shape.blocked_for_good.contains(action)
+            || deferral.said.contains(&revision)
+            || self.case.has_evidence(gate.kind(), gate.subject())?
+        {
+            deferral.pending = None;
+            return Ok(());
+        }
+        let doc: serde_json::Value =
+            serde_json::from_str(&decision.json).context("read the decision document")?;
+        let entry = match &doc["actions"] {
+            serde_json::Value::Object(map) => map.get(action),
+            serde_json::Value::Array(list) => list.iter().find(|entry| entry["id"] == action),
+            _ => None,
+        };
+        let unmet: Vec<String> = entry
+            .and_then(|entry| entry["reasons"].as_array())
+            .into_iter()
+            .flatten()
+            .filter(|reason| reason["value"] != "true")
+            .filter_map(|reason| reason["claim"].as_str().map(str::to_owned))
+            .collect();
+        deferral.pending = Some((revision, unmet));
+        Ok(())
+    }
+
+    /// Says the pending deferral of [`Run::defer_gate`], if any and not said already at its
+    /// revision: records a `gate.deferred` line first, then prints
+    /// `gate.run: deferred (precondition <claims> not true at <rev>)`, `<claims>` the claims
+    /// the decision there gave as not true, `<rev>` the revision's first eight characters.
+    fn say_deferral(
+        &self,
+        deferral: &mut Deferral,
+        events: &Events,
+        out: &mut dyn Write,
+    ) -> Result<()> {
+        let Some((left, unmet)) = deferral.pending.take() else {
+            return Ok(());
+        };
+        if deferral.said.contains(&left) {
+            return Ok(());
+        }
+        let action = crate::validator::GateRun::ACTION;
+        events.emit(
+            self.steps,
+            &Event::GateDeferred {
+                action: action.to_owned(),
+                revision: left.clone(),
+                unmet: unmet.clone(),
+            },
+        )?;
+        let claims = if unmet.is_empty() {
+            String::new()
+        } else {
+            format!("{} ", unmet.join(", "))
+        };
+        writeln!(
+            out,
+            "{action}: deferred (precondition {claims}not true at {})",
+            short(&left)
+        )?;
+        deferral.said.insert(left);
+        Ok(())
+    }
+
     /// Records a step: by a validator, with the revision it observed, or by the harness, with
     /// the tokens it reported, their components and what it reported about the call (the
-    /// model, cost, duration, API time, turns and start, each only when stated); which one,
-    /// the action, what it reported.
+    /// model, cost, duration, API time, turns, requests and start, each only when stated);
+    /// which one, the action, what it reported.
     fn stepped(
         &self,
         events: &Events,
@@ -11433,6 +11599,7 @@ impl<'a> Run<'a> {
                 duration_ms: call.duration_ms,
                 api_ms: call.api_ms,
                 turns: call.turns,
+                requests: call.requests,
                 started_at: call.started_at,
                 transcript,
                 transcript_refused,
@@ -12200,7 +12367,12 @@ impl<'a> Run<'a> {
     }
 
     /// The loop, the case held.
-    fn run_held(&mut self, events: &Events, out: &mut dyn Write) -> Result<Stop> {
+    fn run_held(
+        &mut self,
+        events: &Events,
+        deferral: &mut Deferral,
+        out: &mut dyn Write,
+    ) -> Result<Stop> {
         let inputs: Vec<String> = self
             .options
             .inputs
@@ -12375,6 +12547,20 @@ impl<'a> Run<'a> {
         // then `may now:` only when the set changes.
         let mut said_may: Option<Vec<String>> = None;
         let shape = Shape::of(&self.case.protocol, &self.options.inputs)?;
+        // The revisions whose gate deferral the case's record already holds, an earlier run's
+        // among them: one `gate.deferred` line per revision ([`Run::defer_gate`]). Read line by
+        // line, a line that does not read skipped ([`Events::read_readable`]): the record's own
+        // error is the store's writes' to report ([`Run::close`]), never a stop of the loop, and
+        // it hides no deferral already said.
+        *deferral = Deferral {
+            said: events
+                .read_readable()?
+                .iter()
+                .filter(|line| line["event"] == "gate.deferred")
+                .filter_map(|line| line["revision"].as_str().map(str::to_owned))
+                .collect(),
+            pending: None,
+        };
         let keeps_state = self.harness.keeps_state();
         // The validators that observed without writing a record, each with the revision it
         // observed at: not due again there, because the next observation would end the same
@@ -12386,6 +12572,15 @@ impl<'a> Run<'a> {
         // judgement step is offered, because what is missing is not the harness's to make; when
         // every wait is local, the run stops at once instead.
         let mut awaited: Vec<(String, String, String, Option<String>)> = Vec::new();
+        // What each waiting validator's last observation said, by its name: the head the forge
+        // reports among it, so a new head is a new awaited set for the backoff.
+        let mut said: BTreeMap<String, String> = BTreeMap::new();
+        // The awaited set the run last paused on, with what each of its observations said, and
+        // the interval it paused (before the hour budget cut it): the next pause on the same
+        // set grows from it ([`Backoff::after`]), one on another starts again.
+        type PausedOn = Vec<(String, String, String, String)>;
+        let backoff = self.backoff();
+        let mut paused_on: Option<(PausedOn, Duration)> = None;
         // Whether the story's records were written before a granted step this run.
         let mut recorded_before = false;
         let all_local = |awaited: &[(String, String, String, Option<String>)]| {
@@ -12477,6 +12672,9 @@ impl<'a> Run<'a> {
                 .filter(|a| keeps_state || shape.for_stateless(a))
                 .cloned()
                 .collect();
+            if open {
+                self.defer_gate(&decision, &shape, deferral, events, out)?;
+            }
             // A deterministic step first: a validator due at this decision.
             let mut due = None;
             // After a stop on the case's tests, its tests are observed again first, its record
@@ -12507,17 +12705,36 @@ impl<'a> Run<'a> {
             // the run pauses and observes it again, offering no judgement step meanwhile. A run
             // with no step or hour budget has nothing to wait in and stops waiting at once; the
             // case stays open for the next run, as it does when every wait left is on something
-            // local. A budget spent stops the wait first.
+            // local. A budget spent stops the wait first. The pause is the run's backoff: its
+            // first interval, then longer for each consecutive pause on the same awaited set
+            // with the same observations, and its first again once either changed.
             if open && due.is_none() {
                 awaited.retain(|(_, action, _, _)| admissible.contains(action));
                 if !awaited.is_empty() {
                     if let Some(stop) = self.budget_spent() {
                         return Ok(waiting(&awaited, Some(stop)));
                     }
-                    let pause = self.pause().filter(|_| !all_local(&awaited));
+                    let mut set: PausedOn = awaited
+                        .iter()
+                        .map(|(name, action, revision, _)| {
+                            (
+                                name.clone(),
+                                action.clone(),
+                                revision.clone(),
+                                said.get(name).cloned().unwrap_or_default(),
+                            )
+                        })
+                        .collect();
+                    set.sort();
+                    let interval = match &paused_on {
+                        Some((last_set, last)) if *last_set == set => backoff.after(*last),
+                        _ => backoff.start(),
+                    };
+                    let pause = self.pause(interval).filter(|_| !all_local(&awaited));
                     let Some(pause) = pause else {
                         return Ok(waiting(&awaited, None));
                     };
+                    paused_on = Some((set, interval));
                     let on: Vec<&str> = awaited
                         .iter()
                         .map(|(_, action, _, _)| action.as_str())
@@ -12705,6 +12922,7 @@ impl<'a> Run<'a> {
                         observed_without_record
                             .insert((validator.name().to_owned(), revision.clone()));
                         if waits {
+                            said.insert(validator.name().to_owned(), observation.summary.clone());
                             awaited.push((
                                 validator.name().to_owned(),
                                 validator.action().to_owned(),

@@ -152,8 +152,9 @@ pub enum Event {
     /// 0: the model, the harness program's own version as its stream stated it (the `harness`
     /// layer's revision, ADR 0101; Claude Code: `claude_code_version` of its `system`/`init`
     /// event), the cost in dollars, the call's duration and its time in the API in
-    /// milliseconds, the turns, and the instant the call started, which precedes the line's
-    /// `at`; and the path of its transcript relative to the transcripts directory,
+    /// milliseconds, the turns, the model requests its stream shows
+    /// ([`crate::harness::requests_in`]), and the instant the call started, which precedes the
+    /// line's `at`; and the path of its transcript relative to the transcripts directory,
     /// `<repo>/<case>/run-<r>/step-<n>.jsonl`, when takt kept one
     /// ([`crate::harness::keep_transcript`]), or why it kept none (`transcript_refused`, its
     /// paths relative too: a file already at that path, which is never overwritten, or a link
@@ -181,6 +182,8 @@ pub enum Event {
         api_ms: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         turns: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        requests: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         started_at: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -251,6 +254,18 @@ pub enum Event {
     Decline {
         reason: String,
         case_revision: String,
+    },
+    /// The repository's gate did not run at `revision`, a revision of the gate validator's
+    /// subject, because the precondition of its action (`action`, `gate.run`) did not hold
+    /// there: `unmet` names the claims the last decision there gave as not true, in its order.
+    /// Written once per revision, an earlier run's line counting, when the case moves on from
+    /// the revision with no gate record there, or the run stops at it; a later run may still
+    /// run the gate at a revision a stop deferred. A record line, never evidence, never a pass.
+    #[serde(rename = "gate.deferred")]
+    GateDeferred {
+        action: String,
+        revision: String,
+        unmet: Vec<String>,
     },
     /// The run pauses on the forge for `seconds`, then observes the actions `on` again.
     Waiting { on: Vec<String>, seconds: f64 },
@@ -447,6 +462,29 @@ impl Events {
         Ok(Some(
             bytes.iter().filter(|byte| **byte == b'\n').count() + 1,
         ))
+    }
+
+    /// Every line that reads as JSON, in order, each other line skipped, wherever it is and
+    /// whatever made it unreadable; none when there is no file. For a reader that only looks
+    /// lines up, such as the loop's deferrals already said ([`Event::GateDeferred`]): one line
+    /// that does not read hides no other. A symbolic link at the path is refused, never read
+    /// through ([`Events::open`]).
+    pub fn read_readable(&self) -> Result<Vec<serde_json::Value>> {
+        let mut bytes = Vec::new();
+        match self.open(std::fs::OpenOptions::new().read(true)) {
+            Ok(mut file) => {
+                file.read_to_end(&mut bytes)
+                    .with_context(|| format!("read {}", self.path.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(error) => {
+                return Err(error).with_context(|| format!("read {}", self.path.display()));
+            }
+        }
+        Ok(bytes
+            .split(|byte| *byte == b'\n')
+            .filter_map(|line| serde_json::from_slice::<serde_json::Value>(line).ok())
+            .collect())
     }
 
     /// Every line written so far, each read as JSON, in order; none before the first. Blank

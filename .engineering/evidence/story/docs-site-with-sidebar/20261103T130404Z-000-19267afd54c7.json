@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-03T13:04:04Z",
+  "actor": "human:timo",
+  "artifact": "story:docs-site-with-sidebar",
+  "kind": "story",
+  "revision": 8,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "check, Documentation site and Documentation validation green on main 97c56193 (runs 41432729641, 41433708279, 41432729590)",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/41432729590"
+  }
+}
