@@ -11,6 +11,17 @@
 //! private directories is still seen, as it was in the real one. Every test file that runs a
 //! step under the guard includes this module (`tests_have_a_home_of_their_own.rs`).
 //!
+//! The private directories hold links, not copies: the guard reads a program directory's link
+//! with what it resolves to (`Entry::Through` in `crates/takt/src/run.rs`,
+//! story:program-rewritten-through-a-link-refuses-the-step), so a step that writes through an
+//! existing name is refused as a change in the real directory would be. Copies would keep that
+//! write out of the real home, but they would put several gigabytes of programs under every
+//! test binary's directory, and a copied `rustc` finds no sysroot beside it. What links leave:
+//! the write itself lands in the real program before the refusal names it, so a test writes
+//! only at a name of its own; and another process that replaces an existing program while a
+//! step runs (a reinstall at the same name) reaches the step. A program installed at a new name
+//! still does not.
+//!
 //! The private directories are under this crate's `CARGO_TARGET_TMPDIR`, or the system temporary
 //! directory for unit tests, and removed when the process exits. Any failure to make them aborts
 //! the binary before a test runs.
@@ -78,7 +89,8 @@ fn a_program(path: &Path) -> bool {
     })
 }
 
-/// Makes `copy` a directory of links, one to each program directly in `dir` by its path there.
+/// Makes `copy` a directory of links, one to each program directly in `dir` by its path there;
+/// the guard reads each with what it resolves to.
 fn copy_programs(dir: &Path, copy: &Path) -> std::io::Result<()> {
     std::fs::create_dir(copy)?;
     for entry in std::fs::read_dir(dir)? {
