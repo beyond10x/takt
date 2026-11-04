@@ -548,7 +548,9 @@ fn ci_result_follows_completion_within_one_interval() {
 /// Checks that pass at any instant of a grid after their first read, under a scaled backoff
 /// (100 ms, capped at 225 ms): every `ci_result` record is written within one cap of the
 /// instant, beside the time the run spends between two reads on its own (the longest gap
-/// between two reads less the wait between them) and 20 ms for the write.
+/// between two reads less the wait between them) and that time again, 20 ms at least, for the
+/// write of the record: a runner slow between its reads is as slow writing it, and a run that
+/// waits a whole cap too long is still late.
 #[test]
 fn ci_result_follows_any_completion_within_one_cap() {
     let first = Duration::from_millis(100);
@@ -592,7 +594,7 @@ fn ci_result_follows_any_completion_within_one_cap() {
             })
             .max()
             .unwrap_or_default();
-        if after > cap + own + Duration::from_millis(20) {
+        if after > cap + own + own.max(Duration::from_millis(20)) {
             late.push((offset, after, own, waited));
         }
     }
