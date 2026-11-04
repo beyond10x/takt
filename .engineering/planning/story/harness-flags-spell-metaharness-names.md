@@ -22,7 +22,7 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 10
+revision: 11
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":1}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":1}}}
@@ -93,17 +93,23 @@ message. Each line is **cited** (read from the story or the tree) or **inferred*
 
 ## Status
 
-Partial unit under D84, built at d2294dff and merged at cb63ced3 on integration/takt. The story stays active: acceptance 1
-is partly built.
+Built in wave 51 (unit b, merged into `wave/51` at dd2e14194, review fixes at 54d05a31c); earlier partial unit
+d2294dff, merged at cb63ced3. Unit a of the wave carried the flags; unit b added their observables, with no
+production change.
 
-- 1 each-flag-observed: partly. --max-turns 60 under claude is built, `the_max_turns_flag_is_the_claude_ceiling`. --effort,
-  --max-budget-usd, --strict-version and --context are refused before any case opens, as the file's keys are
-  (`a_flag_not_carried_yet_is_refused_before_any_case_opens`, `scenario_run_refuses_a_flag_not_carried_yet_before_anything_opens`).
-  Their observables wait on the metaharness session-request and Loom partial RunSpec stories.
-- 2 flag-over-key: built, `a_flag_wins_over_the_files_max_turns`.
-- 3 kind-check-applies: takt's refusal built, `max_turns_under_codex_is_refused_before_any_case_opens`; metaharness's own
-  refusal text waits on its session-request story.
-- 4 help-lists-names: built, `the_help_of_both_run_commands_lists_the_five_flags`.
+- 1 each-flag-observed: `each_flag_observed::{effort,max_turns,max_budget_usd,strict_version,context}_on_takt_{run,scenario_run}`.
+  Each runs the flag, the run file's key alone and neither, and the first two give the observable. `--strict-version`
+  is observed with Codex off metaharness 0.23.0's pinned versions: the run stops `HarnessUnqualified` with
+  metaharness's H9 verdict where without the flag the step runs. Claude Code cannot show the difference, since its
+  strict hermetic mode stops an off-pin version with or without the flag.
+- 2 flag-over-key: `a_flag_wins_over_the_files_max_turns`; budget and effort, `w51_a_adversary::a_flag_wins_over_the_files_budget_and_effort`.
+- 3 kind-check-applies: `kind_check_applies` and `max_turns_under_codex_is_refused_before_any_case_opens`, with
+  metaharness's refusal text.
+- 4 help-lists-names: `the_help_of_both_run_commands_lists_the_five_flags`; `config_docs_adv_carry`.
 
-Also in the unit: a session setting given with --harness none is refused, since none starts no session
-(`a_session_flag_under_harness_none_is_refused_before_any_case_opens`).
+The conformance scenarios stay unrun (approval-record:wave-51-harness-mapping-carried, decision 3); each is the cargo
+test above. Review: review-result:w51-adv-b-1, fixed.
+
+Scope as built: `crates/takt-cli/tests/harness_flags_spell_metaharness.rs`, `crates/takt-cli/src/main.rs` (the
+`LoopArgs` help), `website/docs/reference/configuration.md`. Not changed after all: `crates/takt/src/run_config.rs`
+(its `CODEX_FLAG_MAX_TURNS_REFUSED` was removed by unit a), `ess/ess-inputs.yaml`.

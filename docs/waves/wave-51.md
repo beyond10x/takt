@@ -32,7 +32,7 @@ pins already in `Cargo.lock` carry what they need (loom 0.52.0 `SessionOverrides
 | unit | story | objective | scope | stage |
 |---|---|---|---|---|
 | a | story:harness-section-is-metaharness-session-request | `effort`, `max-budget-usd`, `strict-version` and `context` reach the session through Loom's overrides; a bad value and a per-kind refusal are metaharness's own words, before any case opens | cited | merged at 470afdf57 and, after review fixes, at 16d44a200; tree cache discarded |
-| b | story:harness-flags-spell-metaharness-names | each flag's observable on `takt run` and `takt scenario run`; `--harness codex --max-turns` refused in metaharness's words; help and reference without "refused until" | cited, one line inferred | implementing, base 16d44a200 |
+| b | story:harness-flags-spell-metaharness-names | each flag's observable on `takt run` and `takt scenario run`; `--harness codex --max-turns` refused in metaharness's words; help and reference without "refused until" | cited, one line inferred | merged at dd2e14194 and, after review fixes, at 54d05a31c; tree cache discarded |
 
 | unit | agent | branch | tree | build dir | scratch root |
 |---|---|---|---|---|---|
@@ -73,8 +73,21 @@ one pull request through the bot route, its merge, the tag and the release.
 |---|---|---|
 | review-result:w51-sec-a-1 | a | fixed: a context file whose text has a credential's shape is refused before any case opens |
 | review-result:w51-adv-a-1 | a | fixed: the scenario seed is the tree a context path is checked against; metaharness's byte cap and text rule apply before any case opens; a budget number below 1e-5; a refusal names only the refused flags |
+| review-result:w51-adv-b-1 | b and a's correction | fixed: under Codex the prompt fit counts the `context` files in the same argument; `takt run` checks `context` against the branch of the case it resumes; the `--context` help says what each run command checks |
 
-Unit a's correction is attacked again by unit b's adversary pass, which runs against `wave/51` with both units in.
+Unit a's correction was attacked again by unit b's adversary pass, against `wave/51` with both units in. Findings
+fell from 5 in the first pass to 3, none carried; the correction answering the second pass was checked by reading its
+diff (no assertion dropped, no test edited), with no third attack.
+
+## Unit builds
+
+One tree built at a time, each in its own `target/`, line tables only, incremental off. Each unit had one cold build;
+every later cargo invocation reused it, and no `cargo clean` ran.
+
+| unit | cargo invocations | peak `target/` | result |
+|---|---|---|---|
+| a | 4 initial (red 63 s, red 4 s, green 29 s, clippy 42 s), 2 for fix 1, 1 security review, 3 adversary | 3.1G | green, but for the `harness_proposes` case red on the unchanged base |
+| b | 5 initial (red 140 s, fmt 3 s, green 15 s, clippy 53 s, fmt 3 s), 1 adversary, 3 for fix 2 | 3.3G | green, the same exception |
 
 Filed as drafts, outside the wave (tag `from-finding`):
 story:the-refused-path-proposal-case-holds-on-every-host (from unit a's red run on the unchanged base: one

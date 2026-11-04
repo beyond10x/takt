@@ -23,17 +23,13 @@ scope:
   path: crates/takt/src/harness.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
-- confidence: inferred
-  path: crates/takt/tests/harness_preflight.rs
-- confidence: inferred
-  path: crates/takt/tests/harness_proposes.rs
 - confidence: cited
   path: ess/domains/takt.yaml
 - confidence: cited
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 11
+revision: 13
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":6}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":6}}}
@@ -140,17 +136,29 @@ four keys refused as not carried yet, the documentation). Each line is **cited**
 
 ## Status
 
-Partial unit under D84 (approval-record:cfgproxy-d84-unit-5-partial-and-fix-round), built at f403e81b and merged at
-a7fe4f7d on integration/takt. The story stays active: acceptance items 1, 4 and 5 wait on upstream stories.
+Built in wave 51 (unit a, merged into `wave/51` at 470afdf57, review fixes at 16d44a200 and 54d05a31c), on the pins
+already in `Cargo.lock`: loom 0.52.0's `SessionOverrides` and metaharness 0.23.0's `RunSpec::from_document` and
+`check_spec`. Earlier partial unit: f403e81b, merged at a7fe4f7d.
 
-- 2 max-turns-replaces-default: built, `max_turns_replaces_the_default` (claude receives `--max-turns 60`, not 40).
-- 3 unadmitted-key-refused: built, `an_unadmitted_key_is_refused_naming_the_key`.
-- 6 takt-owned-key-refused: built, `a_takt_owned_key_is_refused_as_takts`.
-- 7 string-form-unchanged: built, `the_string_form_starts_the_argv_of_the_flag`.
-- 1 codex-effort-passed: unbuilt. takt's loom 0.45.0 SessionExecutor has no effort field; waits on the metaharness session-request and Loom partial RunSpec stories.
-- 4 bad-value-refused-by-metaharness: unbuilt; metaharness's own check waits on the metaharness session-request story.
-- 5 kind-check-refused: unbuilt for metaharness's refusal text, which waits on the metaharness session-request story. takt's own refusal of `max-turns` under `kind: codex` is built, `codex_max_turns_is_refused_not_dropped`.
+- 1 codex-effort-passed: `codex_effort_passed` (the Codex configuration metaharness generated holds
+  `model_reasoning_effort = "high"`).
+- 2 max-turns-replaces-default: `max_turns_replaces_the_default`.
+- 3 unadmitted-key-refused: `an_unadmitted_key_is_refused_naming_the_key`; every other metaharness document key under
+  each kind, `w51_a_security::every_reserved_session_key_is_refused_before_any_case_opens`.
+- 4 bad-value-refused-by-metaharness: `bad_value_refused_by_metaharness` (metaharness's `RunSpecDocumentError`).
+- 5 kind-check-refused: `kind_check_refused` (metaharness's `check_spec` refusal, before any case opens).
+- 6 takt-owned-key-refused: `a_takt_owned_key_is_refused_as_takts`.
+- 7 string-form-unchanged: `the_string_form_starts_the_argv_of_the_flag`.
 
-Deviation from the Decision, taken in the unit: effort, max-budget-usd, strict-version and context are admitted by name, but takt refuses them until its launch carries each one (`a_key_not_carried_yet_is_refused_not_dropped`). An accepted cost cap that never reaches the session would look enforced when it is not. Lift each refusal when the launch carries the key.
+The four keys once refused as not carried yet reach the session through `SessionExecutor::with_overrides`. Decisions
+(approval-record:wave-51-harness-mapping-carried): `context` is a plain relative path of a file the session's copy
+holds (the work tree, a resumed case's branch, or a scenario's seed), reached through no link, UTF-8 without NUL, of
+no credential's shape, the files together within metaharness's 65,536-byte cap, all checked before any case opens;
+`max-budget-usd` is a number or a decimal string carried in micro-dollars. The conformance scenarios stay unrun (no
+conformance runner); each is the cargo test above. Reviews: review-result:w51-sec-a-1, review-result:w51-adv-a-1,
+review-result:w51-adv-b-1, all fixed.
 
-Not done: website/docs/reference/configuration.md is not updated for the mapping; ess/ess-inputs.yaml names no harness-section scenarios; takt.work.HarnessSetting is declared as an opaque value, since an ESS union needs a tag.
+Scope as built: `crates/takt/src/run_config.rs`, `crates/takt/src/harness.rs`, `crates/takt-cli/src/main.rs`,
+`crates/takt-cli/tests/run_config_harness_section.rs`, `crates/takt-cli/tests/harness_flags_spell_metaharness.rs`,
+`website/docs/reference/configuration.md`. Not changed after all: `crates/takt/tests/harness_preflight.rs`,
+`crates/takt/tests/harness_proposes.rs` and the declarations of `ess/domains/takt.yaml` (its citations only).
