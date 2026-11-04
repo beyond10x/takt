@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-04T00:08:38Z",
+  "actor": "human:timo",
+  "artifact": "story:harness-flags-spell-metaharness-names",
+  "kind": "story",
+  "revision": 10,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test --no-fail-fast -p b10x-takt-cli --test harness_flags_spell_metaharness",
+    "reference": "unit 51-b: each flag's run differs from the run without it and equals the file's key alone, on takt run and takt scenario run; 9 to 19 cases green at 4b44de2d4; VERIFIED"
+  }
+}

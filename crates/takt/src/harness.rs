@@ -333,11 +333,20 @@ pub struct SessionHarness {
     /// The session the last step's executor recorded, until the run takes it
     /// ([`Harness::take_session`]).
     pub session: std::cell::RefCell<Option<AgentSession>>,
+    /// `strict-version`: the version of the binary off the adapter's pin stops the run before the
+    /// first session ([`Harness::preflight`]), which metaharness otherwise reads as advisory, and
+    /// each session asks metaharness to refuse it ([`loom_sdk::session::SessionOverrides`]).
+    pub strict_version: bool,
+    /// `effort`: the reasoning effort each session asks of the model, in the vendor's vocabulary.
+    pub effort: Option<String>,
+    /// `max-budget-usd`: the ceiling on each session's spend, in micro-dollars.
+    pub max_budget_micro_usd: Option<u64>,
+    /// `context`: the repository files each session is handed as metaharness's context files,
+    /// each one plain relative path of a file the session's copy holds; the session executor
+    /// refuses any other before the copy is made.
+    pub requested_context: Vec<String>,
     /// The `commit` member of the last step's reply until the run takes it
     /// ([`Harness::take_commit`]).
-    /// `strict-version`: the version of the binary off the adapter's pin stops the run before the
-    /// first session ([`Harness::preflight`]), which metaharness otherwise reads as advisory.
-    pub strict_version: bool,
     pub commit: std::cell::RefCell<Option<serde_json::Value>>,
 }
 
@@ -395,6 +404,9 @@ impl SessionHarness {
             credential: None,
             home: None,
             strict_version: false,
+            effort: None,
+            max_budget_micro_usd: None,
+            requested_context: Vec::new(),
             runner: None,
             reported: std::cell::Cell::new(None),
             unreported: std::cell::Cell::new(false),
@@ -902,9 +914,18 @@ impl Harness for SessionHarness {
             ClaudeCode::prompt_with(context, rule, &paths)
         };
         *self.session.borrow_mut() = None;
+        // The run's session settings over the kind's defaults: each one named wins, and the
+        // executor refuses one the kind's launcher does not apply, or a context file its copy
+        // does not hold, before the copy is made.
         let mut executor =
             loom_sdk::session::SessionExecutor::new(context.tree, Vec::new(), String::new())
-                .of_kind(self.kind);
+                .of_kind(self.kind)
+                .with_overrides(loom_sdk::session::SessionOverrides {
+                    effort: self.effort.clone(),
+                    max_budget_micro_usd: self.max_budget_micro_usd,
+                    strict_version: self.strict_version.then_some(true),
+                    context: self.requested_context.clone(),
+                });
         // The files the session's copy is made of, read before the step decides what it is
         // given, so what Codex loads from the copy is judged on the files the copy holds.
         let copied = Self::copied(context.tree)?;
@@ -927,8 +948,26 @@ impl Harness for SessionHarness {
                 !self.context.is_empty(),
             );
             agents_left_to_codex = left;
-            let fit =
-                |files: &[DeclaredContextFile]| codex_prompt_argument(&prompt_for(files), files);
+            // The run's `context` files, which metaharness reads from the copy and puts ahead of
+            // the brief in the same argument, are measured with it; a file it cannot read here
+            // the executor refuses before the copy is made.
+            let requested: Vec<DeclaredContextFile> = self
+                .requested_context
+                .iter()
+                .filter_map(|path| {
+                    let bytes = std::fs::read(context.tree.join(path)).ok()?;
+                    DeclaredContextFile::new(path.clone(), bytes).ok()
+                })
+                .collect();
+            let fit = |files: &[DeclaredContextFile]| {
+                codex_prompt_argument(
+                    &loom_sdk::session::metaharness::protocol::with_context_files(
+                        &prompt_for(files),
+                        files,
+                    ),
+                    &requested,
+                )
+            };
             if !codex_instructions.is_empty()
                 && !loom_sdk::session::metaharness::protocol::argument_fits(&fit(
                     &codex_instructions,
@@ -1989,6 +2028,42 @@ fn scope_context_files(
         },
     );
     given
+}
+
+/// The files `tree`'s index tracks, as git lists them: the files a session's copy holds that
+/// metaharness hands over as context files, since it reads a context file only when the copy's
+/// index names it.
+///
+/// # Errors
+///
+/// When git cannot list `tree`'s index.
+pub fn tracked_files(tree: &Path) -> Result<std::collections::BTreeSet<String>> {
+    let listed = crate::git::run(tree, &["ls-files", "-z", "--cached"])
+        .with_context(|| format!("list the files {} tracks", tree.display()))?;
+    Ok(listed
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect())
+}
+
+/// Whether `path`, relative to `tree`, names a regular file reached through no symbolic link: the
+/// files the session executor's copy holds.
+#[must_use]
+pub fn reached_through_no_link(tree: &Path, path: &str) -> bool {
+    let mut at = tree.to_path_buf();
+    let parts: Vec<&str> = path.split('/').collect();
+    for (index, part) in parts.iter().enumerate() {
+        at.push(part);
+        let Ok(meta) = std::fs::symlink_metadata(&at) else {
+            return false;
+        };
+        let last = index + 1 == parts.len();
+        if (last && !meta.is_file()) || (!last && !meta.is_dir()) {
+            return false;
+        }
+    }
+    true
 }
 
 /// The instruction files a step is given when none is configured: the repository's `AGENTS.md`

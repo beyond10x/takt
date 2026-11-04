@@ -670,9 +670,11 @@ impl ScenarioRunArgs {
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return self
-                .looping
-                .configured(takt::run_config::RunConfig::default(), matches);
+            return self.looping.configured(
+                takt::run_config::RunConfig::default(),
+                matches,
+                &self.repo,
+            );
         };
         let file = takt::run_config::RunConfig::read(path)?;
         if file.story.is_some() {
@@ -683,7 +685,7 @@ impl ScenarioRunArgs {
         }
         self.declared_scan = file.scan;
         self.forge_settings = file.forge_settings();
-        self.looping.configured(file, matches)?;
+        self.looping.configured(file, matches, &self.repo)?;
         Ok(())
     }
 }
@@ -835,9 +837,11 @@ impl RunArgs {
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            return self
-                .looping
-                .configured(takt::run_config::RunConfig::default(), matches);
+            return self.looping.configured(
+                takt::run_config::RunConfig::default(),
+                matches,
+                &self.repo,
+            );
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
         if let Some(story) = file.story.take()
@@ -851,18 +855,27 @@ impl RunArgs {
         self.declared_scan = file.scan;
         self.protocol_settings = file.protocol_settings.clone();
         self.forge_settings = file.forge_settings();
-        self.looping.configured(file, matches)?;
-        Ok(())
+        self.looping.configured(file, matches, &self.repo)
     }
 }
 
 impl LoopArgs {
+    /// The session's `context` files checked against `tree`, the tree the case's session copies
+    /// ([`takt::run_config::SessionRequest::check_context`]); with no session, nothing.
+    fn check_context(&self, tree: &takt::run_config::ContextTree<'_>) -> Result<()> {
+        self.session
+            .as_ref()
+            .map_or(Ok(()), |session| session.check_context(tree))
+    }
+
     /// Fills each loop flag `matches` did not take from the command line with `file`'s value,
-    /// when it sets it, for `takt run` and `takt scenario run` alike.
+    /// when it sets it, for `takt run` and `takt scenario run` alike. The session settings are
+    /// checked by metaharness for a session in `repo` ([`takt::run_config::SessionRequest::with_flags`]).
     fn configured(
         &mut self,
         mut file: takt::run_config::RunConfig,
         matches: &clap::ArgMatches,
+        repo: &Path,
     ) -> Result<()> {
         if let Some(path) = &self.llm_config {
             file.set_llm_file(path)?;
@@ -902,6 +915,7 @@ impl LoopArgs {
             base,
             &looping.harness,
             looping.session_flags(),
+            repo,
         )?;
         // The file's endpoint is b10x-harness's: under another harness, which a flag may have
         // chosen over the file's, it is left out rather than refused as a flag nobody gave.
@@ -1163,23 +1177,33 @@ struct LoopArgs {
     #[arg(long, value_name = "FILE")]
     llm_config: Option<PathBuf>,
     /// The reasoning effort the session asks of the model, in the vendor's own vocabulary, as
-    /// `metaharness run --effort` takes it. Refused until takt's launch carries it.
+    /// `metaharness run --effort` takes it: Claude Code's `--effort`, Codex's
+    /// `model_reasoning_effort`. The run file's `harness` mapping's `effort`; the flag wins over
+    /// it. Refused under `--harness harness`.
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
-    /// A ceiling on the session's turns, as `metaharness run --max-turns` takes it. Refused under
-    /// `--harness codex`, whose launch takes no turn ceiling.
+    /// A ceiling on the session's turns, as `metaharness run --max-turns` takes it, in place of
+    /// the default 40. The run file's `harness` mapping's `max-turns`; the flag wins over it.
+    /// Refused under `--harness codex`, whose launch takes no turn ceiling.
     #[arg(long, value_name = "N")]
     max_turns: Option<u32>,
     /// A ceiling in US dollars on what the session may spend, as `metaharness run
-    /// --max-budget-usd` takes it. Refused until takt's launch carries it.
+    /// --max-budget-usd` takes it, no finer than one micro-dollar. The run file's `harness`
+    /// mapping's `max-budget-usd`; the flag wins over it. Claude Code's only.
     #[arg(long, value_name = "USD")]
     max_budget_usd: Option<String>,
-    /// Refuse before the run when the installed vendor version is outside metaharness's pin, as
-    /// `metaharness run --strict-version` takes it. Refused until takt's launch carries it.
+    /// Stop the run `HarnessUnqualified` before a session starts when the installed vendor
+    /// version is outside metaharness's pin, as `metaharness run --strict-version` takes it. The
+    /// run file's `harness` mapping's `strict-version`; the flag wins over it.
     #[arg(long)]
     strict_version: bool,
-    /// A file whose text the prompt carries, as `metaharness run --context` takes it, repeatable.
-    /// Refused until takt's launch carries it.
+    /// A file whose text the session is handed, as `metaharness run --context` takes it,
+    /// repeatable: a file the session's copy holds (for `takt run` a file the work tree tracks,
+    /// or a resumed case's branch holds; for `takt scenario run` a file of the seed), as one
+    /// plain relative path reached through no link, UTF-8 text without NUL and no credential,
+    /// the files together within metaharness's 65536-byte cap; any other is refused before the
+    /// case opens or resumes. The run file's `harness` mapping's `context`; the flag wins over
+    /// it.
     #[arg(long, value_name = "FILE")]
     context: Vec<PathBuf>,
     #[command(flatten)]
@@ -1836,6 +1860,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 intent.is_some() || opens_turn,
                 out,
             )?;
+            // The session's `context` files are checked against the files its copy is made of,
+            // before the case opens or resumes: a resumed case's branch, which resuming checks
+            // out, else the work tree a new case is cut from.
+            let case_head = resuming.as_ref().and_then(|resuming| {
+                let branch = takt::case::Branch::name_of(&resuming.id);
+                let head = format!("refs/heads/{branch}^{{commit}}");
+                takt::git::run(&repo, &["rev-parse", "--verify", "--quiet", &head]).ok()
+            });
+            looping.check_context(&match &case_head {
+                Some(revision) => takt::run_config::ContextTree::Revision {
+                    repo: &repo,
+                    revision,
+                },
+                None => takt::run_config::ContextTree::WorkTree(&repo),
+            })?;
             let given_for_resume = given.as_ref().zip(protocol.as_deref());
             let first_input = inputs.first().map(|(name, _)| name.clone());
             if let Some(resuming) = &resuming {
@@ -2625,12 +2664,14 @@ fn harness_of(looping: &LoopArgs) -> Result<Box<dyn Harness>> {
         if let Some(program) = &looping.harness_program {
             session.program = program.to_string_lossy().into_owned();
         }
-        if let Some(max_turns) = looping
-            .session
-            .as_ref()
-            .and_then(|request| request.max_turns())
-        {
-            session.max_turns = max_turns;
+        if let Some(request) = &looping.session {
+            if let Some(max_turns) = request.max_turns() {
+                session.max_turns = max_turns;
+            }
+            session.effort = request.effort().map(str::to_owned);
+            session.max_budget_micro_usd = request.max_budget_micro_usd();
+            session.strict_version = request.strict_version();
+            session.requested_context = request.context();
         }
         session.check_program()?;
         Ok(session)
@@ -3942,6 +3983,14 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
             repo.display()
         )
     })?;
+    // The session's `context` files are checked against the seed, the tree the case is cut
+    // from, before anything is cut or opened.
+    looping
+        .check_context(&takt::run_config::ContextTree::Revision {
+            repo: &repo,
+            revision: &seed,
+        })
+        .with_context(|| format!("scenario {}", scenario.id))?;
     // The identity the trial's commits carry: the one given, else the one `--declared-on`
     // configures (the pinned seed predates any such file); none under a forge, which pushes
     // them, is refused before anything is fetched, cut or pushed.

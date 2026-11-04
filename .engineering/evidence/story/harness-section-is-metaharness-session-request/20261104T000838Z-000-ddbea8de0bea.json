@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-04T00:08:38Z",
+  "actor": "human:timo",
+  "artifact": "story:harness-section-is-metaharness-session-request",
+  "kind": "story",
+  "revision": 11,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "cargo test --no-fail-fast -p b10x-takt-cli --test run_config_harness_section --test harness_flags_spell_metaharness",
+    "reference": "unit 51-a red run on d661e73b1 source (10 failed: not carried yet, takt's own codex text) vs green at 2bdbab776 (17 and 8 passed); VERIFIED: new behaviour the base refuses"
+  }
+}

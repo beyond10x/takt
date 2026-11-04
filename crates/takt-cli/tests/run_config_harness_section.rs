@@ -82,10 +82,13 @@ impl World {
             };
             fs::create_dir_all(&dir).expect("a directory");
             let double = dir.join(program);
+            // The Codex configuration metaharness generated for the session, copied beside the
+            // argv file when the child is given a CODEX_HOME.
             fs::write(
                 &double,
                 format!(
-                    "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done > '{}'\nexit 1\n",
+                    "#!/bin/sh\ncase $1 in --version) echo '2.1.309 (Claude Code)'; exit 0 ;; esac\nif [ -n \"$CODEX_HOME\" ] && [ -f \"$CODEX_HOME/config.toml\" ]; then cp \"$CODEX_HOME/config.toml\" '{}'; fi\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done > '{}'\nexit 1\n",
+                    world.config_copy(program).display(),
                     world.started(program).display()
                 ),
             )
@@ -115,6 +118,11 @@ impl World {
         self.0.join(format!("started-{program}"))
     }
 
+    /// Where `program`'s double copies the `config.toml` of the CODEX_HOME it was given.
+    fn config_copy(&self, program: &str) -> PathBuf {
+        self.0.join(format!("started-{program}-config.toml"))
+    }
+
     fn cases(&self) -> PathBuf {
         self.repo().join(".takt/cases")
     }
@@ -135,6 +143,7 @@ impl World {
         }
         for program in ["claude", "codex"] {
             let _ = fs::remove_file(self.started(program));
+            let _ = fs::remove_file(self.config_copy(program));
         }
         git(&self.repo(), &["worktree", "prune"]);
         git(&self.repo(), &["checkout", "-q", "-f", "main"]);
@@ -254,29 +263,164 @@ fn max_turns_is_a_whole_number() {
     assert!(!said.contains("MARKER-turns-value"), "{said}");
 }
 
-/// A key admitted but not carried by takt's launch yet is refused, not dropped: a cost cap or an
-/// effort that is accepted and never reaches the session would look enforced when it is not.
+/// harness-section/codex-effort-passed: `effort` reaches the Codex session. The configuration
+/// metaharness generated for the child, which the double copies beside its argv file, holds
+/// `model_reasoning_effort = "high"`.
 #[test]
-fn a_key_not_carried_yet_is_refused_not_dropped() {
-    let world = World::new("not-carried");
-    let said = world.refused("harness: {kind: claude, max-budget-usd: 1}\n");
-    assert!(said.contains("`max-budget-usd`"), "{said}");
-    assert!(
-        said.contains("refused rather than run without it"),
-        "{said}"
+fn codex_effort_passed() {
+    let world = World::new("codex-effort");
+    world.fresh();
+    let config = world.file(
+        "run.yaml",
+        &run_file("harness: {kind: codex, effort: high}\n"),
     );
-    let said = world.refused("harness: {kind: codex, effort: high}\n");
-    assert!(said.contains("`effort`"), "{said}");
+    let output = world.run(&config, &[]);
+    let said = text(&output);
+    assert!(
+        world.argv("codex").is_some(),
+        "codex was not started: {said}"
+    );
+    let generated = fs::read_to_string(world.config_copy("codex"))
+        .unwrap_or_else(|error| panic!("no Codex configuration was copied ({error}): {said}"));
+    assert!(
+        generated
+            .lines()
+            .any(|line| line.trim() == "model_reasoning_effort = \"high\""),
+        "{generated}"
+    );
 }
 
-/// Codex's launch takes no turn ceiling, so `max-turns` under `kind: codex` is refused rather than
-/// dropped.
+/// harness-section/bad-value-refused-by-metaharness: a value of the wrong type is refused before
+/// any case opens with metaharness's own message, read from its session-request document, and no
+/// harness is started.
 #[test]
-fn codex_max_turns_is_refused_not_dropped() {
-    let world = World::new("codex-max-turns");
+fn bad_value_refused_by_metaharness() {
+    let world = World::new("bad-value");
+    let said = world.refused("harness: {kind: claude, max-turns: sixty}\n");
+    assert!(
+        said.contains("the run-spec document's `max-turns` takes a whole number"),
+        "{said}"
+    );
+    assert!(!said.contains("sixty"), "{said}");
+    let said = world.refused("harness: {kind: claude, strict-version: MARKER-strict}\n");
+    assert!(
+        said.contains("the run-spec document's `strict-version` takes true or false"),
+        "{said}"
+    );
+    assert!(!said.contains("MARKER-strict"), "{said}");
+}
+
+/// harness-section/kind-check-refused: `max-turns` under `kind: codex` is refused before any case
+/// opens with metaharness's own refusal of the setting for that kind, and no harness is started.
+#[test]
+fn kind_check_refused() {
+    let world = World::new("kind-check");
     let said = world.refused("harness: {kind: codex, max-turns: 60}\n");
-    assert!(said.contains("`max-turns`"), "{said}");
     assert!(said.contains("`kind: codex`"), "{said}");
+    assert!(
+        said.contains(
+            "the run asked for --max-turns and the pinned codex exec has no way to express it"
+        ),
+        "{said}"
+    );
+    let said = world.refused("harness: {kind: codex, max-budget-usd: 2}\n");
+    assert!(
+        said.contains("the run asked for --max-budget-usd and the pinned codex exec"),
+        "{said}"
+    );
+}
+
+/// `max-budget-usd` reaches the Claude Code session as metaharness passes it: read as a number or
+/// a decimal string, carried in micro-dollars, and given to the program as its decimal of dollars.
+#[test]
+fn max_budget_usd_reaches_the_claude_session() {
+    let world = World::new("budget");
+    for (written, passed) in [("1.5", "1.5"), ("\"2.50\"", "2.5"), ("3", "3")] {
+        world.fresh();
+        let config = world.file(
+            "run.yaml",
+            &run_file(&format!(
+                "harness: {{kind: claude, max-budget-usd: {written}}}\n"
+            )),
+        );
+        let output = world.run(&config, &[]);
+        let argv = world
+            .argv("claude")
+            .unwrap_or_else(|| panic!("claude was not started: {}", text(&output)));
+        let at = argv
+            .iter()
+            .position(|arg| arg == "--max-budget-usd")
+            .unwrap_or_else(|| panic!("no --max-budget-usd in {argv:?}"));
+        assert_eq!(
+            argv.get(at + 1).map(String::as_str),
+            Some(passed),
+            "{written}: {argv:?}"
+        );
+    }
+}
+
+/// A `max-budget-usd` finer than one micro-dollar, or no sum of dollars at all, is refused before
+/// any case opens naming the key, and its value is never printed.
+#[test]
+fn a_budget_finer_than_a_micro_dollar_is_refused_naming_the_key() {
+    let world = World::new("budget-fine");
+    for written in ["0.0000001", "\"1.0000005\"", "\"MARKER-budget\"", "-1"] {
+        let said = world.refused(&format!(
+            "harness: {{kind: claude, max-budget-usd: {written}}}\n"
+        ));
+        assert!(said.contains("`max-budget-usd`"), "{written}: {said}");
+        assert!(said.contains("micro-dollar"), "{written}: {said}");
+        assert!(!said.contains("MARKER-budget"), "{said}");
+    }
+}
+
+/// `context` names files of the repository the session's copy holds: such a file is handed to the
+/// Claude Code session as metaharness renders a context file, and any other path is refused
+/// before any case opens, naming it.
+#[test]
+fn context_names_a_file_the_copy_holds() {
+    let world = World::new("context");
+    world.fresh();
+    let config = world.file(
+        "run.yaml",
+        &run_file("harness: {kind: claude, context: [README.md]}\n"),
+    );
+    let output = world.run(&config, &[]);
+    let argv = world
+        .argv("claude")
+        .unwrap_or_else(|| panic!("claude was not started: {}", text(&output)));
+    assert!(
+        argv.iter()
+            .any(|arg| arg.starts_with("<context-file-") && arg.contains("path=\"README.md\"")),
+        "{argv:?}"
+    );
+    for (path, named) in [
+        ("missing.md", "missing.md"),
+        ("/etc/hostname", "/etc/hostname"),
+        ("../outside.md", "../outside.md"),
+        ("./README.md", "./README.md"),
+    ] {
+        let said = world.refused(&format!(
+            "harness: {{kind: claude, context: [\"{path}\"]}}\n"
+        ));
+        assert!(said.contains(named), "{path}: {said}");
+    }
+}
+
+/// `strict-version` is carried: the run is not refused for it, and the session's version check
+/// is the one that decides.
+#[test]
+fn strict_version_is_carried_not_refused() {
+    let world = World::new("strict");
+    world.fresh();
+    let config = world.file(
+        "run.yaml",
+        &run_file("harness: {kind: claude, strict-version: true}\n"),
+    );
+    let output = world.run(&config, &[]);
+    let said = text(&output);
+    assert!(world.cases().exists(), "a case was opened: {said}");
+    assert!(!said.contains("does not carry"), "{said}");
 }
 
 /// The string form keeps its meaning: `harness: codex` starts the argv `--harness codex` starts.

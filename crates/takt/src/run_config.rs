@@ -14,6 +14,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result, anyhow};
+use loom_sdk::session::metaharness::protocol::{CONTEXT_BYTES_MAX, context_cost};
 
 use crate::forge::command::ForgeCommands;
 use crate::forge::credential::CredentialSource;
@@ -466,11 +467,19 @@ impl HarnessSetting {
 }
 
 /// metaharness's session request as a `harness` mapping gives it: its admitted keys as written,
-/// under metaharness's names, `kind` one of its three and `max-turns` a whole number.
+/// under metaharness's names, read by metaharness's own document reader
+/// (`RunSpec::from_document`), `kind` one of its three, `max-turns` a whole number above zero and
+/// `max-budget-usd` a sum of dollars no finer than one micro-dollar. Checked for its harness by
+/// metaharness's `check_spec` once the run's harness and repository are known
+/// ([`SessionRequest::with_flags`]).
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionRequest {
     harness: &'static str,
     settings: serde_json::Map<String, serde_json::Value>,
+    /// The run file the mapping was read from, which a refusal of its settings names.
+    file: Option<PathBuf>,
+    /// Whether `context` is the command line's `--context`, which a refusal of it names.
+    context_from_flag: bool,
 }
 
 impl SessionRequest {
@@ -488,22 +497,74 @@ impl SessionRequest {
             .and_then(serde_json::Value::as_u64)
             .and_then(|turns| u32::try_from(turns).ok())
     }
+
+    /// The reasoning effort the session asks of the model, when `effort` is given.
+    #[must_use]
+    pub fn effort(&self) -> Option<&str> {
+        self.settings
+            .get("effort")
+            .and_then(serde_json::Value::as_str)
+    }
+
+    /// The ceiling on the session's spend in micro-dollars, when `max-budget-usd` is given.
+    #[must_use]
+    pub fn max_budget_micro_usd(&self) -> Option<u64> {
+        self.settings.get("max-budget-usd").and_then(micro_usd)
+    }
+
+    /// Whether the session refuses a harness program outside metaharness's pinned versions.
+    #[must_use]
+    pub fn strict_version(&self) -> bool {
+        self.settings
+            .get("strict-version")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    /// The repository files the session is handed as context, in order, as `context` names them.
+    #[must_use]
+    pub fn context(&self) -> Vec<String> {
+        self.settings
+            .get("context")
+            .and_then(serde_json::Value::as_array)
+            .map(|files| {
+                files
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl SessionRequest {
     /// The request a run takes: `base`, the file's mapping, with each flag's setting written over
-    /// its key, under `harness`, the harness the run takes and its `kind`. `None` when neither the
-    /// file nor a flag gives a setting, and when `harness` is `none`, which starts no session. A
-    /// setting refused under `harness` is an error, named as the file's refusal names it; under
-    /// `none` a setting the file or a flag gives is refused, since it would be dropped.
+    /// its key, under `harness`, the harness the run takes and its `kind`, for a session in
+    /// `repo`. `None` when neither the file nor a flag gives a setting, and when `harness` is
+    /// `none`, which starts no session. The file's settings, and then the flags' over them, pass
+    /// metaharness's own check for the harness with `repo` as the working directory; a refusal is
+    /// an error naming the run file, or the command line's flags that metaharness refuses, with
+    /// metaharness's own message. The `context` files are checked against the tree the case is
+    /// cut from by [`SessionRequest::check_context`], once that tree is known. Under `none` a
+    /// setting the file or a flag gives is refused, since it would be dropped.
     pub fn with_flags(
         base: Option<&Self>,
         harness: &str,
         flags: SessionFlags<'_>,
+        repo: &Path,
     ) -> Result<Option<Self>> {
         if flags.max_turns == Some(0) {
             return Err(anyhow!(
                 "the command line's --max-turns is a whole number above zero, no other value; nothing was started"
+            ));
+        }
+        if flags
+            .max_budget_usd
+            .is_some_and(|usd| micro_usd_of(usd).is_none())
+        {
+            return Err(anyhow!(
+                "the command line's --max-budget-usd is {BUDGET_SHAPE}; nothing was started"
             ));
         }
         let mut settings = base
@@ -511,9 +572,6 @@ impl SessionRequest {
             .unwrap_or_default();
         for (key, value) in flags.settings() {
             settings.insert(key.to_owned(), value);
-        }
-        if let Some(detail) = refused_setting(&settings, harness, flags.max_turns.is_some()) {
-            return Err(anyhow!(detail));
         }
         let (harness, kind) = match harness {
             "claude" => ("claude", "claude"),
@@ -537,9 +595,329 @@ impl SessionRequest {
         if base.is_none() && settings.is_empty() {
             return Ok(None);
         }
+        if let Some(base) = base
+            && let Some(refusal) = metaharness_refusal(kind, &base.settings, repo)
+        {
+            let under = if base.harness == harness {
+                format!("`kind: {kind}`")
+            } else {
+                format!("--harness {harness}")
+            };
+            let detail =
+                format!("metaharness refuses its `harness` mapping under {under}: {refusal}");
+            return Err(match &base.file {
+                Some(path) => harness_refused(path, &detail),
+                None => anyhow!("{detail}; nothing was started"),
+            });
+        }
+        if let Some(refusal) = metaharness_refusal(kind, &settings, repo) {
+            // The flags metaharness refuses: each one that, written alone over the file's
+            // settings, is refused; all of them when only their combination is.
+            let given = flags.settings();
+            let base_settings = base
+                .map(|request| request.settings.clone())
+                .unwrap_or_default();
+            let mut refused: Vec<String> = given
+                .iter()
+                .filter(|(key, value)| {
+                    let mut alone = base_settings.clone();
+                    alone.insert((*key).to_owned(), value.clone());
+                    metaharness_refusal(kind, &alone, repo).is_some()
+                })
+                .map(|(key, _)| format!("--{key}"))
+                .collect();
+            if refused.is_empty() {
+                refused = given.iter().map(|(key, _)| format!("--{key}")).collect();
+            }
+            let verb = if refused.len() == 1 { "is" } else { "are" };
+            return Err(anyhow!(
+                "the command line's {} {verb} refused under the {harness} harness, as metaharness checks the session: {refusal}; nothing was started",
+                refused.join(", ")
+            ));
+        }
         settings.insert("kind".to_owned(), serde_json::Value::from(kind));
-        Ok(Some(Self { harness, settings }))
+        Ok(Some(Self {
+            harness,
+            settings,
+            file: base.and_then(|base| base.file.clone()),
+            context_from_flag: !flags.context.is_empty(),
+        }))
     }
+
+    /// Checks each `context` file against `tree`, the tree the session's copy is made of, as
+    /// metaharness and Loom's executor would check it at launch, so that a file the session
+    /// cannot be handed is refused before any case opens, naming the path: one plain relative
+    /// path ([`loom_sdk::session::plain_relative`]) of a regular file `tree` holds, reached
+    /// through no link; UTF-8 text with no NUL; holding no text of a credential's shape
+    /// ([`crate::run::credential_shape`]), named by its shape and never its text; and all of
+    /// them within metaharness's byte cap ([`CONTEXT_BYTES_MAX`] by [`context_cost`]). A
+    /// refusal names the run file, or the command line when `--context` gave the files.
+    ///
+    /// # Errors
+    ///
+    /// The refusal of the first file that fails, or a failure to read `tree`.
+    pub fn check_context(&self, tree: &ContextTree<'_>) -> Result<()> {
+        let context = self.context();
+        if context.is_empty() {
+            return Ok(());
+        }
+        let Some(detail) = tree.refusal(&context)? else {
+            return Ok(());
+        };
+        Err(match (&self.file, self.context_from_flag) {
+            (Some(file), false) => harness_refused(file, &detail),
+            _ => anyhow!("the command line's --context is refused: {detail}; nothing was started"),
+        })
+    }
+}
+
+/// The tree a session's copy is made of, from which its context files are checked before any
+/// case opens.
+#[derive(Debug, Clone, Copy)]
+pub enum ContextTree<'a> {
+    /// The work tree at this path, whose copy holds the files its index tracks as the work tree
+    /// has them (`takt run`).
+    WorkTree(&'a Path),
+    /// The commit `revision` of the repository at `repo`, whose tree a case is cut from
+    /// (`takt scenario run`, its seed).
+    Revision {
+        /// The repository.
+        repo: &'a Path,
+        /// The commit.
+        revision: &'a str,
+    },
+}
+
+impl ContextTree<'_> {
+    /// The regular files the tree holds, each reached through no link.
+    fn held(&self) -> Result<std::collections::BTreeSet<String>> {
+        match self {
+            Self::WorkTree(repo) => Ok(crate::harness::tracked_files(repo)?
+                .into_iter()
+                .filter(|path| crate::harness::reached_through_no_link(repo, path))
+                .collect()),
+            Self::Revision { repo, revision } => {
+                let listed =
+                    crate::git::run(repo, &["ls-tree", "-r", "-z", "--full-tree", revision])
+                        .with_context(|| format!("list the files of {revision}"))?;
+                Ok(listed
+                    .split('\0')
+                    .filter_map(|entry| {
+                        let (meta, path) = entry.split_once('\t')?;
+                        let mut meta = meta.split(' ');
+                        let mode = meta.next()?;
+                        let kind = meta.next()?;
+                        (kind == "blob" && matches!(mode, "100644" | "100755"))
+                            .then(|| path.to_owned())
+                    })
+                    .collect())
+            }
+        }
+    }
+
+    /// At most one byte past metaharness's cap of `path`'s bytes as the tree holds them.
+    fn read(&self, path: &str) -> Result<Vec<u8>> {
+        use std::io::Read as _;
+        let bound = u64::try_from(CONTEXT_BYTES_MAX).unwrap_or(u64::MAX) + 1;
+        match self {
+            Self::WorkTree(repo) => {
+                let mut bytes = Vec::new();
+                std::fs::File::open(repo.join(path))
+                    .and_then(|file| file.take(bound).read_to_end(&mut bytes))
+                    .with_context(|| format!("read the context file {}", path.escape_debug()))?;
+                Ok(bytes)
+            }
+            Self::Revision { repo, revision } => {
+                let mut bytes = crate::git::blob(repo, &format!("{revision}:{path}"))
+                    .with_context(|| format!("read the context file {}", path.escape_debug()))?;
+                bytes.truncate(usize::try_from(bound).unwrap_or(usize::MAX));
+                Ok(bytes)
+            }
+        }
+    }
+
+    /// Why the first of `context` cannot be handed to the session, naming it, or `None`.
+    fn refusal(&self, context: &[String]) -> Result<Option<String>> {
+        let held = self.held()?;
+        let holder = match self {
+            Self::WorkTree(_) => "the repository's index tracks".to_owned(),
+            Self::Revision { revision, .. } => {
+                format!(
+                    "the commit {} holds",
+                    revision.get(..12).unwrap_or(revision)
+                )
+            }
+        };
+        let mut total = 0_usize;
+        for path in context {
+            let shown = path.escape_debug();
+            if !loom_sdk::session::plain_relative(path) || !held.contains(path) {
+                return Ok(Some(format!(
+                    "the context file `{shown}` is not a file {holder} and the session's copy holds, spelled as one plain relative path and reached through no link"
+                )));
+            }
+            let bytes = self.read(path)?;
+            if bytes.len() > CONTEXT_BYTES_MAX {
+                return Ok(Some(format!(
+                    "the context file `{shown}` is larger than metaharness's cap of {CONTEXT_BYTES_MAX} bytes for the context files of one session"
+                )));
+            }
+            let Ok(text) = std::str::from_utf8(&bytes) else {
+                return Ok(Some(format!(
+                    "the context file `{shown}` is not UTF-8 text, which metaharness hands a session"
+                )));
+            };
+            if bytes.contains(&0) {
+                return Ok(Some(format!(
+                    "the context file `{shown}` holds a NUL, so it is not the text metaharness hands a session"
+                )));
+            }
+            if let Some(shape) = crate::run::credential_shape(text) {
+                return Ok(Some(format!(
+                    "the context file `{shown}` holds text of a credential's shape ({shape}), which takt never hands a session"
+                )));
+            }
+            total += context_cost(path, bytes.len());
+            if total > CONTEXT_BYTES_MAX {
+                return Ok(Some(format!(
+                    "the context file `{shown}` brings the context files to {total} bytes, past metaharness's cap of {CONTEXT_BYTES_MAX} bytes for one session"
+                )));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// The name metaharness's document gives the harness takt names `harness`.
+fn metaharness_kind(harness: &str) -> &str {
+    match harness {
+        "harness" => "b10x",
+        other => other,
+    }
+}
+
+/// metaharness's session-request document of `settings` under `kind`, metaharness's name of the
+/// harness: each setting under its own name, `max-budget-usd` written as the string metaharness
+/// reads it, and `cwd` when the session's working directory is known.
+fn session_document(
+    kind: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    cwd: Option<&Path>,
+) -> serde_json::Value {
+    let mut document = serde_json::Map::new();
+    for (key, value) in settings {
+        if key == "kind" {
+            continue;
+        }
+        let value = match (key.as_str(), value) {
+            ("max-budget-usd", serde_json::Value::Number(number)) => {
+                serde_json::Value::from(decimal_of(number))
+            }
+            _ => value.clone(),
+        };
+        document.insert(key.clone(), value);
+    }
+    document.insert(
+        "kind".to_owned(),
+        serde_json::Value::from(metaharness_kind(kind)),
+    );
+    if let Some(cwd) = cwd {
+        document.insert(
+            "cwd".to_owned(),
+            serde_json::Value::from(cwd.to_string_lossy().into_owned()),
+        );
+    }
+    serde_json::Value::Object(document)
+}
+
+/// metaharness's own refusal of `settings` for a session of `kind` in `repo`, read by its
+/// document reader and checked by its `check_spec`, or `None` when it takes them.
+fn metaharness_refusal(
+    kind: &str,
+    settings: &serde_json::Map<String, serde_json::Value>,
+    repo: &Path,
+) -> Option<String> {
+    use loom_sdk::session::metaharness::{check_spec, protocol::RunSpec};
+    match RunSpec::from_document(&session_document(kind, settings, Some(repo))) {
+        Err(error) => Some(error.to_string()),
+        Ok(spec) => check_spec(&spec).err().map(|refusal| refusal.to_string()),
+    }
+}
+
+/// What a `max-budget-usd` is, as a refusal says it.
+const BUDGET_SHAPE: &str = "a sum of US dollars, a number or a decimal string such as 2.5, at least zero and no finer than one micro-dollar (six digits after the point)";
+
+/// `max-budget-usd` as written, a number or a string, in micro-dollars, or `None` when it is no
+/// sum of dollars or is finer than one micro-dollar.
+fn micro_usd(value: &serde_json::Value) -> Option<u64> {
+    match value {
+        serde_json::Value::Number(number) => micro_usd_of(&decimal_of(number)),
+        serde_json::Value::String(text) => micro_usd_of(text),
+        _ => None,
+    }
+}
+
+/// `number` as a plain decimal, never in the exponent form a YAML or JSON reader prints a small or
+/// a large float in (`0.000001` is printed `1e-6`): the same digits, the point moved.
+fn decimal_of(number: &serde_json::Number) -> String {
+    let text = number.to_string();
+    let Some((mantissa, exponent)) = text.split_once(['e', 'E']) else {
+        return text;
+    };
+    let Ok(exponent) = exponent.parse::<i32>() else {
+        return text;
+    };
+    let (sign, mantissa) = mantissa
+        .strip_prefix('-')
+        .map_or(("", mantissa), |rest| ("-", rest));
+    let (whole, fraction) = mantissa.split_once('.').unwrap_or((mantissa, ""));
+    let digits = format!("{whole}{fraction}");
+    let Ok(point) = i32::try_from(whole.len()).map(|at| at + exponent) else {
+        return text;
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) || point.abs() > 400 {
+        return text;
+    }
+    let (whole, fraction) = match usize::try_from(point) {
+        Err(_) | Ok(0) => (
+            String::new(),
+            format!(
+                "{}{digits}",
+                "0".repeat(usize::try_from(point.unsigned_abs()).unwrap_or(0))
+            ),
+        ),
+        Ok(at) if at >= digits.len() => (
+            format!("{digits}{}", "0".repeat(at - digits.len())),
+            String::new(),
+        ),
+        Ok(at) => (digits[..at].to_owned(), digits[at..].to_owned()),
+    };
+    let whole = whole.trim_start_matches('0');
+    let whole = if whole.is_empty() { "0" } else { whole };
+    let fraction = fraction.trim_end_matches('0');
+    if fraction.is_empty() {
+        format!("{sign}{whole}")
+    } else {
+        format!("{sign}{whole}.{fraction}")
+    }
+}
+
+/// The decimal of dollars `text` in micro-dollars: digits, and at most six after one point; any
+/// other spelling, a sign or an exponent included, is `None`.
+fn micro_usd_of(text: &str) -> Option<u64> {
+    let (whole, fraction) = text.split_once('.').unwrap_or((text, ""));
+    let digits = |part: &str| part.bytes().all(|byte| byte.is_ascii_digit());
+    if whole.is_empty()
+        || !digits(whole)
+        || !digits(fraction)
+        || fraction.len() > 6
+        || (text.contains('.') && fraction.is_empty())
+    {
+        return None;
+    }
+    let whole: u64 = whole.parse().ok()?;
+    let fraction: u64 = format!("{fraction:0<6}").parse().ok()?;
+    whole.checked_mul(1_000_000)?.checked_add(fraction)
 }
 
 /// The session settings a command line's flags give, under the names metaharness's `run` takes
@@ -586,45 +964,6 @@ impl SessionFlags<'_> {
     }
 }
 
-/// The refusal of a key the mapping admits but takt's launch does not carry yet, naming it, or
-/// `None` for a key it carries. A file's key and a flag's are refused alike.
-fn not_carried_yet(key: &str) -> Option<String> {
-    HARNESS_KEYS_NOT_CARRIED.contains(&key).then(|| {
-        format!(
-            "`{key}` in its `harness` mapping is admitted but takt's launch does not carry it yet, so the run is refused rather than run without it"
-        )
-    })
-}
-
-/// The refusal of `max-turns` in a file's `harness` mapping under `kind: codex`.
-const CODEX_MAX_TURNS_REFUSED: &str = "`max-turns` under `kind: codex` in its `harness` mapping is refused: takt's Codex launch takes no turn ceiling, so the value would be dropped";
-
-/// The refusal of `--max-turns` on the command line under the codex harness, which names no mapping.
-const CODEX_FLAG_MAX_TURNS_REFUSED: &str = "the command line's --max-turns is refused under the codex harness: takt's Codex launch takes no turn ceiling, so the value would be dropped";
-
-/// The refusal of the first setting `settings` holds that `harness` does not take, or `None`;
-/// `turns_from_flag` says the `max-turns` it holds is the command line's.
-fn refused_setting(
-    settings: &serde_json::Map<String, serde_json::Value>,
-    harness: &str,
-    turns_from_flag: bool,
-) -> Option<String> {
-    HARNESS_KEYS_NOT_CARRIED
-        .iter()
-        .filter(|key| settings.contains_key(**key))
-        .find_map(|key| not_carried_yet(key))
-        .or_else(|| {
-            (harness == "codex" && settings.contains_key("max-turns")).then(|| {
-                if turns_from_flag {
-                    CODEX_FLAG_MAX_TURNS_REFUSED
-                } else {
-                    CODEX_MAX_TURNS_REFUSED
-                }
-                .to_owned()
-            })
-        })
-}
-
 /// The keys a `harness` mapping admits: metaharness's `run` settings, under their own names.
 const HARNESS_KEYS: &[&str] = &[
     "kind",
@@ -634,11 +973,6 @@ const HARNESS_KEYS: &[&str] = &[
     "strict-version",
     "context",
 ];
-
-/// The keys a `harness` mapping admits but that takt's launch cannot carry yet: loom's partial
-/// RunSpec and metaharness's session request are not released with them. Refused, not dropped.
-const HARNESS_KEYS_NOT_CARRIED: &[&str] =
-    &["effort", "max-budget-usd", "strict-version", "context"];
 
 /// takt's own keys, its confinement, which a `harness` mapping refuses as takt's.
 const TAKT_KEYS: &[&str] = &[
@@ -750,7 +1084,9 @@ fn harness_setting(path: &Path, member: &serde_yaml_ng::Value) -> Result<Harness
 }
 
 /// The session request `mapping` holds: each key admitted or refused by name, in order, then
-/// `kind` and `max-turns` checked. No value is repeated.
+/// `kind` checked, then every value read by metaharness's own document reader, whose refusal is
+/// its message, and last `max-turns` and `max-budget-usd` checked as takt carries them. No value
+/// takt checks is repeated.
 fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<SessionRequest> {
     let mut settings = serde_json::Map::new();
     for (key, value) in mapping {
@@ -793,16 +1129,32 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
             }
         },
     };
-    if let Some(detail) = refused_setting(&settings, harness, false) {
-        return Err(harness_refused(path, &detail));
+    if let Err(error) = loom_sdk::session::metaharness::protocol::RunSpec::from_document(
+        &session_document(harness, &settings, None),
+    ) {
+        return Err(harness_refused(
+            path,
+            &format!("metaharness refuses its `harness` mapping: {error}"),
+        ));
     }
-    let request = SessionRequest { harness, settings };
+    let request = SessionRequest {
+        harness,
+        settings,
+        file: Some(path.to_path_buf()),
+        context_from_flag: false,
+    };
     if request.settings.contains_key("max-turns")
         && request.max_turns().is_none_or(|turns| turns == 0)
     {
         return Err(harness_refused(
             path,
             "`max-turns` in its `harness` mapping is a whole number above zero, no other value",
+        ));
+    }
+    if request.settings.contains_key("max-budget-usd") && request.max_budget_micro_usd().is_none() {
+        return Err(harness_refused(
+            path,
+            &format!("`max-budget-usd` in its `harness` mapping is {BUDGET_SHAPE}"),
         ));
     }
     Ok(request)
@@ -1871,6 +2223,29 @@ mod tests {
         let path = dir.join("run.toml");
         std::fs::write(&path, text).expect("a configuration file");
         path
+    }
+
+    /// A number of dollars is read in micro-dollars from the plain decimal of its digits, the
+    /// exponent form a reader prints a small or a large float in included; finer than one
+    /// micro-dollar, a sign or no number at all is `None`.
+    #[test]
+    fn a_budget_number_is_read_in_micro_dollars_without_its_exponent_form() {
+        let read = |yaml: &str| {
+            let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml).expect("yaml");
+            micro_usd(&serde_json::to_value(value).expect("json"))
+        };
+        assert_eq!(read("0.000001"), Some(1));
+        assert_eq!(read("0.000009"), Some(9));
+        assert_eq!(read("0.00001"), Some(10));
+        assert_eq!(read("1.5"), Some(1_500_000));
+        assert_eq!(read("3"), Some(3_000_000));
+        assert_eq!(read("1.0e7"), Some(10_000_000_000_000));
+        assert_eq!(read("\"2.50\""), Some(2_500_000));
+        assert_eq!(read("0.0000001"), None);
+        assert_eq!(read("1.0000005"), None);
+        assert_eq!(read("-1"), None);
+        assert_eq!(read("\"1e-6\""), None);
+        assert_eq!(read("true"), None);
     }
 
     /// A `harness` string that names no harness is refused at read, without repeating it: the
