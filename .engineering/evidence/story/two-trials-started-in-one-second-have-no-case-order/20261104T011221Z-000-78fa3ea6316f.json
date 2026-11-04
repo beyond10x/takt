@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-04T01:12:21Z",
+  "actor": "human:timo",
+  "artifact": "story:two-trials-started-in-one-second-have-no-case-order",
+  "kind": "story",
+  "revision": 1,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/41751853108/job/126318636240 (Release 0.30.0, test-cli of the tagged commit, attempt 1: decline_adv1.rs:775 red, the declined case is first in case order)",
+    "reference": "7f08a89bf377487a0474aaddb7980649a500636e"
+  }
+}
