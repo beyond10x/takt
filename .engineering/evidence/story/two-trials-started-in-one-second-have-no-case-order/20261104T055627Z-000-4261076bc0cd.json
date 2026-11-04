@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-04T05:56:27Z",
+  "actor": "human:timo",
+  "artifact": "story:two-trials-started-in-one-second-have-no-case-order",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/41777157198 (check on main at the merge of pull request 58: check-static, test-library, test-cli green)",
+    "reference": "0c28f9c8f4dd81b2689a870957a9f9af70680a17"
+  }
+}

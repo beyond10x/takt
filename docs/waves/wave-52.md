@@ -1,6 +1,7 @@
 # Wave 52: a relative PATH entry and two trials in one second
 
-Stage: **gated**. `wave/52` branches from bbaea844b, wave 51's close on `main`. Skill version 0.26.0
+Stage: **delivered**, released as 0.30.1 from 0c28f9c8f, the merge of pull request 58. `wave/52` branches from
+bbaea844b, wave 51's close on `main`. Skill version 0.26.0
 (aep:implementing, wave mode). Approved: approval-record:wave-52-two-findings. Release: 0.30.1.
 
 ## Selection
@@ -71,3 +72,11 @@ The two cases that were red in the gates of waves 50 and 51 under that `PATH` pa
 
 Free space on `/`: 111G at the start. At the end of each stage it was 111G, 80G and 82G, and 126G after the last discard.
 The host's own sampler saw 72G during `test-cli`, at 04:05Z, which the samples at stage ends missed.
+
+## Delivery
+
+Pull request 58 merged as 0c28f9c8f and tagged 0.30.1; the Release run passed at its first attempt. Both stories moved
+to implemented on the `check` run of `main` at the merge.
+
+For the next wave: the gate script samples free space on `/` every 30 s for as long as it runs and writes the minimum
+to its summary. The sampler ends with the gate. This gate's samples at stage ends missed the 72G low.
