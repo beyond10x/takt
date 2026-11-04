@@ -6,6 +6,28 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-04
+
+A pull request open cut off by a crash is read back on every forge, no merge follows a read that finds the pull request merged, and the step guard sees a program rewritten behind its link.
+
+### Added
+
+- `forge_commands.find` (optional): the command forge's command that prints the number of the open request from `{branch}` into `{base}`, or nothing.
+- The local and GitLab forges find the open pull request for a branch, so a run resumed after a crash takes it instead of opening a second.
+
+### Changed
+
+- A command forge without `find` refuses every later open in a case once an open's answer stayed unknown, naming `find`, since a second open could leave two pull requests.
+- To lift it, add `find` to `forge_commands`, or remove the case's `artifacts/open.unanswered.json` once the forge holds no open request for the branch.
+- The step guard reads a link in a program directory together with what it resolves to, so a step that rewrites the program behind the link is refused.
+
+### Fixed
+
+- When the read just before a merge finds the pull request merged or closed, takt records that and sends no merge; at another head it merges nothing.
+- The command forge takes a number `open` or `find` printed only when `read` reports it open from the case's branch into its base.
+- The local forge writes each request record whole and links it into place, so a crash mid-write leaves no empty record that stops every open on the hub.
+- takt's one-cap CI result test bounds detection and the record's write apart, so a slow runner no longer turns it red and a run one interval late still does.
+
 ## [0.30.1] - 2026-11-04
 
 Trials started in one second in one checkout are numbered in the order they start, and the test suite no longer depends on the caller's `PATH`.
@@ -1062,7 +1084,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.30.1...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.31.0...HEAD
+[0.31.0]: https://github.com/beyond10x/takt/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/beyond10x/takt/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/beyond10x/takt/compare/0.29.0...0.30.0
 [0.29.0]: https://github.com/beyond10x/takt/compare/0.28.0...0.29.0
