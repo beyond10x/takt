@@ -116,6 +116,7 @@ fn commands() -> ForgeCommands {
         read: Some(argv(&["tool", "read", "{number}"])),
         checks: Some(argv(&["tool", "checks", "{number}", "{head}"])),
         merge: Some(argv(&["tool", "merge", "{number}", "{head}"])),
+        find: None,
         id_pattern: Some(r"/merge_requests/(\d+)".to_owned()),
         refused_exit: Some(vec![3]),
     }
@@ -495,7 +496,7 @@ fn a_recorded_number_is_read_back_through_read() {
     let scratch = Scratch::new("read-back");
     let printed = "https://forge.test/g/p/-/merge_requests/42\n";
     let other_branch = view("opened").replace("takt/case-1", "takt/case-2");
-    for (replies, field) in [
+    for (case, (replies, field)) in [
         (
             vec![exit(0, printed, ""), exit(0, &other_branch, "")],
             Some("number"),
@@ -509,11 +510,20 @@ fn a_recorded_number_is_read_back_through_read() {
             vec![exit(0, printed, ""), exit(1, "", "no such request")],
             None,
         ),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let fake = Fake::answering(replies);
         let forge = forge_over(&scratch, commands(), Box::new(fake.clone())).expect("a forge");
+        // Each open is a case of its own: an open whose number did not read back stands
+        // unanswered in its case, and the forge sends none again there.
         let error = forge
-            .open_pull_request(&scratch.0, &scratch.0.join("a"), &request("T"))
+            .open_pull_request(
+                &scratch.0,
+                &scratch.0.join(format!("a{case}")),
+                &request("T"),
+            )
             .expect_err("a number `read` does not confirm is not recorded");
         let text = format!("{error:#}");
         assert!(text.contains("42"), "the error names the number: {text}");

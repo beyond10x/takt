@@ -4178,8 +4178,9 @@ impl Validator for PrOpen {
     }
 
     /// The case's `branch.yaml`, and what the forge keeps of the request it sent, its title and
-    /// body as published, the response it read and, on the forge connectors, the count of its
-    /// keyed writes the provider refused.
+    /// body as published, the response it read, on the forge command the record of an open not
+    /// answered yet, and on the forge connectors the count of its keyed writes the provider
+    /// refused.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
@@ -4188,6 +4189,7 @@ impl Validator for PrOpen {
             artifacts.join(forge::RESPONSE),
             artifacts.join(forge::PUBLISHED),
             artifacts.join(crate::forge::command::CommandForge::BODY),
+            artifacts.join(crate::forge::command::CommandForge::UNANSWERED),
             artifacts.join(crate::forge::connectors::ConnectorsForge::REFUSALS),
         ]
     }

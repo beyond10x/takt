@@ -67,7 +67,11 @@ the run stops `Waiting`, and its last step names the pull request so that a pers
 close it.
 
 An open is read back the same way. Before `pr.open` opens a pull request, it asks the forge for
-one already open for the case's branch, and takes that one instead of opening a second.
+one already open for the case's branch, and takes that one instead of opening a second. `gitlab`
+lists the project's open merge requests, `local` reads the hub's request records, `command` runs
+the run file's `find` entry and `connectors` asks its instance. An answer that cannot be read is
+an error, never none. A command forge without `find` sends no second open while an earlier one
+stands unanswered ([The command forge](./configuration.md#the-command-forge)).
 
 ## The stop line
 

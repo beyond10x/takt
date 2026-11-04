@@ -8,6 +8,7 @@
 //! |---|---|
 //! | push | `git push` of the case's branch to the hub |
 //! | `pr.open` | a request record `<hub>/takt/requests/<n>.json` (branch, base, title, body), `n` taken with an exclusive create, so runs at once never share a number |
+//! | find | the one record open for the branch into the base; a record that does not read, or two open, is the error |
 //! | read | the record, the head as the hub's `refs/heads/<branch>`, behind its base when the base's tip is not an ancestor of the head; merged only when the record names the head and a commit on the hub's base that holds it (the head or a commit whose history has it), so a record written by hand merges nothing |
 //! | checks | the run file's `local_checks`, an argument list run without a shell as the test command is ([`crate::confinement::Confinement::run_test`]: the adapter in use, its environment and scratch home, no credential), in a fresh repository under the state directory that fetched the head from the hub by its id and names no remote; exit 0 passes, any other exit or the timeout fails, pending while it runs; a pass is recorded per head and per argument list (its digest), so a later read of the same checks does not run them again and other checks are run, and a fail is run again by the next read; not run while the run's `--min-free-gib` is not free |
 //! | merge | in the hub, with no work tree: a base whose tip already holds the head moves no ref and the request is recorded merged by the commit that holds it; else `git merge-tree --write-tree` of the base's tip and the head, a conflict refused naming its paths ([`LocalRefused::Conflict`]); else `git commit-tree` of a merge commit under the run's commit identity, saying takt's merge message, and `git update-ref` of the base from the tip to it, so a base another writer moved meanwhile is refused, not overwritten ([`LocalRefused::BaseMoved`]) |
@@ -637,6 +638,59 @@ impl Forge for Local {
                     ));
                 }
             }
+        }
+    }
+
+    /// The open request for `branch` into `base` among the hub's records, every record
+    /// `<n>.json` read: one that does not read (a record whose write never finished among them,
+    /// which may be this branch's) is the error, and so are two open for the branch and the base,
+    /// never none or one of them. A file beside them that is no record (a write in flight,
+    /// `<n>.json.<pid>.next`) is passed over.
+    fn find_open_pull_request(&self, _: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
+        let dir = self.hub.join(Self::REQUESTS);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context(format!("read {}", dir.display())));
+            }
+        };
+        let mut found = Vec::new();
+        for entry in entries {
+            let entry = entry.with_context(|| format!("read {}", dir.display()))?;
+            let name = entry.file_name();
+            let Some(number) = name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".json"))
+                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|digits| digits.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            let request = self.read(number).with_context(|| {
+                format!("the open requests for {branch} into {base} cannot be read")
+            })?;
+            if request.branch == branch
+                && request.base == base
+                && request.state == PullRequestState::Open.as_str()
+            {
+                found.push(number);
+            }
+        }
+        found.sort_unstable();
+        match found.as_slice() {
+            [] => Ok(None),
+            [number] => Ok(Some(*number)),
+            numbers => bail!(
+                "the hub {} holds {} open requests for {branch} into {base} (#{}); none is taken for the case",
+                self.hub.display(),
+                numbers.len(),
+                numbers
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", #")
+            ),
         }
     }
 
