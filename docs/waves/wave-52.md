@@ -1,6 +1,6 @@
 # Wave 52: a relative PATH entry and two trials in one second
 
-Stage: **proposed**. `wave/52` branches from bbaea844b, wave 51's close on `main`. Skill version 0.26.0
+Stage: **gated**. `wave/52` branches from bbaea844b, wave 51's close on `main`. Skill version 0.26.0
 (aep:implementing, wave mode). Approved: approval-record:wave-52-two-findings. Release: 0.30.1.
 
 ## Selection
@@ -55,3 +55,16 @@ Both units in the integration tree, one after the other, on one `target/`, line 
 | a | about 2.8 min, one cold build | 2.8G | green; red with `.` first on `PATH` before the change |
 | b | warm, on unit a's build | 3.0G | green; `decline_adv1` 20 runs of 20 |
 | review and fix | warm | 3.1G | green |
+
+## Gate
+
+On `wave/52` at bff5b77e8, one stage at a time, line tables only, incremental off, from a shell whose `PATH` holds `.`.
+`test-cli` reused `test-library`'s build; the cache was discarded after `check-static` and after `test-cli`.
+
+| stage | exit | duration | `target/` | result |
+|---|---|---|---|---|
+| `task check-static` | 0 | 29 s | 783M | every step 0 |
+| `task test-library` | 0 | 575 s | 39G | 2031 passed, 0 failed |
+| `task test-cli` | 0 | 343 s | 44G | 923 passed, 0 failed |
+
+The two cases that were red in the gates of waves 50 and 51 under that `PATH` passed.
