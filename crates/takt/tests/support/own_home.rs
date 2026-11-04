@@ -210,17 +210,18 @@ fn isolate() -> std::io::Result<()> {
         Some(inherited) => {
             let mut path = Vec::new();
             for dir in std::env::split_paths(&inherited) {
-                if !dir.is_absolute() {
-                    path.push(dir);
-                } else if dir.is_dir() {
+                if dir.is_absolute() && dir.is_dir() {
                     if writable(&dir) {
                         path.push(copy_of(&dir)?);
                     } else {
                         path.push(dir);
                     }
                 }
-                // A directory that does not exist yet finds nothing, and one made there later
-                // would be another process's: it is left out.
+                // A relative entry such as `.` names a directory only against the working
+                // directory of the command that reads it, which for a case's test command is the
+                // case tree (story:a-relative-path-entry-is-no-test-program-directory): it is
+                // left out. A directory that does not exist yet finds nothing, and one made there
+                // later would be another process's: it is left out too.
             }
             Some(std::env::join_paths(path).map_err(std::io::Error::other)?)
         }
