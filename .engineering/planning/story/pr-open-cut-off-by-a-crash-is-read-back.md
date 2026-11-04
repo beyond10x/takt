@@ -2,14 +2,24 @@
 format: aep.planning-md/3
 id: story:pr-open-cut-off-by-a-crash-is-read-back
 kind: story
-status: draft
+status: active
 title: A pull request open cut off by a crash is read back on every forge
 summary: only the connectors forge finds the open pull request after a crash
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: inferred
+  path: crates/takt/src/forge/command.rs
+- confidence: inferred
+  path: crates/takt/src/forge/gitlab.rs
+- confidence: inferred
+  path: crates/takt/src/forge/local.rs
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 3}
 ---
 # A pull request open cut off by a crash is read back on every forge
 

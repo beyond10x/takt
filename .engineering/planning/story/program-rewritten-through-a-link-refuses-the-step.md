@@ -2,14 +2,24 @@
 format: aep.planning-md/3
 id: story:program-rewritten-through-a-link-refuses-the-step
 kind: story
-status: draft
+status: active
 title: A program rewritten through its link in a program directory refuses the step
 summary: the guard reads a linked program as the link only; a rewrite behind it is not refused
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/run.rs
+- confidence: inferred
+  path: crates/takt/tests/support/own_home.rs
+- confidence: cited
+  path: crates/takt/tests/w50_sec_unattributed.rs
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T06:19:36Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-04T06:19:36Z", actor: "human:timo", revision: 3}
 ---
 # A program rewritten through its link in a program directory refuses the step
 
