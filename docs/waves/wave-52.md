@@ -23,8 +23,8 @@ story:the-refused-path-proposal-case-holds-on-every-host is rejected by the same
 
 | unit | story | objective | scope | stage |
 |---|---|---|---|---|
-| a | story:a-relative-path-entry-is-no-test-program-directory | a test binary's `PATH` keeps no relative entry, so `.` on the caller's `PATH` turns no case red | cited, one line inferred | proposed |
-| b | story:two-trials-started-in-one-second-have-no-case-order | the decline case does not depend on the order of two trial ids taken in one second | cited | proposed |
+| a | story:a-relative-path-entry-is-no-test-program-directory | a test binary's `PATH` keeps no relative entry, so `.` on the caller's `PATH` turns no case red | cited, one line inferred | a32b47826, review fix in the wave's fix commit |
+| b | story:two-trials-started-in-one-second-have-no-case-order | the decline case does not depend on the order of two trial ids taken in one second | cited | ec855c034, review fix in the wave's fix commit |
 
 The units share no path. They run one after the other, since one tree builds at a time.
 
@@ -39,3 +39,19 @@ Targeted tests:
 Gate: once both units are in, on `wave/52`, one stage at a time: `task check-static`, then `task test-library`,
 then `task test-cli`, each step's own exit status recorded here. Then one pull request through the bot route, its
 merge, the tag and the release.
+
+## Reviews
+
+| review | units | outcome |
+|---|---|---|
+| review-result:w52-adv-ab-1 | a and b | fixed: a `PATH` with no absolute directory is refused before `main`; the wrap past 99999999 is documented; the adversary's cases on the free search and on built `PATH`s are kept |
+
+## Unit builds
+
+Both units in the integration tree, one after the other, on one `target/`, line tables only, incremental off.
+
+| unit | cargo | peak `target/` | result |
+|---|---|---|---|
+| a | about 2.8 min, one cold build | 2.8G | green; red with `.` first on `PATH` before the change |
+| b | warm, on unit a's build | 3.0G | green; `decline_adv1` 20 runs of 20 |
+| review and fix | warm | 3.1G | green |
