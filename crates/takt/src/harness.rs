@@ -948,8 +948,26 @@ impl Harness for SessionHarness {
                 !self.context.is_empty(),
             );
             agents_left_to_codex = left;
-            let fit =
-                |files: &[DeclaredContextFile]| codex_prompt_argument(&prompt_for(files), files);
+            // The run's `context` files, which metaharness reads from the copy and puts ahead of
+            // the brief in the same argument, are measured with it; a file it cannot read here
+            // the executor refuses before the copy is made.
+            let requested: Vec<DeclaredContextFile> = self
+                .requested_context
+                .iter()
+                .filter_map(|path| {
+                    let bytes = std::fs::read(context.tree.join(path)).ok()?;
+                    DeclaredContextFile::new(path.clone(), bytes).ok()
+                })
+                .collect();
+            let fit = |files: &[DeclaredContextFile]| {
+                codex_prompt_argument(
+                    &loom_sdk::session::metaharness::protocol::with_context_files(
+                        &prompt_for(files),
+                        files,
+                    ),
+                    &requested,
+                )
+            };
             if !codex_instructions.is_empty()
                 && !loom_sdk::session::metaharness::protocol::argument_fits(&fit(
                     &codex_instructions,

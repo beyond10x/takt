@@ -833,16 +833,15 @@ impl RunArgs {
     /// when the file sets it; without `--config`, nothing changes. The file's `story` names
     /// the work only when no flag does (--story, --intent, --case), and is kept with the file
     /// it came from, so a refusal names that file; a run that opens no story (a
-    /// `self.improvement/1` turn) leaves it out. The session's `context` files are checked
-    /// against the work tree, whose files the session's copy holds.
+    /// `self.improvement/1` turn) leaves it out.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
         let Some(path) = &self.config else {
-            self.looping
-                .configured(takt::run_config::RunConfig::default(), matches, &self.repo)?;
-            return self
-                .looping
-                .check_context(&takt::run_config::ContextTree::WorkTree(&self.repo));
+            return self.looping.configured(
+                takt::run_config::RunConfig::default(),
+                matches,
+                &self.repo,
+            );
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
         if let Some(story) = file.story.take()
@@ -856,9 +855,7 @@ impl RunArgs {
         self.declared_scan = file.scan;
         self.protocol_settings = file.protocol_settings.clone();
         self.forge_settings = file.forge_settings();
-        self.looping.configured(file, matches, &self.repo)?;
-        self.looping
-            .check_context(&takt::run_config::ContextTree::WorkTree(&self.repo))
+        self.looping.configured(file, matches, &self.repo)
     }
 }
 
@@ -1201,8 +1198,12 @@ struct LoopArgs {
     #[arg(long)]
     strict_version: bool,
     /// A file whose text the session is handed, as `metaharness run --context` takes it,
-    /// repeatable: a file the repository's index tracks, as one plain relative path. The run
-    /// file's `harness` mapping's `context`; the flag wins over it.
+    /// repeatable: a file the session's copy holds (for `takt run` a file the work tree tracks,
+    /// or a resumed case's branch holds; for `takt scenario run` a file of the seed), as one
+    /// plain relative path reached through no link, UTF-8 text without NUL and no credential,
+    /// the files together within metaharness's 65536-byte cap; any other is refused before the
+    /// case opens or resumes. The run file's `harness` mapping's `context`; the flag wins over
+    /// it.
     #[arg(long, value_name = "FILE")]
     context: Vec<PathBuf>,
     #[command(flatten)]
@@ -1859,6 +1860,21 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 intent.is_some() || opens_turn,
                 out,
             )?;
+            // The session's `context` files are checked against the files its copy is made of,
+            // before the case opens or resumes: a resumed case's branch, which resuming checks
+            // out, else the work tree a new case is cut from.
+            let case_head = resuming.as_ref().and_then(|resuming| {
+                let branch = takt::case::Branch::name_of(&resuming.id);
+                let head = format!("refs/heads/{branch}^{{commit}}");
+                takt::git::run(&repo, &["rev-parse", "--verify", "--quiet", &head]).ok()
+            });
+            looping.check_context(&match &case_head {
+                Some(revision) => takt::run_config::ContextTree::Revision {
+                    repo: &repo,
+                    revision,
+                },
+                None => takt::run_config::ContextTree::WorkTree(&repo),
+            })?;
             let given_for_resume = given.as_ref().zip(protocol.as_deref());
             let first_input = inputs.first().map(|(name, _)| name.clone());
             if let Some(resuming) = &resuming {
