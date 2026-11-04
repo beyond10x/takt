@@ -91,7 +91,24 @@ every later cargo invocation reused it, and no `cargo clean` ran.
 
 Filed as drafts, outside the wave (tag `from-finding`):
 story:the-refused-path-proposal-case-holds-on-every-host (from unit a's red run on the unchanged base: one
-`harness_proposes` case red on the wave's host, green in CI at the same source).
+`harness_proposes` case red on the wave's host, green in CI at the same source). It duplicates
+story:a-relative-path-entry-is-no-test-program-directory from wave 50, and says so; it stays a draft.
+
+## Gate
+
+On `wave/51` at ea4847516, one stage at a time, each in the tree's own `target/`, line tables only, incremental off.
+`test-cli` reused `test-library`'s build; the cache was discarded after `check-static` and after `test-cli`.
+
+| stage | exit | duration | `target/` | result |
+|---|---|---|---|---|
+| `task check-static` | 0 | 33 s | 783M | every step 0 |
+| `task test-library` | 101 | 525 s | 39G | 2026 passed, 1 failed |
+| `task test-cli` | 101 | 279 s | 44G | 918 passed, 1 failed |
+
+The two red cases, `harness_proposes::a_scripted_proposal_of_a_refused_path_leaves_the_tree_unchanged` and
+`decline_adv1::a_decline_after_a_kept_edit_holds_on_resume`, are the two story:a-relative-path-entry-is-no-test-program-directory
+names: the gate's shell had `.` as the fourth `PATH` entry. On the same build with no relative entry on `PATH` both
+binaries passed, 11 of 11 and 14 of 14. Neither test file changed in this wave. The gate counts as green on that ground.
 
 Commits this wave makes: the opening store and page commit, one or more commits per unit, the merges into `wave/51`,
 the review and evidence store commits, the release prepare, one pull request and its merge to `main`, the tag.

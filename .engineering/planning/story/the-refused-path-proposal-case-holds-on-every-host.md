@@ -9,7 +9,7 @@ tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # The refused-path proposal case is red on a host where CI is green
 
@@ -50,3 +50,12 @@ needs; a link committed by the case is either refused for its own reason or no l
 
 - `crates/takt/tests/harness_proposes.rs:668-720` (cited)
 - `crates/takt/src/validator.rs:2205` (the judge-surface comparison that names `linked`) (inferred)
+
+## Duplicate
+
+Duplicates story:a-relative-path-entry-is-no-test-program-directory, filed by wave 50, which names this case and
+`decline_adv1::a_decline_after_a_kept_edit_holds_on_resume`. Wave 51's staged gate on `wave/51` at ea4847516 ran
+from a shell whose `PATH` had `.` as its fourth entry: both cases red, the second 3 times in 3. On the same build with
+every relative entry removed from `PATH`, `harness_proposes` passed 11 of 11 and `decline_adv1` 14 of 14. The git
+upgrade named above as a candidate is not the cause. Work it under the earlier draft; this one stays a draft for an
+operator to reject.
