@@ -133,7 +133,8 @@ fn real_git() -> PathBuf {
 /// merge_requests --input <file>` keeps the request and prints `{"iid": 7}`; `glab api ...
 /// merge_requests/7` prints the merge request with the pushed head and its head pipeline
 /// passing; `glab api ... repository/branches/main` prints the local `main`; `--method PUT`
-/// merges and counts the merge. The `git` shim records, for a push to an `https://` URL, the
+/// merges and counts the merge; the list of open merge requests from a branch, which `pr.open`
+/// reads before it opens one, is empty. The `git` shim records, for a push to an `https://` URL, the
 /// URL, the branch and the revision, exits 0 for a fetch from one; records in
 /// `<state>/origin.lines` each fetch from and push to the remote `origin`, which fetches
 /// nothing and reports each pushed branch created; and runs the real git for every other line.
@@ -174,6 +175,8 @@ case "$method $path" in
   "POST projects/group%2Fsub%2Frepo/merge_requests")
     cp "$input" "$state/request.json"; printf opened > "$state/state"
     printf '{{"iid": 7, "id": 1234}}'; exit 0 ;;
+  "GET projects/group%2Fsub%2Frepo/merge_requests?state=opened&"*)
+    printf '[]'; exit 0 ;;
   "GET projects/group%2Fsub%2Frepo/merge_requests/7")
     sha=$(tr -d '\n' < "$state/pushed")
     printf '{{"iid":7,"state":"%s","source_branch":"%s","target_branch":"main","sha":"%s","head_pipeline":{{"sha":"%s","status":"success"}}}}' "$(cat "$state/state")" "$(cat "$state/branch")" "$sha" "$sha"

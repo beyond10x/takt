@@ -109,7 +109,8 @@ fn real_git() -> PathBuf {
 /// last one again once they run out, and answers the merge request opened at the pushed head
 /// with that head pipeline: `null` for none, else `<status> head` for a pipeline of the pushed
 /// head, `<status> behind` for one of the commit in `<state>/behind`; the line is appended to
-/// `<state>/served`. `--method PUT` counts a merge in `<state>/merges`.
+/// `<state>/served`. `--method PUT` counts a merge in `<state>/merges`. The list of open merge
+/// requests from the case's branch, which `pr.open` reads before it opens one, is empty.
 const GLAB: &str = r#"#!/bin/sh
 state='@STATE@'
 echo "$*" >> "$state/glab.lines"
@@ -129,6 +130,9 @@ case "$method $path" in
   "POST projects/group%2Fsub%2Frepo/merge_requests")
     cp "$input" "$state/request.json"
     printf '{"iid": 7, "id": 1234}'
+    exit 0 ;;
+  "GET projects/group%2Fsub%2Frepo/merge_requests?state=opened&"*)
+    printf '[]'
     exit 0 ;;
   "GET projects/group%2Fsub%2Frepo/merge_requests/7")
     reads=0
