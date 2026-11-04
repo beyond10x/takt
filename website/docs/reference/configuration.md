@@ -412,13 +412,16 @@ forge_commands:
   request gives no number: a `.../merge_requests/new` page, a host with a port, a project whose
   name holds a digit. `pr.open` is then refused, naming `id_pattern`, and nothing is recorded. Any
   number is read back through `read` before `open` returns: a request `read` does not report as an
-  open request for the case's branch, or cannot read, is refused naming `number`, and its number
-  is not recorded.
+  open request from the case's branch into its base, or cannot read, is refused naming `number`,
+  and its number is not recorded.
 - **Finding an open request.** `pr.open` runs `find` for the case's branch and base before it
   opens a request and after an open that failed, so a run resumed after a crash takes the request
   it already opened instead of opening a second. Nothing printed means none; a lone number, with
-  `#` or `!` before it allowed, is the request, read back through `read`. Anything else is an
-  error naming `find`, never none, and nothing is opened.
+  `#` or `!` before it allowed, is read back through `read` and is the request only when `read`
+  reports it open from that branch into that base, the check `open`'s number is held to. Anything
+  else, a number `read` cannot read or one it reports closed, merged, from another branch or into
+  another base among them, is an error naming `find`, the number and what `read` reported, never
+  none, and nothing is opened.
 - **Without `find`.** Nothing reads an open back. Before `open` runs, takt writes
   `open.unanswered.json` under the case's artifacts directory, and removes it once `open`'s answer
   says whether it opened: a number read back, an exit in `refused_exit`, or a failure before
@@ -563,8 +566,11 @@ local_checks: [cargo, test, --quiet]
   `--commit-identity`, or `identity.name` and `identity.email` in
   `.engineering/commit-identity.conf`. Without one the run is refused before any case opens.
 - **Open.** `pr.open` pushes the case's branch to the hub and writes a request record,
-  `<hub>/takt/requests/<n>.json`, holding the branch, the base, the title and the body. `n` is taken
-  by an exclusive create, so two runs at once never share a number.
+  `<hub>/takt/requests/<n>.json`, holding the branch, the base, the title and the body. The record
+  is written whole to `<n>.json.<pid>.next` beside it and then linked to `<n>.json`, which fails
+  rather than replace a record already there, so two runs at once never share a number and no
+  record is ever empty or half written; a run that ends mid-write leaves only the `.next` file,
+  which nothing reads as a record.
 - **Checks.** `local_checks` is an argument list run without a shell, as the test command is: under
   the run's confinement, with its environment cleared of credentials and a scratch home, in a
   fresh repository under the state directory that fetched the head from the hub by its id and names

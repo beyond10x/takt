@@ -50,3 +50,16 @@ Gate: once all four units are in, on `wave/53`, one stage at a time: `task check
 then `task test-cli`, each step's own exit status recorded here. The gate script samples free space on `/` every
 30 s and writes the minimum to its summary. Then one pull request through the bot route, its merge, the tag and the
 release.
+
+Gate plan, agreed with the host's operators before the first stage. The build cache is discarded after every stage, so
+each stage builds on its own. Each stage names its peak `target/`. It starts only when `/` holds the peak and 40G more,
+or 50G more while another build runs beside it. A stage that cannot start waits for space and does not start early. A
+sampler every 30 s stops the running stage at `/` under 40G or at a `target/` over its named peak, and ends the gate.
+Minutes count time inside cargo, not the wait for a build slot. The disk steward set the `task test-library` row:
+its floor is its peak and 25G, and its sampler stops it at `/` under 25G.
+
+| stage | named peak | cargo minutes, estimated | start floor alone | beside a build | basis |
+|---|---|---|---|---|---|
+| `task check-static` | 3G | 1 | 43G | 53G | wave 52: 783M, 29 s |
+| `task test-library` | 44G | 10 | 69G | 69G | wave 52: 39G at stage end, 44G read by the disk steward; its stop line on `/` is 25G |
+| `task test-cli` | 30G | 9 | 70G | 80G | first run alone after a discard; wave 52 ran it on the library's build |

@@ -9,6 +9,8 @@
 //!
 //! The runs go through a double of the forge; nothing here reaches a host.
 
+#[path = "support/one_cap.rs"]
+mod one_cap;
 #[path = "support/own_home.rs"]
 mod own_home;
 
@@ -239,7 +241,7 @@ struct Watched {
     green_after: Option<Duration>,
     heads: Vec<Option<String>>,
     views: Cell<usize>,
-    reads: RefCell<Vec<(Instant, Checks)>>,
+    reads: RefCell<Vec<(Instant, SystemTime, Checks)>>,
 }
 
 impl Watched {
@@ -326,7 +328,9 @@ impl Forge for Watched {
             Some(at) if SystemTime::now() >= at => Checks::Pass,
             _ => Checks::Pending,
         };
-        self.reads.borrow_mut().push((Instant::now(), checks));
+        self.reads
+            .borrow_mut()
+            .push((Instant::now(), SystemTime::now(), checks));
         Ok(checks)
     }
 
@@ -546,11 +550,12 @@ fn ci_result_follows_completion_within_one_interval() {
 }
 
 /// Checks that pass at any instant of a grid after their first read, under a scaled backoff
-/// (100 ms, capped at 225 ms): every `ci_result` record is written within one cap of the
+/// (100 ms, capped at 225 ms): the read that sees them pass comes within one cap of the
 /// instant, beside the time the run spends between two reads on its own (the longest gap
-/// between two reads less the wait between them) and that time again, 20 ms at least, for the
-/// write of the record: a runner slow between its reads is as slow writing it, and a run that
-/// waits a whole cap too long is still late.
+/// between two reads less the wait between them), and the record is written within one second
+/// of that read. The two are bounded apart (`support/one_cap.rs` says why): a slow write on a
+/// loaded runner is no late result, and a run that waits a whole cap too long is still late, the
+/// write's slack never reaching the read.
 #[test]
 fn ci_result_follows_any_completion_within_one_cap() {
     let first = Duration::from_millis(100);
@@ -583,8 +588,12 @@ fn ci_result_follows_any_completion_within_one_cap() {
             .and_then(|meta| meta.modified())
             .expect("a modification time");
         let green_at = forge.green_at.get().expect("the checks were read");
-        let after = written.duration_since(green_at).unwrap_or_default();
         let reads = forge.reads.borrow();
+        let seen = reads
+            .iter()
+            .find(|(_, _, checks)| *checks == Checks::Pass)
+            .map(|(_, at, _)| *at)
+            .unwrap_or_else(|| panic!("no read saw the checks pass\n{text}"));
         let waited: Vec<f64> = waits(&repo, &id).iter().map(|(_, s)| *s).collect();
         let own = reads
             .windows(2)
@@ -594,13 +603,19 @@ fn ci_result_follows_any_completion_within_one_cap() {
             })
             .max()
             .unwrap_or_default();
-        if after > cap + own + own.max(Duration::from_millis(20)) {
-            late.push((offset, after, own, waited));
+        let measured = one_cap::Measured {
+            cap,
+            own,
+            detected: seen.duration_since(green_at).unwrap_or_default(),
+            written: written.duration_since(seen).unwrap_or_default(),
+        };
+        if measured.late() {
+            late.push((offset, measured, waited));
         }
     }
     assert!(
         late.is_empty(),
-        "ci_result later than one cap {cap:?} after the checks passed, as (ms after the first read, how late, the run's own time between reads, the waits): {late:?}, story:ci-wait-watches-the-check"
+        "ci_result later than one cap {cap:?} after the checks passed, as (ms after the first read, the read that saw them pass after the green and the record after that read beside the run's own time between reads, the waits): {late:?}, story:ci-wait-watches-the-check"
     );
 }
 

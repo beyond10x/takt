@@ -559,20 +559,10 @@ impl CommandForge {
                 "the number {number} read from what `open` printed was not read back through `read`; the request may be open under another number, and none is recorded"
             )
         })?;
-        if view.head.branch != request.branch || view.state != PullRequestState::Open {
-            return Err(ForgeOutput {
-                command: Entry::Open.name().to_owned(),
-                field: "number".to_owned(),
-            })
-            .with_context(|| {
-                format!(
-                    "`read` reports request {number} as {} with the head {}, not an open request for {}; none is recorded",
-                    view.state, view.head.branch, request.branch
-                )
-            })
-            .map_err(WriteError::unknown);
+        match not_held(Entry::Open, number, &view, &request.branch, &request.base) {
+            None => Ok(number),
+            Some(error) => Err(WriteError::unknown(error)),
         }
-        Ok(number)
     }
 
     /// `stdout` of `entry` as a JSON document.
@@ -627,6 +617,30 @@ fn tip_of<'a>(stdout: &'a str, reference: &str) -> Option<&'a str> {
     });
     let tip = named.next()?;
     named.next().is_none().then_some(tip)
+}
+
+/// The error for a number `entry` printed that `read` reports as `view`, unless `view` is an open
+/// request from `branch` into `base`: [`ForgeOutput`] naming `entry` and `number`, with what
+/// `read` reported. `open` and `find` hold the number they print to this one check before it is
+/// taken; `None` when it holds.
+fn not_held(
+    entry: Entry,
+    number: u64,
+    view: &PullRequestView,
+    branch: &str,
+    base: &str,
+) -> Option<anyhow::Error> {
+    if view.state == PullRequestState::Open && view.head.branch == branch && view.base == base {
+        return None;
+    }
+    let none = match entry {
+        Entry::Find => "none is taken",
+        _ => "none is recorded",
+    };
+    Some(unreadable(entry, "number").context(format!(
+        "`read` reports request {number} as {} from {} into {}, not an open request from {branch} into {base}; {none}",
+        view.state, view.head.branch, view.base
+    )))
 }
 
 /// A field of `command`'s output that cannot be read.
@@ -873,10 +887,12 @@ impl Forge for CommandForge {
     }
 
     /// `find` with `{branch}` and `{base}`: nothing printed is none, a lone number (on a line of
-    /// its own, `#` or `!` before it allowed) is the request; anything else is
-    /// [`ForgeOutput`] naming `find` and `number`, never none. Without `find`, none: `open`
-    /// then refuses to send again while an earlier open stands unanswered
-    /// ([`CommandForge::UNANSWERED`]).
+    /// its own, `#` or `!` before it allowed) is the request once `read` reports it open from
+    /// `branch` into `base`, as `open`'s number is held ([`not_held`]); anything else printed, a
+    /// number `read` cannot read, or one it reports closed, merged, from another branch or into
+    /// another base is [`ForgeOutput`] naming `find` and `number`, with what `read` reported,
+    /// never none. Without `find`, none: `open` then refuses to send again while an earlier open
+    /// stands unanswered ([`CommandForge::UNANSWERED`]).
     fn find_open_pull_request(&self, tree: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
         if self.commands.find.is_none() {
             return Ok(None);
@@ -890,10 +906,15 @@ impl Forge for CommandForge {
         if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
             return Err(unreadable(Entry::Find, "number"));
         }
-        digits
+        let number: u64 = digits
             .parse()
-            .map(Some)
-            .map_err(|_| unreadable(Entry::Find, "number"))
+            .map_err(|_| unreadable(Entry::Find, "number"))?;
+        let view = self.pull_request(tree, number).with_context(|| {
+            format!(
+                "the number {number} `find` printed for {branch} into {base} was not read back through `read`; none is taken"
+            )
+        })?;
+        not_held(Entry::Find, number, &view, branch, base).map_or(Ok(Some(number)), Err)
     }
 
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {

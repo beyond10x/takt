@@ -2620,7 +2620,8 @@ types:
   # `local` is a bare repository on this machine, the hub the tree's `origin` names by its path,
   # outside the tree and sharing neither its git directory nor its object files with it (a tree
   # cloned with `git clone --no-local`): the push is `git push` to the hub, a request is a record
-  # under the hub's `takt/requests` taken with an exclusive create, the checks are the run file's
+  # under the hub's `takt/requests`, written whole beside its name and linked to it only while no
+  # record holds that name, so no record is ever empty or half written, the checks are the run file's
   # `local_checks` run as the test command is in a fresh repository at the head, not run under the
   # run's free-disk floor, a pass kept per head and per argument list, and the merge is made in
   # the hub under the run's commit identity, a conflict refused naming its paths and a base moved
@@ -2631,7 +2632,7 @@ types:
   # the run's confinement can run and a commit identity, is named, never defaulted to, and a
   # scenario run refuses it as it refuses `gitlab`.
   # read from: crates/takt/src/forge/local.rs:1-15
-  # read from: crates/takt/src/forge/local.rs:280-341
+  # read from: crates/takt/src/forge/local.rs:279-340
   # read from: crates/takt-cli/src/main.rs:3394-3433
   # read from: crates/takt-cli/src/main.rs:4681-4707
   - name: takt.work.ForgeName
@@ -2661,8 +2662,8 @@ types:
   # (a `merge_requests/new` page, a host with a port, a project whose name holds a digit) gives no
   # number, and `pr.open` is refused naming `id_pattern`. Whatever the number's source, it is read
   # back through `read` before `open` returns: a request `read` does not report as an open request
-  # for the case's branch, or cannot read, is refused naming `number` and records no number, so
-  # `pr.opened` never holds for a request `read` did not confirm.
+  # from the case's branch into its base, or cannot read, is refused naming `number` and records no
+  # number, so `pr.opened` never holds for a request `read` did not confirm.
   # An exit code in `refused_exit` is a refusal, any other non-zero exit a failure; standard
   # error of every command goes to a file under the state directory. The push stays takt's own,
   # scanned push over HTTPS to the project the `origin` remote names; the command forge never
@@ -2680,21 +2681,24 @@ types:
   # through `read`.
   # `pr.open` asks `find` for the case's branch into its base before it opens a request and after
   # an open that failed: nothing printed is none; a lone number, `#` or `!` before it allowed, is
-  # the request, read back through `read` and taken, never opened again; anything else is
-  # `unparseable` naming `find` and `number`, never none, and opens nothing. Without `find`
+  # read back through `read` and is the request, taken and never opened again, only when `read`
+  # reports it open from that branch into that base, the check `open`'s number is held to;
+  # anything else printed, or a number `read` cannot read or reports otherwise, is `unparseable`
+  # naming `find` and `number`, with what `read` reported, never none, and opens nothing. Without `find`
   # nothing reads an open back: before `open` runs, `open.unanswered.json` under the case's
   # artifacts records it, removed once `open`'s answer says whether it opened (a number read
   # back, an exit in `refused_exit`, a failure before anything was sent) and left for an outcome
   # that is `unknown` (another exit, a signal, a number that does not read or read back, a run
   # that ended before the answer). While it stands, `pr.open` sends no `open` for the case: it is
   # refused, naming `find` and the file, until `find` is added or the file is removed.
-  # read from: crates/takt/src/forge/command.rs:590-613
-  # read from: crates/takt/src/forge/command.rs:556-575
-  # read from: crates/takt/src/forge/command.rs:615-630
-  # read from: crates/takt/src/forge/command.rs:824-873
-  # read from: crates/takt/src/forge/command.rs:875-896
-  # read from: crates/takt/src/forge/command.rs:775-813
+  # read from: crates/takt/src/forge/command.rs:580-603
+  # read from: crates/takt/src/forge/command.rs:556-564
+  # read from: crates/takt/src/forge/command.rs:605-620
+  # read from: crates/takt/src/forge/command.rs:838-887
+  # read from: crates/takt/src/forge/command.rs:889-918
+  # read from: crates/takt/src/forge/command.rs:789-827
   # read from: crates/takt/src/forge/command.rs:391-395
+  # read from: crates/takt/src/forge/command.rs:622-643
   - name: takt.work.ForgeCommands
     kind: struct
     fields:
@@ -5637,7 +5641,7 @@ entities:
       # read from: crates/takt/src/forge.rs:600-616
       # read from: crates/takt/src/promotion.rs:508-512
       # read from: crates/takt/src/forge/gitlab.rs:690-697
-      # read from: crates/takt/src/forge/local.rs:560-564
+      # read from: crates/takt/src/forge/local.rs:565-569
       # read from: crates/takt/src/scan.rs:154-162
       - name: committed
         type: Optional<takt.work.Revision>
@@ -6017,7 +6021,7 @@ entities:
   # read from: crates/takt/src/validator.rs:5890-5921
   # read from: crates/takt/src/forge/gitlab.rs:725-762
   # read from: crates/takt/src/forge/gitlab.rs:524-533
-  # read from: crates/takt/src/forge/local.rs:644-692
+  # read from: crates/takt/src/forge/local.rs:658-707
   - name: takt.work.EvidenceProducer
     naming:
       summary: >-
