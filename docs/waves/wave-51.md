@@ -1,6 +1,7 @@
 # Wave 51: the harness mapping carries effort, the cost cap, the version check and context
 
-Stage: **running**. `wave/51` branches from 1c3ba5178, 0.29.0's release close on `main`. Skill version 0.26.0
+Stage: **delivered**, released as 0.30.0 from 7f08a89bf, the merge of pull request 56. `wave/51` branches from
+1c3ba5178, 0.29.0's release close on `main`. Skill version 0.26.0
 (aep:implementing, wave mode). Approved: approval-record:wave-51-harness-mapping-carried. Release: 0.30.0.
 
 ## Selection
@@ -112,3 +113,10 @@ binaries passed, 11 of 11 and 14 of 14. Neither test file changed in this wave. 
 
 Commits this wave makes: the opening store and page commit, one or more commits per unit, the merges into `wave/51`,
 the review and evidence store commits, the release prepare, one pull request and its merge to `main`, the tag.
+
+## Delivery
+
+Pull request 56 merged as 7f08a89bf and tagged 0.30.0. The Release run's gate of the tagged commit went red once in
+`test-cli` on `decline_adv1::passing_over_a_declined_case_does_not_pass_over_its_storys_other_open_case`, the case
+story:two-trials-started-in-one-second-have-no-case-order names, recorded there as evidence; the re-run of the failed
+jobs passed and published the release. Both stories moved to implemented on the `check` run of `main` at the merge.

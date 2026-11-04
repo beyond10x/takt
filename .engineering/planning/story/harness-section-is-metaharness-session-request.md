@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:harness-section-is-metaharness-session-request
 kind: story
-status: active
+status: implemented
 title: The run file's harness section is metaharness's session request, checked by metaharness
 summary: Claude, Codex and b10x-harness keys as metaharness run takes them; takt-owned keys refused; waits on metaharness and Loom
 tags:
@@ -29,10 +29,11 @@ scope:
   path: ess/ess-inputs.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 13
+revision: 14
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"review_outcome":6}}}
 - {from: "proposed", to: "active", at: "2026-10-27T01:36:42Z", actor: "human:timo", revision: 6, decided_on: {"recorded":{"review_outcome":6}}}
+- {from: "active", to: "implemented", at: "2026-11-04T02:16:43Z", actor: "human:timo", revision: 14, decided_on: {"recorded":{"test_result":1,"review_outcome":9,"verification":1}}}
 ---
 # Story: harness-section-is-metaharness-session-request
 
