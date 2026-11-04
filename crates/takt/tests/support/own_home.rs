@@ -48,7 +48,8 @@ extern "C" fn before_main() {
     }
     if let Err(error) = isolate() {
         eprintln!("own_home: the test binary's own program directories: {error}");
-        std::process::abort();
+        // An exit status, not `abort`: an abort writes a core file into the working directory.
+        std::process::exit(101);
     }
 }
 
@@ -222,6 +223,13 @@ fn isolate() -> std::io::Result<()> {
                 // case tree (story:a-relative-path-entry-is-no-test-program-directory): it is
                 // left out. A directory that does not exist yet finds nothing, and one made there
                 // later would be another process's: it is left out too.
+            }
+            // An empty `PATH` is one empty entry, which reads as the working directory: a
+            // `PATH` with no existing absolute directory is refused rather than left so.
+            if path.is_empty() {
+                return Err(std::io::Error::other(format!(
+                    "PATH {inherited:?} holds no existing absolute directory; the suite needs one"
+                )));
             }
             Some(std::env::join_paths(path).map_err(std::io::Error::other)?)
         }

@@ -3868,7 +3868,8 @@ const TRIAL_NONCES: u64 = 100_000_000;
 /// 00000000: a number whose trial branch is known, or whose case or case branch is there, is
 /// passed over. That, and `git checkout -b` refusing a branch that exists, is the hard guard;
 /// it holds within a checkout only. A case id [`takt::case::check_id`] refuses is refused, and
-/// so is a second whose every number is taken, before any branch is cut.
+/// so is a second whose every number is taken, before any branch is cut. Start order holds
+/// until a second's numbers wrap: a trial after one at 99999999 takes a smaller number.
 fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u128, String)> {
     let digits: String = at.chars().filter(char::is_ascii_digit).collect();
     let second: u128 = match digits.len() {
