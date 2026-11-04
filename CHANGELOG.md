@@ -6,6 +6,25 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-04
+
+The run file's `harness` mapping and the matching flags carry `effort`, `max-budget-usd`, `strict-version` and `context` to the session, checked by metaharness before any case opens.
+
+### Added
+
+- `harness: {kind, effort, max-turns, max-budget-usd, strict-version, context}` and the flags of the same names reach the session through Loom's session overrides; a flag wins.
+- `max-budget-usd` is a number or a decimal string, carried in micro-dollars; a finer value, a sign or an exponent is refused naming the key.
+- A `context` file is a plain relative path of a file the session's copy holds, reached through no link, UTF-8 text of no credential's shape, within metaharness's 65,536-byte cap.
+- `takt run` checks `context` against the work tree or the branch of the case it resumes, and `takt scenario run` against its seed, before any case opens.
+- Under Codex the prompt fit counts the `context` files metaharness puts in the same argument, and drops scope files until it fits.
+
+### Changed
+
+- The mapping is read by metaharness's `RunSpec::from_document` and checked by its `check_spec`, before any case opens.
+- A value of the wrong type, or a setting the kind does not take such as `max-turns` under Codex, is refused in metaharness's words.
+- The four settings are no longer refused as not carried yet.
+- The `--context` help and the configuration reference say what each run command checks.
+
 ## [0.29.0] - 2026-11-03
 
 `takt run --usd` stops a run on the cost its harness reports, and each pull-request open and merge records whether the forge applied it, refused it, was never asked or may have been.
@@ -1032,7 +1051,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.29.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.30.0...HEAD
+[0.30.0]: https://github.com/beyond10x/takt/compare/0.29.0...0.30.0
 [0.29.0]: https://github.com/beyond10x/takt/compare/0.28.0...0.29.0
 [0.28.0]: https://github.com/beyond10x/takt/compare/0.27.0...0.28.0
 [0.27.0]: https://github.com/beyond10x/takt/compare/0.26.0...0.27.0

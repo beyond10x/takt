@@ -13,7 +13,7 @@ on, every release publishes it to the GitHub container registry as
 `ghcr.io/beyond10x/takt:<version>`, linux/amd64:
 
 ```console
-$ docker pull ghcr.io/beyond10x/takt:0.29.0
+$ docker pull ghcr.io/beyond10x/takt:0.30.0
 ```
 
 The release workflow (`.github/workflows/release.yml`) calls `.github/workflows/image.yml`
@@ -28,7 +28,7 @@ no image. A pull request that changes `Dockerfile`, `.dockerignore` or
 To build it yourself:
 
 ```console
-$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.29.0 .
+$ docker build --build-arg REVISION=$(git rev-parse HEAD) -t takt:0.30.0 .
 ```
 
 ## What a deployment supplies
