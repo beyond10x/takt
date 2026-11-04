@@ -68,3 +68,6 @@ On `wave/52` at bff5b77e8, one stage at a time, line tables only, incremental of
 | `task test-cli` | 0 | 343 s | 44G | 923 passed, 0 failed |
 
 The two cases that were red in the gates of waves 50 and 51 under that `PATH` passed.
+
+Free space on `/`: 111G at the start. At the end of each stage it was 111G, 80G and 82G, and 126G after the last discard.
+The host's own sampler saw 72G during `test-cli`, at 04:05Z, which the samples at stage ends missed.
