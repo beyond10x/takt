@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.30.0, 2026-11-04 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.30.1, 2026-11-04 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
@@ -85,6 +85,7 @@ Each release in one line, from the changelog:
 | 0.28.0 | the token rule compares tokens per model request within 5 %, so an unchanged binary is not refused on drift; the forge wait starts at 2 s and grows to 4.5 s instead of a fixed 30 s; a red revision records `gate.deferred` and runs no gate |
 | 0.29.0 | `takt run --usd` stops a run on the cost its harness reports, counted in micro-dollars; `pr.open` and `repository.merge` record their forge write as `applied`, `refused`, `not_attempted` or `unknown`, and an unknown one is read back and never sent again; a refusal names a program directory changed during a step as of unknown origin |
 | 0.30.0 | the run file's `harness` mapping (`effort`, `max-turns`, `max-budget-usd`, `strict-version`, `context`) and the matching flags reach the session through Loom's session overrides, read and checked by metaharness before any case opens; `max-budget-usd` is carried in micro-dollars; a `context` file must be a tracked plain file of the session's copy within metaharness's 65,536-byte cap |
+| 0.30.1 | a test binary's `PATH` keeps no relative entry, so `.` on the caller's `PATH` turns no case red; trials started in one second in one checkout are numbered in the order they start |
 
 ## Every story
 

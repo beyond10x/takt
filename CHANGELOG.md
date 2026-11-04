@@ -6,6 +6,17 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.30.1] - 2026-11-04
+
+Trials started in one second in one checkout are numbered in the order they start, and the test suite no longer depends on the caller's `PATH`.
+
+### Fixed
+
+- Without `origin`, a trial started in the same second as one the checkout knows takes a number after it, so case order is start order.
+- Start order holds until a second's numbers wrap past 99999999; a first trial reaches that with a chance of about 1 in 10^8.
+- takt's own tests drop relative entries such as `.` from the `PATH` each test binary sees, so they no longer count the case tree as programs.
+- A `PATH` with no existing absolute directory stops a test binary before its first case, naming the `PATH`.
+
 ## [0.30.0] - 2026-11-04
 
 The run file's `harness` mapping and the matching flags carry `effort`, `max-budget-usd`, `strict-version` and `context` to the session, checked by metaharness before any case opens.
@@ -1051,7 +1062,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.30.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.30.1...HEAD
+[0.30.1]: https://github.com/beyond10x/takt/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/beyond10x/takt/compare/0.29.0...0.30.0
 [0.29.0]: https://github.com/beyond10x/takt/compare/0.28.0...0.29.0
 [0.28.0]: https://github.com/beyond10x/takt/compare/0.27.0...0.28.0
