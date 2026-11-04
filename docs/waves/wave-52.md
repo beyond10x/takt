@@ -1,0 +1,41 @@
+# Wave 52: a relative PATH entry and two trials in one second
+
+Stage: **proposed**. `wave/52` branches from bbaea844b, wave 51's close on `main`. Skill version 0.26.0
+(aep:implementing, wave mode). Approved: approval-record:wave-52-two-findings. Release: 0.30.1.
+
+## Selection
+
+Every planned wave is released, so two stories filed from findings enter, accepted by
+approval-record:wave-52-two-findings. `aep plan artifact waves --kind story --status active` after their scope entries:
+
+```
+wave 1
+  story:a-relative-path-entry-is-no-test-program-directory (inferred)
+  story:two-trials-started-in-one-second-have-no-case-order
+unassessed: story:harness-child-confined
+1 wave(s), 0 collision(s), 1 unassessed
+```
+
+story:harness-child-confined stays out: dependency-blocker:loom-child-confinement is open. The duplicate
+story:the-refused-path-proposal-case-holds-on-every-host is rejected by the same approval. The other drafts stay drafts.
+
+## Units
+
+| unit | story | objective | scope | stage |
+|---|---|---|---|---|
+| a | story:a-relative-path-entry-is-no-test-program-directory | a test binary's `PATH` keeps no relative entry, so `.` on the caller's `PATH` turns no case red | cited, one line inferred | proposed |
+| b | story:two-trials-started-in-one-second-have-no-case-order | the decline case does not depend on the order of two trial ids taken in one second | cited | proposed |
+
+The units share no path. They run one after the other, since one tree builds at a time.
+
+Targeted tests:
+
+- a: `cargo test -p b10x-takt --test tests_have_a_home_of_their_own --test harness_proposes` and
+  `cargo test -p b10x-takt-cli --test decline_adv1`, each once with `.` first on `PATH` (red before the change) and
+  once without
+- b: `cargo test -p b10x-takt-cli --test decline_adv1`, then its built binary run 20 times
+- each: `cargo fmt --all --check`, `cargo clippy -p b10x-takt -p b10x-takt-cli --all-targets --locked -- -D warnings`
+
+Gate: once both units are in, on `wave/52`, one stage at a time: `task check-static`, then `task test-library`,
+then `task test-cli`, each step's own exit status recorded here. Then one pull request through the bot route, its
+merge, the tag and the release.
