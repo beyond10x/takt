@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-04T05:56:27Z",
+  "actor": "human:timo",
+  "artifact": "story:a-relative-path-entry-is-no-test-program-directory",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 52: the case the story names was red before the change and green after it, in the targeted run and in the full gate on bff5b77e8",
+    "reference": "0c28f9c8f4dd81b2689a870957a9f9af70680a17"
+  }
+}
