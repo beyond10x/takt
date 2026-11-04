@@ -2,14 +2,17 @@
 format: aep.planning-md/3
 id: story:the-refused-path-proposal-case-holds-on-every-host
 kind: story
-status: draft
+status: rejected
 title: The refused-path proposal case holds on every host
 summary: harness_proposes' refused-path case stops at a judge-surface link on the wave's host and passes in CI at the same source
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T02:39:11Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "rejected", at: "2026-11-04T02:39:12Z", actor: "human:timo", revision: 4}
 ---
 # The refused-path proposal case is red on a host where CI is green
 

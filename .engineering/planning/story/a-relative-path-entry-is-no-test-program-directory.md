@@ -2,14 +2,22 @@
 format: aep.planning-md/3
 id: story:a-relative-path-entry-is-no-test-program-directory
 kind: story
-status: draft
+status: active
 title: A relative PATH entry does not make a test's case tree a program directory
 summary: own_home keeps relative PATH entries, so the guard counts the case tree's files as programs
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/tests/support/own_home.rs
+- confidence: inferred
+  path: crates/takt/tests/tests_have_a_home_of_their_own.rs
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T02:39:10Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-04T02:39:10Z", actor: "human:timo", revision: 3}
 ---
 # A relative PATH entry does not make a test's case tree a program directory
 

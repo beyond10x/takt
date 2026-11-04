@@ -109,6 +109,21 @@ fn the_real_cargo_bin_is_not_on_the_path() {
     );
 }
 
+/// story:a-relative-path-entry-is-no-test-program-directory: a relative entry such as `.`
+/// resolves against the working directory of the command that reads it, so in a case's test
+/// command it would make the case tree a program directory the guard counts.
+#[test]
+fn no_relative_entry_is_left_on_the_path() {
+    let path = std::env::var_os("PATH").expect("a PATH");
+    let relative: Vec<PathBuf> = std::env::split_paths(&path)
+        .filter(|dir| !dir.is_absolute())
+        .collect();
+    assert!(
+        relative.is_empty(),
+        "PATH holds relative entries: {relative:?}"
+    );
+}
+
 /// A test file runs steps under the guard when it opens a run in this process or starts the
 /// `takt` binary.
 const RUNS_STEPS: &[&str] = &[

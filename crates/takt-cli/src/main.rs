@@ -3860,13 +3860,16 @@ const TRIAL_NONCES: u64 = 100_000_000;
 /// to the second, its 14 digits, then an 8-digit nonce, 22 digits in all, past `u64`, so it
 /// is counted in `u128`. Runs from different checkouts very likely take different numbers (two
 /// runs in one second share one with a chance of 1 in 10^8) and their cases go into one
-/// scorecard; not consecutive ones. The
-/// nonce is `nonce` (random, [`trial_nonce`]) when that number is free in this checkout, else
-/// the next free one after it, wrapping: a number whose trial branch is known, local or a
-/// remote's, or whose case or case branch is there, is passed over. That, and `git checkout
-/// -b` refusing a branch that exists, is the hard guard; it holds within a checkout only. A
-/// case id [`takt::case::check_id`] refuses is refused, and so is a second whose every number
-/// is taken, before any branch is cut.
+/// scorecard; not consecutive ones. Within one checkout, trials of one second are numbered
+/// in the order they start: when the checkout knows a number of that second (a trial branch,
+/// local or a remote's, or this scenario's case or case branch), the nonce starts one after
+/// the largest of them ([`latest_nonce`]); otherwise it starts at `nonce` (random,
+/// [`trial_nonce`]). From there it is the first free one, wrapping past 99999999 to
+/// 00000000: a number whose trial branch is known, or whose case or case branch is there, is
+/// passed over. That, and `git checkout -b` refusing a branch that exists, is the hard guard;
+/// it holds within a checkout only. A case id [`takt::case::check_id`] refuses is refused, and
+/// so is a second whose every number is taken, before any branch is cut. Start order holds
+/// until a second's numbers wrap: a trial after one at 99999999 takes a smaller number.
 fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u128, String)> {
     let digits: String = at.chars().filter(char::is_ascii_digit).collect();
     let second: u128 = match digits.len() {
@@ -3875,9 +3878,12 @@ fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u1
     }
     .ok_or_else(|| anyhow!("the instant {at} gives no second to number a trial by"))?;
     let known = known_trials(repo)?;
+    let start = match latest_nonce(repo, scenario, second, &known)? {
+        Some(latest) => (latest + 1) % TRIAL_NONCES,
+        None => nonce % TRIAL_NONCES,
+    };
     for k in 0..TRIAL_NONCES {
-        let n = second * u128::from(TRIAL_NONCES)
-            + u128::from((nonce % TRIAL_NONCES + k) % TRIAL_NONCES);
+        let n = second * u128::from(TRIAL_NONCES) + u128::from((start + k) % TRIAL_NONCES);
         let case_id = format!("scenario-{scenario}-trial-{n}");
         takt::case::check_id(&case_id)?;
         let digits = n.to_string();
@@ -3895,6 +3901,49 @@ fn unique_trial(repo: &Path, scenario: &str, at: &str, nonce: u64) -> Result<(u1
         "scenario {scenario}: every trial number of {at} is taken in {}; nothing was changed",
         repo.display()
     ))
+}
+
+/// The largest nonce of `second` among the trial numbers this checkout knows: its trial
+/// branches `known`, local or a remote's, and the cases of `scenario` there, as directories
+/// under either cases root ([`takt::case::CASE_ROOTS`], of the checkout and of the checkout
+/// holding its cases) or as case branches. None when it knows no number of that second.
+fn latest_nonce(
+    repo: &Path,
+    scenario: &str,
+    second: u128,
+    known: &[String],
+) -> Result<Option<u64>> {
+    let case_prefix = format!("scenario-{scenario}-trial-");
+    let branch_prefix = takt::case::Branch::name_of(&case_prefix);
+    let mut numbers: Vec<String> = known
+        .iter()
+        .filter_map(|name| trial_number(name).map(str::to_owned))
+        .collect();
+    let case_branches = takt::git::refs(repo, &["refs/heads/takt"])?;
+    numbers.extend(case_branches.iter().filter_map(|name| {
+        name.strip_prefix("refs/heads/")
+            .and_then(|branch| branch.strip_prefix(&branch_prefix))
+            .map(str::to_owned)
+    }));
+    let roots = std::iter::once(repo.to_path_buf()).chain(takt::case::cases_root_of(repo));
+    for root in roots {
+        for cases in takt::case::CASE_ROOTS {
+            let Ok(entries) = std::fs::read_dir(root.join(cases)) else {
+                continue;
+            };
+            numbers.extend(entries.filter_map(|entry| {
+                let name = entry.ok()?.file_name().into_string().ok()?;
+                name.strip_prefix(&case_prefix).map(str::to_owned)
+            }));
+        }
+    }
+    Ok(numbers
+        .iter()
+        .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        .filter_map(|n| n.parse::<u128>().ok())
+        .filter(|n| n / u128::from(TRIAL_NONCES) == second)
+        .filter_map(|n| u64::try_from(n % u128::from(TRIAL_NONCES)).ok())
+        .max())
 }
 
 /// The nonce of a trial number without `origin` ([`unique_trial`]): eight random bytes
@@ -5325,9 +5374,10 @@ mod tests {
     }
 
     /// story:trial-numbers-are-unique-across-checkouts: without `origin` a trial number is
-    /// the instant's fourteen digits, then the eight-digit nonce, 22 digits; a number whose
-    /// trial branch is known (local, or a remote's), whose case is there, or whose case branch
-    /// is, is passed over for the next nonce, past 99999999 to 00000000.
+    /// the instant's fourteen digits, then the eight-digit nonce, 22 digits; the nonce given
+    /// when the checkout knows no number of that second, else one after the largest it knows
+    /// (a trial branch, local or a remote's, a case or a case branch), past 99999999 to
+    /// 00000000, a number taken there passed over for the next.
     #[test]
     fn a_trial_number_without_origin_is_the_instant_and_a_free_nonce() {
         let repo = repository("one-ready", "unique-trial");
@@ -5360,9 +5410,48 @@ mod tests {
             &["branch", "takt/scenario-1-trial-2026101914253000000045"],
         );
         assert_eq!(taken(42), 2_026_101_914_253_000_000_046);
-        assert_eq!(taken(99_999_999), 2_026_101_914_253_099_999_999);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_000_000_046);
         git(&repo, &["branch", "trial/2026101914253099999999"]);
         assert_eq!(taken(99_999_999), 2_026_101_914_253_000_000_000);
+        git(&repo, &["branch", "trial/2026101914253000000000"]);
+        assert_eq!(taken(99_999_999), 2_026_101_914_253_000_000_001);
+        assert_eq!(
+            super::unique_trial(&repo, "1", "2026-10-19T14:25:31Z", 99_999_999)
+                .expect("a trial number")
+                .0,
+            2_026_101_914_253_199_999_999
+        );
+    }
+
+    /// story:two-trials-started-in-one-second-have-no-case-order: trials started in one second
+    /// in one checkout are numbered in the order they start, whatever their nonces: the next
+    /// takes a number after the largest of that second the checkout knows, its trial branch,
+    /// its case or its case branch. A number of another second does not count.
+    #[test]
+    fn trials_started_in_one_second_in_one_checkout_are_numbered_in_start_order() {
+        let repo = repository("one-ready", "trial-order");
+        let at = "2026-10-19T14:25:30Z";
+        let taken = |nonce: u64| {
+            super::unique_trial(&repo, "1", at, nonce)
+                .expect("a trial number")
+                .0
+        };
+        git(&repo, &["branch", "trial/2026101914253199999999"]);
+        let first = taken(42);
+        assert_eq!(first, 2_026_101_914_253_000_000_042);
+        git(&repo, &["branch", &format!("trial/{first}")]);
+        let second = taken(7);
+        assert!(second > first, "trial {second} started after trial {first}");
+        fs::create_dir_all(repo.join(".takt/cases/scenario-1-trial-2026101914253000000050"))
+            .expect("a case directory");
+        let third = taken(7);
+        assert!(third > 2_026_101_914_253_000_000_050, "{third}");
+        git(
+            &repo,
+            &["branch", "takt/scenario-1-trial-2026101914253000000060"],
+        );
+        let fourth = taken(7);
+        assert!(fourth > 2_026_101_914_253_000_000_060, "{fourth}");
     }
 
     /// The lines of `aep plan artifact history <id>` in `repo` that record an approval.

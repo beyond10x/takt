@@ -2,14 +2,22 @@
 format: aep.planning-md/3
 id: story:two-trials-started-in-one-second-have-no-case-order
 kind: story
-status: draft
+status: active
 title: Two trials started in one second have no case order
 summary: unique_trial numbers a trial as second x 1e8 plus a random nonce, so two trials in one second sort at random and decline_adv1.rs:775 fails about half the time on a fast runner.
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: cited
+  path: crates/takt-cli/tests/decline_adv1.rs
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T02:39:11Z", actor: "human:timo", revision: 2, decided_on: {"recorded":{"test_result":1}}}
+- {from: "proposed", to: "active", at: "2026-11-04T02:39:11Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"test_result":1}}}
 ---
 # Two trials started in one second have no case order
 
