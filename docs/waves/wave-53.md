@@ -93,4 +93,4 @@ Pull request 60 passed its 7 checks on CI, `finding_scripts` among them: the hos
 410aaddd2 and tagged 0.31.0. The Release run published the GitHub Release with its four assets.
 
 The stories' close-out is a store-only commit on `store/close-wave-53`, cut from 410aaddd2. It rides along with the
-next takt wave, whose integration branch merges it.
+next takt wave, whose integration branch merges it. The close-out commit is 2915a22e1.
