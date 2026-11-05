@@ -1150,6 +1150,10 @@ struct LoopArgs {
     #[arg(long, value_name = "SECONDS")]
     active_seconds: Option<u64>,
     /// The test command, split at white space, run without a shell.
+    /// Refused before the case opens, exit 1: a command holding `'` or `"` (put what needs a
+    /// shell in a script file of the tree and name it), and one whose program the step could
+    /// not start: a path holding `/` names no executable file in the tree, or a bare name no
+    /// executable file on `PATH`.
     #[arg(long, default_value = "cargo test --quiet")]
     test_cmd: String,
     /// The harness, each through metaharness: `claude` (Claude Code), `codex` (Codex),
@@ -2959,10 +2963,12 @@ fn validators_of(
     looping: &LoopArgs,
     scenarios: Option<PathBuf>,
 ) -> Result<Vec<Box<dyn Validator>>> {
-    let mut validators: Vec<Box<dyn Validator>> = vec![
-        Box::new(TestsRun::new(&looping.test_cmd)?),
-        Box::new(ChangeRead),
-    ];
+    // The test command is checked here, before any case opens or resumes: its quoting, and
+    // whether the step could start its program in `repo` (`TestsRun::check_program`).
+    let tests = TestsRun::new(&looping.test_cmd)
+        .and_then(|tests| tests.check_program(repo).map(|()| tests))
+        .map_err(|error| anyhow!("--test-cmd refused: {error:#}; nothing was opened"))?;
+    let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(tests), Box::new(ChangeRead)];
     let gates = repository_file(repo, "gates", looping.gates.clone(), DEFAULT_GATES)?;
     let project = repository_file(repo, "project", looping.project.clone(), DEFAULT_PROJECT)?;
     if let Some(gates) = gates {

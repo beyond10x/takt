@@ -1869,8 +1869,14 @@ impl TestsRun {
     /// The evidence kind it writes.
     pub const KIND: &str = "test_result";
 
-    /// Splits `command` at white space.
+    /// Splits `command` at white space. A command holding `'` or `"` is refused: it is run
+    /// without a shell, so its quoting would reach the program as broken words.
     pub fn new(command: &str) -> Result<Self> {
+        if let Some(quote) = command.chars().find(|c| matches!(c, '\'' | '"')) {
+            bail!(
+                "the test command `{command}` holds {quote}: it is split at white space and run without a shell, so its quoting would reach the program as broken words; put what needs a shell in a script file of the tree and name that script"
+            );
+        }
         let command: Vec<String> = command.split_whitespace().map(str::to_owned).collect();
         if command.is_empty() {
             bail!("the test command is empty");
@@ -1893,6 +1899,48 @@ impl TestsRun {
     pub fn with_limits(mut self, limits: Limits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// Checks, before a case opens on `tree`, that the step can start the command's program
+    /// where it starts it, running nothing: the adapter in use must admit it
+    /// ([`crate::confinement::Confinement::admit_test`]). Under `none`, whose step starts it in
+    /// `tree` with takt's `PATH` when that passes to it ([`crate::confinement::inheritable`]),
+    /// a program holding `/` is resolved against `tree` and must be an executable file, and
+    /// one without must be an executable file in an absolute directory of that `PATH`
+    /// (`found_on`); without a `PATH` passed, a bare name is not looked up. Another adapter
+    /// starts the program as it confines it, so its admission is the check.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, naming the program.
+    pub fn check_program(&self, tree: &Path) -> Result<()> {
+        let program = &self.command[0];
+        let confinement = crate::confinement::current();
+        confinement.admit_test(program)?;
+        if confinement.name() != "none" {
+            return Ok(());
+        }
+        if program.contains('/') {
+            if !executable(&tree.join(program)) {
+                bail!(
+                    "the test command's program {program} is no executable file in the tree {}, where the test step starts it, without a shell",
+                    tree.display()
+                );
+            }
+            return Ok(());
+        }
+        let Some(path) = std::env::var("PATH")
+            .ok()
+            .filter(|path| crate::confinement::inheritable("PATH", path))
+        else {
+            return Ok(());
+        };
+        if found_on(program, &path).is_none() {
+            bail!(
+                "the test command's program {program} is no executable file in any directory of the PATH the test step gives it, takt's own"
+            );
+        }
+        Ok(())
     }
 }
 
