@@ -1,6 +1,6 @@
 # Wave 54: four finding stories
 
-Stage: **active**. `wave/54` branches from 410aaddd2, the release of 0.31.0, and merges `store/close-wave-53` (the
+Stage: **gated**. `wave/54` branches from 410aaddd2, the release of 0.31.0, and merges `store/close-wave-53` (the
 close-out of wave 53) first. Skill version 0.26.0 (aep:implementing, wave mode). Approved:
 approval-record:wave-54-four-findings. Release: 0.32.0.
 
@@ -68,3 +68,32 @@ stage's start only free space on `/` and the load average apply.
 
 `task test-library` starts only after the host's operators clear its build slot. Then one pull request through the bot
 route, its merge, the tag and the release.
+
+## Units delivered
+
+| unit | commit | targeted tests | cargo | peak `target/` |
+|---|---|---|---|---|
+| a | 5ab8c4d3f | `git::tests` 11/11, `git_env` 1/1 | under 8 min | 2.7G |
+| c | 92aed883e | `resume_missing_branch_cli` 1/1, `loop_case_cli` 11/11, `case_id_branch_name` 8/8 | under 23 min, slot wait included | 2.9G |
+| b | 872bae7b4 | `test_cmd_checked_cli` 4/4, `loop_case_cli` 11/11, `gate_validator` 16/16 | 3 min | 3.1G |
+| d | 05ed2422b | `gate_flag_checked_cli` 4/4, `gate_cli` 8/8, `loop_case_cli` 11/11, `self_improvement_cli` 51/51 | not logged apart from slot wait | 3.4G |
+
+The adversary pass found six red cases; approval-record:wave-54-adversary-correction decided them. Five were fixed in
+7501e6380, which commits `crates/takt/tests/w54_adversary.rs` (5/5) and `crates/takt-cli/tests/w54_adversary_cli.rs`
+(7/7) green. The sixth, a `--case-id` dropped on a story resume, is story:a-case-id-on-a-story-resume-is-refused, a
+draft that keeps the case. The release was prepared in dc64f9833.
+
+## Gate
+
+| stage | head | exit | wall | cargo | peak `target/` | lowest free on `/` | result |
+|---|---|---|---|---|---|---|---|
+| `task check-static` | dc64f9833 | 0 | 1014 s | 144 s | 1G | 73G | every step 0 |
+| `task test-cli` | dc64f9833 | 101 | 1940 s | 1147 s | 8G | 58G | 938 passed, 1 failed |
+| `task test-library` | | | | | | | not run locally; CI |
+
+- **`test-cli`**, `finding_scripts::the_predicate_reaches_no_network_ipc_or_socket_of_the_host`: from the host, as in
+  wave 53. The `ipip` module is loaded, so every new network namespace holds `tunl0` beside `lo`. No commit of the
+  wave touches that case.
+- **`test-library`** does not fit the host's disk while other sessions build there (44G peak, 84G floor).
+  approval-record:wave-54-gate-on-ci counts `test-cli` green and leaves the library suite to the pull request's CI.
+- A first `test-cli` start was refused by its pre-check at a load average of 66; the second started at 22:06Z.
