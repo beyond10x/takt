@@ -2,13 +2,15 @@
 format: aep.planning-md/3
 id: decision-blocker:excluded-files-and-user-excludes
 kind: decision-blocker
-status: open
+status: cleared
 title: May a step's change set leave out files the repository's git excludes?
 summary: 'git-excluded-files-are-not-step-changes and git-reads-no-user-excludes contradict; recommendation: a run-file list of deployment paths'
 relations:
 - blocks: story:git-excluded-files-are-not-step-changes
 - blocks: story:git-reads-no-user-excludes
-revision: 1
+revision: 3
+transitions:
+- {from: "open", to: "cleared", at: "2026-11-05T02:17:22Z", actor: "human:timo", revision: 3}
 ---
 # Decision: may a step's change set leave out files the repository's git excludes?
 
@@ -40,3 +42,12 @@ Option 3. It keeps the guard's input out of a step's reach, as option 1 does, an
 own files that option 2 offers, without trusting a file a step can write. Both stories would be rewritten to it:
 git-reads-no-user-excludes as written, and git-excluded-files-are-not-step-changes as "paths the run file names are no
 step changes".
+
+## Answer
+
+Option 3, decided by the owner's delegation through the orchestrator on 2026-11-05. takt reads no user excludes, and
+the run file may name paths that are the deployment's; the list is read at open and the guard does not count them.
+This keeps the guard's input out of a step's reach and still gives a deployment a place for its own files.
+
+story:git-reads-no-user-excludes holds as written, with `.git/info/exclude` untrusted by the guard as well.
+story:git-excluded-files-are-not-step-changes is rewritten to the run file's list. Neither is in wave 54.

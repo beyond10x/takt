@@ -8,7 +8,8 @@ relations:
 - decomposes: epic:composable-agentic-work
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-ae680d5-adversarial
-revision: 1
+- informed_by: decision-blocker:excluded-files-and-user-excludes
+revision: 2
 ---
 ## Outcome
 
@@ -25,3 +26,12 @@ From the adversarial review of main at bd20f7b on 2026-10-19: ten adversarial re
 ## Acceptance
 
 With `$HOME/.config/git/ignore` listing `pkg/mod/` and an untracked `pkg/mod/__init__.py`, takt's `uncommitted` reports `pkg/mod/__init__.py`.
+
+## Decision
+
+decision-blocker:excluded-files-and-user-excludes chose option 3: this story holds as written, and the repository's own
+`.git/info/exclude` is not trusted by the step guard either. A deployment's own files beside the tree are named in the
+run file instead (story:git-excluded-files-are-not-step-changes).
+
+Added acceptance: with `.git/info/exclude` listing `pkg/mod/` and an untracked `pkg/mod/__init__.py`, the step guard
+still counts `pkg/mod/__init__.py` as a change the step made.
