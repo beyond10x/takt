@@ -716,7 +716,7 @@ takt.work.Case|- name: takt.work.Case|crates/takt/src/run.rs|1	if let Some(artif
 takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|5	std::fs::write(self.dir.join(OBSERVATIONS_FILE), render_observations(&[]))?;	sha256:7f0723d52be84a7bc1bafc480d447ef5c7e439acc55aab8c658f3ee8b7876a22
 takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|6	pub fn latest_decision(case_dir: &Path) -> Result<Option<Decision>> { && .map(Some)	sha256:017b224507b553104c28b8eb3bc5c59ab59b9a20e34b1c663c3096f8b6faee2c
 takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|7	pub fn resumable( && Ok(None)	sha256:5da6346f52e48518840c600501623acc1b358c242cf9c7a4b0fd8aff1b16e95b
-takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|8	pub fn resume(tree: &Path, id: &str) -> Result<Self> { && Ok(case)	sha256:3e16dc569d6e8bbda8aeb5b43cbb28e3f83089d8bbd0fb25d2c292f4d6ac94d7
+takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|8	pub fn resume(tree: &Path, id: &str) -> Result<Self> { && Ok(case)	sha256:7a2be337c875bc2c6f59c5405a9e695f2b7a7c8c23f2a2bd1bc21e8950a79053
 takt.work.Case|- name: takt.work.Case|crates/takt/src/run.rs|2	pub fn next_to_resume( && Self::resumable_undeclined(tree, active, &mut passed, out)	sha256:33b213433f0f4c529fe8a8f88b390400d6d80f9db3dcfceac447bec1d1217733
 takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|9	pub fn open( && opened.map_err(|error: anyhow::Error| {	sha256:b7b56086481e0a7a60aa9133832efda6c7b4513c71fea7062d1b2c7f1d3f5049
 takt.work.Case|- name: takt.work.Case|crates/takt/src/case.rs|10	"the tree {} has uncommitted work: {named}; a case opens only on a clean tree,	sha256:5af7dad101356efc414a8468a270b06d9cece322a8eb5a739c0893fdbd03d6f9
