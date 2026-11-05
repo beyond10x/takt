@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-05T02:07:11Z",
+  "actor": "human:timo",
+  "artifact": "story:program-rewritten-through-a-link-refuses-the-step",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 53: the w50_sec_unattributed case was red before the change and green after it, StepRefused naming the program",
+    "reference": "410aaddd2489734837093dd423b7438e8f3cb98a"
+  }
+}

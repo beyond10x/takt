@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-05T02:07:11Z",
+  "actor": "human:timo",
+  "artifact": "story:a-slow-runner-is-no-late-ci-result",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 53: the one-cap case passed 20 runs of 20 at unit d, and the adversary's case of a run one cap late on a slow runner, red on the first fix, is green on the shipped rule",
+    "reference": "410aaddd2489734837093dd423b7438e8f3cb98a"
+  }
+}

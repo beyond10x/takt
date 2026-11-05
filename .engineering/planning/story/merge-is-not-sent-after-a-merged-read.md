@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:merge-is-not-sent-after-a-merged-read
 kind: story
-status: active
+status: implemented
 title: A merge is not sent after the read before it finds the pull request merged or closed
 summary: the read just before the merge is checked only for its base
 tags:
@@ -12,10 +12,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/validator.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-04T06:19:34Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-05T02:07:20Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 # A merge is not sent after the read before it finds the pull request merged or closed
 
@@ -53,3 +54,14 @@ merge is sent. The observation records what the read found, as the first read wo
 ## Scope
 
 - `crates/takt/src/validator.rs`: the read before the merge (cited)
+
+## Status
+
+Built in wave 53 (unit a, 73286bbd8), released in 0.31.0 from 410aaddd2, the merge of pull request 60.
+
+- The read right before the merge in `crates/takt/src/validator.rs` (R7): merged or closed, it is observed as a first
+  read finding it so, and no merge is sent; open at another head, nothing is merged and the claim stays unknown.
+- `crates/takt/tests/merge_after_a_merged_read.rs`: merged, closed and moved-head second reads, each with no merge
+  call in the forge's log (red, then green).
+
+Review: review-result:w53-adv-2, no finding on this unit.

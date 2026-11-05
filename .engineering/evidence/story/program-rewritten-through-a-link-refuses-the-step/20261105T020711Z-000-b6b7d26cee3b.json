@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-05T02:07:11Z",
+  "actor": "human:timo",
+  "artifact": "story:program-rewritten-through-a-link-refuses-the-step",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/41947422752 (check on main at the merge of pull request 60: check-static, test-library, test-cli green)",
+    "reference": "410aaddd2489734837093dd423b7438e8f3cb98a"
+  }
+}

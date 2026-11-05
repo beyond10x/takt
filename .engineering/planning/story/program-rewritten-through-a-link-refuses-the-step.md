@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:program-rewritten-through-a-link-refuses-the-step
 kind: story
-status: active
+status: implemented
 title: A program rewritten through its link in a program directory refuses the step
 summary: the guard reads a linked program as the link only; a rewrite behind it is not refused
 tags:
@@ -16,10 +16,11 @@ scope:
   path: crates/takt/tests/support/own_home.rs
 - confidence: cited
   path: crates/takt/tests/w50_sec_unattributed.rs
-revision: 7
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-04T06:19:36Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-04T06:19:36Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-05T02:07:20Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 # A program rewritten through its link in a program directory refuses the step
 
@@ -73,3 +74,17 @@ the links leave, another process reinstalling a program at an existing name whil
 is filed as story:a-program-reinstalled-at-its-name-during-a-test-step-refuses-it, a draft outside
 this wave. Until it is delivered, a gate refusal that names a program-directory link counts as that
 known cause, and its stage is rerun once.
+
+## Status
+
+Built in wave 53 (unit c, a023aad5b), released in 0.31.0 from 410aaddd2, the merge of pull request 60.
+
+- The step guard's snapshot of a program directory in `crates/takt/src/run.rs` reads a link with what it resolves
+  to (`Entry::Through`, `Outside::program_at`); a dangling or looping link stays the link alone.
+- `w50_sec_unattributed`: the case asserts `StepRefused` naming the program (red, then green);
+  `w53_adversary::through`: a chain of links, a re-pointed middle link, a relative link, a dangling link made to
+  resolve, a program replaced by a link, all refused.
+- The test homes keep links (the Decision above); story:a-program-reinstalled-at-its-name-during-a-test-step-refuses-it
+  is the draft for what that leaves.
+
+Review: review-result:w53-adv-2, no finding on this unit.
