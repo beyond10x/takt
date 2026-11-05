@@ -373,7 +373,7 @@ fn sha256(path: &Path) -> String {
 /// `takt run` on the protocol in `world.repo` opening the case `turn-1` with `inputs`; its exit
 /// code, standard output and standard error.
 fn run(world: &World, inputs: &[String]) -> (i32, String, String) {
-    run_with_gate(world, inputs, "repository.merge")
+    run_with_gate(world, inputs, "candidate.merge")
 }
 
 /// [`run`], with `gate` the approval the harness may request.

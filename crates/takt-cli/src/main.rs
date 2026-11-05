@@ -761,6 +761,8 @@ struct RunArgs {
     #[arg(long = "input", value_name = "NAME=VALUE")]
     inputs: Vec<String>,
     /// The case id; generated when absent.
+    /// Not with --case: a resumed case keeps its own id, so the two together are refused before
+    /// the run, nothing changed.
     #[arg(long)]
     case_id: Option<String>,
     /// The checkout of the scenario repository a `self.improvement/1` turn's finding names its
@@ -1215,7 +1217,10 @@ struct LoopArgs {
     /// The approval gate the harness may request to end the run. Not given, the case's
     /// protocol's first action that requires a capability and that the case's inputs do not
     /// block for good: `repository.merge` for a delivery or a software change,
-    /// `candidate.merge` or `candidate.merge_judge_surface` for an improvement turn.
+    /// `candidate.merge` or `candidate.merge_judge_surface` for an improvement turn. Given to
+    /// `takt run`, it must be an action of the protocol the case runs on that requires a
+    /// capability (the one a case opens on, or a resumed case's own); another is refused with
+    /// exit 1 before the case opens or resumes, naming the protocol and those actions.
     #[arg(long)]
     gate: Option<String>,
     /// The gates document, relative to the repository; given, it must be a file, and the gate
@@ -1857,6 +1862,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     takt::case::TURN_FINDING
                 ));
             }
+            // A resumed case keeps its own id: `--case-id` beside `--case` would be dropped.
+            if let (Some(case), Some(case_id)) = (&case, &case_id) {
+                return Err(anyhow!(
+                    "--case-id {case_id}: --case {case} resumes the case {case}, and a resumed case keeps its own id; run without --case-id; nothing was changed"
+                ));
+            }
             let resuming = case_to_resume(
                 &repo,
                 case.as_deref(),
@@ -1888,6 +1899,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     given_for_resume,
                     first_input.as_deref(),
                 )?;
+                check_gate(looping.gate.as_deref(), &resuming.protocol)?;
                 if let Some(given) = &install_root {
                     resume_install_root(&repo, &resuming.id, &resuming.protocol.id, given)?;
                 }
@@ -2074,6 +2086,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             } else {
                 None
             };
+            // `--gate` names an approval-required action of the protocol the fresh case on an
+            // intent opens on; a resumed case's own was checked above, a story's once its tags
+            // are read.
+            if let Some(settings) = &applied {
+                check_gate(looping.gate.as_deref(), &settings.protocol)?;
+            }
             let options = match &applied {
                 Some(settings) => {
                     looping.options(settings.spec.clone(), settings.pairs(), case_id.clone())
@@ -2200,13 +2218,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         frontier,
                         &store,
                         &|tags| {
-                            settings_for(
+                            let settings = settings_for(
                                 &protocol_settings,
                                 protocol.as_deref(),
                                 &inputs,
                                 tags,
                                 true,
-                            )
+                            )?;
+                            check_gate(looping.gate.as_deref(), &settings.protocol)?;
+                            Ok(settings)
                         },
                         &|settings| {
                             looping.options(
@@ -4529,6 +4549,28 @@ fn refuse_for_resume(
         ));
     }
     Ok(())
+}
+
+/// Refuses `--gate <gate>` unless it names an approval-required action of `protocol`, the one the
+/// case runs on ([`LoadedProtocol::approval_actions`]): any other gate would never be offered.
+/// The refusal names the protocol and its approval-required actions.
+fn check_gate(gate: Option<&str>, protocol: &LoadedProtocol) -> Result<()> {
+    let Some(gate) = gate else {
+        return Ok(());
+    };
+    let approval = protocol.approval_actions();
+    if approval.iter().any(|action| action == gate) {
+        return Ok(());
+    }
+    let named = if approval.is_empty() {
+        "it has none".to_owned()
+    } else {
+        format!("they are {}", approval.join(", "))
+    };
+    Err(anyhow!(
+        "--gate {gate}: no approval-required action of {}, the protocol the case runs on ({named}); give one of them or no --gate; nothing was changed",
+        protocol.id
+    ))
 }
 
 /// Refuses `--install-root <given>` for the case `id`, on `protocol`, about to be resumed, unless
