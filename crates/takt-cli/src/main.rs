@@ -1154,8 +1154,11 @@ struct LoopArgs {
     /// The test command, split at white space, run without a shell.
     /// Refused before the case opens, exit 1: a command holding `'` or `"` (put what needs a
     /// shell in a script file of the tree and name it), and one whose program the step could
-    /// not start: a path holding `/` names no executable file in the tree, or a bare name no
-    /// executable file on `PATH`.
+    /// not start, found as the step finds it: a path holding `/`, read against the tree and
+    /// free to leave it (`../x`, an absolute path), names no file takt may execute, or a bare
+    /// name names none in any directory of `PATH`, an empty or relative entry read against the
+    /// tree. On a resume from another branch, a program in the tree is read from the case's
+    /// branch, which the step runs on.
     #[arg(long, default_value = "cargo test --quiet")]
     test_cmd: String,
     /// The harness, each through metaharness: `claude` (Claude Code), `codex` (Codex),
@@ -1877,10 +1880,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             )?;
             // The session's `context` files are checked against the files its copy is made of,
             // before the case opens or resumes: a resumed case's branch, which resuming checks
-            // out, else the work tree a new case is cut from.
+            // out (from the one remote holding it, when no local branch does), else the work
+            // tree a new case is cut from.
             let case_head = resuming.as_ref().and_then(|resuming| {
                 let branch = takt::case::Branch::name_of(&resuming.id);
-                let head = format!("refs/heads/{branch}^{{commit}}");
+                let source = takt::case::checkout_source(&repo, &branch).ok().flatten()?;
+                let head = format!("{source}^{{commit}}");
                 takt::git::run(&repo, &["rev-parse", "--verify", "--quiet", &head]).ok()
             });
             looping.check_context(&match &case_head {
@@ -2108,7 +2113,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             {
                 return Err(anyhow!(why));
             }
-            let mut validators = validators_of(&repo, &looping, scenarios)?;
+            let mut validators = validators_of(
+                &repo,
+                &looping,
+                scenarios,
+                resuming.as_ref().map(|resuming| resuming.id.as_str()),
+            )?;
             forge.register(&mut validators);
             // An improvement turn's merge validators read the mainline, with a forge or without.
             validators.push(Box::new(takt::improvement::CandidateMerged::new(
@@ -2977,16 +2987,31 @@ impl EndpointArgs {
 /// The validators that need no forge: the test command, `change.read`, the gate when a gates
 /// document is given or at its default path in `repo`, with the project file likewise, and
 /// the loop scorecard's three, and an improvement turn's five but its merge validators,
-/// `scenarios` the scenario repository's checkout its scenario checks are given.
+/// `scenarios` the scenario repository's checkout its scenario checks are given; `resuming` the
+/// id of the case the run resumes.
 fn validators_of(
     repo: &Path,
     looping: &LoopArgs,
     scenarios: Option<PathBuf>,
+    resuming: Option<&str>,
 ) -> Result<Vec<Box<dyn Validator>>> {
     // The test command is checked here, before any case opens or resumes: its quoting, and
-    // whether the step could start its program in `repo` (`TestsRun::check_program`).
+    // whether the step could start its program in `repo` (`TestsRun::check_program_at`). A
+    // resume off the case's branch checks the branch out before the step runs, so the program
+    // is read from the commit that checkout takes, nothing checked out here.
+    let at = match resuming {
+        Some(id) => {
+            let branch = takt::case::Branch::name_of(id);
+            if takt::git::current_branch(repo)?.as_deref() == Some(branch.as_str()) {
+                None
+            } else {
+                takt::case::checkout_source(repo, &branch)?
+            }
+        }
+        None => None,
+    };
     let tests = TestsRun::new(&looping.test_cmd)
-        .and_then(|tests| tests.check_program(repo).map(|()| tests))
+        .and_then(|tests| tests.check_program_at(repo, at.as_deref()).map(|()| tests))
         .map_err(|error| anyhow!("--test-cmd refused: {error:#}; nothing was opened"))?;
     let mut validators: Vec<Box<dyn Validator>> = vec![Box::new(tests), Box::new(ChangeRead)];
     let gates = repository_file(repo, "gates", looping.gates.clone(), DEFAULT_GATES)?;
@@ -4171,7 +4196,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         // Everything read before the push: the story's text and the gates and the project file,
         // the seed's, read on the trial branch.
         let story = Aep::default().show(&repo, &scenario.story)?;
-        let mut validators = validators_of(&repo, &looping, None)?;
+        let mut validators = validators_of(&repo, &looping, None, None)?;
         forge.register(&mut validators);
         // Through a forge the identity is read as the push would carry it, before the trial
         // base is pushed or any step is taken.

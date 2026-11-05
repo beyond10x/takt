@@ -1905,15 +1905,32 @@ impl TestsRun {
     /// where it starts it, running nothing: the adapter in use must admit it
     /// ([`crate::confinement::Confinement::admit_test`]). Under `none`, whose step starts it in
     /// `tree` with takt's `PATH` when that passes to it ([`crate::confinement::inheritable`]),
-    /// a program holding `/` is resolved against `tree` and must be an executable file, and
-    /// one without must be an executable file in an absolute directory of that `PATH`
-    /// (`found_on`); without a `PATH` passed, a bare name is not looked up. Another adapter
-    /// starts the program as it confines it, so its admission is the check.
+    /// the program is found as the step's `execvp` finds it: a program holding `/` is read
+    /// against `tree`, which it may leave (`../x`, an absolute path), and one without is
+    /// looked for in each directory of that `PATH` in turn, an empty entry or `.` being `tree`
+    /// and a relative one read against it; what is found must be a file this process may
+    /// execute (`access` with `X_OK`). Without a `PATH` passed, a bare name is not looked up.
+    /// Another adapter starts the program as it confines it, so its admission is the check.
     ///
     /// # Errors
     ///
     /// The refusal, naming the program.
     pub fn check_program(&self, tree: &Path) -> Result<()> {
+        self.check_program_at(tree, None)
+    }
+
+    /// [`Self::check_program`] for a step that starts the program in `tree` once a resume has
+    /// checked it out at `at`, a ref of the case's branch, when given: a candidate inside the
+    /// tree is read from `at`'s commit, as the checkout leaves it, so nothing is checked out
+    /// and nothing written to check it. There it must be an executable file or a link; one that
+    /// commit lacks and `HEAD` tracks, the checkout removes, so it is none; one neither tracks
+    /// is read in the tree as it is, which the checkout leaves alone, as is a candidate outside
+    /// the tree.
+    ///
+    /// # Errors
+    ///
+    /// The refusal, naming the program; a git read of `at` or `HEAD` that fails.
+    pub fn check_program_at(&self, tree: &Path, at: Option<&str>) -> Result<()> {
         let program = &self.command[0];
         let confinement = crate::confinement::current();
         confinement.admit_test(program)?;
@@ -1921,9 +1938,9 @@ impl TestsRun {
             return Ok(());
         }
         if program.contains('/') {
-            if !executable(&tree.join(program)) {
+            if !startable(tree, at, &tree.join(program))? {
                 bail!(
-                    "the test command's program {program} is no executable file in the tree {}, where the test step starts it, without a shell",
+                    "the test command's program {program}, read against the tree {} where the test step starts it without a shell, is no file the step may execute",
                     tree.display()
                 );
             }
@@ -1935,13 +1952,59 @@ impl TestsRun {
         else {
             return Ok(());
         };
-        if found_on(program, &path).is_none() {
-            bail!(
-                "the test command's program {program} is no executable file in any directory of the PATH the test step gives it, takt's own"
-            );
+        for dir in path.split(':') {
+            if startable(tree, at, &tree.join(dir).join(program))? {
+                return Ok(());
+            }
         }
-        Ok(())
+        bail!(
+            "the test command's program {program} is no file the test step may execute in any directory of the PATH it gives it, takt's own, read from the tree {} as the step's lookup reads it",
+            tree.display()
+        )
     }
+}
+
+/// Whether the test step, started in `tree` checked out at `at` (as it is, when `None`), may
+/// execute `candidate`, a path joined to `tree` ([`TestsRun::check_program_at`]). Inside the
+/// tree is as [`inside_tree`] reads a path: `.` dropped, `..` taken back, none leading out.
+fn startable(tree: &Path, at: Option<&str>, candidate: &Path) -> Result<bool> {
+    let inside = candidate
+        .strip_prefix(tree)
+        .ok()
+        .and_then(Path::to_str)
+        .and_then(|relative| inside_tree(&[relative.to_owned()]).pop());
+    if let Some(at) = at
+        && let Some(inside) = inside
+    {
+        if let Some(object) = object_at(tree, at, &inside)? {
+            return Ok(object.starts_with("100755 ") || object.starts_with("120000 "));
+        }
+        if object_at(tree, "HEAD", &inside)?.is_some() {
+            return Ok(false);
+        }
+    }
+    Ok(may_execute(candidate))
+}
+
+/// Whether this process may execute `path` as `execve` meets it: a file, links followed, that
+/// `access` with `X_OK` allows, so an execute bit only others hold is none to its owner.
+#[cfg(unix)]
+fn may_execute(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt as _;
+    if !path.metadata().is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: `name` is a NUL-terminated string that outlives the call, which only reads it.
+    unsafe { libc::access(name.as_ptr(), libc::X_OK) == 0 }
+}
+
+/// Whether `path` is a file.
+#[cfg(not(unix))]
+fn may_execute(path: &Path) -> bool {
+    path.is_file()
 }
 
 /// What the test command's output says about its tests, for the step's summary. With one or

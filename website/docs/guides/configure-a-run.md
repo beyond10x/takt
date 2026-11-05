@@ -169,8 +169,10 @@ local_checks: [cargo, test, --quiet]
 `test_cmd` is split at white space and run without a shell, so pipes and `&&` do not work; the
 default is `cargo test --quiet`. Before the case opens, a command holding `'` or `"` is refused,
 exit 1: put what needs a shell in a script file of the tree and name it. So is a program the step
-could not start: a path holding `/` that names no executable file in the tree, or a bare name
-that names none on `PATH`. When the case's first test run fails before any step has
+could not start, found as the step finds it: a path holding `/`, read against the tree, that
+names no file takt may execute, or a bare name that names none in any directory of `PATH` (an
+empty or relative entry is read against the tree). On a resume from another branch, a program in
+the tree is read from the case's branch, which the step runs on. When the case's first test run fails before any step has
 changed the tree, the run stops `RedBase`, exit 3, before any model call:
 
 ```console
