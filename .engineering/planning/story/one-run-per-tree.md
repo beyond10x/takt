@@ -13,7 +13,8 @@ relations:
 - informed_by: review-result:findings-hunt-33ab42c
 - depends_on: story:signal-releases-the-case
 - decomposes: epic:composable-agentic-work
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 2
 ---
 ## Outcome
 
@@ -44,3 +45,26 @@ source: .engineering/planning/review-result/findings-hunt-33ab42c.md
 ## Acceptance
 
 In the predicate's run, the second `takt run` exits 1 and says another run holds the tree. No case `b` and no branch `takt/b` are created. Run a's step is judged only on its own writes, and HEAD stays on `takt/a`.
+
+## Reproduced on 0.24.0
+
+story:a-second-run-on-a-tree-is-refused-on-0-24, a duplicate filed by the 0.24.0 trial cycle, is merged here and rejected.
+Its reproduction and its acceptance hold for this story; no tree-level hold exists on `main` at 0.31.0.
+
+The 0.24.0 run-loop review reproduced the finding with `.takt/cases`. Run 1 was in a harness step; run 2
+(`takt run --intent …`) opened its case on the same tree and checked out its branch. Run 1's step undo put the tree
+back to its checkpoint, deleting run 2's branch and emptying run 2's case directory (`case.yaml`, `events.jsonl`,
+`branch.yaml` and its `tests.run` evidence gone); run 2 exited 5 with `git rev-parse --abbrev-ref HEAD … unknown
+revision`. In a pod with one volume tree and a restart policy, two generations can overlap.
+
+```expected_before
+command: with run 1 in a harness step, takt run --repo <same tree> --intent x; then git branch --list 'takt/takt-*' and ls .takt/cases/<second id>/events.jsonl
+output: the second run exits non-zero, the branch list is empty and events.jsonl does not exist
+```
+
+Acceptance it adds:
+
+1. A tree-level hold (`.takt/tree.lock`, created new, holding the pid and boot id) is taken before open, resume, take
+   and scenario checkout, and released on every exit path.
+2. A second run while it is held exits 1 naming the holder, and changes nothing in the tree.
+3. A hold whose holder is dead (pid gone, or another boot id) is taken over, and the takeover is recorded.

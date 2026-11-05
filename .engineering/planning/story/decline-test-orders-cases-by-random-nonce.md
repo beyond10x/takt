@@ -2,13 +2,18 @@
 format: aep.planning-md/3
 id: story:decline-test-orders-cases-by-random-nonce
 kind: story
-status: draft
+status: rejected
 title: A decline test orders two trial cases by ids whose order a random nonce decides
 summary: decline_adv1.rs:775 fails when both trials fall in one second
 tags:
 - finding
 - priority:medium
-revision: 1
+relations:
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-05T02:14:31Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "rejected", at: "2026-11-05T02:14:31Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
@@ -27,3 +32,8 @@ The test runs two scenario trials, then asserts `declined < open` on their case 
 ## Acceptance
 
 The test names its cases by the order the frontier actually takes them in, so a random nonce cannot flip that order. It passes when both trials run in the same second, with the second trial's nonce below the first's.
+
+## Decision
+
+Rejected by approval-record:wave-54-four-findings: delivered in wave 52 by
+story:two-trials-started-in-one-second-have-no-case-order.

@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:an-open-pull-request-is-found-on-resume
 kind: story
-status: draft
+status: rejected
 title: A resumed run finds the pull request already open for its branch
 summary: every forge adapter implements find_open_pull_request; 0.24.0 regression
 tags:
@@ -11,7 +11,11 @@ tags:
 - trial-0.24.0
 relations:
 - informed_by: story:pr-open-not-idempotent-on-resume
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-05T02:14:32Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "rejected", at: "2026-11-05T02:14:32Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
@@ -52,3 +56,9 @@ output: "crates/takt/src/forge.rs:1"
 3. An answer the adapter cannot read is an error, never none.
 4. story:pr-open-not-idempotent-on-resume's acceptance holds again on 0.25.x, and that story
    names this one.
+
+## Decision
+
+Rejected by approval-record:wave-54-four-findings as delivered by 0.31.0: the command, GitLab and local forges
+implement `find_open_pull_request` (`crates/takt/src/forge/command.rs`, `forge/gitlab.rs`, `forge/local.rs`), and the
+connectors forge keys each open so a lost answer replays (story:pr-open-cut-off-by-a-crash-is-read-back).

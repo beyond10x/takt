@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-second-run-on-a-tree-is-refused-on-0-24
 kind: story
-status: draft
+status: rejected
 title: A second run on a tree is refused before it deletes the first run's case
 summary: a tree-level hold before open, resume, take and scenario checkout
 tags:
@@ -11,7 +11,11 @@ tags:
 - trial-0.24.0
 relations:
 - informed_by: story:one-run-per-tree
-revision: 1
+- serves: vision:safe-agentic-coding
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-05T02:14:32Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "rejected", at: "2026-11-05T02:14:32Z", actor: "human:timo", revision: 4}
 ---
 ## Outcome
 
@@ -47,3 +51,8 @@ output: the second run exits non-zero, the branch list is empty and events.jsonl
 3. A hold whose holder is dead (pid gone, or another boot id) is taken over, and the takeover is
    recorded.
 4. Implementing this closes story:one-run-per-tree too.
+
+## Decision
+
+Rejected by approval-record:wave-54-four-findings as a duplicate of story:one-run-per-tree, which now carries this
+story's 0.24.0 reproduction and acceptance (section "Reproduced on 0.24.0").
