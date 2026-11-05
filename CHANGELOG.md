@@ -6,6 +6,24 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-05
+
+`takt run` checks its test command and its `--gate` before a case opens, a resume names a missing case branch and how to recover it, and a failed read of git's output leaves no git process behind.
+
+### Changed
+
+- A `--test-cmd` holding `'` or `"` is refused before the case opens, exit 1: it is split at white space and run without a shell, so its quoting would reach the program as broken words.
+- A `--test-cmd` whose program the step could not start is refused before the case opens, exit 1, naming the program.
+- On a resume from another branch, a test program in the tree is read from the case's branch.
+- `takt run --gate` must name an approval-required action of the protocol the case runs on; another is refused before the case opens or resumes, exit 1, naming the protocol and those actions.
+- `--case-id` beside `--case` is refused, exit 1: a resumed case keeps its own id.
+
+### Fixed
+
+- A resume whose case branch is gone exits 1 naming the branch, the last head the case recorded and the `git branch` line that recreates it, instead of git's pathspec error.
+- A case branch kept only on the one remote that holds it still resumes.
+- A git call whose output cannot be read, or whose input cannot be written, kills and waits for git and joins its error reader before the error returns, so no git process is left behind.
+
 ## [0.31.0] - 2026-11-04
 
 A pull request open cut off by a crash is read back on every forge, no merge follows a read that finds the pull request merged, and the step guard sees a program rewritten behind its link.
@@ -1084,7 +1102,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.31.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.32.0...HEAD
+[0.32.0]: https://github.com/beyond10x/takt/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/beyond10x/takt/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/beyond10x/takt/compare/0.30.0...0.30.1
 [0.30.0]: https://github.com/beyond10x/takt/compare/0.29.0...0.30.0
