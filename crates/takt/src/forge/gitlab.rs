@@ -521,6 +521,22 @@ impl Glab {
         format!("{}/merge_requests", self.api_project())
     }
 
+    /// The line that lists the project's merge requests opened from `branch` into `base`.
+    #[must_use]
+    pub fn find_argv(&self, branch: &str, base: &str) -> Vec<String> {
+        self.api_get_argv(&self.find_path(branch, base))
+    }
+
+    /// The API path that lists the project's merge requests opened from `branch` into `base`.
+    fn find_path(&self, branch: &str, base: &str) -> String {
+        format!(
+            "{}?state=opened&source_branch={}&target_branch={}",
+            self.open_path(),
+            encoded(branch),
+            encoded(base)
+        )
+    }
+
     /// The line that reads merge request `iid`: its state, head and base, and its head pipeline.
     #[must_use]
     pub fn view_argv(&self, iid: u64) -> Vec<String> {
@@ -704,6 +720,48 @@ impl Forge for Glab {
                 output.display()
             ))
         })
+    }
+
+    /// The project's merge requests opened from `branch` into `base`, listed through the API
+    /// ([`Self::find_argv`]) and read strictly: an answer that is no list, or an entry without
+    /// its `iid`, `state`, `source_branch` and `target_branch`, is the error, never none. An
+    /// entry the host should not have listed (another branch or base, or not open) is passed
+    /// over; two open for the branch and the base are the error.
+    fn find_open_pull_request(&self, tree: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
+        let (argv, exit) = self.exchange(tree, "GET", &self.find_path(branch, base), None)?;
+        let document = answer_of(&argv, &exit)?;
+        let line = argv.join(" ");
+        let listed = document
+            .as_array()
+            .ok_or_else(|| anyhow!("{line} answered no list of merge requests"))?;
+        let mut found = Vec::new();
+        for entry in listed {
+            let text = |name: &str| -> Result<&str> {
+                entry[name]
+                    .as_str()
+                    .ok_or_else(|| anyhow!("{line} listed a merge request with no {name}"))
+            };
+            let iid = entry["iid"]
+                .as_u64()
+                .ok_or_else(|| anyhow!("{line} listed a merge request with no iid"))?;
+            let open = state_of(&argv, entry)? == PullRequestState::Open;
+            let (source, target) = (text("source_branch")?, text("target_branch")?);
+            if open && source == branch && target == base {
+                found.push(iid);
+            }
+        }
+        match found.as_slice() {
+            [] => Ok(None),
+            [iid] => Ok(Some(*iid)),
+            iids => bail!(
+                "{line} listed {} merge requests open from {branch} into {base} (!{}); none is taken for the case",
+                iids.len(),
+                iids.iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", !")
+            ),
+        }
     }
 
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {

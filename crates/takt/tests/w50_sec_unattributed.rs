@@ -4,7 +4,7 @@
 //! it, and names such a change as of unknown origin. These cases check that the refusal is a
 //! refusal to every reader of the case, that it repeats no content of what was written, that an
 //! observation whose only write lies outside the tree is still refused, that a program changed
-//! through the link a program directory holds is not seen today
+//! through the link a program directory holds is refused
 //! (story:program-rewritten-through-a-link-refuses-the-step), and that a test's own home keeps a
 //! toolchain install of another process away from its steps (acceptance 1).
 //!
@@ -456,13 +456,13 @@ fn an_observation_whose_only_write_is_a_program_is_refused_as_of_unknown_origin(
 
 /// A program directory on `PATH` that holds a link to a program elsewhere (as a dotfile or
 /// tool manager installs one): a step that rewrites the program through that link changes what
-/// a lookup by the name finds, as surely as a new file there would, and is refused. The guard
-/// reads each program directory's links by their target alone (`Entry::Link`), so the rewrite
-/// behind the link is a change to a program on `PATH` it does not see. Today the run is not
-/// refused for it: a known gap, story:program-rewritten-through-a-link-refuses-the-step, which
-/// turns this case into "the run stops `StepRefused` naming it".
+/// a lookup by the name finds, as surely as a new file there would, and is refused
+/// (story:program-rewritten-through-a-link-refuses-the-step). The guard reads such a link with
+/// what it resolves to, so the rewrite behind it differs; the refusal names the program by the
+/// link a lookup finds it at, as of unknown origin and as not put back, and the program is left
+/// as the step wrote it.
 #[test]
-fn a_program_rewritten_through_its_link_on_path_during_a_step_is_not_refused_today() {
+fn a_program_rewritten_through_its_link_on_path_during_a_step_is_refused() {
     let _one = one_at_a_time();
     let mut scratch = scratch("through-link", "#!/bin/sh\nexit 1\n");
     let target = scratch.root.join("tool").join("probe");
@@ -482,15 +482,32 @@ fn a_program_rewritten_through_its_link_on_path_during_a_step_is_not_refused_tod
         rewritten.contains("rewritten by the step"),
         "the step rewrote the program behind the link: {rewritten}"
     );
+    let why = match &stop {
+        Ok(Stop::StepRefused(why)) => why.clone(),
+        _ => panic!(
+            "a step that rewrote the program {} finds through {} on PATH stops the run \
+             StepRefused, not {}\n{text}",
+            target.display(),
+            link.display(),
+            shown(&stop)
+        ),
+    };
+    let link_shown = link.display().to_string();
+    let (_, after) = why
+        .split_once(UNKNOWN)
+        .unwrap_or_else(|| panic!("the refusal names a change of unknown origin: {why}"));
     assert!(
-        !matches!(&stop, Ok(Stop::StepRefused(_))),
-        "story:program-rewritten-through-a-link-refuses-the-step: the current behaviour changed: a \
-         step that rewrote the program {} finds through {} on PATH is now refused. This case goes \
-         red here on purpose: rewrite it to assert that the run stops StepRefused naming the \
-         program, now that the guard sees the rewrite. The run stopped {}\n{text}",
-        target.display(),
-        link.display(),
-        shown(&stop)
+        after.contains(&link_shown),
+        "the refusal names the program by its link {link_shown}: {why}"
+    );
+    let (_, left) = why
+        .split_once("not put back")
+        .unwrap_or_else(|| panic!("the program is named as not put back: {why}"));
+    assert!(left.contains(&link_shown), "{why}");
+    assert_eq!(
+        fs::read_link(&link).ok().as_deref(),
+        Some(target.as_path()),
+        "the link is left as it was"
     );
 }
 

@@ -11,10 +11,15 @@
 //! | `read` | to read it: `{number}` | JSON: `state`, `head`, `branch`, `base` |
 //! | `checks` | to read the checks on its head: `{number}`, `{head}` | JSON: each check's `name` and `state` |
 //! | `merge` | to merge it: `{number}`, `{head}` | nothing read |
+//! | `find`, optional | to find the open request from a branch into a base: `{branch}`, `{base}` | its number, or nothing for none |
 //!
 //! Exit 0 is ok; an exit in `refused_exit` is [`ForgeRefused`], any other exit [`ForgeFailed`];
 //! what a command cannot be read from is [`ForgeOutput`]. Standard error of every command is
 //! kept in a file under the state directory, never in the case.
+//!
+//! Without `find`, an open the forge may have taken cannot be read back: until `open` answers,
+//! [`CommandForge::UNANSWERED`] under the case's artifacts names it, and while it stands no
+//! open is sent for the case again ([`Forge::open_pull_request`]).
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -27,7 +32,8 @@ use crate::scan::Scan;
 use super::{
     Checks, Exit, Failed, Forge, Head, IdentityScan, MERGE_REQUEST, MERGE_RESPONSE, Outgoing,
     PUSH_ENV, PullRequest, PullRequestState, PullRequestView, RESPONSE, Runner, WriteError,
-    Written, fresh, head_is_a_commit, is_object_id, may_publish, push_over_https, write_request,
+    WriteOutcome, Written, fresh, head_is_a_commit, is_object_id, may_publish, push_over_https,
+    write_request,
 };
 
 /// An action of the forge and the entry of `forge_commands` that performs it.
@@ -41,9 +47,20 @@ pub enum Entry {
     Checks,
     /// `merge`.
     Merge,
+    /// `find`.
+    Find,
 }
 
 impl Entry {
+    /// Every entry, in the order the run file documents them.
+    pub const ALL: [Self; 5] = [
+        Self::Open,
+        Self::Read,
+        Self::Checks,
+        Self::Merge,
+        Self::Find,
+    ];
+
     /// The entry's key in the run file.
     #[must_use]
     pub fn name(self) -> &'static str {
@@ -52,6 +69,7 @@ impl Entry {
             Self::Read => "read",
             Self::Checks => "checks",
             Self::Merge => "merge",
+            Self::Find => "find",
         }
     }
 
@@ -62,6 +80,7 @@ impl Entry {
             Self::Open => &["branch", "base", "title", "body_file"],
             Self::Read => &["number"],
             Self::Checks | Self::Merge => &["number", "head"],
+            Self::Find => &["branch", "base"],
         }
     }
 }
@@ -98,6 +117,9 @@ pub struct ForgeCommands {
     pub checks: Option<Vec<String>>,
     /// Merges the request at the head it is given.
     pub merge: Option<Vec<String>>,
+    /// Finds the open request from a branch into a base; prints its number, or nothing when
+    /// there is none. Optional: without it, an open whose answer was lost is not sent again.
+    pub find: Option<Vec<String>>,
     /// A regular expression whose first group is the request's number in what `open` printed.
     pub id_pattern: Option<String>,
     /// The exit codes that are a refusal and not a failure.
@@ -107,7 +129,7 @@ pub struct ForgeCommands {
 /// A command that exited in `refused_exit`: the forge refused the action.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForgeRefused {
-    /// The entry that ran: `open`, `read`, `checks` or `merge`.
+    /// The entry that ran: `open`, `read`, `checks`, `merge` or `find`.
     pub command: String,
     /// Its exit code.
     pub exit: i32,
@@ -257,6 +279,7 @@ impl ForgeCommands {
             Entry::Read => &self.read,
             Entry::Checks => &self.checks,
             Entry::Merge => &self.merge,
+            Entry::Find => &self.find,
         }
         .as_deref()
     }
@@ -279,7 +302,7 @@ impl ForgeCommands {
     /// letters and `_` in braces), `id_pattern` a regular expression with a group, `refused_exit` codes above 0 and below 256.
     /// The refusal names the key and never repeats a value.
     pub fn check(&self) -> Result<()> {
-        for entry in [Entry::Open, Entry::Read, Entry::Checks, Entry::Merge] {
+        for entry in Entry::ALL {
             if let Some(argv) = self.argv(entry)
                 && argv.first().is_none_or(|program| program.trim().is_empty())
             {
@@ -364,6 +387,12 @@ impl CommandForge {
     /// The file under the case's artifacts directory that holds the body `{body_file}` names: the
     /// case's own, so no other run's `open` can change what this one publishes.
     pub const BODY: &str = "open.body";
+
+    /// The file under the case's artifacts directory that names an open sent and not answered:
+    /// written before `open` runs, removed once its answer says whether it opened (a number read
+    /// back, or a refusal or a failure before it was sent), and left for an outcome that is
+    /// `unknown`. Read only without `find`, which would read the open request back.
+    pub const UNANSWERED: &str = "open.unanswered.json";
 
     /// Over `commands`, refused when the section is misshapen or lacks an entry the protocol's
     /// `actions` need, naming it; `state` is the directory each command's
@@ -501,6 +530,41 @@ impl CommandForge {
             .ok_or_else(|| unreadable().into())
     }
 
+    /// Runs `open` for `request`, its body in the file `body`, keeps what it printed in `output`,
+    /// and reads the number it printed back through `read` ([`Forge::open_pull_request`]).
+    fn open_sent(
+        &self,
+        tree: &Path,
+        request: &PullRequest,
+        output: &Path,
+        body: &str,
+    ) -> Written<u64> {
+        let exit = self
+            .run(
+                Entry::Open,
+                tree,
+                &[
+                    ("branch", &request.branch),
+                    ("base", &request.base),
+                    ("title", &request.title),
+                    ("body_file", body),
+                ],
+            )
+            .map_err(write_failure)?;
+        std::fs::write(output, &exit.stdout)
+            .with_context(|| format!("write the response {}", output.display()))?;
+        let number = self.number_of(&exit.stdout)?;
+        let view = self.pull_request(tree, number).with_context(|| {
+            format!(
+                "the number {number} read from what `open` printed was not read back through `read`; the request may be open under another number, and none is recorded"
+            )
+        })?;
+        match not_held(Entry::Open, number, &view, &request.branch, &request.base) {
+            None => Ok(number),
+            Some(error) => Err(WriteError::unknown(error)),
+        }
+    }
+
     /// `stdout` of `entry` as a JSON document.
     fn json(entry: Entry, exit: &Exit) -> Result<serde_json::Value> {
         serde_json::from_str(&exit.stdout).map_err(|_| {
@@ -553,6 +617,30 @@ fn tip_of<'a>(stdout: &'a str, reference: &str) -> Option<&'a str> {
     });
     let tip = named.next()?;
     named.next().is_none().then_some(tip)
+}
+
+/// The error for a number `entry` printed that `read` reports as `view`, unless `view` is an open
+/// request from `branch` into `base`: [`ForgeOutput`] naming `entry` and `number`, with what
+/// `read` reported. `open` and `find` hold the number they print to this one check before it is
+/// taken; `None` when it holds.
+fn not_held(
+    entry: Entry,
+    number: u64,
+    view: &PullRequestView,
+    branch: &str,
+    base: &str,
+) -> Option<anyhow::Error> {
+    if view.state == PullRequestState::Open && view.head.branch == branch && view.base == base {
+        return None;
+    }
+    let none = match entry {
+        Entry::Find => "none is taken",
+        _ => "none is recorded",
+    };
+    Some(unreadable(entry, "number").context(format!(
+        "`read` reports request {number} as {} from {} into {}, not an open request from {branch} into {base}; {none}",
+        view.state, view.head.branch, view.base
+    )))
 }
 
 /// A field of `command`'s output that cannot be read.
@@ -692,53 +780,53 @@ impl Forge for CommandForge {
 
     /// What is checked and written before `open` runs fails with nothing sent; `open` itself is
     /// classed by how it ended ([`write_failure`]); after it exited 0, a number that does not
-    /// read or read back is `unknown`, since the request may be open.
+    /// read or read back is `unknown`, since the request may be open. Without `find`, an earlier
+    /// open of the case that stands unanswered ([`CommandForge::UNANSWERED`]) sends none, the
+    /// refusal naming `find`: the forge may hold that one open, and nothing here can read it
+    /// back. The record is written before `open` runs and removed once the open's answer is
+    /// known; one left by an `unknown` outcome, or by a removal that failed, only refuses a later
+    /// open.
     fn open_pull_request(&self, tree: &Path, dir: &Path, request: &PullRequest) -> Written<u64> {
+        let unanswered = dir.join(Self::UNANSWERED);
         let body = (|| -> Result<_> {
             may_publish(&self.scan, &request.branch)?;
             std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+            if self.commands.find.is_none() {
+                match std::fs::symlink_metadata(&unanswered) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        return Err(anyhow::Error::new(error)
+                            .context(format!("read {}", unanswered.display())));
+                    }
+                    Ok(_) => bail!(
+                        "an open of the request for {} sent by an earlier step was never answered ({}), so the forge may hold it open, and the run file's `forge_commands` has no `find` entry to read it back; none is sent again: add `find`, which prints the number of the open request from `{{branch}}` into `{{base}}` or nothing, or remove that file once the forge holds no open request for {}; nothing was opened",
+                        request.branch,
+                        unanswered.display(),
+                        request.branch
+                    ),
+                }
+            }
             let output = fresh(dir.join(RESPONSE))?;
             write_request(dir, request)?;
             let body = dir.join(Self::BODY);
             std::fs::write(&body, &request.body)
                 .with_context(|| format!("write {}", body.display()))?;
+            let sent = serde_json::json!({ "branch": request.branch, "base": request.base });
+            std::fs::write(&unanswered, serde_json::to_vec_pretty(&sent)?)
+                .with_context(|| format!("write {}", unanswered.display()))?;
             Ok((output, body.display().to_string()))
         })();
         let (output, body) = body.map_err(WriteError::not_attempted)?;
-        let exit = self
-            .run(
-                Entry::Open,
-                tree,
-                &[
-                    ("branch", &request.branch),
-                    ("base", &request.base),
-                    ("title", &request.title),
-                    ("body_file", &body),
-                ],
-            )
-            .map_err(write_failure)?;
-        std::fs::write(&output, &exit.stdout)
-            .with_context(|| format!("write the response {}", output.display()))?;
-        let number = self.number_of(&exit.stdout)?;
-        let view = self.pull_request(tree, number).with_context(|| {
-            format!(
-                "the number {number} read from what `open` printed was not read back through `read`; the request may be open under another number, and none is recorded"
-            )
-        })?;
-        if view.head.branch != request.branch || view.state != PullRequestState::Open {
-            return Err(ForgeOutput {
-                command: Entry::Open.name().to_owned(),
-                field: "number".to_owned(),
-            })
-            .with_context(|| {
-                format!(
-                    "`read` reports request {number} as {} with the head {}, not an open request for {}; none is recorded",
-                    view.state, view.head.branch, request.branch
-                )
-            })
-            .map_err(WriteError::unknown);
+        let opened = self.open_sent(tree, request, &output, &body);
+        if opened
+            .as_ref()
+            .err()
+            .is_none_or(|error| error.outcome() != WriteOutcome::Unknown)
+        {
+            // Answered: opened, refused or never sent. A file that stays only refuses later.
+            let _ = std::fs::remove_file(&unanswered);
         }
-        Ok(number)
+        opened
     }
 
     /// The commit the branch `base`, the merge target, is at in the project `origin` names:
@@ -796,6 +884,37 @@ impl Forge for CommandForge {
             "--recurse-submodules=no",
         ]))?;
         Ok(tip.to_owned())
+    }
+
+    /// `find` with `{branch}` and `{base}`: nothing printed is none, a lone number (on a line of
+    /// its own, `#` or `!` before it allowed) is the request once `read` reports it open from
+    /// `branch` into `base`, as `open`'s number is held ([`not_held`]); anything else printed, a
+    /// number `read` cannot read, or one it reports closed, merged, from another branch or into
+    /// another base is [`ForgeOutput`] naming `find` and `number`, with what `read` reported,
+    /// never none. Without `find`, none: `open` then refuses to send again while an earlier open
+    /// stands unanswered ([`CommandForge::UNANSWERED`]).
+    fn find_open_pull_request(&self, tree: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
+        if self.commands.find.is_none() {
+            return Ok(None);
+        }
+        let exit = self.run(Entry::Find, tree, &[("branch", branch), ("base", base)])?;
+        let printed = exit.stdout.trim();
+        if printed.is_empty() {
+            return Ok(None);
+        }
+        let digits = printed.trim_start_matches(['#', '!']);
+        if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err(unreadable(Entry::Find, "number"));
+        }
+        let number: u64 = digits
+            .parse()
+            .map_err(|_| unreadable(Entry::Find, "number"))?;
+        let view = self.pull_request(tree, number).with_context(|| {
+            format!(
+                "the number {number} `find` printed for {branch} into {base} was not read back through `read`; none is taken"
+            )
+        })?;
+        not_held(Entry::Find, number, &view, branch, base).map_or(Ok(Some(number)), Err)
     }
 
     fn pull_request(&self, tree: &Path, number: u64) -> Result<PullRequestView> {

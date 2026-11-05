@@ -95,7 +95,7 @@ for `_`; those eight have no flag.
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
 | `commit` | mapping of `style` (`semantic`, the default, `repository` or `action`), `trailer` (default `Refs`; empty for none) and `types` (an action to its commit type), as `--commit-style`, `--commit-trailer` and `--commit-types`: how a step commit's message is written ([Commit messages](#commit-messages)); checked when the file is read |
 | `scan` | string: `none`, the one adapter; not set, nothing unscanned is accepted ([The scan](#the-scan)); accepted only here, never as a flag |
-| `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
+| `forge_commands` | a mapping read with `forge: command`: `open`, `read`, `checks` and `merge`, each the argument list that action runs, without a shell ([The forge](#the-forge)), the optional `find`, which prints the number of the request open from a branch into a base, with `id_pattern`, a regular expression whose first group is the request number in what `open` printed, and `refused_exit`, the exit codes that are a refusal; no flag |
 | `forge_instance` | string: the connector `forge: connectors` calls and, after one `/`, its instance, `<connector>[/<instance>]` as `connectors invoke` takes its target: the connector `gitlab` or `github`, the instance a word of letters, digits, `.`, `_` and `-`; checked when the file is read, needed by `forge: connectors` and refused under any other forge ([The connectors forge](#the-connectors-forge)); no flag |
 | `forge_endpoint` | string: the URL of a served Connectors instance that `forge: connectors` calls over its served wire instead of running `connectors`, `https://`, or `http://` to a loopback host alone (`localhost`, `127.0.0.0/8`, `[::1]`), with no userinfo, query or fragment; no credential goes with a call to it; checked when the file is read, refused under any other forge ([The connectors forge](#the-connectors-forge)); no flag |
 | `local_checks` | argument list: the checks `forge: local` runs on a request's head, without a shell, as the test command is run (its confinement, environment and timeout), in a fresh repository under the state directory that fetched the head from the hub by its id and names no remote; exit 0 passes, any other exit or the timeout fails; a pass is kept for that head and that argument list, so changed `local_checks` run again, and a fail is run again on the next read; not run while less than `--min-free-gib` is free; under `--confinement none` they share the run's `CARGO_TARGET_DIR`, under `substrate` they build in the fresh repository's own `target/`, and a program the adapter cannot run (anything but `cargo`) is refused before any case opens; required by `forge: local` and refused under any other forge, before any case opens; no flag |
@@ -394,14 +394,15 @@ forge_commands:
   read: [mr-state, "{number}"]
   checks: [mr-checks, "{number}", "{head}"]
   merge: [mr-merge, "{number}", "{head}"]
+  find: [mr-find, "{branch}", "{base}"]
   id_pattern: '/merge_requests/(\d+)'
   refused_exit: [3]
 ```
 
 - **Placeholders** are substituted once, inside the argument that holds them: `open` takes
   `{branch}`, `{base}`, `{title}` and `{body_file}` (a file under the case's artifacts directory holding the
-  body), `read` takes `{number}`, `checks` and `merge` take `{number}` and `{head}`. `merge` receives
-  the head the checks were read on. A placeholder an entry does not take, written in braces as a word
+  body), `read` takes `{number}`, `checks` and `merge` take `{number}` and `{head}`, `find` takes
+  `{branch}` and `{base}`. `merge` receives the head the checks were read on. A placeholder an entry does not take, written in braces as a word
   of lowercase letters and `_`, and a placeholder as the first element, the program, are refused
   before the case opens.
 - **Request number.** `open` prints the request's URL or number. `id_pattern`'s first group, in
@@ -411,8 +412,23 @@ forge_commands:
   request gives no number: a `.../merge_requests/new` page, a host with a port, a project whose
   name holds a digit. `pr.open` is then refused, naming `id_pattern`, and nothing is recorded. Any
   number is read back through `read` before `open` returns: a request `read` does not report as an
-  open request for the case's branch, or cannot read, is refused naming `number`, and its number
-  is not recorded.
+  open request from the case's branch into its base, or cannot read, is refused naming `number`,
+  and its number is not recorded.
+- **Finding an open request.** `pr.open` runs `find` for the case's branch and base before it
+  opens a request and after an open that failed, so a run resumed after a crash takes the request
+  it already opened instead of opening a second. Nothing printed means none; a lone number, with
+  `#` or `!` before it allowed, is read back through `read` and is the request only when `read`
+  reports it open from that branch into that base, the check `open`'s number is held to. Anything
+  else, a number `read` cannot read or one it reports closed, merged, from another branch or into
+  another base among them, is an error naming `find`, the number and what `read` reported, never
+  none, and nothing is opened.
+- **Without `find`.** Nothing reads an open back. Before `open` runs, takt writes
+  `open.unanswered.json` under the case's artifacts directory, and removes it once `open`'s answer
+  says whether it opened: a number read back, an exit in `refused_exit`, or a failure before
+  anything was sent. Any other outcome leaves it: another exit, a signal, a number that does not
+  read or read back, or a run that ended first. While it stands, `pr.open` sends no `open` for the
+  case and is refused naming `find` and the file. Add `find`, or remove the file once the forge
+  holds no open request for the branch.
 - **Output.** `read` prints JSON with `state` (`open`, `merged` or
   `closed`), `head` (the commit, or an object with `sha` and `branch`), `branch` (when `head` is the
   commit alone) and `base`. `checks` prints JSON, a list of `{name, state}`. Output that cannot be
@@ -550,8 +566,11 @@ local_checks: [cargo, test, --quiet]
   `--commit-identity`, or `identity.name` and `identity.email` in
   `.engineering/commit-identity.conf`. Without one the run is refused before any case opens.
 - **Open.** `pr.open` pushes the case's branch to the hub and writes a request record,
-  `<hub>/takt/requests/<n>.json`, holding the branch, the base, the title and the body. `n` is taken
-  by an exclusive create, so two runs at once never share a number.
+  `<hub>/takt/requests/<n>.json`, holding the branch, the base, the title and the body. The record
+  is written whole to `<n>.json.<pid>.next` beside it and then linked to `<n>.json`, which fails
+  rather than replace a record already there, so two runs at once never share a number and no
+  record is ever empty or half written; a run that ends mid-write leaves only the `.next` file,
+  which nothing reads as a record.
 - **Checks.** `local_checks` is an argument list run without a shell, as the test command is: under
   the run's confinement, with its environment cleared of credentials and a scratch home, in a
   fresh repository under the state directory that fetched the head from the hub by its id and names

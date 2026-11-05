@@ -110,6 +110,7 @@ fn commands() -> ForgeCommands {
         read: Some(argv(&["tool", "read", "{number}"])),
         checks: Some(argv(&["tool", "checks", "{number}", "{head}"])),
         merge: Some(argv(&["tool", "merge", "{number}", "{head}"])),
+        find: None,
         id_pattern: None,
         refused_exit: Some(vec![3]),
     }
@@ -182,7 +183,10 @@ fn adv_b2_a_url_that_names_no_request_gives_no_number() {
             Box::new(fake),
         )
         .expect("a forge");
-        let opened = forge.open_pull_request(&scratch.0, &scratch.0.join("a"), &request("b", "x"));
+        // Each open is a case of its own: an open whose number did not read stands unanswered
+        // in its case, and the forge sends none again there.
+        let artifacts = scratch.0.join(format!("a{}", read.len()));
+        let opened = forge.open_pull_request(&scratch.0, &artifacts, &request("b", "x"));
         let typed = opened
             .as_ref()
             .err()

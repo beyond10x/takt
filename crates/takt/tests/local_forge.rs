@@ -426,6 +426,53 @@ fn a_number_held_is_passed_over() {
     );
 }
 
+/// What an open cut off mid-write leaves is a `<n>.json.<pid>.next` file beside the records,
+/// never a `<n>.json`: it holds no number, stops no open and no find, and the open beside it
+/// takes the number, writes its record whole and leaves no `.next` file of its own.
+#[test]
+fn an_open_cut_off_mid_write_leaves_no_record() {
+    let scratch = Scratch::new("cut-off-write");
+    let hub = scratch.hub();
+    let a = scratch.clone("a");
+    change(&a, "takt/a", "a.txt", "a\n");
+    let requests = hub.join("takt/requests");
+    fs::create_dir_all(&requests).expect("a directory");
+    let left = requests.join("1.json.4194303.next");
+    fs::write(&left, "{\"branch\": \"takt/b\", \"ba").expect("a write cut off");
+    let forge = local(&scratch, &a, &["true"]);
+    let artifacts = scratch.0.join("artifacts");
+    assert_eq!(
+        forge
+            .find_open_pull_request(&a, "takt/a", "integration")
+            .expect("a file that is no record is passed over"),
+        None
+    );
+    let number = deliver(&forge, &a, &artifacts, "takt/a");
+    assert_eq!(number, 1);
+    let record: serde_json::Value =
+        serde_json::from_slice(&fs::read(requests.join("1.json")).expect("the record"))
+            .expect("the record reads whole");
+    assert_eq!(record["branch"], "takt/a");
+    let mut names: Vec<String> = fs::read_dir(&requests)
+        .expect("the records")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, ["1.json", "1.json.4194303.next"]);
+    assert_eq!(
+        forge
+            .find_open_pull_request(&a, "takt/a", "integration")
+            .expect("one open"),
+        Some(1)
+    );
+}
+
 /// The merge names the head: a head the branch has moved past is refused, a request already
 /// merged is not merged again, and either leaves the base where it was. A second merge with no
 /// read of the target's tip between goes onto the base where the first left it.

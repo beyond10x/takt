@@ -116,6 +116,7 @@ fn commands() -> ForgeCommands {
         read: Some(argv(&["tool", "read", "{number}"])),
         checks: Some(argv(&["tool", "checks", "{number}", "{head}"])),
         merge: Some(argv(&["tool", "merge", "{number}", "{head}"])),
+        find: None,
         id_pattern: Some(r"/merge_requests/(\d+)".to_owned()),
         refused_exit: Some(vec![3]),
     }
@@ -488,16 +489,21 @@ fn settings_must_fit_the_forge() {
 }
 
 /// A request number `open` printed is read back through `read` before the open returns: a
-/// request `read` does not report as an open request for the case's branch, or that it cannot
-/// read at all, is no request takt records, and the error names the number.
+/// request `read` does not report as an open request from the case's branch into its base, or
+/// that it cannot read at all, is no request takt records, and the error names the number.
 #[test]
 fn a_recorded_number_is_read_back_through_read() {
     let scratch = Scratch::new("read-back");
     let printed = "https://forge.test/g/p/-/merge_requests/42\n";
     let other_branch = view("opened").replace("takt/case-1", "takt/case-2");
-    for (replies, field) in [
+    let other_base = view("opened").replace(r#""base": "main""#, r#""base": "release""#);
+    for (case, (replies, field)) in [
         (
             vec![exit(0, printed, ""), exit(0, &other_branch, "")],
+            Some("number"),
+        ),
+        (
+            vec![exit(0, printed, ""), exit(0, &other_base, "")],
             Some("number"),
         ),
         (
@@ -509,11 +515,20 @@ fn a_recorded_number_is_read_back_through_read() {
             vec![exit(0, printed, ""), exit(1, "", "no such request")],
             None,
         ),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         let fake = Fake::answering(replies);
         let forge = forge_over(&scratch, commands(), Box::new(fake.clone())).expect("a forge");
+        // Each open is a case of its own: an open whose number did not read back stands
+        // unanswered in its case, and the forge sends none again there.
         let error = forge
-            .open_pull_request(&scratch.0, &scratch.0.join("a"), &request("T"))
+            .open_pull_request(
+                &scratch.0,
+                &scratch.0.join(format!("a{case}")),
+                &request("T"),
+            )
             .expect_err("a number `read` does not confirm is not recorded");
         let text = format!("{error:#}");
         assert!(text.contains("42"), "the error names the number: {text}");
@@ -526,6 +541,68 @@ fn a_recorded_number_is_read_back_through_read() {
         }
         assert_eq!(fake.calls()[1], argv(&["tool", "read", "42"]), "{text}");
     }
+}
+
+/// The number `find` prints is read back through `read` and taken only for a request `read`
+/// reports open from the branch into the base, the check `open`'s number is held to: one
+/// `read` reports from another branch, into another base, merged or closed, or cannot read, is
+/// an error naming `find`, the number and what `read` reported, never none and never taken.
+#[test]
+fn a_number_find_prints_is_taken_only_when_read_holds_it() {
+    let scratch = Scratch::new("find-read-back");
+    let finding = ForgeCommands {
+        find: Some(argv(&["tool", "find", "{branch}", "{base}"])),
+        ..commands()
+    };
+    let other_branch = view("opened").replace("takt/case-1", "takt/case-2");
+    let other_base = view("opened").replace(r#""base": "main""#, r#""base": "release""#);
+    for (read, typed, said) in [
+        (
+            exit(0, &other_branch, ""),
+            true,
+            Some("from takt/case-2 into main"),
+        ),
+        (
+            exit(0, &other_base, ""),
+            true,
+            Some("from takt/case-1 into release"),
+        ),
+        (exit(0, &view("merged"), ""), true, Some("as merged")),
+        (exit(0, &view("closed"), ""), true, Some("as closed")),
+        (exit(0, "not json", ""), false, None),
+        (exit(1, "", "no such request"), false, None),
+    ] {
+        let fake = Fake::answering([exit(0, "#42\n", ""), read]);
+        let forge = forge_over(&scratch, finding.clone(), Box::new(fake.clone())).expect("a forge");
+        let error = forge
+            .find_open_pull_request(&scratch.0, "takt/case-1", "main")
+            .expect_err("a number `read` does not hold is not taken");
+        let text = format!("{error:#}");
+        assert!(
+            text.contains("42") && text.contains("find"),
+            "the error names `find` and the number: {text}"
+        );
+        if let Some(said) = said {
+            assert!(text.contains(said), "it says what `read` reported: {text}");
+        }
+        if typed {
+            let typed = error.downcast_ref::<ForgeOutput>().expect("typed");
+            assert_eq!(
+                (typed.command.as_str(), typed.field.as_str()),
+                ("find", "number")
+            );
+        }
+        assert_eq!(fake.calls()[1], argv(&["tool", "read", "42"]), "{text}");
+    }
+    let fake = Fake::answering([exit(0, "#42\n", ""), exit(0, &view("opened"), "")]);
+    let forge = forge_over(&scratch, finding, Box::new(fake.clone())).expect("a forge");
+    assert_eq!(
+        forge
+            .find_open_pull_request(&scratch.0, "takt/case-1", "main")
+            .expect("one open from the branch into the base"),
+        Some(42)
+    );
+    assert_eq!(fake.calls()[1], argv(&["tool", "read", "42"]));
 }
 
 /// A repository whose `origin` names a project on a fake host.

@@ -2,14 +2,20 @@
 format: aep.planning-md/3
 id: story:merge-is-not-sent-after-a-merged-read
 kind: story
-status: draft
+status: active
 title: A merge is not sent after the read before it finds the pull request merged or closed
 summary: the read just before the merge is checked only for its base
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/validator.rs
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T06:19:34Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 3}
 ---
 # A merge is not sent after the read before it finds the pull request merged or closed
 

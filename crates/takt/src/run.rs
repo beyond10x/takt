@@ -2111,7 +2111,10 @@ fn performer_of(action: &str) -> String {
 /// One entry of a snapshot: a regular file with its bytes and whether it is executable, a
 /// symbolic link with its target, or anything else (a FIFO, a socket, a device) by its kind
 /// alone. A link is an entry by itself and is never followed: what it points at may lie outside
-/// the tree, and nothing the kernel does for a case reaches outside the tree. Anything else is
+/// the tree, and nothing the kernel does for a case reaches outside the tree. The one exception
+/// is a link directly in a program directory outside the tree ([`Outside`]): its target and what
+/// it resolves to ([`Entry::Through`], [`Outside::program_at`]), since a lookup by its name runs
+/// that, so a change behind the link differs as a change of the link does. Anything else is
 /// never opened: reading a FIFO no one writes would block the run for good. A file outside the
 /// tree too large to keep a copy of ([`Outside`]) is its fingerprint alone ([`fingerprint`]),
 /// which tells a change but cannot put the file back.
@@ -2119,6 +2122,7 @@ fn performer_of(action: &str) -> String {
 enum Entry {
     File { bytes: Vec<u8>, executable: bool },
     Link(PathBuf),
+    Through(PathBuf, Box<Entry>),
     Other(&'static str),
     Large(String),
 }
@@ -2396,7 +2400,7 @@ fn restore(
         }
         match before.get(path) {
             Some(Entry::File { bytes, executable }) => put_back_file(&full, bytes, *executable)?,
-            Some(Entry::Link(target)) => make_link(target, &full)?,
+            Some(Entry::Link(target) | Entry::Through(target, _)) => make_link(target, &full)?,
             Some(Entry::Other(_) | Entry::Large(_)) | None => {}
         }
     }
@@ -7264,8 +7268,9 @@ impl JudgeSurface {
 /// every directory outside the tree the script itself prepends to `PATH`
 /// ([`outside_path_dirs`]), `$CARGO_HOME/bin` and every `bin` of a rustup toolchain, that the
 /// user can write (one that does not exist yet when its nearest existing directory can be
-/// written), each directory by itself and each executable file and link directly in it; one too
-/// large to keep is its [`fingerprint`]. A directory the user cannot write no step can change.
+/// written), each directory by itself and each executable file and link directly in it, a link
+/// with what it resolves to ([`Entry::Through`]); one too large to keep is its [`fingerprint`].
+/// A directory the user cannot write no step can change.
 ///
 /// And what Python loads code from outside the tree ([`outside_import_dirs`]): each `PYTHONPATH`
 /// entry and `PYTHONHOME`, `PYTHONUSERBASE`, `PYTHONPYCACHEPREFIX` or `PYTHONSTARTUP` value the
@@ -7570,11 +7575,14 @@ impl Outside {
     /// What is at each of the paths now. A path whose way crosses a link is read through it,
     /// so a change there is seen, and is never written or removed through it ([`Self::put_back`]).
     /// What Python imports from is read by its [`fingerprint`] alone, since takt never puts it
-    /// back.
+    /// back; a program directory's link with what it resolves to ([`Self::program_at`]).
     fn read(tree: &Path, extra: &OutsideDirs) -> Result<Self> {
         let mut entries = BTreeMap::new();
         for (path, anchor, held) in Self::paths(tree, extra) {
-            let entry = Self::entry_at_with(&path, held != Held::Import)?;
+            let entry = match held {
+                Held::Program => Self::program_at(&path)?,
+                Held::Config | Held::Import => Self::entry_at_with(&path, held != Held::Import)?,
+            };
             entries.insert(path, (anchor, entry, held != Held::Config));
         }
         Ok(Self(entries))
@@ -7653,6 +7661,29 @@ impl Outside {
             Ok(meta) if meta.is_dir() => Some(Entry::Other("directory")),
             Ok(meta) => Some(Entry::Other(other_kind(meta.file_type()))),
         })
+    }
+
+    /// What is at the program directory's `path` now ([`Self::entry_at`]); a link with what it
+    /// resolves to, read as [`Self::entry_at`] reads a file ([`Entry::Through`]), so a program
+    /// rewritten behind the link differs as the link changed would. A link that resolves to
+    /// nothing (dangling, looping) is the link alone; an end that cannot be read is its
+    /// [`fingerprint`].
+    fn program_at(path: &Path) -> Result<Option<Entry>> {
+        let entry = Self::entry_at(path)?;
+        let Some(Entry::Link(target)) = entry else {
+            return Ok(entry);
+        };
+        let end = std::fs::canonicalize(path).ok().and_then(|end| {
+            Self::entry_at(&end).unwrap_or_else(|_| {
+                std::fs::metadata(&end)
+                    .ok()
+                    .map(|meta| Entry::Large(fingerprint(&meta)))
+            })
+        });
+        Ok(Some(match end {
+            Some(end) => Entry::Through(target, Box::new(end)),
+            None => Entry::Link(target),
+        }))
     }
 
     /// The paths at which `now` differs from this, in path order: a part of the way (`.cargo`)
@@ -7747,7 +7778,9 @@ impl Outside {
                     }
                     put_back_file(&path, &bytes, executable)?;
                 }
-                Some(Entry::Link(target)) => make_link(&target, &path)?,
+                Some(Entry::Link(target) | Entry::Through(target, _)) => {
+                    make_link(&target, &path)?;
+                }
                 Some(Entry::Other("directory")) => std::fs::create_dir_all(&path)
                     .with_context(|| format!("create {}", path.display()))?,
                 Some(Entry::Other(_) | Entry::Large(_)) | None => {}

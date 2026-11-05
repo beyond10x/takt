@@ -7,7 +7,8 @@
 //! | action | the local forge |
 //! |---|---|
 //! | push | `git push` of the case's branch to the hub |
-//! | `pr.open` | a request record `<hub>/takt/requests/<n>.json` (branch, base, title, body), `n` taken with an exclusive create, so runs at once never share a number |
+//! | `pr.open` | a request record `<hub>/takt/requests/<n>.json` (branch, base, title, body), written whole to `<n>.json.<pid>.next` and linked to `<n>.json` only while no record holds that name, so runs at once never share a number and no record is ever empty or half written |
+//! | find | the one record open for the branch into the base; a record that does not read, or two open, is the error |
 //! | read | the record, the head as the hub's `refs/heads/<branch>`, behind its base when the base's tip is not an ancestor of the head; merged only when the record names the head and a commit on the hub's base that holds it (the head or a commit whose history has it), so a record written by hand merges nothing |
 //! | checks | the run file's `local_checks`, an argument list run without a shell as the test command is ([`crate::confinement::Confinement::run_test`]: the adapter in use, its environment and scratch home, no credential), in a fresh repository under the state directory that fetched the head from the hub by its id and names no remote; exit 0 passes, any other exit or the timeout fails, pending while it runs; a pass is recorded per head and per argument list (its digest), so a later read of the same checks does not run them again and other checks are run, and a fail is run again by the next read; not run while the run's `--min-free-gib` is not free |
 //! | merge | in the hub, with no work tree: a base whose tip already holds the head moves no ref and the request is recorded merged by the commit that holds it; else `git merge-tree --write-tree` of the base's tip and the head, a conflict refused naming its paths ([`LocalRefused::Conflict`]); else `git commit-tree` of a merge commit under the run's commit identity, saying takt's merge message, and `git update-ref` of the base from the tip to it, so a base another writer moved meanwhile is refused, not overwritten ([`LocalRefused::BaseMoved`]) |
@@ -16,7 +17,6 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -364,11 +364,17 @@ impl Local {
         })
     }
 
+    /// The file beside the record `path` a write of this process goes through,
+    /// `<n>.json.<pid>.next`: never a record's name, so no reader takes it for one.
+    fn next_of(path: &Path) -> PathBuf {
+        path.with_extension(format!("json.{}.next", std::process::id()))
+    }
+
     /// Writes request `number` whole, through a file beside it renamed over it, so a reader
     /// never reads half of it.
     fn write(&self, number: u64, request: &Request) -> Result<()> {
         let path = self.record(number);
-        let next = path.with_extension(format!("json.{}.next", std::process::id()));
+        let next = Self::next_of(&path);
         let bytes = serde_json::to_vec_pretty(request).context("serialize the request")?;
         std::fs::write(&next, bytes).with_context(|| format!("write {}", next.display()))?;
         std::fs::rename(&next, &path).with_context(|| format!("write {}", path.display()))
@@ -594,10 +600,14 @@ impl Forge for Local {
         pushed
     }
 
-    /// Writes the request's record under the lowest number no record holds, taken with an
-    /// exclusive create, so a number held is passed over and never written over; the head and
-    /// the base must be branches of the hub. Every failure before the record's file is made is
-    /// `not_attempted`; a write into the file made is `unknown`, the record perhaps there.
+    /// Writes the request's record under the lowest number no record holds: whole into
+    /// `<n>.json.<pid>.next` beside it, then linked to `<n>.json` with `link(2)`, which fails
+    /// rather than replace a name that exists, so a number held is passed over and never written
+    /// over, and the `.next` file removed. A record is so never seen empty or half written, and
+    /// a process gone mid-write leaves a `.next` file, which no reader takes for a record
+    /// ([`Forge::find_open_pull_request`]), never an empty `<n>.json`. The head and the base must
+    /// be branches of the hub. Every failure before the link is `not_attempted`: no record holds
+    /// the number. A `.next` file the removal leaves after the link is passed over too.
     fn open_pull_request(&self, _: &Path, _: &Path, request: &PullRequest) -> Written<u64> {
         let bytes = (|| -> Result<_> {
             self.tip_of(&request.branch)?;
@@ -620,23 +630,81 @@ impl Forge for Local {
         let mut number = 1;
         loop {
             let path = self.record(number);
-            match std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&path)
-            {
-                Ok(mut file) => {
-                    file.write_all(&bytes)
-                        .with_context(|| format!("write {}", path.display()))?;
-                    return Ok(number);
-                }
+            let next = Self::next_of(&path);
+            if let Err(error) = std::fs::write(&next, &bytes) {
+                let _ = std::fs::remove_file(&next);
+                return Err(WriteError::not_attempted(
+                    anyhow::Error::new(error).context(format!("write {}", next.display())),
+                ));
+            }
+            let linked = std::fs::hard_link(&next, &path);
+            let _ = std::fs::remove_file(&next);
+            match linked {
+                Ok(()) => return Ok(number),
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => number += 1,
                 Err(error) => {
                     return Err(WriteError::not_attempted(
-                        anyhow::Error::new(error).context(format!("create {}", path.display())),
+                        anyhow::Error::new(error).context(format!(
+                            "link {} to {}",
+                            next.display(),
+                            path.display()
+                        )),
                     ));
                 }
             }
+        }
+    }
+
+    /// The open request for `branch` into `base` among the hub's records, every record
+    /// `<n>.json` read: one that does not read (no write of the forge leaves one, so it was made
+    /// or changed by another hand, and may be this branch's) is the error, and so are two open for
+    /// the branch and the base, never none or one of them. A file beside them that is no record (a
+    /// write in flight, or one a process gone mid-write left, `<n>.json.<pid>.next`) is passed over.
+    fn find_open_pull_request(&self, _: &Path, branch: &str, base: &str) -> Result<Option<u64>> {
+        let dir = self.hub.join(Self::REQUESTS);
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(anyhow::Error::new(error).context(format!("read {}", dir.display())));
+            }
+        };
+        let mut found = Vec::new();
+        for entry in entries {
+            let entry = entry.with_context(|| format!("read {}", dir.display()))?;
+            let name = entry.file_name();
+            let Some(number) = name
+                .to_str()
+                .and_then(|name| name.strip_suffix(".json"))
+                .filter(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+                .and_then(|digits| digits.parse::<u64>().ok())
+            else {
+                continue;
+            };
+            let request = self.read(number).with_context(|| {
+                format!("the open requests for {branch} into {base} cannot be read")
+            })?;
+            if request.branch == branch
+                && request.base == base
+                && request.state == PullRequestState::Open.as_str()
+            {
+                found.push(number);
+            }
+        }
+        found.sort_unstable();
+        match found.as_slice() {
+            [] => Ok(None),
+            [number] => Ok(Some(*number)),
+            numbers => bail!(
+                "the hub {} holds {} open requests for {branch} into {base} (#{}); none is taken for the case",
+                self.hub.display(),
+                numbers.len(),
+                numbers
+                    .iter()
+                    .map(u64::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", #")
+            ),
         }
     }
 

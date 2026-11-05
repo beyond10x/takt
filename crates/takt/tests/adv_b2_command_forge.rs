@@ -84,6 +84,7 @@ fn commands() -> ForgeCommands {
         read: Some(argv(&["tool", "read", "{number}"])),
         checks: Some(argv(&["tool", "checks", "{number}", "{head}"])),
         merge: Some(argv(&["tool", "merge", "{number}", "{head}"])),
+        find: None,
         id_pattern: None,
         refused_exit: Some(vec![3]),
     }

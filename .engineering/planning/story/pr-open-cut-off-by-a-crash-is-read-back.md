@@ -2,14 +2,24 @@
 format: aep.planning-md/3
 id: story:pr-open-cut-off-by-a-crash-is-read-back
 kind: story
-status: draft
+status: active
 title: A pull request open cut off by a crash is read back on every forge
 summary: only the connectors forge finds the open pull request after a crash
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: inferred
+  path: crates/takt/src/forge/command.rs
+- confidence: inferred
+  path: crates/takt/src/forge/gitlab.rs
+- confidence: inferred
+  path: crates/takt/src/forge/local.rs
+revision: 7
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 3}
 ---
 # A pull request open cut off by a crash is read back on every forge
 
@@ -43,3 +53,12 @@ Every shipped forge finds the open pull request for a branch, or refuses to open
 ## Scope
 
 - `crates/takt/src/forge/command.rs`, `forge/gitlab.rs`, `forge/local.rs`: `find_open_pull_request` (inferred)
+
+## Decision
+
+Decided 2026-11-04 under the owner's standing delegation, through the orchestrator: a command forge
+without a `find` entry refuses every later open in a case once an open's answer stayed `unknown`.
+The record `open.unanswered.json` under the case's artifacts names that open; the refusal names
+`find`. It lifts when the run file gains `find`, or when the operator removes the record once the
+forge holds no open request for the branch. Refusing is the safe direction: sending the open again
+could leave two pull requests. The 0.31.0 changelog states it under Changed, with both ways out.

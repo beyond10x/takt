@@ -4178,8 +4178,9 @@ impl Validator for PrOpen {
     }
 
     /// The case's `branch.yaml`, and what the forge keeps of the request it sent, its title and
-    /// body as published, the response it read and, on the forge connectors, the count of its
-    /// keyed writes the provider refused.
+    /// body as published, the response it read, on the forge command the record of an open not
+    /// answered yet, and on the forge connectors the count of its keyed writes the provider
+    /// refused.
     fn writes(&self) -> Vec<PathBuf> {
         let artifacts = Path::new("artifacts");
         vec![
@@ -4188,6 +4189,7 @@ impl Validator for PrOpen {
             artifacts.join(forge::RESPONSE),
             artifacts.join(forge::PUBLISHED),
             artifacts.join(crate::forge::command::CommandForge::BODY),
+            artifacts.join(crate::forge::command::CommandForge::UNANSWERED),
             artifacts.join(crate::forge::connectors::ConnectorsForge::REFUSALS),
         ]
     }
@@ -5812,23 +5814,29 @@ impl Validator for PrMerged {
         // it is pushed, so a push the forge never took, or one it has not moved the pull
         // request to yet, leaves the pull request at an earlier head of takt's, and the push
         // below is made again.
-        if view.head.branch != name
-            || (view.head.sha != pushed
-                && view.head.sha != revision
-                && !carries(tree, &dir, revision, &view.head.sha)?)
-        {
-            return Ok((
+        let off_head = |head: &crate::forge::Head| -> Result<Option<(Observation, bool)>> {
+            if head.branch == name
+                && (head.sha == pushed
+                    || head.sha == revision
+                    || carries(tree, &dir, revision, &head.sha)?)
+            {
+                return Ok(None);
+            }
+            Ok(Some((
                 nothing(format!(
                     "pull request #{number} has the head {} at {}, not {name} at {}; nothing to merge, the claim stays unknown",
-                    view.head.branch,
-                    short(&view.head.sha),
+                    head.branch,
+                    short(&head.sha),
                     short(&pushed)
                 )),
                 false,
-            ));
+            )))
+        };
+        if let Some(stop) = off_head(&view.head)? {
+            return Ok(stop);
         }
         let (state, merged_now) = match view.state {
-            PullRequestState::Open => {
+            PullRequestState::Open => 'open: {
                 // The grant authorises the revision the case reached the gate at and no other:
                 // checked here as well as in the evaluation that admitted the step.
                 let authority = crate::case::Authority::read(&dir)?.unwrap_or_default();
@@ -6033,13 +6041,36 @@ impl Validator for PrMerged {
                         ));
                     }
                 }
-                // R7: the pull request read again right before the merge; a base the forge
-                // moved it to after the guard judged its target merges nothing.
+                // R7: the pull request read again right before the merge. Merged or closed, it
+                // is observed as a first read finding it so observes it, and no merge is sent;
+                // open at another head than the one the merge names, or on a base the forge
+                // moved it to after the guard judged its target, it merges nothing.
                 let last = self.forge.pull_request(tree, number).with_context(|| {
                     format!(
                         "read pull request #{number} through the forge {forge} before the merge"
                     )
                 })?;
+                if last.state != PullRequestState::Open {
+                    if let Some(stop) = off_head(&last.head)? {
+                        return Ok(stop);
+                    }
+                    let state = last.state;
+                    view = last;
+                    self.wrote(not_sent, number, &view.head.sha);
+                    break 'open (state, false);
+                }
+                if last.head != view.head {
+                    return Ok((
+                        nothing(format!(
+                            "the forge {forge} reports pull request #{number}'s head as {} at {} right before the merge, not {} at {}, the head the merge names; nothing merged, the claim stays unknown",
+                            last.head.branch,
+                            short(&last.head.sha),
+                            view.head.branch,
+                            short(&view.head.sha)
+                        )),
+                        false,
+                    ));
+                }
                 if last.base != target {
                     return Ok((
                         nothing(format!(

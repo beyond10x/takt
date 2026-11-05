@@ -2,14 +2,20 @@
 format: aep.planning-md/3
 id: story:a-slow-runner-is-no-late-ci-result
 kind: story
-status: draft
+status: active
 title: A slow runner is no late CI result
 summary: The one-cap CI result case allows 20 ms beyond the runner's own time; a slow darwin runner measured 863 ms against a 769 ms allowance and turned it red.
 tags:
 - from-finding
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/tests/ci_wait_backoff.rs
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-04T06:19:36Z", actor: "human:timo", revision: 2, decided_on: {"recorded":{"verification":1}}}
+- {from: "proposed", to: "active", at: "2026-11-04T06:19:37Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"verification":1}}}
 ---
 # The one-cap CI result case allows a slow runner too little slack
 
