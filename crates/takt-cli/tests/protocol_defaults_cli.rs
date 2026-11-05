@@ -8,6 +8,7 @@ mod own_home;
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -492,8 +493,9 @@ fn another_document_under_the_case_protocol_id_is_refused() {
 /// A forge that refuses `open_pull_request`: the run ends with a `stopped: error:` line that
 /// names the refusal, on stdout like every other stop, and exits with the code `takt run
 /// --help` documents for it, which is none of the other stops' codes. The forge is `local`, its
-/// hub a bare repository beside the tree holding its `main`, where a file at `takt` leaves no
-/// room for the request's record: the branch is pushed, and the open is refused.
+/// hub a bare repository beside the tree holding its `main`, whose records directory can be read
+/// (it holds no request, so `pr.open` finds none open) but not written: the branch is pushed,
+/// and the open is refused.
 #[test]
 fn a_forge_refusing_the_pull_request_stops_the_run_with_a_documented_code() {
     let (outer, repo) = repository(None, "forge-refusal");
@@ -545,7 +547,10 @@ fn a_forge_refusing_the_pull_request_stops_the_run_with_a_documented_code() {
     let mut case = CaseDir::resume(&repo, "refused").expect("the case reads back");
     case.set_revision("implementation", &head)
         .expect("the revision is recorded");
-    fs::write(hub.join("takt"), "not a directory\n").expect("the hub's takt is a file");
+    let requests = hub.join("takt").join("requests");
+    fs::create_dir_all(&requests).expect("the hub's records directory");
+    fs::set_permissions(&requests, fs::Permissions::from_mode(0o555))
+        .expect("the records directory is read-only");
     let (code, out, err) = takt(&[
         "run",
         "--repo",

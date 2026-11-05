@@ -1,6 +1,6 @@
 # Wave 53: four finding stories
 
-Stage: **proposed**. `wave/53` branches from dfae174f3, wave 52's close on `main`. Skill version 0.26.0
+Stage: **gate run, pull request open**. `wave/53` branches from dfae174f3, wave 52's close on `main`. Skill version 0.26.0
 (aep:implementing, wave mode). Approved: approval-record:wave-53-four-findings. Release: 0.31.0.
 
 ## Selection
@@ -63,3 +63,26 @@ its floor is its peak and 25G, and its sampler stops it at `/` under 25G.
 | `task check-static` | 3G | 1 | 43G | 53G | wave 52: 783M, 29 s |
 | `task test-library` | 44G | 10 | 69G | 69G | wave 52: 39G at stage end, 44G read by the disk steward; its stop line on `/` is 25G |
 | `task test-cli` | 30G | 9 | 70G | 80G | first run alone after a discard; wave 52 ran it on the library's build |
+
+`task test-cli` started at a floor of 60G with a stop at 25G, set by the host's operators when the stage started. At a
+gate stage's start, the I/O pressure line and the count of other builds were not applied; the build slot governs those.
+
+## Gate
+
+| stage | head | exit | wall | cargo | peak `target/` | lowest free on `/` | result |
+|---|---|---|---|---|---|---|---|
+| `task check-static` | f54dd0c3a | 0 | 41 s | 41 s | 1G | 74G | every step 0 |
+| `task test-library` | f54dd0c3a | 101 | 1067 s | 1067 s | 39G | 29G | 2056 passed, 3 failed |
+| targeted, after the fix | 9e760b2fe | 0 | | 69 s | 2.4G | | `gitlab_ci_wait` 3/3, `gitlab_api` 6/6, `gitlab_forge_cli` 6/6 |
+| `task test-cli` | 9e760b2fe | 101 | 1711 s | 1280 s | 8G | 33G | 921 passed, 2 failed |
+| targeted, after the fix | the next commit | 0 | | 25 s | 2.2G | | `protocol_defaults_cli` 14/14, fmt 0 |
+
+- **`test-library`**: the three failures were in `gitlab_ci_wait.rs`. Its `glab` double answered no list of open
+  merge requests, which the GitLab forge now reads before `pr.open` opens one. The doubles were fixed, changing
+  fixtures only. approval-record:wave-53-library-stage-rerun counts the stage on the targeted run.
+- **`test-cli`**, `protocol_defaults_cli`: the case refused the open by making the hub's `takt` a file. The new
+  look for an open request now fails on that path first. The case now makes the records directory read-only, so the
+  open itself is refused.
+- **`test-cli`**, `finding_scripts::the_predicate_reaches_no_network_ipc_or_socket_of_the_host`: from the host. The
+  gate's machine had the `ipip` module loaded, so every new network namespace held `tunl0` beside `lo`. No commit of
+  the wave touches that case. CI runs the full gate on the pull request.
