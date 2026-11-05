@@ -10,7 +10,7 @@ tags:
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:composable-agentic-work
-revision: 2
+revision: 3
 ---
 ## Outcome
 
@@ -29,3 +29,39 @@ older than wave 54; the base was not run.
 
 With story `probe`'s case `a` open, `takt run --story story:probe --case-id zzz` exits 1 naming `a`, and no case `zzz`
 and no branch `takt/zzz` exist.
+
+## Failing case
+
+The adversary case, taken out of `crates/takt-cli/tests/w54_adversary_cli.rs` when wave 54 was corrected; it uses that file's `world`, `open` and `run` helpers. It is red on wave 54:
+
+```rust
+/// story:gate-flag-names-a-protocol-action: `--case-id` is dropped on any resume, not only one
+/// named by `--case`: a `--story` whose case is open resumes it, keeping its own id. The story
+/// file is the one a case opened for a story keeps.
+#[test]
+fn w54_d_a_case_id_on_a_story_resume_is_refused() {
+    let scratch = world("story-resume");
+    let repo = scratch.repo();
+    open(&scratch, "a");
+    fs::write(
+        repo.join(".takt/cases/a").join(takt::case::STORY_FILE),
+        "id: story:probe\n",
+    )
+    .expect("the case's story");
+    let (code, out, err) = run(
+        &scratch,
+        &[
+            "--story",
+            "story:probe",
+            "--case-id",
+            "zzz",
+            "--iterations",
+            "0",
+        ],
+    );
+    assert!(
+        code == 1 && err.contains("--case-id zzz"),
+        "story:gate-flag-names-a-protocol-action: the open case a of story:probe is resumed and --case-id zzz is dropped without a word; exit {code}\n{out}\n{err}"
+    );
+}
+```
