@@ -14,7 +14,11 @@ relations:
 scope:
 - confidence: inferred
   path: crates/takt/src/git.rs
-revision: 6
+- confidence: inferred
+  path: crates/takt/src/run.rs
+- confidence: inferred
+  path: crates/takt/src/run_config.rs
+revision: 8
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:10Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-11-06T04:03:36Z", actor: "human:timo", revision: 6}
