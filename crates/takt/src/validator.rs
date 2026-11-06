@@ -1682,6 +1682,12 @@ impl FreshHome {
     /// binding's `env` declares or else on [`FIXED_PATH`], and a binding that declares no `PATH`
     /// runs with [`FIXED_PATH`]; a name found nowhere is refused, naming it and the path searched.
     fn admitting(&self, project: &str, tree: &Path) -> Result<String> {
+        // A shell's `-c` line the gate cannot split into words leaves paths it would run
+        // uncompared at the base ([`argument_paths`]): refused, naming the command.
+        let unread = argument_paths(project)?.unread;
+        if !unread.is_empty() {
+            bail!("{}", unread.join("; "));
+        }
         let mut doc: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(project).context("read the project file")?;
         let Some(top) = doc.as_mapping_mut() else {
@@ -2551,35 +2557,568 @@ fn inside_tree(paths: &[String]) -> Vec<String> {
     inside
 }
 
+/// What the commands and providers a project file admits name in their arguments
+/// ([`argument_paths`]), each relative to the tree ([`inside_tree`]).
+#[derive(Debug, Default)]
+struct ArgumentPaths {
+    /// Compared whatever the base holds there: each argument as it is written, an option's
+    /// value after its `=` (`--path=dir`), and each word of a shell's `-c` line, as it is
+    /// written and from every directory the line changes to.
+    paths: Vec<String>,
+    /// The patterns of a shell's `-c` line (`scripts/*.mk`), compared as globs: every path
+    /// each matches.
+    globs: Vec<String>,
+    /// What a short option's glued value may name (`-fscripts/check.mk`,
+    /// `-qfscripts/check.mk`): each tail after a run of option letters, compared where the base
+    /// or the revision holds something.
+    glued: Vec<String>,
+    /// Why a command's `-c` line cannot be split into words with certainty, naming the
+    /// command: while there is one, the gate runs nothing.
+    unread: Vec<String>,
+}
+
+/// The shells whose `-c` line the gate splits into words ([`shell_lines`]).
+const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish"];
+
+/// How many `-c` lines deep, one given inside another, the gate reads.
+const SHELL_LINES_AT_MOST: usize = 3;
+
+/// How many directories a `-c` line's words are read from, its `cd`s followed.
+const LINE_DIRS_AT_MOST: usize = 16;
+
 /// The arguments of the commands and providers a project file admits, as paths relative to the
-/// tree ([`inside_tree`]): each argument as it is written, and an option's value after its `=`
-/// (`--path=dir`). Which of them a commit holds is the caller's to read.
-fn argument_paths(project: &str) -> Result<Vec<String>> {
+/// tree ([`ArgumentPaths`]): each argument as it is written, an option's value after its `=`
+/// (`--path=dir`), the tails of a short option with its value glued on, and the words of the
+/// line a shell runs with `-c` ([`shell_lines`]), or why that line cannot be read. Which of
+/// them a commit holds is the caller's to read.
+fn argument_paths(project: &str) -> Result<ArgumentPaths> {
     let doc: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(project).context("read the project file")?;
-    let mut bindings: Vec<&serde_yaml_ng::Value> = Vec::new();
+    let mut bindings: Vec<(String, &serde_yaml_ng::Value)> = Vec::new();
+    let named = |kind: &str, name: &serde_yaml_ng::Value| {
+        format!("{kind} `{}`", name.as_str().unwrap_or("?"))
+    };
     if let Some(commands) = doc["commands"].as_mapping() {
-        bindings.extend(commands.values());
+        bindings.extend(
+            commands
+                .iter()
+                .map(|(name, binding)| (named("command", name), binding)),
+        );
     }
     if let Some(providers) = doc["providers"].as_mapping() {
-        bindings.extend(providers.values().map(|provider| &provider["command"]));
+        bindings.extend(
+            providers
+                .iter()
+                .map(|(name, provider)| (named("provider", name), &provider["command"])),
+        );
     }
-    let mut paths = Vec::new();
-    for argument in bindings
-        .iter()
-        .filter_map(|binding| binding["args"].as_sequence())
-        .flatten()
-        .filter_map(serde_yaml_ng::Value::as_str)
-    {
-        paths.push(argument.to_owned());
-        if let Some((_, value)) = argument
-            .strip_prefix('-')
-            .and_then(|option| option.split_once('='))
-        {
-            paths.push(value.to_owned());
+    let mut found = ArgumentPaths::default();
+    for (name, binding) in bindings {
+        let args: Vec<String> = binding["args"]
+            .as_sequence()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_yaml_ng::Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        for argument in &args {
+            word_paths(argument, "", &mut found);
+        }
+        let words: Vec<String> = binding["executable"]
+            .as_str()
+            .map(str::to_owned)
+            .into_iter()
+            .chain(args)
+            .collect();
+        if let Err(why) = shell_lines(
+            &words,
+            &[String::new()],
+            &known_variables(binding),
+            0,
+            &mut found,
+        ) {
+            found.unread.push(format!("the {name} {why}"));
         }
     }
-    Ok(inside_tree(&paths))
+    found.paths = inside_tree(&found.paths);
+    found.globs = inside_tree(&found.globs);
+    found.glued = inside_tree(&found.glued);
+    Ok(found)
+}
+
+/// `path` read from the directory `dir` (`""` the tree's root): an absolute one as it is.
+fn joined(dir: &str, path: &str) -> String {
+    if dir.is_empty() || path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("{dir}/{path}")
+    }
+}
+
+/// What the word `word`, read from the directory `dir`, may name ([`ArgumentPaths`]): the word,
+/// an option's value after its `=`, and for a short option (one `-`) every tail after a run of
+/// option letters, so `-qfscripts/check.mk` gives `fscripts/check.mk` and `scripts/check.mk`
+/// among them.
+fn word_paths(word: &str, dir: &str, found: &mut ArgumentPaths) {
+    found.paths.push(joined(dir, word));
+    if let Some((_, value)) = word
+        .strip_prefix('-')
+        .and_then(|option| option.split_once('='))
+    {
+        found.paths.push(joined(dir, value));
+    }
+    if word.starts_with('-') && !word.starts_with("--") {
+        let bytes = word.as_bytes();
+        for k in 2..bytes.len() {
+            if !bytes[k - 1].is_ascii_alphanumeric() || bytes[k] == b'=' {
+                break;
+            }
+            found.glued.push(joined(dir, &word[k..]));
+        }
+    }
+}
+
+/// The variables a gate command runs with whose value the gate knows, for a `-c` line's
+/// expansions: what the binding's `env` sets, and else what the gate sets ([`FreshHome::vars`],
+/// [`FIXED_PATH`]), `HOME` standing for the fresh home outside the tree as `/`.
+fn known_variables(binding: &serde_yaml_ng::Value) -> std::collections::BTreeMap<String, String> {
+    let mut known: std::collections::BTreeMap<String, String> = [
+        ("PATH", FIXED_PATH),
+        ("HOME", "/"),
+        ("PYTHONNOUSERSITE", "1"),
+        ("PYTHONDONTWRITEBYTECODE", "1"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .collect();
+    if let Some(env) = binding["env"].as_mapping() {
+        for (name, value) in env {
+            if let (Some(name), Some(value)) = (name.as_str(), value.as_str()) {
+                known.insert(name.to_owned(), value.to_owned());
+            }
+        }
+    }
+    known
+}
+
+/// Reads the line each shell among `words` ([`SHELLS`]) runs with `-c` (alone or in a cluster,
+/// `-ec`), the first operand after its options: each of its words ([`split_line`]) is what
+/// [`word_paths`] reads, from every directory in `dirs` and every one the line changes to, a
+/// pattern a glob; and a `-c` line among its words is read in turn, up to
+/// [`SHELL_LINES_AT_MOST`] deep. The error is why a line cannot be read, naming it.
+fn shell_lines(
+    words: &[String],
+    dirs: &[String],
+    known: &std::collections::BTreeMap<String, String>,
+    depth: usize,
+    found: &mut ArgumentPaths,
+) -> std::result::Result<(), String> {
+    for (k, word) in words.iter().enumerate() {
+        if !SHELLS.contains(&word.rsplit('/').next().unwrap_or_default()) {
+            continue;
+        }
+        let mut line_given = false;
+        let mut at = k + 1;
+        while let Some(option) = words.get(at) {
+            if option == "--" {
+                at += 1;
+                break;
+            }
+            match option.strip_prefix(['-', '+']) {
+                Some(letters)
+                    if !letters.is_empty() && letters.chars().all(|c| c.is_ascii_alphabetic()) =>
+                {
+                    line_given |= option.starts_with('-') && letters.contains('c');
+                    if letters.ends_with(['o', 'O']) {
+                        at += 1;
+                    }
+                }
+                _ if option.starts_with("--") => {}
+                _ => break,
+            }
+            at += 1;
+        }
+        let Some(line) = words.get(at).filter(|_| line_given) else {
+            continue;
+        };
+        if depth >= SHELL_LINES_AT_MOST {
+            return Err(format!(
+                "runs the shell line `{line}` inside {depth} others, deeper than the gate reads"
+            ));
+        }
+        let (line_words, line_dirs) = split_line(line, dirs, known).map_err(|why| {
+            format!(
+                "runs the shell line `{line}`, which the gate cannot split into words with certainty: {why}; the paths it names cannot be compared at the base"
+            )
+        })?;
+        for word in &line_words {
+            for dir in &line_dirs {
+                if word.pattern {
+                    found.globs.push(joined(dir, &word.text));
+                } else {
+                    word_paths(&word.text, dir, found);
+                }
+            }
+        }
+        let texts: Vec<String> = line_words.into_iter().map(|word| word.text).collect();
+        shell_lines(&texts, &line_dirs, known, depth + 1, found)?;
+    }
+    Ok(())
+}
+
+/// A word of a `-c` line ([`split_line`]), its quotes removed and its variables expanded.
+struct LineWord {
+    text: String,
+    /// Whether it holds an unquoted `*` or `?`, a pattern the shell expands.
+    pattern: bool,
+}
+
+/// The words of a `-c` line as they are being split ([`split_line`]).
+#[derive(Default)]
+struct Splitter {
+    words: Vec<LineWord>,
+    word: String,
+    started: bool,
+    pattern: bool,
+    /// Whether the word holds a quoted or escaped `*`, `?`, `[`, `]` or `\`.
+    literal: bool,
+    /// Whether the word holds a quoted, escaped or expanded character.
+    quoted: bool,
+    /// Where in the word an unquoted `[` not yet closed stands.
+    bracket: Option<usize>,
+    /// Whether the word holds an unquoted `{`.
+    braced: bool,
+    /// The variables the line expands.
+    expanded: Vec<String>,
+}
+
+impl Splitter {
+    fn push(&mut self, c: char) {
+        self.started = true;
+        self.word.push(c);
+    }
+
+    fn push_literal(&mut self, c: char) {
+        self.literal |= matches!(c, '*' | '?' | '[' | ']' | '\\');
+        self.quoted = true;
+        self.push(c);
+    }
+
+    /// Ends the word: as it is written and, with an unquoted `{`, each word its brace
+    /// expansion makes ([`brace_words`]), since `bash` makes it and `sh` does not.
+    fn end(&mut self) -> std::result::Result<(), String> {
+        if self.started {
+            if self.pattern && (self.literal || self.word.starts_with('-')) {
+                return Err(format!(
+                    "the pattern `{}` is quoted in part or is an option",
+                    self.word
+                ));
+            }
+            let word = std::mem::take(&mut self.word);
+            let mut texts = Vec::new();
+            if self.braced {
+                texts = brace_words(&word)?;
+                if texts.len() > 1 && self.quoted {
+                    return Err(format!("the brace expansion in `{word}` is quoted in part"));
+                }
+                texts.retain(|text| *text != word);
+            }
+            for text in std::iter::once(word).chain(texts) {
+                self.words.push(LineWord {
+                    text,
+                    pattern: self.pattern,
+                });
+            }
+        }
+        self.word.clear();
+        self.started = false;
+        self.pattern = false;
+        self.literal = false;
+        self.quoted = false;
+        self.bracket = None;
+        self.braced = false;
+        Ok(())
+    }
+
+    /// The expansion after a `$`: a variable of `known`, by its name or as `${NAME}`; anything
+    /// else (a command substitution, arithmetic, a positional or special parameter, an
+    /// operator inside `${…}`, a variable the gate does not set) is the error. Unquoted, a
+    /// value the shell would split or match as a pattern is the error too.
+    fn expand(
+        &mut self,
+        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+        quoted: bool,
+        known: &std::collections::BTreeMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        let name = match chars.peek() {
+            Some('{') => {
+                chars.next();
+                let mut name = String::new();
+                loop {
+                    match chars.next() {
+                        Some('}') => break,
+                        Some(c) => name.push(c),
+                        None => return Err("an unclosed `${`".to_owned()),
+                    }
+                }
+                if !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    return Err(format!("the expansion `${{{name}}}`"));
+                }
+                name
+            }
+            Some(c) if c.is_ascii_alphabetic() || *c == '_' => {
+                let mut name = String::new();
+                while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '_') {
+                    name.push(c);
+                }
+                name
+            }
+            Some(c) => return Err(format!("the expansion `${c}`")),
+            None => return Err("a `$` at the end of the line".to_owned()),
+        };
+        let Some(value) = known.get(&name) else {
+            return Err(format!(
+                "the variable `${name}`, which the gate does not set for the command"
+            ));
+        };
+        if !quoted && value.contains(|c: char| c.is_whitespace() || matches!(c, '*' | '?' | '[')) {
+            return Err(format!(
+                "the variable `${name}`, whose value the shell splits or expands"
+            ));
+        }
+        for c in value.chars() {
+            self.push_literal(c);
+        }
+        self.expanded.push(name);
+        Ok(())
+    }
+}
+
+/// How many words the brace expansions of one word of a `-c` line make at most.
+const BRACE_WORDS_AT_MOST: usize = 64;
+
+/// The words the brace expansions of `word` make, `bash`'s: each `{a,b}` with a `,` at its own
+/// depth gives one word per alternative, nested and in turn; a pair with no such `,` is left as
+/// it is (`{}`, `{fd}`). A sequence (`{1..3}`) and more than [`BRACE_WORDS_AT_MOST`] words are
+/// the error.
+fn brace_words(word: &str) -> std::result::Result<Vec<String>, String> {
+    let mut from = 0;
+    while let Some(open) = word[from..].find('{').map(|at| at + from) {
+        let mut depth = 0usize;
+        let mut commas = Vec::new();
+        let mut close = None;
+        for (at, c) in word[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + at);
+                        break;
+                    }
+                }
+                ',' if depth == 1 => commas.push(open + at),
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            break;
+        };
+        if commas.is_empty() {
+            if word[open..close].contains("..") {
+                return Err(format!("the sequence expansion in `{word}`"));
+            }
+            from = open + 1;
+            continue;
+        }
+        let mut words = Vec::new();
+        let mut start = open + 1;
+        for end in commas.into_iter().chain([close]) {
+            let alternative = format!(
+                "{}{}{}",
+                &word[..open],
+                &word[start..end],
+                &word[close + 1..]
+            );
+            words.extend(brace_words(&alternative)?);
+            if words.len() > BRACE_WORDS_AT_MOST {
+                return Err(format!(
+                    "the brace expansion in `{word}` makes more than {BRACE_WORDS_AT_MOST} words"
+                ));
+            }
+            start = end + 1;
+        }
+        return Ok(words);
+    }
+    Ok(vec![word.to_owned()])
+}
+
+/// The directory `path` names relative to the tree's root, `""` the root itself; `None` when
+/// it leads out of the tree.
+fn tree_dir(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// `line`, a `-c` line a shell runs from each directory of `dirs`, split into words as a POSIX
+/// shell splits it, with every directory a `cd` or `pushd` in it may change to besides
+/// (`dirs` first): white space, `;`, `&`, `|`, `(`, `)`, `<` and `>` between words, `'…'` as it
+/// is, `"…"` with `\` escaping `"`, `\`, `$` and a backquote, `\` outside quotes escaping the
+/// next character, a `#` starting a word starting a comment. What would make a word other than
+/// the gate reads it is the error, so the line fails closed: an unclosed quote or a `\` at its
+/// end, a command substitution, an expansion other than a variable the gate sets for the
+/// command ([`known_variables`]) that the line does not itself set, a brace sequence
+/// ([`brace_words`]), `~+` and `~-`, and a `cd` to a directory outside the tree or one the gate
+/// cannot tell. A bracket class (`chec[k]`) is read as `?`, a pattern.
+fn split_line(
+    line: &str,
+    dirs: &[String],
+    known: &std::collections::BTreeMap<String, String>,
+) -> std::result::Result<(Vec<LineWord>, Vec<String>), String> {
+    let mut split = Splitter::default();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => split.end()?,
+            ';' | '&' | '|' | '(' | ')' | '<' | '>' => split.end()?,
+            '#' if !split.started => while chars.next_if(|c| *c != '\n').is_some() {},
+            '\'' => {
+                split.started = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => split.push_literal(c),
+                        None => return Err("an unclosed `'`".to_owned()),
+                    }
+                }
+            }
+            '"' => {
+                split.started = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some('\n') => {}
+                            Some(c @ ('"' | '\\' | '$' | '`')) => split.push_literal(c),
+                            Some(c) => {
+                                split.push_literal('\\');
+                                split.push_literal(c);
+                            }
+                            None => return Err("an unclosed `\"`".to_owned()),
+                        },
+                        Some('$') => split.expand(&mut chars, true, known)?,
+                        Some('`') => return Err("a command substitution in backquotes".to_owned()),
+                        Some(c) => split.push_literal(c),
+                        None => return Err("an unclosed `\"`".to_owned()),
+                    }
+                }
+            }
+            '\\' => match chars.next() {
+                Some('\n') => {}
+                Some(c) => split.push_literal(c),
+                None => return Err("a `\\` at the end of the line".to_owned()),
+            },
+            '$' => split.expand(&mut chars, false, known)?,
+            '`' => return Err("a command substitution in backquotes".to_owned()),
+            '*' | '?' => {
+                split.pattern = true;
+                split.push(c);
+            }
+            '[' if split.bracket.is_none() => {
+                split.bracket = Some(split.word.len());
+                split.push(c);
+            }
+            // A bracket class matches one character of those it names: compared as `?`, every
+            // path it could match and more. A `]` right after `[` or `[!` is one of them.
+            ']' if split
+                .bracket
+                .is_some_and(|at| !matches!(&split.word[at..], "[" | "[!" | "[^")) =>
+            {
+                let at = split.bracket.take().unwrap_or_default();
+                split.word.truncate(at);
+                split.pattern = true;
+                split.push('?');
+            }
+            '{' => {
+                split.braced = true;
+                split.push(c);
+            }
+            '~' if !split.started && matches!(chars.peek(), Some('+' | '-')) => {
+                return Err("a `~+` or `~-`, a directory the shell is in".to_owned());
+            }
+            c => split.push(c),
+        }
+    }
+    split.end()?;
+    for name in &split.expanded {
+        if split.words.iter().any(|word| {
+            word.text == *name
+                || word
+                    .text
+                    .strip_prefix(name.as_str())
+                    .is_some_and(|rest| rest.starts_with('='))
+        }) {
+            return Err(format!("the line sets `{name}`, which it also expands"));
+        }
+    }
+    let mut all: Vec<String> = dirs.to_vec();
+    for (k, word) in split.words.iter().enumerate() {
+        if !matches!(word.text.as_str(), "cd" | "pushd") {
+            continue;
+        }
+        let mut at = k + 1;
+        while let Some(option) = split.words.get(at) {
+            if option.text == "--" {
+                at += 1;
+                break;
+            }
+            if !option.text.starts_with('-') || option.text == "-" {
+                break;
+            }
+            at += 1;
+        }
+        let target = split
+            .words
+            .get(at)
+            .filter(|target| {
+                !target.pattern
+                    && !target.text.is_empty()
+                    && !target.text.starts_with(['/', '~', '-'])
+            })
+            .ok_or_else(|| {
+                format!(
+                    "`{}` changes to a directory the gate cannot tell inside the tree",
+                    word.text
+                )
+            })?;
+        let mut more = Vec::new();
+        for dir in &all {
+            more.push(
+                tree_dir(&joined(dir, &target.text))
+                    .ok_or_else(|| format!("`{} {}` leaves the tree", word.text, target.text))?,
+            );
+        }
+        all.extend(more);
+        all.sort();
+        all.dedup();
+        if all.len() > LINE_DIRS_AT_MOST {
+            return Err(format!(
+                "it changes directory to more than {LINE_DIRS_AT_MOST} places, more than the gate follows"
+            ));
+        }
+    }
+    Ok((split.words, all))
 }
 
 /// What Python loads from the tree for the commands and providers a project file admits, read
@@ -3523,11 +4062,31 @@ impl GateRun {
             let mut globs: Vec<String> = Vec::new();
             let mut changed = Vec::new();
             let mut files = admitted_files(text).with_context(read)?;
-            for argument in argument_paths(text).with_context(read)? {
+            // The paths inside an argument besides ([`argument_paths`]): a short option's glued
+            // value where the base or the revision holds it, and the words and patterns of a
+            // shell's `-c` line. A line the gate cannot split runs nothing.
+            let arguments = argument_paths(text).with_context(read)?;
+            if !arguments.unread.is_empty() {
+                return Ok(nothing_recorded(format!(
+                    "the gates document {document}: not run; {}; no record, the claim stays unknown",
+                    arguments.unread.join("; ")
+                )));
+            }
+            for argument in arguments.paths {
                 if !object_at(tree, &at, &argument)?.is_some_and(|o| o.starts_with("040000 ")) {
                     files.push(argument);
                 }
             }
+            for tail in arguments.glued {
+                let held = object_at(tree, &at, &tail)?;
+                if held.as_deref().is_some_and(|o| o.starts_with("040000 ")) {
+                    continue;
+                }
+                if held.is_some() || object_at(tree, revision, &tail)?.is_some() {
+                    files.push(tail);
+                }
+            }
+            globs.extend(arguments.globs);
             // What Python loads from the tree for the gate's commands ([`python_paths`]).
             let (python, python_globs, closed) =
                 python_paths(tree, &at, revision, text).with_context(read)?;
