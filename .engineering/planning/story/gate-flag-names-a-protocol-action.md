@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:gate-flag-names-a-protocol-action
 kind: story
-status: active
+status: implemented
 title: --gate must name an approval-required action of the protocol
 tags:
 - finding
@@ -16,10 +16,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt-cli/src/main.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-05T02:14:03Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-05T02:14:04Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-06T03:10:32Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 ## Outcome
 
@@ -49,3 +50,16 @@ source: .engineering/planning/review-result/findings-hunt-33ab42c.md
 ## Acceptance
 
 The predicate exits 1 and names the protocol's approval-required actions, and no case directory exists. `--case a --case-id zzz` exits 1.
+
+## Status
+
+Built in wave 54 (unit d, 05ed2422b), released in 0.32.0 from 9e7a3904e, the merge of pull request 61.
+
+- `crates/takt-cli/src/main.rs`: `check_gate` refuses a `--gate` that is no approval-required action of the protocol
+  the case runs on, before the case opens or resumes, exit 1, naming those actions; `--case-id` beside `--case` is
+  refused. `crates/takt/src/protocol.rs`: `approval_actions`.
+- `crates/takt-cli/tests/gate_flag_checked_cli.rs` (red, then green).
+
+Review: review-result:w54-adv-1. Its finding D1, a `--case-id` dropped on a story resume, is
+story:a-case-id-on-a-story-resume-is-refused, a draft. story:scenario-run-gate-names-a-protocol-action and
+story:a-refused-story-gate-leaves-the-tree-where-it-was are drafts filed from this unit.

@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T03:10:29Z",
+  "actor": "human:timo",
+  "artifact": "story:test-cmd-checked-before-open",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 54: test_cmd_checked_cli's three refusal cases were red before the change and green after it, exit 1 and no case directory or takt/ branch",
+    "reference": "9e7a3904ed86e34332daaacc80da1bda6512b249"
+  }
+}
