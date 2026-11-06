@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:pr-open-cut-off-by-a-crash-is-read-back
 kind: story
-status: active
+status: implemented
 title: A pull request open cut off by a crash is read back on every forge
 summary: only the connectors forge finds the open pull request after a crash
 tags:
@@ -16,10 +16,11 @@ scope:
   path: crates/takt/src/forge/gitlab.rs
 - confidence: inferred
   path: crates/takt/src/forge/local.rs
-revision: 7
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-04T06:19:35Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-05T02:07:20Z", actor: "human:timo", revision: 8, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 # A pull request open cut off by a crash is read back on every forge
 
@@ -62,3 +63,17 @@ The record `open.unanswered.json` under the case's artifacts names that open; th
 `find`. It lifts when the run file gains `find`, or when the operator removes the record once the
 forge holds no open request for the branch. Refusing is the safe direction: sending the open again
 could leave two pull requests. The 0.31.0 changelog states it under Changed, with both ways out.
+
+## Status
+
+Built in wave 53 (unit b, 302cd81d2; review fix c171df987; fixture fixes 9e760b2fe, bfb570639), released in 0.31.0
+from 410aaddd2, the merge of pull request 60.
+
+- The local and GitLab forges implement `find_open_pull_request`; the command forge has an optional `find` entry,
+  and its number, like `open`'s, is taken only when `read` reports it open from the case's branch into its base.
+- Without `find`, `open.unanswered.json` names an open whose answer stayed unknown, and every later open in the
+  case is refused, naming `find` (the Decision above).
+- The local forge writes each record whole to `<n>.json.<pid>.next` and links it to `<n>.json`.
+- `pr_open_after_a_crash_on_every_forge.rs` (red, then green); new cases in `command_forge.rs` and `local_forge.rs`.
+
+Review: review-result:w53-adv-2, fixed.

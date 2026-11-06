@@ -89,7 +89,7 @@ for `_`; those eight have no flag.
 | `endpoint_file` | path: the endpoint file for `--harness harness`; a relative path is read beside the configuration file |
 | `endpoint_token_env` | string: the variable holding the endpoint's key, as `--endpoint-token-env`; read only with `--harness harness` and when no credential flag is given |
 | `forge` | string: `gitlab`, `command`, `connectors`, `local` or `none` |
-| `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet` |
+| `test_cmd` | string: the test command, split at white space, run without a shell; default `cargo test --quiet`; a command holding `'` or `"`, or whose program the step could not start, is refused before the case opens, exit 1 |
 | `state_dir` | path: the state directory, as `--state-dir`: the run's transcripts go to `<state_dir>/transcripts` and what a discarded step sets aside to `<state_dir>/set-aside` ([The state directory](#the-state-directory)); a relative path is read beside the configuration file |
 | `continue_past_red_base` | boolean: go on when the case's first test run fails at the unchanged base ([`RedBase`](../concepts/how-a-run-ends.md)) |
 | `records` | string: `default` (the default) or `trial`, as `--records`: the decisions the case keeps ([Records profiles](#records-profiles)); checked when the file is read |
@@ -694,7 +694,7 @@ full text of each, and the [exit codes](./exit-codes.md) are generated from the 
 | `--case <CASE>` | the case to resume, by id; not with `--intent` |
 | `--protocol <PROTOCOL>` | a built-in id (`takt protocols`) or a `protocol/1` file |
 | `--input <NAME=VALUE>` | a case input; repeatable; refused for a resumed case |
-| `--case-id <CASE_ID>` | the case id; generated when absent |
+| `--case-id <CASE_ID>` | the case id; generated when absent; not with `--case`, which is refused, exit 1 |
 | `--scenarios <SCENARIOS>` | the scenario checkout an improvement turn's finding names its scenario in |
 | `--install-root <INSTALL_ROOT>` | where an improvement turn reads the promoted binary |
 
@@ -765,7 +765,7 @@ which is `--model`) need `--harness harness`, and an `llm` section may not sit b
 | flag | meaning |
 |---|---|
 | `--forge <FORGE>` | `gitlab`, `command`, `connectors`, `local` or `none` ([The forge](#the-forge)) |
-| `--gate <GATE>` | the approval gate the harness may request to end the run; default the protocol's first action that requires a capability |
+| `--gate <GATE>` | the approval gate the harness may request to end the run; default the protocol's first action that requires a capability; given to `takt run`, it must be an action of the case's protocol that requires a capability, else the run is refused before the case opens or resumes, exit 1, naming those actions |
 | `--gates <GATES>` | the gates document, relative to the repository; default `.engineering/gates.yaml` when it is a file |
 | `--project <PROJECT>` | the `engineering-assertions-project/1` file; default `.engineering/assertions-project.yaml` when it is a file |
 

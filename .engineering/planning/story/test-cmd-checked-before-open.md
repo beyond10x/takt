@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:test-cmd-checked-before-open
 kind: story
-status: draft
+status: active
 title: takt run checks --test-cmd before it opens a case
 tags:
 - finding
@@ -12,7 +12,16 @@ refs:
 relations:
 - informed_by: review-result:findings-hunt-33ab42c
 - decomposes: epic:composable-agentic-work
-revision: 1
+- serves: vision:safe-agentic-coding
+scope:
+- confidence: cited
+  path: crates/takt-cli/src/main.rs
+- confidence: cited
+  path: crates/takt/src/validator.rs
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-05T02:14:03Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-05T02:14:03Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

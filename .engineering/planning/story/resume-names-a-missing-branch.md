@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:resume-names-a-missing-branch
 kind: story
-status: draft
+status: active
 title: Resuming a case whose branch is gone says how to recover
 tags:
 - finding
@@ -13,7 +13,14 @@ relations:
 - informed_by: review-result:findings-hunt-33ab42c
 - depends_on: story:abandon-a-case
 - decomposes: epic:composable-agentic-work
-revision: 1
+- serves: vision:safe-agentic-coding
+scope:
+- confidence: cited
+  path: crates/takt/src/case.rs
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-05T02:14:03Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-05T02:14:03Z", actor: "human:timo", revision: 3}
 ---
 ## Outcome
 

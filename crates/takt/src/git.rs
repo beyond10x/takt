@@ -96,10 +96,12 @@ fn output_with(
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
-    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
-        stdin
-            .write_all(input)
-            .with_context(|| format!("write to git {}", args.join(" ")))?;
+    if let (Some(input), Some(mut stdin)) = (input, child.stdin.take())
+        && let Err(error) = stdin.write_all(input)
+    {
+        drop(stdin);
+        reap(&mut child);
+        return Err(error).with_context(|| format!("write to git {}", args.join(" ")));
     }
     child
         .wait_with_output()
@@ -112,7 +114,6 @@ fn output_with(
 /// object (`GIT_NO_REPLACE_OBJECTS`): what it shows is what the repository holds, as a push sends
 /// it. Exiting non-zero is an error naming what git said.
 pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<String>> {
-    use std::io::Read as _;
     let mut child = command(tree, args)?
         .env("GIT_NO_REPLACE_OBJECTS", "1")
         .stdin(Stdio::null())
@@ -120,21 +121,49 @@ pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<St
         .stderr(Stdio::piped())
         .spawn()
         .with_context(|| format!("run git {} in {}", args.join(" "), tree.display()))?;
-    let stderr = child.stderr.take().map(|mut stream| {
-        std::thread::spawn(move || {
-            let mut said = Vec::new();
-            let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
-            let _ = std::io::copy(&mut stream, &mut std::io::sink());
-            said
-        })
-    });
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take().map(stderr_reader);
+    finish_bounded(tree, args, limit, child, stdout, stderr)
+}
+
+/// The thread reading what a git says on its standard error, `stream`: the first 64 KiB kept,
+/// the rest read and dropped, so git never stalls on a full pipe.
+fn stderr_reader(mut stream: std::process::ChildStderr) -> std::thread::JoinHandle<Vec<u8>> {
+    use std::io::Read as _;
+    std::thread::spawn(move || {
+        let mut said = Vec::new();
+        let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
+        let _ = std::io::copy(&mut stream, &mut std::io::sink());
+        said
+    })
+}
+
+/// [`run_bounded`] once git is started as `child`: reads `stdout`, its standard output, up to
+/// one byte past `limit`, then waits for git and joins `stderr`, the thread reading its standard
+/// error. A read that fails kills git, waits for it and joins the thread before the error
+/// returns, so it leaves no process and no thread behind.
+fn finish_bounded(
+    tree: &Path,
+    args: &[&str],
+    limit: usize,
+    mut child: std::process::Child,
+    stdout: Option<impl std::io::Read>,
+    stderr: Option<std::thread::JoinHandle<Vec<u8>>>,
+) -> Result<Option<String>> {
+    use std::io::Read as _;
     let mut kept = Vec::new();
     let mut over = false;
-    if let Some(stdout) = child.stdout.take() {
+    if let Some(stdout) = stdout {
         let read = stdout
             .take(u64::try_from(limit).unwrap_or(u64::MAX).saturating_add(1))
             .read_to_end(&mut kept);
-        read.with_context(|| format!("read git {}", args.join(" ")))?;
+        if let Err(error) = read {
+            reap(&mut child);
+            if let Some(reader) = stderr {
+                let _ = reader.join();
+            }
+            return Err(error).with_context(|| format!("read git {}", args.join(" ")));
+        }
         over = kept.len() > limit;
     }
     if over {
@@ -159,6 +188,13 @@ pub fn run_bounded(tree: &Path, args: &[&str], limit: usize) -> Result<Option<St
         );
     }
     Ok(Some(String::from_utf8_lossy(&kept).into_owned()))
+}
+
+/// Kills `child` and waits for it: what an error returned between a git's start and its wait
+/// does first, so the git it leaves unfinished is no process, not even an unwaited one.
+fn reap(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
 }
 
 /// The `git <args>` [`output`] and [`run_bounded`] run in `tree`, set up as every git takt runs
@@ -3294,10 +3330,12 @@ impl Isolated {
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("run git {} isolated", args.join(" ")))?;
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin
-                .write_all(input)
-                .with_context(|| format!("write to git {} isolated", args.join(" ")))?;
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(error) = stdin.write_all(input)
+        {
+            drop(stdin);
+            reap(&mut child);
+            return Err(error).with_context(|| format!("write to git {} isolated", args.join(" ")));
         }
         child
             .wait_with_output()
@@ -3470,21 +3508,21 @@ pub fn diff_bounded(
             .stderr(Stdio::piped())
             .spawn()
             .with_context(|| format!("run git {} isolated", args.join(" ")))?;
-        let stderr = child.stderr.take().map(|mut stream| {
-            std::thread::spawn(move || {
-                let mut said = Vec::new();
-                let _ = stream.by_ref().take(64 << 10).read_to_end(&mut said);
-                let _ = std::io::copy(&mut stream, &mut std::io::sink());
-                said
-            })
-        });
+        let stderr = child.stderr.take().map(stderr_reader);
         if let Some(stdout) = child.stdout.take() {
             let mut stdout = stdout.take(count_to - counted);
             let mut buffer = [0u8; 64 << 10];
             loop {
-                let read = stdout
-                    .read(&mut buffer)
-                    .with_context(|| format!("read git {}", args.join(" ")))?;
+                let read = match stdout.read(&mut buffer) {
+                    Ok(read) => read,
+                    Err(error) => {
+                        reap(&mut child);
+                        if let Some(reader) = stderr {
+                            let _ = reader.join();
+                        }
+                        return Err(error).with_context(|| format!("read git {}", args.join(" ")));
+                    }
+                };
                 if read == 0 {
                     break;
                 }
@@ -3871,6 +3909,78 @@ mod tests {
         assert!(parse_status(b"R  only-target\0").is_err());
         assert!(parse_status(b"?? \xff\0").is_err());
         assert!(parse_status(b"").expect("reads").is_empty());
+    }
+
+    /// A git whose standard output cannot be read is killed and waited for, and the thread
+    /// reading its standard error joined, before the read error returns: no process is left.
+    #[cfg(unix)]
+    #[test]
+    fn a_read_error_leaves_no_git_process_and_no_reader_thread() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Broken;
+        impl std::io::Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("the pipe broke"))
+            }
+        }
+        // A git as takt starts every git, through the confinement seam, that waits on its
+        // standard input, held open below, so it outlives the read.
+        let mut child = command(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &["hash-object", "--stdin"],
+        )
+        .expect("a git command")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start a git that outlives the read");
+        let _input = child.stdin.take().expect("its standard input");
+        let pid = libc::pid_t::try_from(child.id()).expect("a process id");
+        let mut stream = child.stderr.take().expect("its standard error");
+        let joined = Arc::new(AtomicBool::new(false));
+        let done = Arc::clone(&joined);
+        let reader = std::thread::spawn(move || {
+            use std::io::Read as _;
+            let mut said = Vec::new();
+            // The stream ends only once the process is gone; the pause after it makes a return
+            // that does not join the thread come before the thread is done.
+            let _ = stream.read_to_end(&mut said);
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            done.store(true, Ordering::SeqCst);
+            said
+        });
+        let error = finish_bounded(
+            Path::new("tree"),
+            &["log", "--oneline"],
+            1024,
+            child,
+            Some(Broken),
+            Some(reader),
+        )
+        .expect_err("a read error is an error");
+        // SAFETY: signal 0 sends nothing; it answers whether the id names a process, a zombie
+        // not yet waited for included.
+        let left = unsafe { libc::kill(pid, 0) } == 0;
+        if left {
+            // SAFETY: the id names the test's own unwaited child, so no other process.
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+        assert!(
+            !left,
+            "the process {pid} was left behind: not killed and waited for"
+        );
+        assert!(
+            joined.load(Ordering::SeqCst),
+            "the standard error reader was not joined"
+        );
+        assert!(
+            format!("{error:#}").contains("read git log --oneline"),
+            "{error:#}"
+        );
     }
 
     #[cfg(unix)]

@@ -1,6 +1,6 @@
 # Wave 53: four finding stories
 
-Stage: **gate run, pull request open**. `wave/53` branches from dfae174f3, wave 52's close on `main`. Skill version 0.26.0
+Stage: **delivered**. Released as 0.31.0 from 410aaddd2, the merge of pull request 60. `wave/53` branches from dfae174f3, wave 52's close on `main`. Skill version 0.26.0
 (aep:implementing, wave mode). Approved: approval-record:wave-53-four-findings. Release: 0.31.0.
 
 ## Selection
@@ -86,3 +86,11 @@ gate stage's start, the I/O pressure line and the count of other builds were not
 - **`test-cli`**, `finding_scripts::the_predicate_reaches_no_network_ipc_or_socket_of_the_host`: from the host. The
   gate's machine had the `ipip` module loaded, so every new network namespace held `tunl0` beside `lo`. No commit of
   the wave touches that case. CI runs the full gate on the pull request.
+
+## Delivery
+
+Pull request 60 passed its 7 checks on CI, `finding_scripts` among them: the host gap did not reach CI. It was merged as
+410aaddd2 and tagged 0.31.0. The Release run published the GitHub Release with its four assets.
+
+The stories' close-out is a store-only commit on `store/close-wave-53`, cut from 410aaddd2. It rides along with the
+next takt wave, whose integration branch merges it. The close-out commit is 2915a22e1.

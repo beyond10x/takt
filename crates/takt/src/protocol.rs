@@ -279,6 +279,16 @@ fn split_id(id: &str) -> Result<(&str, u32)> {
     Ok((name, major))
 }
 
+/// Whether the declared `action` is approval-required: one of its `requires` entries names a
+/// `capability`.
+fn requires_capability(action: &serde_yaml_ng::Value) -> bool {
+    action["requires"].as_sequence().is_some_and(|requires| {
+        requires
+            .iter()
+            .any(|requirement| requirement["capability"].as_str().is_some())
+    })
+}
+
 impl LoadedProtocol {
     /// The approval gate a run on this protocol takes when it is given none: the first action,
     /// in declaration order, that requires a capability and whose precondition the case's
@@ -308,19 +318,31 @@ impl LoadedProtocol {
             .as_mapping()?
             .iter()
             .find(|(_, action)| {
-                let requires = action["requires"].as_sequence().is_some_and(|requires| {
-                    requires
-                        .iter()
-                        .any(|requirement| requirement["capability"].as_str().is_some())
-                });
                 let precondition = &action["precondition"];
                 let never = blocked(precondition)
                     || precondition["all"]
                         .as_sequence()
                         .is_some_and(|terms| terms.iter().any(blocked));
-                requires && !never
+                requires_capability(action) && !never
             })
             .and_then(|(name, _)| name.as_str().map(str::to_owned))
+    }
+
+    /// The approval-required actions, in declaration order: each action the protocol's
+    /// `actions` declares with a `requires` entry naming a `capability`, the actions
+    /// [`LoadedProtocol::default_gate`] chooses from and `takt run --gate` may name.
+    #[must_use]
+    pub fn approval_actions(&self) -> Vec<String> {
+        let Ok(doc) = serde_yaml_ng::from_str::<serde_yaml_ng::Value>(&self.yaml) else {
+            return Vec::new();
+        };
+        doc["actions"]
+            .as_mapping()
+            .into_iter()
+            .flatten()
+            .filter(|(_, action)| requires_capability(action))
+            .filter_map(|(name, _)| name.as_str().map(str::to_owned))
+            .collect()
     }
 
     /// The built-in protocols, `(name, major)` each, as the engineering protocols' registry

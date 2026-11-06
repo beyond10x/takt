@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-slow-runner-is-no-late-ci-result
 kind: story
-status: active
+status: implemented
 title: A slow runner is no late CI result
 summary: The one-cap CI result case allows 20 ms beyond the runner's own time; a slow darwin runner measured 863 ms against a 769 ms allowance and turned it red.
 tags:
@@ -12,10 +12,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/tests/ci_wait_backoff.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-04T06:19:36Z", actor: "human:timo", revision: 2, decided_on: {"recorded":{"verification":1}}}
 - {from: "proposed", to: "active", at: "2026-11-04T06:19:37Z", actor: "human:timo", revision: 3, decided_on: {"recorded":{"verification":1}}}
+- {from: "active", to: "implemented", at: "2026-11-05T02:07:19Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":2}}}
 ---
 # The one-cap CI result case allows a slow runner too little slack
 
@@ -56,3 +57,17 @@ not turn it red, and a run that waits a whole interval too long still does.
 ## Scope
 
 - `crates/takt/tests/ci_wait_backoff.rs`: the slack in `ci_result_follows_any_completion_within_one_cap` (cited)
+
+## Status
+
+Built in wave 53 (unit d, 6e2641054; review fix c171df987), released in 0.31.0 from 410aaddd2, the merge of pull
+request 60.
+
+- `ci_result_follows_any_completion_within_one_cap` in `crates/takt/tests/ci_wait_backoff.rs` bounds detection and
+  the write apart (`crates/takt/tests/support/one_cap.rs`): the read that saw the checks pass at most `cap + own`
+  after the green, the record at most 1 s after that read. The first fix, `cap + own + max(own, 20 ms)`, let a run
+  one cap late through on a slow runner; the adversary's finding.
+- `w53_adversary::slow_runner`: a run one cap late flagged on runners 0, 300 and 524 ms slow, the darwin run on
+  time passes, a write of 2 s flagged.
+
+Review: review-result:w53-adv-2, fixed.

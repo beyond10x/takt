@@ -415,15 +415,18 @@ fn adv2_script_after_bash_c_double_dash_earns_no_pass() {
     ran.assert_no_forged_pass();
 }
 
-/// `bash -c './check.sh'`: the command line of `-c` is one word, quoted for the shell that reads
-/// it; the guard names the word with its quotes.
+/// `bash -c './check.sh'`: the command line of `-c` is one word, quoted for a shell that reads
+/// it. A test command is run without a shell, so a quoted one is refused before any run
+/// (story:test-cmd-checked-before-open): no step can earn it a pass.
 #[test]
 fn adv2_script_quoted_in_bash_c_earns_no_pass() {
-    let tree = repository("bash-c-quoted", &[("check.sh", FAILING_CHECK, true)]);
-    let ran = run(&tree, "bash -c './check.sh'", |tree| {
-        write_executable(tree, "check.sh", PASSING_CHECK);
-    });
-    ran.assert_no_forged_pass();
+    let Err(refused) = TestsRun::new("bash -c './check.sh'") else {
+        panic!("a quoted test command is refused");
+    };
+    assert!(
+        format!("{refused:#}").contains("without a shell"),
+        "{refused:#}"
+    );
 }
 
 /// `perl -I lib t/check.pl`: `-I` takes the next word; the guard takes `lib` for the script.

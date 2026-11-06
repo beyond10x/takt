@@ -3442,7 +3442,9 @@ impl CaseDir {
     /// to a path. The case is held (`run.lock`, taken atomically) before the checkout and the
     /// revision are written and let go once they are: a case another holds is refused with
     /// nothing written, and of two resuming at once only one writes. The run takes its own
-    /// hold when it starts ([`CaseDir::hold`]).
+    /// hold when it starts ([`CaseDir::hold`]). A case whose branch is gone is refused before
+    /// the checkout, nothing written, naming the last head the case recorded and how to
+    /// recreate the branch there or give the case up.
     pub fn resume(tree: &Path, id: &str) -> Result<Self> {
         check_id(id)?;
         refuse_link_on_the_way(tree, id, "resumed")?;
@@ -3464,6 +3466,7 @@ impl CaseDir {
             .with_context(|| format!("read {}", snapshot.display()))?;
         let branch = Branch::name_of(id);
         if crate::git::current_branch(tree)?.as_deref() != Some(branch.as_str()) {
+            refuse_missing_branch(tree, &dir, id, &branch, &doc)?;
             crate::git::run(tree, &["checkout", "-q", &branch])
                 .with_context(|| format!("check out the branch of the case {id}"))?;
         }
@@ -4687,6 +4690,126 @@ impl LatestStamp {
     pub fn tick_micros(&self) -> i128 {
         10_i128.pow(Self::MICRO_DIGITS - self.digits.min(Self::MICRO_DIGITS))
     }
+}
+
+/// The ref `git checkout <branch>` in `tree` checks the branch out from: `refs/heads/<branch>`
+/// when it is there; else, by git's checkout guess, `refs/remotes/<remote>/<branch>` of the
+/// one remote that holds it, from which the checkout creates the local branch; `None` when
+/// there is no local branch and no single remote holds one.
+///
+/// # Errors
+///
+/// A git read that fails.
+pub fn checkout_source(tree: &Path, branch: &str) -> Result<Option<String>> {
+    let local = format!("refs/heads/{branch}");
+    if crate::git::refs(tree, &[&local])?.contains(&local) {
+        return Ok(Some(local));
+    }
+    let tracking = crate::git::refs(tree, &["refs/remotes"])?;
+    let remotes = crate::git::run(tree, &["remote"])?;
+    let mut held = remotes
+        .lines()
+        .map(|remote| format!("refs/remotes/{remote}/{branch}"))
+        .filter(|full| tracking.contains(full));
+    Ok(match (held.next(), held.next()) {
+        (Some(only), None) => Some(only),
+        _ => None,
+    })
+}
+
+/// `word` as a POSIX shell reads it back as one word: as it is when each of its characters is
+/// one no shell treats specially, else in single quotes, each `'` in it written `'\''`.
+fn shell_word(word: &str) -> String {
+    if !word.is_empty()
+        && word
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "_-./:@%+,".contains(c))
+    {
+        word.to_owned()
+    } else {
+        format!("'{}'", word.replace('\'', r"'\''"))
+    }
+}
+
+/// Refuses to resume the case `id` (directory `dir`, `case.yaml` read as `doc`) when its
+/// branch `branch` is gone from `tree`, before anything is written ([`CaseDir::resume`]): no
+/// local branch, and none git's checkout would create from a remote ([`checkout_source`]).
+/// The message names the branch, the last head the case recorded ([`last_recorded_head`]) and
+/// the two ways on, recreating the branch at that head or giving the case up by removing its
+/// directory, in place of git's pathspec refusal; the branch and the directory shell-quoted
+/// where they need it, so a pasted line runs one command.
+fn refuse_missing_branch(
+    tree: &Path,
+    dir: &Path,
+    id: &str,
+    branch: &str,
+    doc: &serde_yaml_ng::Value,
+) -> Result<()> {
+    if checkout_source(tree, branch)?.is_some() {
+        return Ok(());
+    }
+    let quoted = shell_word(branch);
+    let recreate = match last_recorded_head(tree, dir, doc) {
+        Some((head, source)) => format!(
+            "the last head the case recorded is {head} ({source}); recreate the branch there \
+             with `git branch {quoted} {head}` and resume the case again"
+        ),
+        None => format!(
+            "the case records no head that is still a commit here; recreate the branch at the \
+             commit to resume from with `git branch {quoted} <commit>` and resume the case again"
+        ),
+    };
+    bail!(
+        "the branch {branch} of the case {id} does not exist; {recreate}, or give the case up \
+         by removing its directory {}",
+        shell_word(&dir.strip_prefix(tree).unwrap_or(dir).display().to_string())
+    )
+}
+
+/// The newest commit the case at `dir` records that `tree` still holds, with where it is
+/// recorded: the implementation revision of `case.yaml` (`doc`), which every resume and every
+/// commit of a run moves to the branch's head; else the revision last pushed (`branch.yaml`'s
+/// `pushed`); else the commit the branch forked from (`base_commit`). A value that is no full
+/// commit id, or names no commit here, is passed over.
+fn last_recorded_head(
+    tree: &Path,
+    dir: &Path,
+    doc: &serde_yaml_ng::Value,
+) -> Option<(String, &'static str)> {
+    let recorded = Branch::read(dir).ok();
+    let candidates = [
+        (
+            doc["artifacts"]["implementation"]["revision"]
+                .as_str()
+                .map(str::to_owned),
+            "the implementation revision in case.yaml",
+        ),
+        (
+            recorded.as_ref().and_then(|branch| branch.pushed.clone()),
+            "the revision last pushed, in branch.yaml",
+        ),
+        (
+            recorded.and_then(|branch| branch.base_commit),
+            "the commit the branch forked from, in branch.yaml",
+        ),
+    ];
+    candidates.into_iter().find_map(|(revision, source)| {
+        let revision = revision?;
+        let full = matches!(revision.len(), 40 | 64)
+            && revision.bytes().all(|byte| byte.is_ascii_hexdigit());
+        let commit = full
+            && crate::git::run(
+                tree,
+                &[
+                    "rev-parse",
+                    "-q",
+                    "--verify",
+                    &format!("{revision}^{{commit}}"),
+                ],
+            )
+            .is_ok();
+        commit.then_some((revision, source))
+    })
 }
 
 #[cfg(test)]
