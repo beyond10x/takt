@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-gate-holds-against-lint-allows-in-source
 kind: story
-status: draft
+status: active
 title: A step cannot switch off the lint gate from source
 summary: '#![allow(clippy::all)] in a crate root turns a failing clippy -D warnings green'
 tags:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/gate_holds_against_lint_allows.rs
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-06T04:03:36Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-11-06T04:03:36Z", actor: "human:timo", revision: 5}
 ---
 # Story: the-gate-holds-against-lint-allows-in-source
 

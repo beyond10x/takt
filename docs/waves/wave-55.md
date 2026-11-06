@@ -1,7 +1,7 @@
 # Wave 55: the gate holds against a step's edits
 
-Stage: **proposed**. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
-close-out of wave 54) first, as bfe7871f5. Skill version 0.26.0 (aep:implementing, wave mode). Approved: pending.
+Stage: **approved**, unit a next. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
+close-out of wave 54) first, as bfe7871f5. Skill version 0.26.0 (aep:implementing, wave mode). Approved: approval-record:wave-55-gate-holds.
 Release: 0.33.0.
 
 ## Selection
@@ -38,10 +38,10 @@ in `ess/domains/` its change moves (`validator.rs` is cited about 120 times ther
 
 | unit | story | objective | new test target | stage |
 |---|---|---|---|---|
-| a | story:the-gate-reads-paths-inside-arguments | a glued short option and the words of `sh -c "<line>"` are compared at the base, or the command is refused | `gate_reads_paths_in_arguments` | proposed |
-| b | story:the-gate-compares-taskfile-includes | a Taskfile pulled in by `includes:` is compared at the base | `gate_compares_taskfile_includes` | proposed |
-| c | story:the-gate-holds-against-lint-allows-in-source | a crate-level `allow` of a denied lint group added by a step records no `gate.green` | `gate_holds_against_lint_allows` | proposed |
-| d | story:the-gate-does-not-trust-a-step-accepted-citation | a changed citation digest or a dropped `ess-inputs.yaml`/`system.yaml` entry records no `gate.green` | `gate_does_not_trust_step_citations` | proposed |
+| a | story:the-gate-reads-paths-inside-arguments | a glued short option and the words of `sh -c "<line>"` are compared at the base, or the command is refused | `gate_reads_paths_in_arguments` | active |
+| b | story:the-gate-compares-taskfile-includes | a Taskfile pulled in by `includes:` is compared at the base | `gate_compares_taskfile_includes` | active |
+| c | story:the-gate-holds-against-lint-allows-in-source | a crate-level `allow` of a denied lint group added by a step records no `gate.green` | `gate_holds_against_lint_allows` | active |
+| d | story:the-gate-does-not-trust-a-step-accepted-citation | a changed citation digest or a dropped `ess-inputs.yaml`/`system.yaml` entry records no `gate.green` | `gate_does_not_trust_step_citations` | active |
 
 Tree: the managed tree `takt-w55-int` on `wave/55`, one `target/` inside it. Implementors edit that tree; the wave
 commits each unit.

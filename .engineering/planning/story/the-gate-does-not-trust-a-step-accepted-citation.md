@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-gate-does-not-trust-a-step-accepted-citation
 kind: story
-status: draft
+status: active
 title: gate.green does not hold on citation digests or specification inputs a step changed
 summary: a step can add a needle row and run check-citations accept itself, and the citation gate passes
 tags:
@@ -15,7 +15,10 @@ scope:
   path: crates/takt/src/validator.rs
 - confidence: inferred
   path: crates/takt/tests/gate_does_not_trust_step_citations.rs
-revision: 3
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-06T04:03:36Z", actor: "human:timo", revision: 4}
+- {from: "proposed", to: "active", at: "2026-11-06T04:03:36Z", actor: "human:timo", revision: 5}
 ---
 # Story: the-gate-does-not-trust-a-step-accepted-citation
 
