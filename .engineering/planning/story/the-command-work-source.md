@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:the-command-work-source
 kind: story
-status: draft
+status: active
 title: The command work source reads items through a team's own CLI
 summary: work_commands read and select print takt.work-item/1 JSON
 relations:
@@ -16,7 +16,10 @@ scope:
   path: crates/takt/src/run_config.rs
 - confidence: inferred
   path: crates/takt/src/work/command.rs
-revision: 4
+revision: 6
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 5}
+- {from: "proposed", to: "active", at: "2026-11-06T13:11:52Z", actor: "human:timo", revision: 6}
 ---
 # Story: the-command-work-source
 

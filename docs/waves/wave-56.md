@@ -1,7 +1,7 @@
 # Wave 56: work sources, the aep and command sources
 
-Stage: **proposed**. `wave/56` branches from fedfbc28c, the release of 0.33.0, and merges `store/close-wave-55` (the
-close-out of wave 55) first, as 407ff3e56. Skill version 0.26.0 (aep:implementing, wave mode). Approved: pending.
+Stage: **approved**, unit a next. `wave/56` branches from fedfbc28c, the release of 0.33.0, and merges `store/close-wave-55` (the
+close-out of wave 55) first, as 407ff3e56. Skill version 0.26.0 (aep:implementing, wave mode). Approved: approval-record:wave-56-work-sources.
 Release: 0.34.0.
 
 ## Selection
@@ -12,7 +12,7 @@ one. Wave 56 is its first half, with story:git-excluded-files-are-not-step-chang
 approval-record:wave-56-excluded-files. Wave 57 is story:work-from-jira-github-and-gitlab and
 story:claim-and-report-on-a-tracker, after an issue-tracker profile and the Jira mapping land in connectors-definitions.
 
-The three work-source stories are drafts; the go accepts them.
+The three work-source stories are accepted by approval-record:wave-56-work-sources.
 
 What the design draft took as new is in the code already, and stays as it is: the case keeps the item's text as
 `intent.md` with its sha256 as the revision and reads no store on resume (`crates/takt/src/case.rs`, `run.rs`), the

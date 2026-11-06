@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:work-items-in-the-ess-model
 kind: story
-status: draft
+status: active
 title: The ESS model declares work sources, keys and items
 summary: Source, Key and Item in takt.work, Unit widened, before code builds on them
 relations:
@@ -11,7 +11,10 @@ relations:
 scope:
 - confidence: cited
   path: ess/domains/takt.yaml
-revision: 2
+revision: 4
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-06T13:11:50Z", actor: "human:timo", revision: 3}
+- {from: "proposed", to: "active", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 4}
 ---
 # Story: work-items-in-the-ess-model
 

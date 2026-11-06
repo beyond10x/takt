@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:work-flag-and-the-aep-source
 kind: story
-status: draft
+status: active
 title: takt run --work names the item, and the aep source is the planning store behind it
 summary: --work <key>, the ordered work list, aep as today, case ids for tracker keys
 relations:
@@ -20,7 +20,10 @@ scope:
   path: crates/takt/src/frontier.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 6
+revision: 8
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 7}
+- {from: "proposed", to: "active", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 8}
 ---
 # Story: work-flag-and-the-aep-source
 
