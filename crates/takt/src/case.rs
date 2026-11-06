@@ -3191,7 +3191,16 @@ impl CaseDir {
         inputs: &[(String, String)],
         commit_as: &CommitAs,
     ) -> Result<Self> {
-        Self::open_in(None, tree, protocol, id, intent, inputs, commit_as)
+        Self::open_in(
+            None,
+            tree,
+            protocol,
+            id,
+            intent,
+            inputs,
+            commit_as,
+            &crate::git::DeploymentPaths::default(),
+        )
     }
 
     /// [`CaseDir::open_as`] for a case a dispatcher opens for a child ([`Dispatched`]) in `tree`,
@@ -3200,7 +3209,9 @@ impl CaseDir {
     /// tree's git directory points at the checkout ([`link_tree`]), and the tree gets no case
     /// file. The case's base is the branch the dispatching checkout is on when the tree is on
     /// none, which is how a managed tree is made. `None` opens a case under `tree` itself, as
-    /// [`CaseDir::open_as`] does.
+    /// [`CaseDir::open_as`] does. An untracked or ignored file under the deployment's paths `own`
+    /// is not uncommitted work: it is the deployment's ([`crate::git::DeploymentPaths`]).
+    #[allow(clippy::too_many_arguments)]
     pub fn open_in(
         dispatched: Option<Dispatched<'_>>,
         tree: &Path,
@@ -3209,6 +3220,7 @@ impl CaseDir {
         intent: &str,
         inputs: &[(String, String)],
         commit_as: &CommitAs,
+        own: &crate::git::DeploymentPaths,
     ) -> Result<Self> {
         let cases = dispatched.map_or(tree, |dispatched| dispatched.root);
         check_id(id)?;
@@ -3221,7 +3233,7 @@ impl CaseDir {
                 existing.display()
             ));
         }
-        let uncommitted = crate::git::uncommitted(tree)?;
+        let uncommitted = crate::git::uncommitted_outside(tree, own)?;
         if !uncommitted.is_empty() {
             const SHOWN: usize = 10;
             let mut named = uncommitted
@@ -3744,9 +3756,15 @@ impl CaseDir {
     /// (detached when it left none). Nothing of the case remains. Not for a case with commits
     /// of its own on its branch.
     pub fn discard(self) -> Result<()> {
+        self.discard_keeping(&crate::git::DeploymentPaths::default())
+    }
+
+    /// [`CaseDir::discard`] that keeps the deployment's paths `own`: an untracked file under one
+    /// is the deployment's, not the take's, and stays ([`crate::git::discard_uncommitted_outside`]).
+    pub fn discard_keeping(self, own: &crate::git::DeploymentPaths) -> Result<()> {
         let branch = Branch::read(&self.dir)?;
         if crate::git::current_branch(&self.tree)?.as_deref() == Some(branch.name.as_str()) {
-            crate::git::discard_uncommitted(&self.tree)?;
+            crate::git::discard_uncommitted_outside(&self.tree, own)?;
         }
         std::fs::remove_dir_all(&self.dir)
             .with_context(|| format!("remove the case {}", self.dir.display()))?;

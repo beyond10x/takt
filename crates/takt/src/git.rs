@@ -1096,6 +1096,105 @@ fn status(tree: &Path, ignored: bool) -> Result<Vec<Entry>> {
     parse_status(&raw(tree, &args, None)?)
 }
 
+/// The paths a run file names as the deployment's (`deployment_paths`,
+/// [`crate::run_config::RunConfig::deployment_paths`]): files a deployment keeps beside the tree,
+/// such as a wrapper's log, which no step owns. Each entry is a path relative to the tree, or,
+/// ending in `/`, a directory and everything under it. Only a path git does not track is the
+/// deployment's: what `HEAD` holds is the repository's whatever the list says. Read once when the
+/// run opens and carried as it was read, never from a file a step can write; no excludes file
+/// (`.git/info/exclude`, `core.excludesFile`) adds to it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct DeploymentPaths(Vec<String>);
+
+impl DeploymentPaths {
+    /// The list of `entries`, or why one of them is refused, naming it: an empty entry, an
+    /// absolute path, a part that is empty (`a//b`), `.` or `..`, a NUL byte, and a part named
+    /// `.git` in any case, which is the repository's git directory (or a nested one's), guarded
+    /// whatever the list says.
+    pub fn new(entries: Vec<String>) -> std::result::Result<Self, String> {
+        for entry in &entries {
+            let why = if entry.is_empty() {
+                Some("is empty, and names no path")
+            } else if entry.starts_with('/') {
+                Some("is absolute; an entry is a path relative to the tree")
+            } else if entry.contains('\0') {
+                Some("holds a NUL byte, which no path can")
+            } else {
+                entry
+                    .strip_suffix('/')
+                    .unwrap_or(entry)
+                    .split('/')
+                    .find_map(|part| match part {
+                        "" => Some("holds an empty part; an entry is a plain path of the tree"),
+                        "." => Some("holds a `.` part; an entry is a plain path of the tree"),
+                        ".." => Some("holds a `..` part, which leaves the tree"),
+                        _ if part.eq_ignore_ascii_case(".git") => Some(
+                            "names a `.git` directory, which takt guards whatever the list says",
+                        ),
+                        _ => None,
+                    })
+            };
+            if let Some(why) = why {
+                return Err(format!("the entry {entry:?} {why}"));
+            }
+        }
+        Ok(Self(entries))
+    }
+
+    /// The entries, as the run file wrote them.
+    #[must_use]
+    pub fn entries(&self) -> &[String] {
+        &self.0
+    }
+
+    /// Whether `path`, relative to the tree as git names it (an ignored directory ending in
+    /// `/`), is an entry or lies under an entry that ends in `/`. Never a path that merely
+    /// starts with the same characters.
+    #[must_use]
+    pub fn covers(&self, path: &str) -> bool {
+        let path = path.trim_end_matches('/');
+        self.0.iter().any(|entry| match entry.strip_suffix('/') {
+            Some(dir) => {
+                path == dir
+                    || path
+                        .strip_prefix(dir)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            }
+            None => path == entry,
+        })
+    }
+
+    /// Whether the directory `dir`, relative to the tree, holds an entry below it: git names an
+    /// ignored directory as one entry, which would take the deployment's paths with it.
+    fn holds(&self, dir: &str) -> bool {
+        let dir = dir.trim_end_matches('/');
+        self.0.iter().any(|entry| {
+            entry
+                .trim_end_matches('/')
+                .strip_prefix(dir)
+                .is_some_and(|rest| rest.starts_with('/'))
+        })
+    }
+
+    /// Each entry as an exclude pattern anchored at the tree's root, every character a pattern
+    /// reads as more than itself escaped: what `git clean` is told to keep.
+    fn patterns(&self) -> Vec<String> {
+        self.0
+            .iter()
+            .map(|entry| {
+                let mut pattern = String::from("/");
+                for c in entry.chars() {
+                    if matches!(c, '\\' | '*' | '?' | '[' | ' ' | '!' | '#') {
+                        pattern.push('\\');
+                    }
+                    pattern.push(c);
+                }
+                pattern
+            })
+            .collect()
+    }
+}
+
 /// The paths with uncommitted changes (staged, unstaged or untracked), relative to the tree, as
 /// git names them: a rename names both its source and its target.
 pub fn changed_paths(tree: &Path) -> Result<Vec<String>> {
@@ -1108,31 +1207,32 @@ pub fn changed_paths(tree: &Path) -> Result<Vec<String>> {
 /// The uncommitted paths outside the cases directory, in path order: what makes a tree not
 /// clean. Ignored files do not; they are no one's work in progress.
 pub fn uncommitted(tree: &Path) -> Result<Vec<String>> {
-    Ok(changed_paths(tree)?
-        .into_iter()
-        .filter(|path| !is_under_cases(path))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect())
+    uncommitted_outside(tree, &DeploymentPaths::default())
 }
 
-/// The ignored paths outside the cases directory, an ignored directory as itself (`target/`),
-/// not file by file.
-fn ignored(entries: &[Entry]) -> BTreeSet<String> {
+/// [`uncommitted`], an untracked path `own` covers left out: the deployment's, no one's work
+/// in progress ([`DeploymentPaths`]).
+pub fn uncommitted_outside(tree: &Path, own: &DeploymentPaths) -> Result<Vec<String>> {
+    Ok(dirty(&status(tree, false)?, own).into_iter().collect())
+}
+
+/// The ignored paths outside the cases directory and outside `own`, an ignored directory as
+/// itself (`target/`), not file by file.
+fn ignored(entries: &[Entry], own: &DeploymentPaths) -> BTreeSet<String> {
     entries
         .iter()
         .filter(|entry| entry.code == "!!")
         .map(|entry| entry.path.clone())
-        .filter(|path| !is_under_cases(path.trim_end_matches('/')))
+        .filter(|path| !is_under_cases(path.trim_end_matches('/')) && !own.covers(path))
         .collect()
 }
 
 /// The paths of `entries` that are uncommitted (not ignored) and outside the cases directory,
-/// both sides of a rename.
-fn dirty(entries: &[Entry]) -> BTreeSet<String> {
+/// both sides of a rename; an untracked path `own` covers is the deployment's and left out.
+fn dirty(entries: &[Entry], own: &DeploymentPaths) -> BTreeSet<String> {
     entries
         .iter()
-        .filter(|entry| entry.code != "!!")
+        .filter(|entry| entry.code != "!!" && !(entry.code == "??" && own.covers(&entry.path)))
         .flat_map(|entry| entry.from.iter().cloned().chain([entry.path.clone()]))
         .filter(|path| !is_under_cases(path))
         .collect()
@@ -1423,15 +1523,23 @@ fn new_gitlinks(tree: &Path, paths: &[String]) -> Result<Vec<String>> {
 /// tracked files back to `HEAD`, untracked files removed; ignored files stay. For a tree that was
 /// clean when the work being discarded began, so that everything uncommitted is that work's.
 pub fn discard_uncommitted(tree: &Path) -> Result<()> {
+    discard_uncommitted_outside(tree, &DeploymentPaths::default())
+}
+
+/// [`discard_uncommitted`] that keeps the deployment's paths `own` as well: an untracked file
+/// under one is the deployment's, never the discarded work's ([`DeploymentPaths`]).
+pub fn discard_uncommitted_outside(tree: &Path, own: &DeploymentPaths) -> Result<()> {
     run(tree, &["reset", "-q", "--hard", "HEAD"])?;
-    clean_untracked(tree)
+    clean_untracked(tree, own)
 }
 
 /// `git clean -fdq` with each cases root kept (the new one and the legacy one): the untracked
 /// files a case holds are the case's, and a `.takt/.gitignore` that un-ignores them leaves them
-/// untracked and in reach of a clean.
-fn clean_untracked(tree: &Path) -> Result<()> {
-    let keep: Vec<String> = CASE_ROOTS.iter().map(|root| format!("{root}/")).collect();
+/// untracked and in reach of a clean. Each path of `own` is kept too, as an exclude pattern
+/// anchored at the tree's root: the deployment's ([`DeploymentPaths`]).
+fn clean_untracked(tree: &Path, own: &DeploymentPaths) -> Result<()> {
+    let mut keep: Vec<String> = CASE_ROOTS.iter().map(|root| format!("{root}/")).collect();
+    keep.extend(own.patterns());
     let mut args = vec!["clean", "-fdq"];
     for pattern in &keep {
         args.extend(["-e", pattern.as_str()]);
@@ -1954,6 +2062,9 @@ pub struct Checkpoint {
     index_lock: (PathBuf, bool),
     git_dirs: Vec<GitDir>,
     aside: Option<Aside>,
+    /// The deployment's paths ([`DeploymentPaths`]), left out of what is guarded, measured and
+    /// put back; none unless [`Checkpoint::take_owning`] names them.
+    own: DeploymentPaths,
 }
 
 /// What a judgement step did to the tree, against its [`Checkpoint`].
@@ -2054,22 +2165,29 @@ fn guarded_refs(tree: &Path, unguarded: &BTreeSet<String>) -> Result<BTreeMap<St
 /// What is at each ignored path of `entries`: the content of a file git names, a directory as
 /// itself and, since git names an ignored directory as one entry, every path below it as well
 /// ([`below`]). Each path is kept as the bytes the file system holds, a name that is not UTF-8
-/// among them, so that what is found is what is put back.
-fn ignored_contents(tree: &Path, entries: &[Entry]) -> Result<BTreeMap<OsString, Content>> {
+/// among them, so that what is found is what is put back. A path `own` covers is the
+/// deployment's and left out, inside an ignored directory too ([`DeploymentPaths`]).
+fn ignored_contents(
+    tree: &Path,
+    entries: &[Entry],
+    own: &DeploymentPaths,
+) -> Result<BTreeMap<OsString, Content>> {
     let mut found = BTreeMap::new();
-    for path in ignored(entries) {
+    for path in ignored(entries, own) {
+        let holds_own = own.holds(&path);
         let path = OsString::from(path);
         let content = Content::of(&at(tree, &path))?;
-        // A directory that holds a cases root is kept as what is in it, never as a whole: the
-        // step's own files below it are put back or removed, the cases root is not. The files
-        // directly in it are kept as their bytes, since git names none of them when the
-        // directory is ignored as a whole, so each can be put back or set aside as it was.
-        if content == Content::Dir && holds_cases_root(&path.to_string_lossy()) {
-            below(tree, &path, true, &mut found)?;
+        // A directory that holds a cases root, or a path of the deployment's, is kept as what
+        // is in it, never as a whole: the step's own files below it are put back or removed,
+        // the cases root and the deployment's paths are not. The files directly in it are kept
+        // as their bytes, since git names none of them when the directory is ignored as a
+        // whole, so each can be put back or set aside as it was.
+        if content == Content::Dir && (holds_cases_root(&path.to_string_lossy()) || holds_own) {
+            below(tree, &path, true, own, &mut found)?;
             continue;
         }
         if content == Content::Dir {
-            below(tree, &path, false, &mut found)?;
+            below(tree, &path, false, own, &mut found)?;
         }
         // A directory that cannot be listed was recorded as such by [`below`].
         found.entry(path).or_insert(content);
@@ -2109,11 +2227,13 @@ pub fn shown(path: &OsStr) -> String {
 /// never opened, so that a large `target/` costs one `lstat` a path and nothing of it is kept to
 /// put back. With `kept`, the regular files directly in `dir` are kept as their bytes instead,
 /// as a directory that holds a cases root (`.takt`) keeps its own files. A directory that cannot
-/// be listed is compared by its stamp alone.
+/// be listed is compared by its stamp alone. A path `own` covers is left out, and a directory
+/// that holds one is walked but not recorded as itself ([`DeploymentPaths`]).
 fn below(
     tree: &Path,
     dir: &OsStr,
     kept: bool,
+    own: &DeploymentPaths,
     found: &mut BTreeMap<OsString, Content>,
 ) -> Result<()> {
     let full = at(tree, dir);
@@ -2148,6 +2268,11 @@ fn below(
         if is_under_cases(&path.to_string_lossy()) {
             continue;
         }
+        // An entry of the deployment's is UTF-8 text: a name that is not UTF-8 is never one.
+        let text = path.to_str().map(str::to_owned);
+        if text.as_deref().is_some_and(|text| own.covers(text)) {
+            continue;
+        }
         let meta = match entry.metadata() {
             Ok(meta) => meta,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -2158,8 +2283,10 @@ fn below(
         let kind = meta.file_type();
         if kind.is_dir() {
             path.push("/");
-            below(tree, &path, false, found)?;
-            found.entry(path).or_insert(Content::Dir);
+            below(tree, &path, false, own, found)?;
+            if !text.as_deref().is_some_and(|text| own.holds(text)) {
+                found.entry(path).or_insert(Content::Dir);
+            }
         } else if kind.is_symlink() {
             let target = std::fs::read_link(entry.path())
                 .with_context(|| format!("read {}", entry.path().display()))?;
@@ -2565,6 +2692,14 @@ impl Checkpoint {
     /// Takes the checkpoint of `tree` as [`Self::take`] does, the branches `kept` (a case's
     /// base) guarded even when another worktree has them checked out.
     pub fn take_guarding(tree: &Path, kept: &[String]) -> Result<Self> {
+        Self::take_owning(tree, kept, &DeploymentPaths::default())
+    }
+
+    /// Takes the checkpoint of `tree` as [`Self::take_guarding`] does, the paths `own` covers
+    /// left out as the deployment's ([`DeploymentPaths`]): not uncommitted before the step, not
+    /// ignored paths it may not write, not what [`Self::change`] counts, and not what
+    /// [`Self::restore`] removes or puts back.
+    pub fn take_owning(tree: &Path, kept: &[String], own: &DeploymentPaths) -> Result<Self> {
         let git_dir = PathBuf::from(run(tree, &["rev-parse", "--absolute-git-dir"])?);
         let common = PathBuf::from(run(
             tree,
@@ -2590,7 +2725,7 @@ impl Checkpoint {
             }
         };
         let entries = status(tree, true)?;
-        let dirty = dirty(&entries)
+        let dirty = dirty(&entries, own)
             .into_iter()
             .map(|path| Content::of(&tree.join(&path)).map(|content| (path, content)))
             .collect::<Result<_>>()?;
@@ -2605,12 +2740,13 @@ impl Checkpoint {
             index: index_entries(tree)?,
             index_file,
             dirty,
-            ignored: ignored_contents(tree, &entries)?,
+            ignored: ignored_contents(tree, &entries, own)?,
             aside: None,
             dot_git,
             head_file,
             index_lock,
             git_dirs,
+            own: own.clone(),
         })
     }
 
@@ -2805,7 +2941,7 @@ impl Checkpoint {
         }
         let entries = status(tree, true)?;
         let mut paths = BTreeSet::new();
-        for path in dirty(&entries) {
+        for path in dirty(&entries, &self.own) {
             if !self.dirty.contains_key(&path) {
                 paths.insert(path);
             }
@@ -2815,7 +2951,7 @@ impl Checkpoint {
                 paths.insert(path.clone());
             }
         }
-        let ignored = ignored_contents(tree, &entries)?;
+        let ignored = ignored_contents(tree, &entries, &self.own)?;
         let mut change = StepChange {
             already_uncommitted: paths
                 .iter()
@@ -3022,8 +3158,8 @@ impl Checkpoint {
             }
         }
         run(tree, &["reset", "-q", "--hard", &self.head])?;
-        clean_untracked(tree)?;
-        let now = ignored_contents(tree, &status(tree, true)?)?;
+        clean_untracked(tree, &self.own)?;
+        let now = ignored_contents(tree, &status(tree, true)?, &self.own)?;
         let to_move = self.set_aside_of(&now);
         for path in now.keys() {
             if !self.ignored.contains_key(path) {

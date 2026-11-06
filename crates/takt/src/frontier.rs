@@ -315,12 +315,17 @@ pub fn is_story_store_path(path: &str, story: &str) -> bool {
 /// fall together, and a record that cannot be written takes the commit back, the case's branch
 /// reset to where it was, and is the error. A refusal records nothing here; it is the
 /// caller's to record. The commit carries `identity`, the case's ([`crate::case::CaseDir::committer`]).
+/// An untracked or ignored file under the deployment's paths `own` is no uncommitted work and
+/// no part of what the write changed: it is neither refused, nor committed, nor discarded
+/// ([`crate::git::DeploymentPaths`]).
+#[allow(clippy::too_many_arguments)]
 pub fn write_on_case_branch(
     tree: &Path,
     branch: &str,
     identity: &crate::git::CommitIdentity,
     story: &str,
     subject: &str,
+    own: &crate::git::DeploymentPaths,
     write: impl FnOnce() -> Result<Written>,
     recorded: impl FnOnce(Option<&str>) -> Result<()>,
 ) -> Result<std::result::Result<Option<String>, String>> {
@@ -332,7 +337,7 @@ pub fn write_on_case_branch(
             on.as_deref().unwrap_or("a detached HEAD")
         ));
     }
-    let uncommitted = crate::git::uncommitted(tree)?;
+    let uncommitted = crate::git::uncommitted_outside(tree, own)?;
     if !uncommitted.is_empty() {
         return Err(anyhow!(
             "the tree {} has uncommitted work: {}; the store's write is committed on {branch} with exactly what it changes; nothing was written",
@@ -342,7 +347,7 @@ pub fn write_on_case_branch(
     }
     let before = crate::git::head(tree)?;
     let discard = |why: String| -> anyhow::Error {
-        match crate::git::discard_uncommitted(tree) {
+        match crate::git::discard_uncommitted_outside(tree, own) {
             Ok(()) => anyhow!("{why}; what it changed was discarded"),
             Err(error) => anyhow!("{why}; what it changed could not be discarded: {error:#}"),
         }
@@ -350,14 +355,14 @@ pub fn write_on_case_branch(
     let written = match write() {
         Ok(written) => written,
         Err(error) => {
-            return Err(if crate::git::uncommitted(tree)?.is_empty() {
+            return Err(if crate::git::uncommitted_outside(tree, own)?.is_empty() {
                 error
             } else {
                 discard(format!("{error:#}"))
             });
         }
     };
-    let changed = crate::git::uncommitted(tree)?;
+    let changed = crate::git::uncommitted_outside(tree, own)?;
     if let Written::Refused(refusal) = written {
         if !changed.is_empty() {
             return Err(discard(format!(

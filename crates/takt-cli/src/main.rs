@@ -683,6 +683,7 @@ impl ScenarioRunArgs {
                 path.display()
             ));
         }
+        file.check_run_file_outside_deployment(path, &self.repo)?;
         self.declared_scan = file.scan;
         self.forge_settings = file.forge_settings();
         self.looping.configured(file, matches, &self.repo)?;
@@ -894,6 +895,7 @@ impl RunArgs {
         self.declared_scan = file.scan;
         self.protocol_settings = file.protocol_settings.clone();
         self.forge_settings = file.forge_settings();
+        file.check_run_file_outside_deployment(path, &self.repo)?;
         self.looping.configured(file, matches, &self.repo)
     }
 
@@ -1026,6 +1028,7 @@ impl LoopArgs {
             looping.continue_past_red_base = go_on;
         }
         looping.setup = file.setup.unwrap_or_default();
+        looping.deployment_paths = file.deployment_paths.unwrap_or_default();
         looping.records_of_file = file.records.filter(|_| unset("records"));
         looping.commit = looping.commit_settings(file.commit.as_ref())?;
         Ok(())
@@ -1406,6 +1409,11 @@ struct LoopArgs {
     /// a flag.
     #[arg(skip)]
     setup: Vec<takt::run_config::SetupCommand>,
+    /// The `deployment_paths` `--config` gave, as read when the run opens and never again: the
+    /// paths the deployment keeps in the tree, which no step changes. Set from the file, never
+    /// from a flag.
+    #[arg(skip)]
+    deployment_paths: takt::git::DeploymentPaths,
     /// The digest of the `llm.routes/1` document `--config` gave, recorded on the run's `opened`
     /// line; set from the file, never from a flag.
     #[arg(skip)]
@@ -2262,12 +2270,13 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     harness,
                     &validators,
                 )?,
-                (None, Some(intent), _) => Run::open_unit_in(
+                (None, Some(intent), _) => Run::open_unit_owning(
                     &repo,
                     options,
                     Unit::Intent(intent),
                     &commit_as,
                     set_aside.as_deref(),
+                    &looping.deployment_paths,
                     harness,
                     &validators,
                 )?,
@@ -2351,12 +2360,13 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                                     .clone()
                                     .or_else(|| Some(item.key.case_id_at(&takt::now()))),
                             );
-                            taken = Some(Run::open_unit_in(
+                            taken = Some(Run::open_unit_owning(
                                 &repo,
                                 options,
                                 Unit::Intent(item.intent()),
                                 &commit_as,
                                 set_aside.as_deref(),
+                                &looping.deployment_paths,
                                 harness,
                                 &validators,
                             )?);
@@ -2407,6 +2417,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                             options.clone(),
                             &commit_as,
                             set_aside.as_deref(),
+                            &looping.deployment_paths,
                             harness,
                             &validators,
                             out,
@@ -2807,8 +2818,9 @@ impl takt::Frontier for Only<'_> {
     }
 }
 
-/// [`Run::take_next_as_in`] with each story's settings resolved from its own tags: the candidates
-/// are listed as the run reads them (the tree put on the base), then each is offered alone, with
+/// [`Run::take_next_owning`], the deployment's paths `own` kept out, with each story's settings
+/// resolved from its own tags: the candidates are listed as the run reads them (the tree put on
+/// the base), then each is offered alone, with
 /// the options `options_for` makes of the settings `resolve` makes of its tags, until one is
 /// taken. A story whose tags or whose settings are refused is the error, before its case is
 /// opened. The settings of the story taken come back with its run.
@@ -2822,6 +2834,7 @@ fn take_next_with_settings<'a>(
     listing: RunOptions,
     commit_as: &takt::case::CommitAs,
     set_aside: Option<&Path>,
+    own: &takt::git::DeploymentPaths,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
@@ -2830,8 +2843,8 @@ fn take_next_with_settings<'a>(
         inner: frontier,
         seen: std::cell::RefCell::new(Vec::new()),
     };
-    if Run::take_next_as_in(
-        repo, listing, &listed, commit_as, set_aside, harness, validators, out,
+    if Run::take_next_owning(
+        repo, listing, &listed, commit_as, set_aside, own, harness, validators, out,
     )?
     .is_some()
     {
@@ -2844,12 +2857,13 @@ fn take_next_with_settings<'a>(
             inner: frontier,
             story: &id,
         };
-        if let Some(run) = Run::take_next_as_in(
+        if let Some(run) = Run::take_next_owning(
             repo,
             options_for(&settings),
             &only,
             commit_as,
             set_aside,
+            own,
             harness,
             validators,
             out,
@@ -3842,6 +3856,7 @@ fn finish(
         run.continue_past_red_base();
     }
     run.declare_setup(looping.setup.clone());
+    run.declare_deployment_paths(looping.deployment_paths.clone());
     if let Some(settings) = &looping.commit {
         run.commit_settings(settings.clone());
     }
@@ -4234,7 +4249,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     }
     // A tree with uncommitted work is refused, never discarded: a checkout would carry it onto
     // the trial branch, and a store file a stopped run left changed would be read there.
-    let uncommitted = takt::git::uncommitted(&repo)?;
+    let uncommitted = takt::git::uncommitted_outside(&repo, &looping.deployment_paths)?;
     if !uncommitted.is_empty() {
         return Err(anyhow!(
             "scenario {}: the tree {} has uncommitted work: {}; a scenario run starts only from a clean tree, and checking out its trial branch would carry the work along: commit it, or move it out of the tree, first; nothing was changed",
@@ -4434,6 +4449,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         story,
         &commit_as,
         set_aside.as_deref(),
+        &looping.deployment_paths,
         harness,
         &validators,
         out,
@@ -4636,6 +4652,7 @@ fn take_story<'a>(
     story: takt::Story,
     commit_as: &takt::case::CommitAs,
     set_aside: Option<&Path>,
+    own: &takt::git::DeploymentPaths,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
@@ -4644,12 +4661,13 @@ fn take_story<'a>(
     let id = story.id.clone();
     let id = id.as_str();
     let title = story.title.clone();
-    let mut run = Run::open_unit_in(
+    let mut run = Run::open_unit_owning(
         repo,
         options,
         Unit::Story(story),
         commit_as,
         set_aside,
+        own,
         harness,
         validators,
     )?;
@@ -4661,14 +4679,14 @@ fn take_story<'a>(
                 return Err(anyhow!("the store would not take {id}: {refusal}"));
             }
         }
-        let changed = takt::git::uncommitted(repo)?;
+        let changed = takt::git::uncommitted_outside(repo, own)?;
         takt::git::commit_paths(repo, &committer, &changed, &takt::run::take_subject(id))
     })();
     let head = match taken {
         Ok(head) => head,
         Err(error) => {
             let dir = run.case.dir.clone();
-            return Err(match run.case.discard() {
+            return Err(match run.case.discard_keeping(own) {
                 Ok(()) => error,
                 Err(removal) => error.context(format!(
                     "and the case {} could not be removed: {removal:#}",

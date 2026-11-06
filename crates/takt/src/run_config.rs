@@ -302,6 +302,18 @@ pub struct RunConfig {
     /// `work`. Its shape is checked when the file is read, and a `work` list naming `command`
     /// needs its `select` ([`crate::work::command::WorkCommands::check`]).
     pub work_commands: Option<crate::work::command::WorkCommands>,
+    /// The `deployment_paths` member as written, a list of paths, which [`RunConfig::read`]
+    /// checks into [`RunConfig::deployment_paths`].
+    #[serde(rename = "deployment_paths")]
+    deployment_paths_member: Option<Vec<String>>,
+    /// The paths the deployment keeps beside the tree (`takt.work.RunConfiguration`
+    /// `deployment_paths`), each relative to the tree, a directory when it ends in `/`: an
+    /// untracked or ignored path under one is no change a step made
+    /// ([`crate::git::DeploymentPaths`]). Set by [`RunConfig::read`], never read from the file:
+    /// an empty or absolute entry, one with an empty, `.` or `..` part, or one naming `.git` is
+    /// refused there, naming it.
+    #[serde(skip)]
+    pub deployment_paths: Option<crate::git::DeploymentPaths>,
 }
 
 /// What a run file says about the forge beyond its name: the commands, the transport and the
@@ -1185,7 +1197,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1941,7 +1953,44 @@ impl RunConfig {
                 config.work_commands.as_ref(),
             )?);
         }
+        if let Some(entries) = config.deployment_paths_member.take() {
+            let toml = extension == Some("toml");
+            let paths = crate::git::DeploymentPaths::new(entries).map_err(|why| {
+                let line = locate(text, toml, &["deployment_paths"])
+                    .or_else(|| locate(text, toml, &["takt", "deployment_paths"]))
+                    .unwrap_or(1);
+                anyhow!(
+                    "the run configuration file {} is refused at line {line}: `deployment_paths`: {why}",
+                    path.display()
+                )
+            })?;
+            config.deployment_paths = Some(paths);
+        }
         Ok(config)
+    }
+
+    /// Refuses a `deployment_paths` that covers the run file itself, the file at `run_file`,
+    /// when it lies inside `tree`: a step could rewrite it there, unseen by the guard, for the
+    /// next run that reads it. Both paths are resolved first; one that does not resolve is
+    /// taken as outside.
+    pub fn check_run_file_outside_deployment(&self, run_file: &Path, tree: &Path) -> Result<()> {
+        let Some(paths) = &self.deployment_paths else {
+            return Ok(());
+        };
+        let (Ok(file), Ok(tree)) = (run_file.canonicalize(), tree.canonicalize()) else {
+            return Ok(());
+        };
+        let Some(inside) = file.strip_prefix(&tree).ok().and_then(Path::to_str) else {
+            return Ok(());
+        };
+        let inside = inside.replace(std::path::MAIN_SEPARATOR, "/");
+        if paths.covers(&inside) {
+            return Err(anyhow!(
+                "the run configuration file {} is refused: `deployment_paths` covers {inside}, the run file itself, inside the tree, where a step could rewrite it for the next run; keep the run file outside the paths the list names; nothing was opened",
+                run_file.display()
+            ));
+        }
+        Ok(())
     }
 
     /// Sets the document `--llm-config` names, a `.toml`, `.yaml` or `.yml` file of at most the bound
