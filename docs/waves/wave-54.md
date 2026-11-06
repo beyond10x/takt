@@ -105,7 +105,9 @@ made red, which the local gate did not run. The git.rs unit test started a proce
 older adversary case built a quoted test command, and two adversary cases read `/proc`, which macOS lacks. They were
 fixed in the tests in e6012f1e9 (targeted: lib 234/234, `confinement`, `step_cannot_forge_adv2`, `w54_adversary`).
 The pull request then passed its 7 checks, was merged as 9e7a3904e, and main's check run 42152410700 passed before
-the tag 0.32.0. review-result:w54-adv-1 records the adversary pass.
+the tag 0.32.0. The first bot push of the tag was refused by a local hook with "historical merge signature is not
+verified", nothing pushed; the same push, rerun unchanged, was accepted. review-result:w54-adv-1 records the adversary
+pass.
 
 The stories' close-out is a store-only commit on `store/close-wave-54`, cut from 9e7a3904e. It rides along with the
 next takt wave, whose integration branch merges it.
