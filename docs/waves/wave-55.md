@@ -1,6 +1,6 @@
 # Wave 55: the gate holds against a step's edits
 
-Stage: **approved**, unit a next. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
+Stage: **gate**: units a-d, the review correction and the release preparation are in. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
 close-out of wave 54) first, as bfe7871f5. Skill version 0.26.0 (aep:implementing, wave mode). Approved: approval-record:wave-55-gate-holds.
 Release: 0.33.0.
 
@@ -38,10 +38,10 @@ in `ess/domains/` its change moves (`validator.rs` is cited about 120 times ther
 
 | unit | story | objective | new test target | stage |
 |---|---|---|---|---|
-| a | story:the-gate-reads-paths-inside-arguments | a glued short option and the words of `sh -c "<line>"` are compared at the base, or the command is refused | `gate_reads_paths_in_arguments` | active |
-| b | story:the-gate-compares-taskfile-includes | a Taskfile pulled in by `includes:` is compared at the base | `gate_compares_taskfile_includes` | active |
-| c | story:the-gate-holds-against-lint-allows-in-source | a crate-level `allow` of a denied lint group added by a step records no `gate.green` | `gate_holds_against_lint_allows` | active |
-| d | story:the-gate-does-not-trust-a-step-accepted-citation | a changed citation digest or a dropped `ess-inputs.yaml`/`system.yaml` entry records no `gate.green` | `gate_does_not_trust_step_citations` | active |
+| a | story:the-gate-reads-paths-inside-arguments | a glued short option and the words of `sh -c "<line>"` are compared at the base, or the command is refused | `gate_reads_paths_in_arguments` | delivered |
+| b | story:the-gate-compares-taskfile-includes | a Taskfile pulled in by `includes:` is compared at the base | `gate_compares_taskfile_includes` | delivered |
+| c | story:the-gate-holds-against-lint-allows-in-source | a crate-level `allow` of a denied lint group added by a step records no `gate.green` | `gate_holds_against_lint_allows` | delivered |
+| d | story:the-gate-does-not-trust-a-step-accepted-citation | a changed citation digest or a dropped `ess-inputs.yaml`/`system.yaml` entry records no `gate.green` | `gate_does_not_trust_step_citations` | delivered |
 
 Tree: the managed tree `takt-w55-int` on `wave/55`, one `target/` inside it. Implementors edit that tree; the wave
 commits each unit.
@@ -65,3 +65,18 @@ cache discarded after the last stage.
 | library, targeted: `-p b10x-takt --lib` and the gate, confinement and adversary test targets | 8G | 20 | not measured |
 
 The whole library suite (44G peak) runs on the pull request's CI, as in wave 54.
+
+## Units delivered
+
+| unit | commit | targeted tests (the implementor's report) | peak `target/` |
+|---|---|---|---|
+| a | 24658b5a1 | `gate_reads_paths_in_arguments` 13, `gate_compares_tool_config`, lib 234 | 3.9G |
+| b | 1f828f8e6 | `gate_compares_taskfile_includes` 9, `gate_compares_tool_config` 21, lib 234 | 4.0G |
+| c | 5bcde0279 | `gate_holds_against_lint_allows` 11, lib 235, the other gate targets | 4.2G |
+| d | d0e8fba54 | `gate_does_not_trust_step_citations` 14, lib 235, the other gate targets | 4.4G |
+| correction | dbd7bba5f | `w55_adversary` 8, `w55_security` 8 (13 of 16 red before), lib 237, five gate targets | 4.7G |
+
+The adversary pass found 8 red cases of 11, the security review 2 blockers and 4 warnings;
+approval-record:wave-55-review-correction decided them: the ones inside the stories' acceptance were fixed in
+dbd7bba5f, and nine `rsi` drafts take the rest. Unit b keeps the strict anchor rule
+(approval-record:wave-55-taskfile-anchors).
