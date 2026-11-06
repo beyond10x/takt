@@ -1033,3 +1033,123 @@ fn putting_a_step_back_removes_a_link_it_put_at_a_deployments_path() {
         "the wrapper, before the step\n"
     );
 }
+
+/// A harness whose edit step replaces the deployment's directory `.autodev/` with a link to
+/// `src` and writes `done.txt`, which makes the test pass.
+struct LinksTheDeploymentsDirectory;
+
+impl Harness for LinksTheDeploymentsDirectory {
+    fn name(&self) -> &str {
+        "links"
+    }
+
+    fn step(&self, context: &StepContext<'_>) -> Result<StepReport, anyhow::Error> {
+        let at = context.tree.join(".autodev");
+        if fs::symlink_metadata(&at).is_ok_and(|meta| meta.is_dir()) {
+            fs::remove_dir_all(&at).expect("remove the deployment's directory");
+        }
+        std::os::unix::fs::symlink("src", &at).expect("a link");
+        fs::write(context.tree.join("done.txt"), "done\n").expect("a write");
+        Ok(StepReport {
+            action: "implementation.edit".to_owned(),
+            summary: "made the test pass".to_owned(),
+            tokens: Some(1),
+        })
+    }
+}
+
+/// An edit step that replaces `.autodev/`, the deployment's, with a link to `src` is refused
+/// and put back, naming the path: no commit of any ref names `.autodev`, and no link is left in
+/// the tree, so what the deployment writes there later lands in no commit.
+#[test]
+#[cfg(unix)]
+fn an_edit_step_that_puts_a_link_at_the_deployments_directory_is_refused_and_put_back() {
+    let scratch = repository("edit-link");
+    let tree = &scratch.repo;
+    fs::create_dir_all(tree.join("src")).expect("a directory");
+    fs::write(tree.join("src/lib.rs"), "pub fn f() {}\n").expect("a file");
+    git(tree, &["add", "-A"]);
+    git(tree, &["commit", "-q", "-m", "sources"]);
+    let list = list_of(
+        &scratch.root.join("run.yaml"),
+        "deployment_paths:\n  - .autodev/\n",
+    );
+    let validators = validators();
+    let harness = LinksTheDeploymentsDirectory;
+    let mut run = Run::open(
+        tree,
+        options(&scratch, "edit-link", 4),
+        &harness,
+        &validators,
+    )
+    .expect("opens");
+    run.declare_deployment_paths(list);
+    run.continue_past_red_base();
+    append(&tree.join(EARLIER_LOG), EARLIER_LINE);
+    let mut out = Vec::new();
+    let stop = run.run(&mut out);
+    let text = String::from_utf8_lossy(&out).into_owned();
+    assert!(
+        matches!(&stop, Ok(Stop::StepRefused(why)) if why.contains(".autodev")),
+        "the step that put a link at .autodev was not refused naming it: {stop:?}\n{text}"
+    );
+    let everything = ever_committed(tree);
+    assert!(
+        !everything.lines().any(|path| path.starts_with(".autodev")),
+        "a commit names .autodev: {everything}\n{text}"
+    );
+    assert!(
+        !fs::symlink_metadata(tree.join(".autodev"))
+            .is_ok_and(|meta| meta.file_type().is_symlink()),
+        "the link is left in the tree\n{text}"
+    );
+    append(&tree.join(LOG), "the wrapper, after the step\n");
+    assert_eq!(
+        fs::read_to_string(tree.join("src/lib.rs")).expect("the source"),
+        "pub fn f() {}\n"
+    );
+    assert!(
+        !tree.join("src/run-2.log").exists(),
+        "the deployment's write lands in src/\n{text}"
+    );
+}
+
+/// The links a step's change names as the deployment's ([`takt::git::StepChange`]): one at a
+/// path an entry covers, one inside a covered directory, one at a directory above an entry and
+/// one at an entry without `/`, whatever git ignores; never a link elsewhere, nor a file or a
+/// directory at a covered path.
+#[test]
+#[cfg(unix)]
+fn every_link_at_or_above_a_deployments_path_is_named_and_nothing_else() {
+    let scratch = repository("link-names");
+    let tree = &scratch.repo;
+    fs::write(tree.join(".gitignore"), "/hidden\n").expect("the ignore file");
+    git(tree, &["add", "-A"]);
+    git(tree, &["commit", "-q", "-m", "ignore"]);
+    let own = DeploymentPaths::new(vec![
+        ".autodev/".to_owned(),
+        "deep/out/".to_owned(),
+        "notes.txt".to_owned(),
+        "hidden".to_owned(),
+        "plain/".to_owned(),
+    ])
+    .expect("the list");
+    fs::create_dir_all(tree.join(".autodev")).expect("a directory");
+    let before = takt::git::Checkpoint::take_owning(tree, &[], &own).expect("a checkpoint");
+    let link =
+        |path: &str| std::os::unix::fs::symlink("README.md", tree.join(path)).expect("a link");
+    link(".autodev/out");
+    link("deep");
+    link("notes.txt");
+    link("hidden");
+    link("elsewhere");
+    append(&tree.join("plain/file.txt"), "the deployment's\n");
+    let change = before.change(tree).expect("the change");
+    assert_eq!(
+        change.deployment_links,
+        [".autodev/out", "deep", "hidden", "notes.txt"],
+        "paths {:?}, ignored_added {:?}",
+        change.paths,
+        change.ignored_added
+    );
+}

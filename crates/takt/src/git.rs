@@ -1176,6 +1176,13 @@ impl DeploymentPaths {
         self.covers(path) && !linked(tree, path)
     }
 
+    /// Whether a link at `path`, relative to the tree, would take what the deployment writes
+    /// somewhere else: the list covers `path`, or `path` is a directory above an entry.
+    #[must_use]
+    pub fn reaches(&self, path: &str) -> bool {
+        self.covers(path) || self.holds(path)
+    }
+
     /// Whether the directory `dir`, relative to the tree, holds an entry below it: git names an
     /// ignored directory as one entry, which would take the deployment's paths with it.
     fn holds(&self, dir: &str) -> bool {
@@ -1277,6 +1284,16 @@ fn linked(tree: &Path, path: &str) -> bool {
         }
     }
     false
+}
+
+/// Whether `path`, relative to `tree`, is itself a link, read with `lstat`: a path that is not
+/// there is none, and one that cannot be read counts as one, so what cannot be checked is never
+/// let through ([`StepChange::deployment_links`]).
+fn is_link(tree: &Path, path: &str) -> bool {
+    match std::fs::symlink_metadata(tree.join(path.trim_end_matches('/'))) {
+        Ok(meta) => meta.file_type().is_symlink(),
+        Err(error) => error.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 /// Where a repository configures the identity takt commits with, in git's configuration syntax:
@@ -2159,6 +2176,11 @@ pub struct StepChange {
     /// out of the tree, into [`Checkpoint::aside`] at the same relative path: nothing of them
     /// was kept to put back, and nothing the operator had is deleted.
     pub ignored_set_aside: Vec<OsString>,
+    /// Those of [`Self::paths`] and [`Self::ignored_added`] that are a link at a path the
+    /// deployment's list covers, or at a directory above one inside the tree
+    /// ([`DeploymentPaths`]): what the deployment writes there would land where the link
+    /// points, in a commit. A step that leaves one is refused and put back, whatever its kind.
+    pub deployment_links: Vec<String>,
 }
 
 /// The index's entries: mode, object, stage, the assume-unchanged and skip-worktree flags, path.
@@ -3057,6 +3079,19 @@ impl Checkpoint {
             }
         }
         change.ignored_set_aside = self.set_aside_of(&ignored);
+        let links: BTreeSet<String> = change
+            .paths
+            .iter()
+            .cloned()
+            .chain(
+                change
+                    .ignored_added
+                    .iter()
+                    .map(|path| path.to_string_lossy().into_owned()),
+            )
+            .filter(|path| self.own.reaches(path) && is_link(tree, path))
+            .collect();
+        change.deployment_links = links.into_iter().collect();
         Ok(change)
     }
 

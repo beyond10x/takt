@@ -223,9 +223,11 @@ fn every_minted_case_id_passes_the_case_id_rule() {
 }
 
 /// Invariant 5 (a symlink): with `.autodev/` the deployment's, a step that turns `.autodev`
-/// into a link to `src` is exempted as the deployment's path (the link is `?? .autodev`, which
-/// the list covers), so the step guard counts nothing; the deployment's log written through it
-/// during the next step lands in `src/`, which is that step's change and goes into its commit.
+/// into a link to `src` must not be exempted as the deployment's path (the link is
+/// `?? .autodev`, which the list covers): the step guard counts it, names it as a link at the
+/// deployment's path, which refuses the step, and putting the step back removes it, so the
+/// deployment's log written during the next step lands in `.autodev/`, never in `src/` or in a
+/// commit.
 #[test]
 fn a_link_the_step_puts_at_a_deployment_path_is_a_change() {
     let scratch = repository("link");
@@ -259,6 +261,64 @@ fn a_link_the_step_puts_at_a_deployment_path_is_a_change() {
             "a step put a link at .autodev/out to a path outside the tree and the guard counted none of it: paths {:?}",
             change.paths
         ));
+    }
+    fs::remove_file(repo.join(".autodev/out")).expect("remove the link");
+
+    // Step 1 again: the link it puts at the deployment's directory is refused and put back.
+    let before = Checkpoint::take_owning(repo, &[], &own).expect("a checkpoint");
+    fs::remove_dir_all(repo.join(".autodev")).expect("remove");
+    std::os::unix::fs::symlink("src", repo.join(".autodev")).expect("a link");
+    let change = before.change(repo).expect("the change");
+    if change.deployment_links != [".autodev"] {
+        wrong.push(format!(
+            "step 1 put a link at .autodev (to src) and the guard does not refuse it: deployment_links {:?}, paths {:?}",
+            change.deployment_links, change.paths
+        ));
+    }
+    before.restore(repo).expect("step 1 is put back");
+    if fs::symlink_metadata(repo.join(".autodev")).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        wrong.push("step 1 was put back and its link at .autodev is still there".to_owned());
+    }
+
+    // Step 2: the wrapper appends to its log while the step writes its own file.
+    let before = Checkpoint::take_owning(repo, &[], &own).expect("a checkpoint");
+    append(
+        &repo.join(".autodev/run-2.log"),
+        "the wrapper, during step 2\n",
+    );
+    fs::write(repo.join("src/feature.rs"), "pub fn g() {}\n").expect("the step's file");
+    let change = before.change(repo).expect("the change");
+    if change.paths.iter().any(|path| path == "src/run-2.log") {
+        wrong.push(format!(
+            "the deployment's log written to .autodev/run-2.log during step 2 is that step's change, committed with it: paths {:?}",
+            change.paths
+        ));
+    }
+    if change.paths != ["src/feature.rs"] || !change.deployment_links.is_empty() {
+        wrong.push(format!(
+            "step 2's change is not its own file alone: paths {:?}, deployment_links {:?}",
+            change.paths, change.deployment_links
+        ));
+    }
+    let mut add = vec!["add", "--"];
+    add.extend(change.paths.iter().map(String::as_str));
+    git(repo, &add);
+    git(repo, &["commit", "-q", "-m", "step 2"]);
+    let everything = git(repo, &["log", "--all", "--name-only", "--format="]);
+    if everything
+        .lines()
+        .any(|path| path.starts_with(".autodev") || path == "src/run-2.log")
+    {
+        wrong.push(format!(
+            "a commit names the deployment's link or its log: {everything}"
+        ));
+    }
+    if fs::read_to_string(repo.join(".autodev/run-2.log"))
+        .ok()
+        .as_deref()
+        != Some("the wrapper, during step 2\n")
+    {
+        wrong.push("the deployment's log is not in .autodev/ after step 2".to_owned());
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }

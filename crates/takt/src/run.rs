@@ -14138,11 +14138,19 @@ impl<'a> Run<'a> {
             )?;
             return Ok(Judgement::Stop(Stop::StepRefused(why)));
         }
-        // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored
-        // paths, and a path that was uncommitted before the step, whose change cannot be
-        // told apart from what was there.
+        // What only takt does, or what nobody may: a link at the deployment's paths, `.git/`,
+        // `HEAD`, the index, ignored paths, and a path that was uncommitted before the step,
+        // whose change cannot be told apart from what was there.
+        // A link at a path of the deployment's, or at a directory above one, would send what
+        // the deployment writes there into the tree's own files and into a commit: refused
+        // whatever the action, and put back.
         let action = &report.action;
-        let overreach = if !git_dir.touched.is_empty() {
+        let overreach = if !change.deployment_links.is_empty() {
+            Some(format!(
+                "{action} left a link at {}, a path the run file names as the deployment's or a directory above one, through which the deployment's writes would land where the link points and be committed",
+                change.deployment_links.join(", ")
+            ))
+        } else if !git_dir.touched.is_empty() {
             let mut why = format!(
                 "{action} wrote under .git, where git runs or reads it: {}",
                 git_dir.touched.join(", ")
