@@ -825,8 +825,9 @@ impl SourceName {
 }
 
 /// The sources this release serves: a key or a `work` entry of any other is refused before a
-/// case opens, naming these ([`Source::served`]).
-pub const SERVED: [SourceName; 1] = [SourceName::Aep];
+/// case opens, naming these ([`Source::served`]). `command` runs the run file's `work_commands`
+/// ([`crate::work::command`]).
+pub const SERVED: [SourceName; 2] = [SourceName::Aep, SourceName::Command];
 
 /// `names` as a list in words: `a`, `a and b`, `a, b and c`.
 fn listed_in_words(names: &[&str]) -> String {
@@ -862,7 +863,8 @@ impl Source {
     /// (refused in this release, approval-record:wave-56-work-model-points point 6), a name that
     /// is no [`SourceName`], a connection that is no word a forge instance takes
     /// ([`crate::forge::connectors::is_instance_name`], point 1 and its addendum), or a
-    /// connection on `aep`, the one planning store of the repository.
+    /// connection on `aep`, the one planning store of the repository, or on `command`, the one
+    /// `work_commands` section of the run file.
     pub fn parse(text: &str) -> std::result::Result<Self, String> {
         if text.contains('?') {
             return Err(format!(
@@ -886,6 +888,12 @@ impl Source {
             if name == SourceName::Aep {
                 return Err(
                     "the source aep takes no connection: it is the repository's own planning store"
+                        .to_owned(),
+                );
+            }
+            if name == SourceName::Command {
+                return Err(
+                    "the source command takes no connection: it runs the one `work_commands` section of the run file"
                         .to_owned(),
                 );
             }
@@ -1292,23 +1300,26 @@ mod tests {
             ("", "`` is no work source"),
             ("jira@", "connection"),
             ("aep@x", "the source aep takes no connection"),
+            ("command@x", "the source command takes no connection"),
         ] {
             let refusal = Source::parse(text).expect_err(text);
             assert!(refusal.contains(why), "{text}: ({why}) {refusal}");
         }
     }
 
-    /// This release serves `aep` alone; every other source is refused naming the served ones.
+    /// This release serves `aep` and, since story:the-command-work-source, `command`; every
+    /// other source is refused naming the served ones.
     #[test]
-    fn only_aep_is_served() {
+    fn only_aep_and_command_are_served() {
         assert_eq!(Source::aep().served(), Ok(()));
-        for name in ["jira", "github", "gitlab", "command", "jira@team-a"] {
+        assert_eq!(Source::parse("command").expect("a source").served(), Ok(()));
+        for name in ["jira", "github", "gitlab", "jira@team-a"] {
             let refusal = Source::parse(name)
                 .expect("a source")
                 .served()
                 .expect_err(name);
             assert!(
-                refusal.contains("this release serves the work source aep alone"),
+                refusal.contains("this release serves the work sources aep and command"),
                 "{name}: {refusal}"
             );
             assert!(refusal.contains(&format!("`{name}`")), "{name}: {refusal}");

@@ -1,7 +1,8 @@
 //! `takt run --work <key>` and the run file's `work` list through the binary, over a copy of a
 //! fixture planning store, as `run_story_cli.rs` builds it (story:work-flag-and-the-aep-source):
 //! `--work aep:<id>` takes, resumes and refuses a story exactly as `--story <id>` does; a key of
-//! any other source exits 1 before any case opens, naming the sources this release serves;
+//! any other source but `command` exits 1 before any case opens, naming the sources this release
+//! serves;
 //! `work = ["aep"]` and no `work` key select the next ready story as before, and an unknown
 //! source, a filter or a source this release does not serve in `work` is refused; the case
 //! records the item's key and the store's revision of the story beside its id.
@@ -348,9 +349,10 @@ fn an_aep_key_not_ready_is_refused_as_story_is() {
     }
 }
 
-/// Acceptance 2: a key of any source but `aep` exits 1 before any case opens, naming the
-/// sources this release serves; so does a key that names no source takt knows, or that is no
-/// key, each naming why. Nothing is taken.
+/// Acceptance 2: a key of any source but `aep` and `command` (story:the-command-work-source)
+/// exits 1 before any case opens, naming the sources this release serves; so does a key that
+/// names no source takt knows, or that is no key, each naming why. Nothing is taken. A
+/// `command` key is `run_work_command_cli.rs`'s.
 #[test]
 fn a_key_of_another_source_is_refused_naming_the_served_sources() {
     let repo = repository("other-sources");
@@ -359,13 +361,12 @@ fn a_key_of_another_source_is_refused_naming_the_served_sources() {
         "jira@team-a:ABC-12",
         "github:owner/repo#42",
         "gitlab:group/project#7",
-        "command:T-1",
     ] {
         let (code, out, err) = run(&repo, &["--work", key]);
         assert_eq!(code, 1, "{key}: stdout {out} stderr {err}");
         assert!(
             err.contains(&format!("--work {key}"))
-                && err.contains("this release serves the work source aep alone"),
+                && err.contains("this release serves the work sources aep and command"),
             "{key}: the refusal names the key and the sources served: {err}"
         );
         assert_eq!(out, "", "{key}");
@@ -490,11 +491,11 @@ fn an_unknown_filtered_or_unserved_work_source_is_refused() {
         ),
         (
             "work = [\"jira\"]\n",
-            "this release serves the work source aep alone",
+            "this release serves the work sources aep and command",
         ),
         (
             "work = [\"aep\", \"github\"]\n",
-            "this release serves the work source aep alone",
+            "this release serves the work sources aep and command",
         ),
         ("work = [\"jira@\"]\n", "connection"),
         ("work = []\n", "lists no source"),

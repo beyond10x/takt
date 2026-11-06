@@ -14380,11 +14380,12 @@ impl<'a> Run<'a> {
             return Ok((false, None));
         }
         // The message is the harness's `commit` when it passes its check, else the fallback,
-        // said in the record before the step's effect; the trailer is takt's, from the case's
-        // story, never from the reply.
+        // said in the record before the step's effect; the trailer is takt's, from the item the
+        // case records (the story id for a story, the full key for a tracker's item) or else
+        // its story, never from the reply.
         let plan = self.commit_plan_now();
         let reply = self.harness.take_commit();
-        let story = self.case.story()?;
+        let story = crate::case::reference_of(&self.case.dir)?;
         let title = match &self.unit {
             Unit::Story(story) => story.title.clone(),
             Unit::Intent(intent) => intent.lines().next().unwrap_or_default().to_owned(),

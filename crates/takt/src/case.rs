@@ -4855,6 +4855,83 @@ impl CaseDir {
     }
 }
 
+/// The open case to resume for a work item `wanted` admits: the first case directory under
+/// `tree`, in name order, whose `case.yaml` records an [`ITEM_KEY`] that reads as a key `wanted`
+/// takes and that is not finished, by its id. A finished case is skipped; a case whose latest
+/// decision does not read counts as open, and `out` says so, as [`resumable`] does for a story.
+/// A case whose key does not read is no item's. The answer is `(case id, key)`.
+pub fn resumable_item(
+    tree: &Path,
+    wanted: &dyn Fn(&crate::frontier::Key) -> bool,
+    out: &mut dyn Write,
+) -> Result<Option<(String, crate::frontier::Key)>> {
+    for (id, dir) in case_dirs(tree)? {
+        if !dir.join("case.yaml").is_file() {
+            continue;
+        }
+        let Some(key) =
+            case_member(&dir, ITEM_KEY)?.and_then(|key| crate::frontier::Key::parse(&key).ok())
+        else {
+            continue;
+        };
+        if !wanted(&key) {
+            continue;
+        }
+        match is_finished(&dir) {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(error) => writeln!(
+                out,
+                "frontier: the case {id} has a decision that does not read ({error:#}); taken as open"
+            )?,
+        }
+        return Ok(Some((id, key)));
+    }
+    Ok(None)
+}
+
+/// The value of the `Refs` trailer of a step commit in the case at `case_dir`: the reference
+/// of the item the case records ([`item_key_of`], [`crate::commit_style::reference`]), the story
+/// id for an `aep` item and the full key for any other; else the story `story.yaml` names (an
+/// improvement turn's finding); none for a case on a bare intent.
+pub fn reference_of(case_dir: &Path) -> Result<Option<String>> {
+    let Some(key) = case_member(case_dir, ITEM_KEY)? else {
+        return story_of(case_dir);
+    };
+    let key = crate::frontier::Key::parse(&key).map_err(|why| {
+        anyhow!(
+            "the case at {} records an `{ITEM_KEY}` that is no key: {why}",
+            case_dir.display()
+        )
+    })?;
+    Ok(Some(crate::commit_style::reference(&key)))
+}
+
+/// The finished case under `tree` that records the item `key` at `revision` ([`ITEM_KEY`],
+/// [`ITEM_REVISION`]), by its id, the first in name order: a source that offers that item
+/// again unchanged offers work already done. `None` when no finished case records both.
+pub fn finished_item_case(
+    tree: &Path,
+    key: &crate::frontier::Key,
+    revision: &str,
+) -> Result<Option<String>> {
+    for (id, dir) in case_dirs(tree)? {
+        if !dir.join("case.yaml").is_file()
+            || case_member(&dir, ITEM_REVISION)?.as_deref() != Some(revision)
+            || case_member(&dir, ITEM_KEY)?
+                .and_then(|recorded| crate::frontier::Key::parse(&recorded).ok())
+                .as_ref()
+                != Some(key)
+        {
+            continue;
+        }
+        if is_finished(&dir).unwrap_or(false) {
+            return Ok(Some(id));
+        }
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5021,6 +5098,96 @@ mod tests {
 
         let intent = case_dir("intent");
         assert_eq!(item_key_of(&intent).expect("read"), None);
+        let _ = std::fs::remove_dir_all(&tree);
+    }
+
+    /// story:the-command-work-source: a step commit's trailer comes from the key the case
+    /// records: `Refs: command:<id>` for a command item, the story id for an `aep` item and for
+    /// a story case opened before keys were recorded, the finding for an improvement turn, none
+    /// for a bare intent; a recorded key that does not read is refused, not dropped.
+    #[test]
+    fn the_trailer_reference_comes_from_the_recorded_key() {
+        let tree = std::env::temp_dir().join(format!("takt-reference-of-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        let case_dir = |id: &str, yaml: &str, story: Option<&str>| {
+            let dir = tree.join(CASES_DIR).join(id);
+            std::fs::create_dir_all(&dir).expect("the case's directory");
+            std::fs::write(dir.join("case.yaml"), yaml).expect("case.yaml");
+            if let Some(story) = story {
+                std::fs::write(dir.join(STORY_FILE), format!("id: {story}\n")).expect("story");
+            }
+            dir
+        };
+        let command = case_dir(
+            "command",
+            "case_revision: 1\nitem_key: command:T-1\nitem_revision: '4'\n",
+            None,
+        );
+        assert_eq!(
+            reference_of(&command).expect("read").as_deref(),
+            Some("command:T-1")
+        );
+        let aep = case_dir(
+            "aep",
+            "case_revision: 1\nitem_key: aep:story:x\n",
+            Some("story:x"),
+        );
+        assert_eq!(
+            reference_of(&aep).expect("read").as_deref(),
+            Some("story:x")
+        );
+        let older = case_dir("older", "case_revision: 1\n", Some("story:old"));
+        assert_eq!(
+            reference_of(&older).expect("read").as_deref(),
+            Some("story:old")
+        );
+        let intent = case_dir("intent", "case_revision: 1\n", None);
+        assert_eq!(reference_of(&intent).expect("read"), None);
+        let broken = case_dir("broken", "case_revision: 1\nitem_key: nokey\n", None);
+        let error = format!("{:#}", reference_of(&broken).expect_err("no key"));
+        assert!(
+            error.contains("records an `item_key` that is no key"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(&tree);
+    }
+
+    /// The open case of a work item is found by the key it records, for `--work` and for the
+    /// source's own next item; a case of another key, of a story, or with no key is not.
+    #[test]
+    fn the_open_case_of_an_item_is_found_by_its_key() {
+        let tree = std::env::temp_dir().join(format!("takt-resumable-item-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        for (id, yaml) in [
+            ("a-intent", "case_revision: 1\n"),
+            ("b-story", "case_revision: 1\nitem_key: aep:story:x\n"),
+            ("c-command", "case_revision: 1\nitem_key: command:T-1\n"),
+            ("d-unreadable", "case_revision: 1\nitem_key: nokey\n"),
+        ] {
+            let dir = tree.join(CASES_DIR).join(id);
+            std::fs::create_dir_all(&dir).expect("the case's directory");
+            std::fs::write(dir.join("case.yaml"), yaml).expect("case.yaml");
+        }
+        let mut out = Vec::new();
+        let asked = crate::frontier::Key::parse("command:T-1").expect("a key");
+        assert_eq!(
+            resumable_item(&tree, &|key| *key == asked, &mut out).expect("read"),
+            Some(("c-command".to_owned(), asked.clone()))
+        );
+        assert_eq!(
+            resumable_item(
+                &tree,
+                &|key| key.source().name == crate::frontier::SourceName::Command,
+                &mut out
+            )
+            .expect("read"),
+            Some(("c-command".to_owned(), asked.clone()))
+        );
+        let other = crate::frontier::Key::parse("command:T-2").expect("a key");
+        assert_eq!(
+            resumable_item(&tree, &|key| *key == other, &mut out).expect("read"),
+            None
+        );
         let _ = std::fs::remove_dir_all(&tree);
     }
 }

@@ -64,7 +64,8 @@ small = "lab/small"
 /// when it takes the key with none of them. `llm` takes `{path = <file>}` naming the probe
 /// beside it (story:llm-section-is-an-llm-routes-document). `local_checks` takes an argument
 /// list (story:local-forge-merges-into-a-target-branch). `work` takes a list of work sources
-/// (story:work-flag-and-the-aep-source).
+/// (story:work-flag-and-the-aep-source). `work_commands` takes a mapping holding `read`
+/// (story:the-command-work-source).
 fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
     fs::write(dir.join("llm-probe.toml"), PROBE_LLM).expect("a probe document beside the probe");
     [
@@ -86,6 +87,7 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "\"github\"",
         "\"https://connectors.example\"",
         "[\"aep\"]",
+        "{ read = [\"true\"] }",
     ]
     .into_iter()
     .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())

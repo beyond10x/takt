@@ -297,6 +297,11 @@ pub struct RunConfig {
     /// this release does not serve is refused there.
     #[serde(skip)]
     pub work: Option<Vec<crate::frontier::Source>>,
+    /// The `work_commands` section, the argument lists the `command` source runs
+    /// (`takt.work.WorkCommands`): `read` for `--work command:<id>`, `select` for `command` in
+    /// `work`. Its shape is checked when the file is read, and a `work` list naming `command`
+    /// needs its `select` ([`crate::work::command::WorkCommands::check`]).
+    pub work_commands: Option<crate::work::command::WorkCommands>,
 }
 
 /// What a run file says about the forge beyond its name: the commands, the transport and the
@@ -1180,7 +1185,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1919,12 +1924,21 @@ impl RunConfig {
                 )
             })?;
         }
+        if let Some(commands) = &config.work_commands {
+            commands.check().map_err(|error| {
+                anyhow!(
+                    "the run configuration file {} is refused: {error}",
+                    path.display()
+                )
+            })?;
+        }
         if let Some(entries) = config.work_member.take() {
             config.work = Some(work_sources(
                 path,
                 text,
                 extension == Some("toml"),
                 &entries,
+                config.work_commands.as_ref(),
             )?);
         }
         Ok(config)
@@ -2120,12 +2134,14 @@ fn forge_names() -> String {
 /// order, each read by [`crate::frontier::Source::parse`] and held to the sources this release
 /// serves ([`crate::frontier::Source::served`]); a list with no source, an entry that is no
 /// source or carries a filter, and a source not served are refused at the member's line, naming
-/// the entry and why.
+/// the entry and why; so is `command` when `commands`, the file's `work_commands`, names no
+/// `select`, which it runs.
 fn work_sources(
     path: &Path,
     text: &str,
     toml: bool,
     entries: &[String],
+    commands: Option<&crate::work::command::WorkCommands>,
 ) -> Result<Vec<crate::frontier::Source>> {
     let line = locate(text, toml, &["work"])
         .or_else(|| locate(text, toml, &["takt", "work"]))
@@ -2146,6 +2162,16 @@ fn work_sources(
         .map(|entry| {
             let source = crate::frontier::Source::parse(entry).map_err(refused)?;
             source.served().map_err(refused)?;
+            let select = crate::work::command::Entry::Select;
+            if source.name == crate::frontier::SourceName::Command
+                && commands
+                    .and_then(|commands| commands.argv(select))
+                    .is_none()
+            {
+                return Err(refused(format!(
+                    "`{source}` runs `{select}` for the next ready item, and the file names none"
+                )));
+            }
             Ok(source)
         })
         .collect()
@@ -2724,9 +2750,19 @@ mod tests {
             (
                 "work = [\"aep\", \"gitlab\"]\n",
                 1,
-                "this release serves the work source aep alone",
+                "this release serves the work sources aep and command",
             ),
             ("work = []\n", 1, "lists no source"),
+            (
+                "work = [\"aep\", \"command\"]\n",
+                1,
+                "`command` runs `work_commands.select` for the next ready item, and the file names none",
+            ),
+            (
+                "work_commands = { read = [\"tracker\", \"{id}\"] }\nwork = [\"command\"]\n",
+                2,
+                "`command` runs `work_commands.select`",
+            ),
         ] {
             let path = scratch("work-refused", text);
             let error = format!("{:#}", RunConfig::read(&path).expect_err(text));
@@ -2738,6 +2774,58 @@ mod tests {
                 "{text}: {error}"
             );
             assert!(error.contains(why), "{text}: ({why}) {error}");
+        }
+    }
+
+    /// story:the-command-work-source: `work_commands` holds `read`, `select` and
+    /// `refused_exit`, read from TOML and YAML, its shape checked; `command` in `work` with a
+    /// `select` is taken.
+    #[test]
+    fn work_commands_are_read_and_checked() {
+        let path = scratch(
+            "work-commands",
+            "work = [\"command\", \"aep\"]\n[work_commands]\nread = [\"tracker\", \"show\", \"{id}\"]\nselect = [\"tracker\", \"next\"]\nrefused_exit = [3]\n",
+        );
+        let config = RunConfig::read(&path).expect("read");
+        let commands = config.work_commands.as_ref().expect("the section");
+        assert_eq!(
+            commands.read.as_deref(),
+            Some(["tracker", "show", "{id}"].map(str::to_owned).as_slice())
+        );
+        assert_eq!(commands.refused_exit, Some(vec![3]));
+        assert_eq!(
+            config.work_sources(),
+            vec![
+                crate::frontier::Source::parse("command").expect("a source"),
+                crate::frontier::Source::aep()
+            ]
+        );
+        let path = scratch_named(
+            "work-commands-yaml",
+            "run.yaml",
+            "work: [command]\nwork_commands:\n  select: [tracker, next]\n",
+        );
+        assert!(RunConfig::read(&path).is_ok());
+        for (text, why) in [
+            (
+                "work_commands = { read = [\"tracker\", \"{number}\"] }\n",
+                "`work_commands.read` holds the placeholder {number}",
+            ),
+            (
+                "work_commands = { open = [\"tracker\"] }\n",
+                "work_commands",
+            ),
+            (
+                "work_commands = { refused_exit = [256] }\n",
+                "`work_commands.refused_exit` holds exit codes from 1 to 255",
+            ),
+        ] {
+            let path = scratch("work-commands-refused", text);
+            let error = format!("{:#}", RunConfig::read(&path).expect_err(text));
+            assert!(
+                error.contains(&path.display().to_string()) && error.contains(why),
+                "{text}: ({why}) {error}"
+            );
         }
     }
 }

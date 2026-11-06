@@ -87,7 +87,7 @@ impl Entry {
 
 /// The names of the placeholder-shaped words of `element`: lowercase letters and `_` between
 /// braces. A brace that holds anything else is text.
-fn named_in(element: &str) -> Vec<&str> {
+pub(crate) fn named_in(element: &str) -> Vec<&str> {
     let mut names = Vec::new();
     let mut rest = element;
     while let Some(at) = rest.find('{') {
@@ -224,7 +224,7 @@ impl std::error::Error for ForgeEntryMissing {}
 
 /// The placeholders substituted once inside the argument that holds them; a value is never read
 /// for another placeholder, and a brace that names none stays as written.
-fn substitute(template: &str, values: &[(&str, &str)]) -> String {
+pub(crate) fn substitute(template: &str, values: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(at) = rest.find('{') {
