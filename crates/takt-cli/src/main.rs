@@ -748,8 +748,8 @@ struct RunArgs {
     #[arg(skip)]
     work_item: Option<takt::frontier::Key>,
     /// The sources the next ready item comes from, in order: the run file's `work`, else the
-    /// planning store alone.
-    #[arg(skip)]
+    /// planning store alone, which is also what a command line parsed without a run file holds.
+    #[arg(skip = vec![takt::frontier::Source::aep()])]
     work_sources: Vec<takt::frontier::Source>,
     /// The run file's `work_commands`, which the source `command` runs.
     #[arg(skip)]
