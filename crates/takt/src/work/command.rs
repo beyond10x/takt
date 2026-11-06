@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, bail};
 
 use crate::forge::command::{named_in, substitute};
-use crate::forge::{Exit, Runner};
+use crate::forge::{Exit, OutputCut, Runner};
 use crate::frontier::{Key, Source, SourceName};
 
 /// The format a work item document names (`takt.work.Item` `format`).
@@ -185,7 +185,14 @@ impl Item {
         }
         let key = Key::parse(&document.key)
             .map_err(|_| "its `key` is no key `<source>[@<connection>]:<id>`".to_owned())?;
-        if document.title.trim().is_empty() || document.title.chars().any(char::is_control) {
+        // A control character, or U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR, the line
+        // breaks that are no control character.
+        if document.title.trim().is_empty()
+            || document
+                .title
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+        {
             return Err(
                 "its `title` is empty or holds a line break or a control character".to_owned(),
             );
@@ -250,6 +257,14 @@ pub enum WorkCommandError {
         /// The source `select` serves.
         source: String,
     },
+    /// Its standard output was longer than the runner keeps
+    /// ([`crate::forge::Runner::run_whole`]): refused whole, never read from what is left.
+    OutputCut {
+        /// The entry that ran.
+        entry: Entry,
+        /// How many bytes of standard output the runner keeps.
+        limit: usize,
+    },
 }
 
 impl fmt::Display for WorkCommandError {
@@ -289,6 +304,11 @@ impl fmt::Display for WorkCommandError {
                 f,
                 "the work command `{}` printed an item whose key names no item of the source {source}",
                 Entry::Select
+            ),
+            Self::OutputCut { entry, limit } => write!(
+                f,
+                "the output of the work command `{entry}` is longer than {}, the most takt keeps of it, and is refused, not read from what is left",
+                OutputCut::size(*limit)
             ),
         }
     }
@@ -395,10 +415,20 @@ impl CommandSource {
             .collect();
         std::fs::create_dir_all(&self.state)
             .with_context(|| format!("create {}", self.state.display()))?;
-        let exit = self
-            .runner
-            .run(tree, &argv)
-            .with_context(|| format!("the work command `{entry}` could not be run"))?;
+        let exit = match self.runner.run_whole(tree, &argv) {
+            Ok(exit) => exit,
+            Err(error) => {
+                if let Some(cut) = error.downcast_ref::<OutputCut>() {
+                    return Err(WorkCommandError::OutputCut {
+                        entry,
+                        limit: cut.limit,
+                    }
+                    .into());
+                }
+                return Err(error)
+                    .with_context(|| format!("the work command `{entry}` could not be run"));
+            }
+        };
         let stderr = self.state.join(format!("{}.stderr", entry.name()));
         std::fs::write(&stderr, &exit.stderr)
             .with_context(|| format!("write {}", stderr.display()))?;
@@ -685,5 +715,34 @@ mod tests {
             let error = format!("{:#}", commands.check().expect_err(why));
             assert!(error.contains(why), "({why}) {error}");
         }
+    }
+
+    /// Output the process runner cut, keeping only its last bytes, is refused naming the
+    /// command and the limit, never read from what is left: here what is left is a whole item.
+    #[test]
+    fn output_past_the_runners_limit_is_refused_naming_the_command_and_the_limit() {
+        let dir =
+            std::env::temp_dir().join(format!("takt-work-command-{}-cut", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a directory");
+        let printed = format!("{}{ITEM}", " ".repeat(4096));
+        std::fs::write(dir.join("next.json"), &printed).expect("the item file");
+        let commands = WorkCommands {
+            select: Some(vec!["cat".to_owned(), "next.json".to_owned()]),
+            ..WorkCommands::default()
+        };
+        let process = crate::forge::Process {
+            limits: crate::forge::Limits {
+                timeout: std::time::Duration::from_secs(30),
+                output: 1024,
+            },
+        };
+        let source =
+            CommandSource::new(commands, dir.join("state"), Box::new(process)).expect("a source");
+        let error = format!("{:#}", source.select(&dir).expect_err("cut output"));
+        assert!(
+            error.contains("work_commands.select") && error.contains("1024 bytes"),
+            "{error}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

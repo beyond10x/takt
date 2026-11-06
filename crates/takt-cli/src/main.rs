@@ -733,9 +733,11 @@ struct RunArgs {
     /// resumed and refused exactly as --story <story id> is. `command:<id>` is read by the run
     /// file's `work_commands.read` and opens a case as --intent does, its intent the item's
     /// title and body, its record the key and the item's revision; the open case of the same
-    /// key is resumed instead. This release serves the sources `aep` and `command`: a key of
-    /// `jira`, `github` or `gitlab`, of a source takt does not know, text that is no key, or a
-    /// `command` key with no `work_commands.read` is refused before any case opens, exit 1,
+    /// key is resumed instead, and an item whose case is finished at the revision `read` prints
+    /// is refused, naming the case. This release serves the sources `aep` and `command`: a key
+    /// of `jira`, `github` or `gitlab`, of a source takt does not know, text that is no key (an
+    /// id starting with `-` or holding a character that does not show as itself among it), or
+    /// a `command` key with no `work_commands.read` is refused before any case opens, exit 1,
     /// naming why. Not with --story, --intent or --case.
     #[arg(long, value_name = "KEY", conflicts_with_all = ["story", "intent", "case"])]
     work: Option<String>,
@@ -1964,16 +1966,29 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 out,
             )?;
             // An item --work names that has no open case is read now, before anything is
-            // opened: a refusal of `work_commands.read`, of what it printed or of another key
-            // opens no case. It opens as an intent does, its case id the tracker scheme's
-            // unless --case-id names one, its key and revision recorded once it is open.
+            // opened, with the tree put on its base first, as the store is read, never on a
+            // case's branch, which carries a model's commits: a refusal of
+            // `work_commands.read`, of what it printed or of another key opens no case, and
+            // neither does an item a finished case records at the revision read. It opens as
+            // an intent does, its case id the tracker scheme's unless --case-id names one, its
+            // key and revision recorded once it is open.
             let mut opened_item = None;
             let mut intent = intent;
             let mut case_id = case_id;
             if let (Some(key), None) = (&work_item, &resuming) {
                 let item = command_source(work_commands.as_ref(), looping.state_dir.as_deref())
-                    .and_then(|source| source.read(&repo, key))
+                    .and_then(|source| {
+                        takt::run::to_base(&repo, &looping.deployment_paths)?;
+                        source.read(&repo, key)
+                    })
                     .map_err(|error| anyhow!("--work {key}: {error:#}; nothing was opened"))?;
+                if let Some((case, stands)) =
+                    takt::case::item_case_at(&repo, &item.key, &item.revision)?
+                {
+                    return Err(anyhow!(
+                        "--work {key}: the item has the {stands} case {case} at the revision `work_commands.read` printed; nothing was opened"
+                    ));
+                }
                 writeln!(out, "work: read {}: {}", item.key, item.title)?;
                 intent = Some(item.intent());
                 case_id = case_id.or_else(|| Some(item.key.case_id_at(&takt::now())));
@@ -2321,25 +2336,31 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     let mut taken = None;
                     for source in &sources {
                         if source.name == takt::frontier::SourceName::Command {
+                            // `select` runs with the tree on its base, as the store is read,
+                            // never on a case's branch, which carries a model's commits.
                             let selected = command_source(
                                 work_commands.as_ref(),
                                 looping.state_dir.as_deref(),
                             )
-                            .and_then(|commands| commands.select(&repo))
+                            .and_then(|commands| {
+                                takt::run::to_base(&repo, &looping.deployment_paths)?;
+                                commands.select(&repo)
+                            })
                             .map_err(|error| {
                                 anyhow!("the work source {source}: {error:#}; nothing was opened")
                             })?;
                             let Some(item) = selected else {
                                 continue;
                             };
-                            // An item offered again at the revision a finished case recorded is
-                            // work done: the source has no ready item. A new revision is new work.
-                            if let Some(done) =
-                                takt::case::finished_item_case(&repo, &item.key, &item.revision)?
+                            // An item offered again at the revision a case recorded is work
+                            // done, declined or under way: the source has no ready item. A new
+                            // revision is new work.
+                            if let Some((case, stands)) =
+                                takt::case::item_case_at(&repo, &item.key, &item.revision)?
                             {
                                 writeln!(
                                     out,
-                                    "work: {} has the finished case {done} at its revision; the source {source} has no ready item",
+                                    "work: {} has the {stands} case {case} at its revision; the source {source} has no ready item",
                                     item.key
                                 )?;
                                 continue;
@@ -4762,7 +4783,7 @@ fn case_to_resume(
                 None => return Ok(None),
             },
             (None, Some(item)) => {
-                match takt::case::resumable_item(repo, &|key| key == item, out)? {
+                match takt::case::resumable_item(repo, &|key| key == item, false, out)? {
                     Some((id, _)) => (id, Some(item.to_string())),
                     None => return Ok(None),
                 }
@@ -4774,7 +4795,7 @@ fn case_to_resume(
                         Run::next_to_resume(repo, &Aep::default(), out)?
                     } else {
                         let of_source = |key: &takt::frontier::Key| key.source() == source;
-                        takt::case::resumable_item(repo, &of_source, out)?
+                        takt::case::resumable_item(repo, &of_source, true, out)?
                             .map(|(id, key)| (id, key.to_string()))
                     };
                     if found.is_some() {

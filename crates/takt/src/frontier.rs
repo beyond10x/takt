@@ -958,8 +958,10 @@ pub struct Key {
 
 impl Key {
     /// The key `text` writes; why it is none: no `:`, a source [`Source::parse`] refuses, no id,
-    /// or an id holding a control or white-space character, which would not show as itself in a
-    /// trailer or a message.
+    /// an id starting with `-`, which a command line given it as an argument of its own reads
+    /// as an option, or an id holding a character that would not show as itself in a trailer
+    /// or a message: a control, whitespace, separator or format character, or a
+    /// default-ignorable code point, as the case id rule refuses ([`crate::case::check_id`]).
     pub fn parse(text: &str) -> std::result::Result<Self, String> {
         let Some((source, id)) = text.split_once(':') else {
             return Err(
@@ -971,7 +973,12 @@ impl Key {
         if id.is_empty() {
             return Err(format!("the key names no id after `{source}:`"));
         }
-        if let Some(c) = id.chars().find(|c| c.is_control() || c.is_whitespace()) {
+        if id.starts_with('-') {
+            return Err(
+                "its id starts with `-`, which a command line reads as an option".to_owned(),
+            );
+        }
+        if let Some(c) = id.chars().find(|c| crate::case::is_unshowable(*c)) {
             return Err(format!(
                 "its id holds U+{:04X}, a character that does not show as itself",
                 u32::from(c)

@@ -809,6 +809,19 @@ impl Declined {
     }
 }
 
+/// The decline that holds for the case `case_id` at `case_dir` now ([`Declined::now`]), as
+/// `(case revision, reason as its stop line names it)`: for a reader outside the run, such as
+/// [`crate::case::resumable_item`], which passes such a case over as
+/// [`Run::next_to_resume`] does.
+pub(crate) fn declined_now(
+    tree: &Path,
+    case_id: &str,
+    case_dir: &Path,
+) -> Option<(String, String)> {
+    Declined::now(tree, case_id, case_dir)
+        .map(|declined| (declined.case_revision, declined_reason(&declined.reason)))
+}
+
 /// `summary`, a decline's reason, as its stop line names it: each control character escaped,
 /// cut to [`REASON_AT_MOST`] bytes ([`reason_bounded`]), [`NO_REASON`] when it is empty.
 fn declined_reason(summary: &str) -> String {
@@ -8711,14 +8724,15 @@ fn on_a_case_branch(tree: &Path) -> Result<bool> {
     Ok(crate::case::case_of_branch(tree, &branch)?.is_some())
 }
 
-/// Puts the tree on the base of the case whose branch it is on, so that the store is read as
-/// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
-/// on any other branch, or detached, stays where it is. Refused when the branch is under takt's
+/// Puts the tree on the base of the case whose branch it is on, so that the store, and a work
+/// source's command run in the tree, read the base, never a case's branch, which carries a
+/// model's commits. A tree on any other branch, or detached, stays where it is. Refused when
+/// the branch is under takt's
 /// reserved prefix and is no case's ([`crate::case::case_of_branch`]), when it names no case
 /// ([`crate::case::check_id`], checked before the name is joined to a path), when the case's
 /// base is not known, or when the tree has uncommitted work, which the checkout would carry
 /// along.
-fn to_base(tree: &Path, own: &crate::git::DeploymentPaths) -> Result<()> {
+pub fn to_base(tree: &Path, own: &crate::git::DeploymentPaths) -> Result<()> {
     let Some(branch) = crate::git::current_branch(tree)? else {
         return Ok(());
     };

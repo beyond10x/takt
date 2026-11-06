@@ -392,7 +392,7 @@ const DEFAULT_IGNORABLE: &[(u32, u32)] = &[
 /// Whether `c` has no business in a name that is shown to people: a control character, a
 /// whitespace or separator character (spaces, U+2028, U+2029), a format character or a
 /// default-ignorable code point.
-fn is_unshowable(c: char) -> bool {
+pub(crate) fn is_unshowable(c: char) -> bool {
     let point = u32::from(c);
     c.is_control()
         || c.is_whitespace()
@@ -4877,10 +4877,14 @@ impl CaseDir {
 /// `tree`, in name order, whose `case.yaml` records an [`ITEM_KEY`] that reads as a key `wanted`
 /// takes and that is not finished, by its id. A finished case is skipped; a case whose latest
 /// decision does not read counts as open, and `out` says so, as [`resumable`] does for a story.
-/// A case whose key does not read is no item's. The answer is `(case id, key)`.
+/// With `pass_declined`, for an argument-less run, a case declined at its current case
+/// revision is passed over too, said on `out`, as [`crate::run::Run::next_to_resume`] passes a
+/// story's over; without it, for `--work`, it is resumed and stops declined again. A case whose
+/// key does not read is no item's. The answer is `(case id, key)`.
 pub fn resumable_item(
     tree: &Path,
     wanted: &dyn Fn(&crate::frontier::Key) -> bool,
+    pass_declined: bool,
     out: &mut dyn Write,
 ) -> Result<Option<(String, crate::frontier::Key)>> {
     for (id, dir) in case_dirs(tree)? {
@@ -4902,6 +4906,14 @@ pub fn resumable_item(
                 out,
                 "frontier: the case {id} has a decision that does not read ({error:#}); taken as open"
             )?,
+        }
+        if pass_declined && let Some((revision, reason)) = crate::run::declined_now(tree, &id, &dir)
+        {
+            writeln!(
+                out,
+                "frontier: passed over the case {id} ({key}): declined at case revision {revision} ({reason}); a commit that moves its revision makes it step again"
+            )?;
+            continue;
         }
         return Ok(Some((id, key)));
     }
@@ -4925,14 +4937,16 @@ pub fn reference_of(case_dir: &Path) -> Result<Option<String>> {
     Ok(Some(crate::commit_style::reference(&key)))
 }
 
-/// The finished case under `tree` that records the item `key` at `revision` ([`ITEM_KEY`],
-/// [`ITEM_REVISION`]), by its id, the first in name order: a source that offers that item
-/// again unchanged offers work already done. `None` when no finished case records both.
-pub fn finished_item_case(
+/// The case under `tree` that records the item `key` at `revision` ([`ITEM_KEY`],
+/// [`ITEM_REVISION`]), the first in name order, as `(case id, how it stands)`: `finished`,
+/// `declined` at its current case revision, or `open`. A source that offers that item again
+/// unchanged offers work done, declined or under way, and no second case opens on it. `None`
+/// when no case records both.
+pub fn item_case_at(
     tree: &Path,
     key: &crate::frontier::Key,
     revision: &str,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, &'static str)>> {
     for (id, dir) in case_dirs(tree)? {
         if !dir.join("case.yaml").is_file()
             || case_member(&dir, ITEM_REVISION)?.as_deref() != Some(revision)
@@ -4943,9 +4957,14 @@ pub fn finished_item_case(
         {
             continue;
         }
-        if is_finished(&dir).unwrap_or(false) {
-            return Ok(Some(id));
-        }
+        let stands = if is_finished(&dir).unwrap_or(false) {
+            "finished"
+        } else if crate::run::declined_now(tree, &id, &dir).is_some() {
+            "declined"
+        } else {
+            "open"
+        };
+        return Ok(Some((id, stands)));
     }
     Ok(None)
 }
@@ -5189,13 +5208,14 @@ mod tests {
         let mut out = Vec::new();
         let asked = crate::frontier::Key::parse("command:T-1").expect("a key");
         assert_eq!(
-            resumable_item(&tree, &|key| *key == asked, &mut out).expect("read"),
+            resumable_item(&tree, &|key| *key == asked, false, &mut out).expect("read"),
             Some(("c-command".to_owned(), asked.clone()))
         );
         assert_eq!(
             resumable_item(
                 &tree,
                 &|key| key.source().name == crate::frontier::SourceName::Command,
+                true,
                 &mut out
             )
             .expect("read"),
@@ -5203,7 +5223,7 @@ mod tests {
         );
         let other = crate::frontier::Key::parse("command:T-2").expect("a key");
         assert_eq!(
-            resumable_item(&tree, &|key| *key == other, &mut out).expect("read"),
+            resumable_item(&tree, &|key| *key == other, true, &mut out).expect("read"),
             None
         );
         let _ = std::fs::remove_dir_all(&tree);

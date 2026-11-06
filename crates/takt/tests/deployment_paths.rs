@@ -993,3 +993,43 @@ fn a_store_write_on_the_case_branch_neither_commits_nor_discards_the_deployments
     );
     assert!(!ever_committed(tree).contains("run-1.log"));
 }
+
+/// A link a step puts at or inside a path of the list is the step's change, so putting the
+/// tree back removes it, as itself and never followed; and an entry without `/` keeps no
+/// directory of its name from being put back. The deployment's own file beside the link stays.
+#[test]
+#[cfg(unix)]
+fn putting_a_step_back_removes_a_link_it_put_at_a_deployments_path() {
+    let scratch = repository("link-restore");
+    let tree = &scratch.repo;
+    append(&tree.join(LOG), "the wrapper, before the step\n");
+    let own =
+        DeploymentPaths::new(vec![".autodev/".to_owned(), "logs".to_owned()]).expect("the list");
+    let before = takt::git::Checkpoint::take_owning(tree, &[], &own).expect("a checkpoint");
+    std::os::unix::fs::symlink(&scratch.root, tree.join(".autodev/out")).expect("a link");
+    append(&tree.join("logs/new.txt"), "the step's\n");
+    let change = before.change(tree).expect("the change");
+    assert!(
+        change.paths.iter().any(|path| path == ".autodev/out")
+            && change.paths.iter().any(|path| path == "logs/new.txt"),
+        "{:?}",
+        change.paths
+    );
+    before.restore(tree).expect("the tree is put back");
+    assert!(
+        fs::symlink_metadata(tree.join(".autodev/out")).is_err(),
+        "the link is removed"
+    );
+    assert!(
+        !tree.join("logs").exists(),
+        "the step's directory is removed"
+    );
+    assert!(
+        scratch.root.join("repo").exists(),
+        "the link's target is kept"
+    );
+    assert_eq!(
+        fs::read_to_string(tree.join(LOG)).expect("the deployment's log"),
+        "the wrapper, before the step\n"
+    );
+}

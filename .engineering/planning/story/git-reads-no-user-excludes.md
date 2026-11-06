@@ -9,7 +9,7 @@ relations:
 - serves: vision:safe-agentic-coding
 - informed_by: review-result:main-ae680d5-adversarial
 - informed_by: decision-blocker:excluded-files-and-user-excludes
-revision: 2
+revision: 3
 ---
 ## Outcome
 
@@ -35,3 +35,46 @@ run file instead (story:git-excluded-files-are-not-step-changes).
 
 Added acceptance: with `.git/info/exclude` listing `pkg/mod/` and an untracked `pkg/mod/__init__.py`, the step guard
 still counts `pkg/mod/__init__.py` as a change the step made.
+
+## Wave 56 security review
+
+The wave 56 security review (on `wave/56` at 9a67088ee, after `deployment_paths` landed) confirmed the finding again:
+with `.git/info/exclude` listing `scratch.tmp` and a global excludes file listing `pkg/mod/`, `git::uncommitted` reports
+neither file, so the `uncommitted` preconditions (case open, `tests.run`) do not see them, while the step guard still
+counts them (`crates/takt/tests/deployment_paths.rs`). The reviewer's test, `uncommitted_reports_a_file_only_an_excludes_file_hides`,
+left the wave because this story is still a draft; it is the acceptance test to start from.
+
+The test, verbatim (it uses the helpers `repository`, `append` and `git` of `crates/takt/tests/work_and_deployment_w56_sec.rs`):
+
+```rust
+/// Invariant 5 (story:git-reads-no-user-excludes, acceptance): takt's git reads no excludes file,
+/// so a file `.git/info/exclude` or a `core.excludesFile` lists is untracked to takt, and
+/// `uncommitted` reports it.
+#[test]
+fn uncommitted_reports_a_file_only_an_excludes_file_hides() {
+    let scratch = repository("excludes");
+    let repo = &scratch.repo;
+    append(&repo.join(".git/info/exclude"), "pkg/mod/\n");
+    append(&repo.join("pkg/mod/__init__.py"), "shadow = True\n");
+    let excludes = scratch.root.join("global-ignore");
+    fs::write(&excludes, "scratch.tmp\n").expect("the excludes file");
+    git(
+        repo,
+        &[
+            "config",
+            "core.excludesFile",
+            &excludes.display().to_string(),
+        ],
+    );
+    fs::write(repo.join("scratch.tmp"), "hidden\n").expect("a file");
+    let uncommitted = takt::git::uncommitted(repo).expect("uncommitted");
+    let missing: Vec<&str> = ["pkg/mod/__init__.py", "scratch.tmp"]
+        .into_iter()
+        .filter(|path| !uncommitted.iter().any(|named| named == path))
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "takt's git still reads the excludes files: uncommitted is {uncommitted:?}, missing {missing:?}"
+    );
+}
+```

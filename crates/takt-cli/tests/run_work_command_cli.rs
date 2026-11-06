@@ -590,3 +590,57 @@ fn select_offering_a_finished_item_again_opens_no_second_case() {
         Some("2026-11-06T11:00:00Z")
     );
 }
+
+/// `--work command:<id>` on an item whose case is finished at the revision `read` prints is
+/// refused before a case opens, naming the finished case, as `--story` refuses a story that is
+/// not ready; at another revision the item is new work and opens a case.
+#[test]
+fn work_naming_an_item_whose_case_is_finished_at_its_revision_is_refused() {
+    let scratch = scratch("work-finished", None);
+    scratch.item("X-1.json", ITEM);
+    let config = scratch.config("work_commands = { read = [\"cat\", \"{items}/{id}.json\"] }\n");
+    let config = config.to_str().expect("utf-8");
+    let repo = scratch.tree();
+    let (_, out, err) = run(&repo, &["--config", config, "--work", "command:X-1"]);
+    let opened = cases(&repo);
+    assert_eq!(opened.len(), 1, "stdout {out} stderr {err}");
+    let id = name_of(&opened[0]);
+    let decisions = opened[0].join("decisions");
+    fs::create_dir_all(&decisions).expect("the decisions directory");
+    fs::write(
+        decisions.join("9999.json"),
+        r#"{"claims":{},"outcomes":{"completed":{"status":"legitimate"}},"explanation":{"computed_from":{"at":"2026-11-06T12:00:00Z"}}}"#,
+    )
+    .expect("a finished decision");
+
+    let (code, out, err) = run(&repo, &["--config", config, "--work", "command:X-1"]);
+    assert_eq!(code, 1, "stdout {out} stderr {err}");
+    assert!(
+        err.contains(&format!(
+            "--work command:X-1: the item has the finished case {id} at the revision `work_commands.read` printed; nothing was opened"
+        )),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(cases(&repo), opened, "no second case is opened");
+
+    scratch.item(
+        "X-1.json",
+        &ITEM.replace("2026-11-06T10:00:00Z", "2026-11-06T11:00:00Z"),
+    );
+    let (_, out, err) = run(
+        &repo,
+        &[
+            "--config",
+            config,
+            "--work",
+            "command:X-1",
+            "--case-id",
+            "x-1-again",
+        ],
+    );
+    assert!(
+        out.starts_with("work: read command:X-1: Fix the login\n"),
+        "stdout {out} stderr {err}"
+    );
+    assert_eq!(cases(&repo).len(), 2, "stdout {out} stderr {err}");
+}
