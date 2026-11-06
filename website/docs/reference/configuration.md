@@ -75,12 +75,12 @@ A YAML file with no `format` is read whole, as the fields themselves. A file wit
 
 ### Every field
 
-Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `forge_endpoint`, `local_checks`, `setup`, `transport` and `credential` is the `takt run` flag of the same name, with `-`
-for `_`; those eight have no flag.
+Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `forge_endpoint`, `local_checks`, `setup`, `transport`, `credential` and `work` is the `takt run` flag of the same name, with `-`
+for `_`; those nine have no flag (`--work` names one item by its key, not a list of sources).
 
 | field | meaning |
 |---|---|
-| `story` | string: the story to deliver, by id; taken only when none of `--story`, `--intent` and `--case` is given; refused by `takt scenario run`, whose scenario names the story |
+| `story` | string: the story to deliver, by id; taken only when none of `--story`, `--work`, `--intent` and `--case` is given; refused by `takt scenario run`, whose scenario names the story |
 | `iterations` | integer: stop after this many steps |
 | `hours` | number: stop after this many hours |
 | `tokens` | whole number above zero: stop once the harness reported this many tokens, as `--tokens`; with neither, 3000000 |
@@ -105,6 +105,7 @@ for `_`; those eight have no flag.
 | `llm` | an `llm.routes/1` document, or `{path: <file>}` naming one beside the run file (`.toml` read by llm's TOML parser, `.yaml` or `.yml` by its YAML one); llm validates it, a refused section opens no case, and the `opened` line records its digest as `llm_digest`; under `--harness harness`, `model` names one of its routes, and no endpoint source (`--model-endpoint`, `--model-wire`, `--subscription-token-file`, `--subscription-token-pointer`, `--api-key-secret`, the `--endpoint-*` names, `endpoint_file`, `endpoint_token_env`) may sit beside the section, both refused before any case opens |
 | `protocol` | string: the protocol a story from the planning store opens on, `<name>/<major>` as `takt protocols` lists it; the flag `--protocol` wins over it, and a story tag `protocol:<name>/<major>` wins over it for that story; an `--intent` opens on `software.change/1` whatever it says; with none of them a story opens on `story.delivery/3` ([defaults](protocol-defaults.md)) |
 | `protocols` | a mapping of a protocol, by name (every revision) or `<name>/<major>`, to a mapping of its declared case inputs, each set to one of the values the protocol declares; an unknown protocol, input or value is refused at its line before any case opens. An input is taken from `--input`, else a story tag `input:<name>=<value>`, else this section, else takt's built-in default for the protocol; each value is recorded with its source in the case's `case.yaml` |
+| `work` | list of strings: the work sources the next ready item comes from, in order, each a source name with an optional `@<connection>` (a word of letters, digits, `.`, `_` and `-`, not starting with `-`); no `work` is `["aep"]`, the planning store, as before. This release serves `aep` alone: a name that is no work source is refused naming it, a known source it does not serve (`jira`, `github`, `gitlab`, `command`) is refused naming the one it serves, a filter after `?` and an empty list are refused, each at its line before any case opens; no flag |
 
 `takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
 
@@ -142,7 +143,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:

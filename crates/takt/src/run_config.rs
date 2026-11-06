@@ -286,6 +286,17 @@ pub struct RunConfig {
     pub credential: Option<CredentialSource>,
     /// The `setup` list: commands run once at open, before the red-base check ([`SetupCommand`]).
     pub setup: Option<Vec<SetupCommand>>,
+    /// The `work` member as written, a list of sources, which [`RunConfig::read`] checks into
+    /// [`RunConfig::work`].
+    #[serde(rename = "work")]
+    work_member: Option<Vec<String>>,
+    /// The sources the next ready item comes from, in order (`takt.work.RunConfiguration`
+    /// `work`), each a source name with an optional `@<connection>`; none when the file has no
+    /// `work` key, which is `["aep"]` ([`RunConfig::work_sources`]). Set by [`RunConfig::read`],
+    /// never read from the file: an entry that is no source, carries a filter or names a source
+    /// this release does not serve is refused there.
+    #[serde(skip)]
+    pub work: Option<Vec<crate::frontier::Source>>,
 }
 
 /// What a run file says about the forge beyond its name: the commands, the transport and the
@@ -377,6 +388,15 @@ impl RunConfig {
             transport: self.transport,
             credential: self.credential.clone(),
         }
+    }
+
+    /// The sources the next ready item comes from, in order: the file's `work`, or `["aep"]`,
+    /// the planning store, when it has none.
+    #[must_use]
+    pub fn work_sources(&self) -> Vec<crate::frontier::Source> {
+        self.work
+            .clone()
+            .unwrap_or_else(|| vec![crate::frontier::Source::aep()])
     }
 }
 
@@ -1160,7 +1180,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1899,6 +1919,14 @@ impl RunConfig {
                 )
             })?;
         }
+        if let Some(entries) = config.work_member.take() {
+            config.work = Some(work_sources(
+                path,
+                text,
+                extension == Some("toml"),
+                &entries,
+            )?);
+        }
         Ok(config)
     }
 
@@ -2086,6 +2114,41 @@ fn forge_names() -> String {
         .split_last()
         .expect("takt has at least one forge");
     format!("{} or {last}", rest.join(", "))
+}
+
+/// The sources the `work` member of the file at `path` (`text`, TOML when `toml`) lists, in
+/// order, each read by [`crate::frontier::Source::parse`] and held to the sources this release
+/// serves ([`crate::frontier::Source::served`]); a list with no source, an entry that is no
+/// source or carries a filter, and a source not served are refused at the member's line, naming
+/// the entry and why.
+fn work_sources(
+    path: &Path,
+    text: &str,
+    toml: bool,
+    entries: &[String],
+) -> Result<Vec<crate::frontier::Source>> {
+    let line = locate(text, toml, &["work"])
+        .or_else(|| locate(text, toml, &["takt", "work"]))
+        .unwrap_or(1);
+    let refused = |why: String| {
+        anyhow!(
+            "the run configuration file {} is refused at line {line}: `work`: {why}",
+            path.display()
+        )
+    };
+    if entries.is_empty() {
+        return Err(refused(
+            "it lists no source; leave it out for the planning store, aep".to_owned(),
+        ));
+    }
+    entries
+        .iter()
+        .map(|entry| {
+            let source = crate::frontier::Source::parse(entry).map_err(refused)?;
+            source.served().map_err(refused)?;
+            Ok(source)
+        })
+        .collect()
 }
 
 /// The 1-based line a member of the file is written on, `keys` the path from the top of the
@@ -2619,5 +2682,62 @@ mod tests {
         let error = format!("{:#}", RunConfig::read(&path).expect_err("refused"));
         assert!(error.contains(&path.display().to_string()), "{error}");
         assert!(!error.contains("MARKER"), "{error}");
+    }
+
+    /// story:work-flag-and-the-aep-source: `work` lists the sources in order, `["aep"]` when
+    /// the file has no `work` key; in TOML, in YAML and in a `loom.agent/1` document's `takt`.
+    #[test]
+    fn work_lists_the_sources_and_defaults_to_aep() {
+        let aep = vec![crate::frontier::Source::aep()];
+        assert_eq!(RunConfig::default().work_sources(), aep);
+        let path = scratch("work-none", "iterations = 1\n");
+        assert_eq!(RunConfig::read(&path).expect("read").work_sources(), aep);
+        let path = scratch("work-aep", "work = [\"aep\"]\n");
+        let config = RunConfig::read(&path).expect("read");
+        assert_eq!(config.work, Some(aep.clone()));
+        assert_eq!(config.work_sources(), aep);
+        let path = scratch_named("work-yaml", "run.yaml", "work:\n  - aep\n");
+        assert_eq!(RunConfig::read(&path).expect("read").work_sources(), aep);
+        let path = scratch_named(
+            "work-loom",
+            "agent.yaml",
+            "format: loom.agent/1\ntakt:\n  work: [aep]\n",
+        );
+        assert_eq!(RunConfig::read(&path).expect("read").work_sources(), aep);
+    }
+
+    /// An entry that names no source is refused naming it, at its line; a filter is refused
+    /// (point 6); a source this release does not serve is refused naming the served ones.
+    #[test]
+    fn a_work_entry_takt_does_not_serve_is_refused_at_its_line() {
+        for (text, line, why) in [
+            (
+                "iterations = 1\nwork = [\"linear\"]\n",
+                2,
+                "`linear` is no work source",
+            ),
+            (
+                "work = [\"jira@team-a?label=takt-ready\"]\n",
+                1,
+                "a filter after `?` is refused in this release",
+            ),
+            (
+                "work = [\"aep\", \"gitlab\"]\n",
+                1,
+                "this release serves the work source aep alone",
+            ),
+            ("work = []\n", 1, "lists no source"),
+        ] {
+            let path = scratch("work-refused", text);
+            let error = format!("{:#}", RunConfig::read(&path).expect_err(text));
+            assert!(
+                error.contains(&format!(
+                    "{} is refused at line {line}: `work`",
+                    path.display()
+                )),
+                "{text}: {error}"
+            );
+            assert!(error.contains(why), "{text}: ({why}) {error}");
+        }
     }
 }

@@ -4812,6 +4812,49 @@ fn last_recorded_head(
     })
 }
 
+/// The member of `case.yaml` holding the key of the work item the case was opened for
+/// (`takt.work.Key`, approval-record:wave-56-work-model-points point 7).
+pub const ITEM_KEY: &str = "item_key";
+/// The member of `case.yaml` holding the item's revision as its source reported it when the
+/// case was opened (point 8).
+pub const ITEM_REVISION: &str = "item_revision";
+
+/// The key of the work item the case at `case_dir` was opened for: its `case.yaml`'s
+/// [`ITEM_KEY`]; for a story case opened before the member was kept, which holds `story.yaml`
+/// alone, `aep:<story id>` (point 7); none for a case on an intent, or for an improvement turn,
+/// whose `story.yaml` names the finding it verifies and no item it works.
+pub fn item_key_of(case_dir: &Path) -> Result<Option<String>> {
+    if let Some(key) = case_member(case_dir, ITEM_KEY)? {
+        return Ok(Some(key));
+    }
+    let Some(story) = story_of(case_dir)? else {
+        return Ok(None);
+    };
+    let turn = case_dir.join("protocol.yaml").is_file()
+        && required_capabilities(case_dir)?.0 == TURN_PROTOCOL;
+    Ok((!turn).then(|| crate::frontier::Key::aep(&story).to_string()))
+}
+
+/// The revision the planning store holds `story` at in the commit `revision`, as the store
+/// writes it (the `revision` of the story's front matter there): an `aep` item's revision
+/// (point 4); `None` when the commit holds no such file or it states none.
+pub fn story_revision(tree: &Path, revision: &str, story: &str) -> Result<Option<String>> {
+    Ok(story_revision_at(tree, revision, story)?.map(|revision| revision.to_string()))
+}
+
+impl CaseDir {
+    /// Records in `case.yaml` the work item the case was opened for: its key as [`ITEM_KEY`]
+    /// and, when its source reported one, its revision as [`ITEM_REVISION`]. Written as the case
+    /// is opened, so a later edit of the item changes nothing in the case.
+    pub fn record_item(&mut self, key: &str, revision: Option<&str>) -> Result<()> {
+        self.doc[ITEM_KEY] = key.into();
+        if let Some(revision) = revision {
+            self.doc[ITEM_REVISION] = revision.into();
+        }
+        self.write()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4911,5 +4954,73 @@ mod tests {
             decision.frontier_line(),
             "frontier: repository.merge (approval-required), tests.run (admissible)"
         );
+    }
+
+    /// story:work-flag-and-the-aep-source: the case records its item's key and revision in
+    /// `case.yaml` (points 7 and 8); a story case opened before it, which holds `story.yaml`
+    /// alone, reads as the key `aep:<story id>`; a case on an intent holds none.
+    #[test]
+    fn the_case_records_its_item_key_and_an_older_story_case_reads_as_aep() {
+        let tree = std::env::temp_dir().join(format!("takt-item-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        let case_dir = |id: &str| {
+            let dir = tree.join(CASES_DIR).join(id);
+            std::fs::create_dir_all(&dir).expect("the case's directory");
+            std::fs::write(dir.join("case.yaml"), "case_revision: 1\n").expect("case.yaml");
+            dir
+        };
+        let dir = case_dir("recorded");
+        let mut case = CaseDir {
+            id: "recorded".to_owned(),
+            dir: dir.clone(),
+            branch: "takt/recorded".to_owned(),
+            tree: tree.clone(),
+            protocol: LoadedProtocol::builtin("story.delivery/1").expect("the protocol"),
+            doc: serde_yaml_ng::from_str("case_revision: 1\n").expect("a document"),
+            written: 0,
+        };
+        case.set_story("story:x").expect("story.yaml");
+        case.record_item("aep:story:x", Some("4"))
+            .expect("the item is recorded");
+        assert_eq!(
+            item_key_of(&dir).expect("read").as_deref(),
+            Some("aep:story:x")
+        );
+        assert_eq!(
+            case_member(&dir, ITEM_REVISION).expect("read").as_deref(),
+            Some("4")
+        );
+        assert_eq!(
+            case.doc["case_revision"].as_u64(),
+            Some(1),
+            "the rest is kept"
+        );
+
+        let older = case_dir("older");
+        std::fs::write(older.join(STORY_FILE), "id: story:old\n").expect("story.yaml");
+        std::fs::write(
+            older.join("protocol.yaml"),
+            "protocol:\n  id: story.delivery\n  revision: 1\n",
+        )
+        .expect("protocol.yaml");
+        assert_eq!(
+            item_key_of(&older).expect("read").as_deref(),
+            Some("aep:story:old")
+        );
+
+        // An improvement turn's `story.yaml` names the finding it verifies, no item it works.
+        let turn = case_dir("turn");
+        std::fs::write(turn.join(STORY_FILE), "id: story:finding\n").expect("story.yaml");
+        let (name, revision) = TURN_PROTOCOL.split_once('/').expect("a protocol id");
+        std::fs::write(
+            turn.join("protocol.yaml"),
+            format!("protocol:\n  id: {name}\n  revision: {revision}\n"),
+        )
+        .expect("protocol.yaml");
+        assert_eq!(item_key_of(&turn).expect("read"), None);
+
+        let intent = case_dir("intent");
+        assert_eq!(item_key_of(&intent).expect("read"), None);
+        let _ = std::fs::remove_dir_all(&tree);
     }
 }

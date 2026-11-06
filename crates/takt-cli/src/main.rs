@@ -724,9 +724,17 @@ struct RunArgs {
     /// resumed, if it has one; else it is taken as the frontier takes a story, which it must be
     /// ready for (`proposed`, nothing blocking it, every dependency done). A story the store
     /// does not list, or one not ready, is refused before any case opens, naming why. Not with
-    /// --intent or --case.
+    /// --intent or --case. The same as --work aep:<ID>.
     #[arg(long, value_name = "ID", conflicts_with_all = ["intent", "case"])]
     story: Option<String>,
+    /// The work item to deliver, by its key `<source>[@<connection>]:<id>`, instead of the
+    /// frontier's next ready one. `aep:<story id>` is a story of the planning store, taken,
+    /// resumed and refused exactly as --story <story id> is. This release serves the source
+    /// `aep` alone: a key of `jira`, `github`, `gitlab` or `command`, of a source takt does not
+    /// know, or text that is no key, is refused before any case opens, exit 1, naming why. Not
+    /// with --story, --intent or --case.
+    #[arg(long, value_name = "KEY", conflicts_with_all = ["story", "intent", "case"])]
+    work: Option<String>,
     /// The run configuration file `story` came from, when --story did not name it.
     #[arg(skip)]
     story_from: Option<PathBuf>,
@@ -833,11 +841,15 @@ fn unset(matches: &clap::ArgMatches, id: &str) -> bool {
 impl RunArgs {
     /// Fills each flag `matches` did not take from the command line with `--config`'s value,
     /// when the file sets it; without `--config`, nothing changes. The file's `story` names
-    /// the work only when no flag does (--story, --intent, --case), and is kept with the file
-    /// it came from, so a refusal names that file; a run that opens no story (a
-    /// `self.improvement/1` turn) leaves it out.
+    /// the work only when no flag does (--story, --work, --intent, --case), and is kept with the
+    /// file it came from, so a refusal names that file; a run that opens no story (a
+    /// `self.improvement/1` turn) leaves it out. `--work aep:<id>` names the story `<id>`, as
+    /// `--story <id>` does; a key of any other source is refused here, before anything is read.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
+        if let Some(work) = &self.work {
+            self.story = Some(story_of_work(work)?);
+        }
         let Some(path) = &self.config else {
             return self.looping.configured(
                 takt::run_config::RunConfig::default(),
@@ -847,7 +859,7 @@ impl RunArgs {
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
         if let Some(story) = file.story.take()
-            && ["story", "intent", "case"]
+            && ["story", "work", "intent", "case"]
                 .into_iter()
                 .all(|id| unset(matches, id))
         {
@@ -1792,6 +1804,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 intent,
                 case,
                 story,
+                work,
                 story_from,
                 protocol,
                 inputs,
@@ -1852,15 +1865,17 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // --story is refused.
             let story = story.filter(|_| !(opens_turn && story_from.is_some()));
             // What named the story, for its refusals.
-            let named_by = |story: &str| match &story_from {
-                Some(file) => format!("story {story} from {}", file.display()),
-                None => format!("--story {story}"),
+            let named_by = |story: &str| match (&work, &story_from) {
+                (Some(key), _) => format!("--work {key}"),
+                (None, Some(file)) => format!("story {story} from {}", file.display()),
+                (None, None) => format!("--story {story}"),
             };
             if let Some(story) = &story
                 && opens_turn
             {
                 return Err(anyhow!(
-                    "--story {story}: a {} turn opens on its finding (--input {}=<story id>), never on a named story; nothing was changed",
+                    "{}: a {} turn opens on its finding (--input {}=<story id>), never on a named story; nothing was changed",
+                    named_by(story),
                     takt::case::TURN_PROTOCOL,
                     takt::case::TURN_FINDING
                 ));
@@ -2277,6 +2292,10 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     }
                 }
             };
+            // A story's case just opened records its item: the key and the story's revision.
+            if !resumed {
+                record_story_item(&repo, &mut run)?;
+            }
             // The loop case just opened gets its baseline and the snapshot of its definitions
             // before any step.
             if let Some(baseline) = &loop_baseline {
@@ -4364,6 +4383,29 @@ impl takt::Frontier for Named<'_> {
     }
 }
 
+/// The story `takt run --work <key>` names: the id of an `aep` key, which the run then takes,
+/// resumes or refuses as it does `--story <id>`. Text that is no key, a source takt does not
+/// know, and a key of a source this release does not serve ([`takt::frontier::SERVED`]) are
+/// refused, naming the key and why, before anything is read or written.
+fn story_of_work(work: &str) -> Result<String> {
+    let refused = |why: String| anyhow!("--work {work}: {why}; nothing was changed");
+    let key = takt::frontier::Key::parse(work).map_err(refused)?;
+    key.source().served().map_err(refused)?;
+    Ok(key.id().to_owned())
+}
+
+/// Records in the case `run` just opened for a story the item it works: the key
+/// `aep:<story id>` and the store's revision of the story in the case's take, at the tree's
+/// `HEAD` (story:work-flag-and-the-aep-source); a case on an intent records none.
+fn record_story_item(repo: &Path, run: &mut Run<'_>) -> Result<()> {
+    let Unit::Story(story) = &run.unit else {
+        return Ok(());
+    };
+    let key = takt::frontier::Key::aep(&story.id);
+    let revision = takt::case::story_revision(repo, "HEAD", &story.id)?;
+    run.case.record_item(&key.to_string(), revision.as_deref())
+}
+
 /// The refusal of `takt run --story <story>` when the frontier narrowed to it took nothing and
 /// opened no case: why, read from the store as the take read it (on the base), by the frontier's
 /// own rule ([`takt::frontier::is_ready`], [`not_ready`]); `named` says what named the story
@@ -4459,6 +4501,7 @@ fn take_story<'a>(
     if run.case.revision("implementation").is_some() {
         run.case.set_revision("implementation", &head)?;
     }
+    record_story_item(repo, &mut run)?;
     writeln!(out, "frontier: took {id}: {title}")?;
     Ok(run)
 }
