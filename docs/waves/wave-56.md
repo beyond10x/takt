@@ -1,6 +1,6 @@
 # Wave 56: work sources, the aep and command sources
 
-Stage: **approved**, units a-d, the review corrections and the release preparation committed, gate next. `wave/56` branches from fedfbc28c, the release of 0.33.0, and merges `store/close-wave-55` (the
+Stage: **delivered**. Released as 0.34.0 from 2c4f1d7f4, the merge of pull request 63. `wave/56` branches from fedfbc28c, the release of 0.33.0, and merges `store/close-wave-55` (the
 close-out of wave 55) first, as 407ff3e56. Skill version 0.26.0 (aep:implementing, wave mode). Approved: approval-record:wave-56-work-sources.
 Release: 0.34.0.
 
@@ -43,3 +43,22 @@ the same on a case-insensitive file system, and the full key is recorded in the 
 As wave 55: `task check-static`, `cargo test --locked -p b10x-takt-cli --no-fail-fast`, then the library's targeted
 test targets, the build cache discarded between the CLI and the library stage and after the last; the whole library
 suite on the pull request's CI.
+
+## Delivery
+
+Units a-d landed as 3d16bb309, 7361507b1, c0c05e6b5 and 9a67088ee. The case-id scheme above was tightened before unit b
+(approval-record:wave-56-work-model-points, point 9): the slug holds the connection and the id, and the hash is always
+added. The adversary and the security reviewer found nine defects in scope, fixed in a19b058f2; the security blocker's
+remaining half, a link an edit step commits at a deployment path, was pulled into the wave and refused fail-closed in
+242ea0649 (approval-record:wave-56-link-refusal). review-result:w56-adv-1 records the review; five follow-ups are drafts.
+
+The staged gate ran its stages apart, as the host's disk allowed: `task check-static` and the library's 35 targets
+(599 passed) at 8f0e82d0a. The CLI stage found the run's work sources empty when the command line was not built through
+the run file reader (two of the binary's own unit tests); fixed in 58723b3e3, the CLI stage then passed 959 with the
+known host-only `tunl0` case failing.
+
+Pull request 63 passed 6 of 7 checks; `takt / darwin (test-cli)` was never picked up by a runner and passed when run
+again. It was merged as 2c4f1d7f4 and tagged 0.34.0.
+
+The stories' close-out is a store-only commit on `store/close-wave-56`, cut from 2c4f1d7f4. It rides along with the
+next takt wave, whose integration branch merges it.

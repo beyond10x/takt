@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T20:55:00Z",
+  "actor": "human:timo",
+  "artifact": "story:the-command-work-source",
+  "kind": "story",
+  "revision": 7,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 56 unit c: run_work_command_cli red then green (9), run_work_command_w56_adv green after a19b058f2, the trailer case seen red with the story trailer",
+    "reference": "2c4f1d7f4304cbbbe5d40bcd9eed8bc8b6893793"
+  }
+}
