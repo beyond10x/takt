@@ -1409,7 +1409,8 @@ enum Judged {
 /// which records nothing when it does not parse, and by the caller's folded globs `extra`; with
 /// `gate`, the tool configuration by name, a link there included ([`is_tool_config`]), and the
 /// lint tables of every cargo manifest ([`lint_changes`]) and the lint-level attributes lowering a
-/// lint group in every changed `.rs` file ([`lint_attribute_changes`]) besides. A change no step
+/// lint group in every changed `.rs` file ([`lint_attribute_changes`]) and in every changed file
+/// such a file pulls in ([`pulled_in_changes`]) besides. A change no step
 /// could make, because the step guard refuses it, but one that reached the branch by another
 /// route (a commit made outside the loop) would decide the verdict all the same. The store is
 /// guarded at the step too, but it decides no test and no check, and takt itself writes it on
@@ -1478,7 +1479,8 @@ fn judged(
             "--",
         ],
     )?;
-    for path in nul_fields(&diff, "diff-tree", false)? {
+    let changed = nul_fields(&diff, "diff-tree", false)?;
+    for &path in &changed {
         // While a line of the test command's script fails closed every program is on the
         // surface: one the base held is as much one as the tree's now.
         // In a directory on `PATH` an entry the base held executable is a program a lookup
@@ -1537,6 +1539,15 @@ fn judged(
                 Err(side) => paths.push(format!(
                     "{path}: a file the lint-attribute scanner cannot read with certainty, {side}"
                 )),
+            }
+        }
+    }
+    // The same in Rust source not read by a `.rs` name: a file `include!` or a `path`
+    // attribute pulls in, and a `.rs` link ([`pulled_in_changes`]).
+    if gate {
+        for named in pulled_in_changes(tree, &at, revision, &changed)? {
+            if !paths.contains(&named) {
+                paths.push(named);
             }
         }
     }
@@ -2608,6 +2619,25 @@ struct ArgumentPaths {
 /// The shells whose `-c` line the gate splits into words ([`shell_lines`]).
 const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish"];
 
+/// The long options of the shells in [`SHELLS`] that take no value and run no line: any other
+/// long option but `--command` (and fish's `--init-command`) is one the gate cannot tell takes a
+/// value, so the shell's words are not read ([`shell_lines`]).
+const SHELL_FLAGS: &[&str] = &[
+    "norc",
+    "noprofile",
+    "login",
+    "posix",
+    "noediting",
+    "restricted",
+    "verbose",
+    "help",
+    "version",
+    "no-config",
+    "private",
+    "interactive",
+    "no-execute",
+];
+
 /// How many `-c` lines deep, one given inside another, the gate reads.
 const SHELL_LINES_AT_MOST: usize = 3;
 
@@ -2658,6 +2688,14 @@ fn argument_paths(project: &str) -> Result<ArgumentPaths> {
             .into_iter()
             .chain(args)
             .collect();
+        // Under `CDPATH` a `cd` changes to a directory under one of its entries, which the gate
+        // does not follow ([`split_line`]).
+        if binding["env"].get("CDPATH").is_some() {
+            found.unread.push(format!(
+                "the {name} sets `CDPATH`, under which a `cd` changes to a directory the gate does not follow; the paths it names cannot be compared at the base"
+            ));
+            continue;
+        }
         if let Err(why) = shell_lines(
             &words,
             &[String::new()],
@@ -2684,16 +2722,22 @@ fn joined(dir: &str, path: &str) -> String {
 }
 
 /// What the word `word`, read from the directory `dir`, may name ([`ArgumentPaths`]): the word,
-/// an option's value after its `=`, and for a short option (one `-`) every tail after a run of
-/// option letters, so `-qfscripts/check.mk` gives `fscripts/check.mk` and `scripts/check.mk`
-/// among them.
+/// the value after the first `=` of an option or of any other word (`--path=dir`, `dd
+/// if=rules.txt`, `BASH_ENV=scripts/env`) and each `:`-separated entry of that value, and for a
+/// short option (one `-`) every tail after a run of option letters, so `-qfscripts/check.mk`
+/// gives `fscripts/check.mk` and `scripts/check.mk` among them.
 fn word_paths(word: &str, dir: &str, found: &mut ArgumentPaths) {
     found.paths.push(joined(dir, word));
-    if let Some((_, value)) = word
-        .strip_prefix('-')
-        .and_then(|option| option.split_once('='))
-    {
+    if let Some((_, value)) = word.split_once('=') {
         found.paths.push(joined(dir, value));
+        if value.contains(':') {
+            found.paths.extend(
+                value
+                    .split(':')
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| joined(dir, entry)),
+            );
+        }
     }
     if word.starts_with('-') && !word.starts_with("--") {
         let bytes = word.as_bytes();
@@ -2730,10 +2774,12 @@ fn known_variables(binding: &serde_yaml_ng::Value) -> std::collections::BTreeMap
 }
 
 /// Reads the line each shell among `words` ([`SHELLS`]) runs with `-c` (alone or in a cluster,
-/// `-ec`), the first operand after its options: each of its words ([`split_line`]) is what
+/// `-ec`) or `--command`, the first operand after its options, or as `--command=<line>`, and
+/// fish's `-C`/`--init-command` line besides: each of its words ([`split_line`]) is what
 /// [`word_paths`] reads, from every directory in `dirs` and every one the line changes to, a
 /// pattern a glob; and a `-c` line among its words is read in turn, up to
-/// [`SHELL_LINES_AT_MOST`] deep. The error is why a line cannot be read, naming it.
+/// [`SHELL_LINES_AT_MOST`] deep. The error is why a line cannot be read, naming it, and a long
+/// option the gate cannot tell takes a value ([`SHELL_FLAGS`]) is one.
 fn shell_lines(
     words: &[String],
     dirs: &[String],
@@ -2742,55 +2788,98 @@ fn shell_lines(
     found: &mut ArgumentPaths,
 ) -> std::result::Result<(), String> {
     for (k, word) in words.iter().enumerate() {
-        if !SHELLS.contains(&word.rsplit('/').next().unwrap_or_default()) {
+        let shell = word.rsplit('/').next().unwrap_or_default();
+        if !SHELLS.contains(&shell) {
             continue;
         }
+        let fish = shell == "fish";
         let mut line_given = false;
+        let mut lines: Vec<&str> = Vec::new();
         let mut at = k + 1;
         while let Some(option) = words.get(at) {
             if option == "--" {
                 at += 1;
                 break;
             }
-            match option.strip_prefix(['-', '+']) {
-                Some(letters)
-                    if !letters.is_empty() && letters.chars().all(|c| c.is_ascii_alphabetic()) =>
-                {
-                    line_given |= option.starts_with('-') && letters.contains('c');
-                    if letters.ends_with(['o', 'O']) {
+            if let Some(long) = option.strip_prefix("--") {
+                let (name, value) = match long.split_once('=') {
+                    Some((name, value)) => (name, Some(value)),
+                    None => (long, None),
+                };
+                match (name, value) {
+                    ("command", None) => line_given = true,
+                    ("init-command", None) if fish => {
+                        lines.extend(words.get(at + 1).map(String::as_str));
                         at += 1;
                     }
+                    ("command", Some(line)) => lines.push(line),
+                    ("init-command", Some(line)) if fish => lines.push(line),
+                    (name, None) if SHELL_FLAGS.contains(&name) => {}
+                    _ => {
+                        return Err(format!(
+                            "runs `{shell}` with the option `{option}`, which the gate cannot tell takes a value or runs a line; the paths it names cannot be compared at the base"
+                        ));
+                    }
                 }
-                _ if option.starts_with("--") => {}
-                _ => break,
+            } else {
+                match option.strip_prefix(['-', '+']) {
+                    Some(letters)
+                        if !letters.is_empty()
+                            && letters.chars().all(|c| c.is_ascii_alphabetic()) =>
+                    {
+                        line_given |= option.starts_with('-') && letters.contains('c');
+                        if fish && letters.ends_with('C') {
+                            lines.extend(words.get(at + 1).map(String::as_str));
+                            at += 1;
+                        } else if letters.ends_with(['o', 'O'])
+                            || (fish && letters.ends_with(['d', 'f', 'p', 'D']))
+                        {
+                            at += 1;
+                        }
+                    }
+                    _ => break,
+                }
             }
             at += 1;
         }
-        let Some(line) = words.get(at).filter(|_| line_given) else {
-            continue;
-        };
-        if depth >= SHELL_LINES_AT_MOST {
-            return Err(format!(
-                "runs the shell line `{line}` inside {depth} others, deeper than the gate reads"
-            ));
+        lines.extend(words.get(at).filter(|_| line_given).map(String::as_str));
+        for line in lines {
+            read_line(line, dirs, known, depth, found)?;
         }
-        let (line_words, line_dirs) = split_line(line, dirs, known).map_err(|why| {
+    }
+    Ok(())
+}
+
+/// Reads the `-c` line `line` a shell runs from each directory of `dirs`, as [`shell_lines`]
+/// reads it, `depth` lines inside others.
+fn read_line(
+    line: &str,
+    dirs: &[String],
+    known: &std::collections::BTreeMap<String, String>,
+    depth: usize,
+    found: &mut ArgumentPaths,
+) -> std::result::Result<(), String> {
+    if depth >= SHELL_LINES_AT_MOST {
+        return Err(format!(
+            "runs the shell line `{line}` inside {depth} others, deeper than the gate reads"
+        ));
+    }
+    let (line_words, line_dirs) = split_line(line, dirs, known).map_err(|why| {
             format!(
                 "runs the shell line `{line}`, which the gate cannot split into words with certainty: {why}; the paths it names cannot be compared at the base"
             )
         })?;
-        for word in &line_words {
-            for dir in &line_dirs {
-                if word.pattern {
-                    found.globs.push(joined(dir, &word.text));
-                } else {
-                    word_paths(&word.text, dir, found);
-                }
+    for word in &line_words {
+        for dir in &line_dirs {
+            if word.pattern {
+                found.globs.push(joined(dir, &word.text));
+            } else {
+                word_paths(&word.text, dir, found);
             }
         }
-        let texts: Vec<String> = line_words.into_iter().map(|word| word.text).collect();
-        shell_lines(&texts, &line_dirs, known, depth + 1, found)?;
     }
+    let texts: Vec<String> = line_words.into_iter().map(|word| word.text).collect();
+    shell_lines(&texts, &line_dirs, known, depth + 1, found)?;
     Ok(())
 }
 
@@ -3007,8 +3096,8 @@ fn tree_dir(path: &str) -> Option<String> {
 /// the gate reads it is the error, so the line fails closed: an unclosed quote or a `\` at its
 /// end, a command substitution, an expansion other than a variable the gate sets for the
 /// command ([`known_variables`]) that the line does not itself set, a brace sequence
-/// ([`brace_words`]), `~+` and `~-`, and a `cd` to a directory outside the tree or one the gate
-/// cannot tell. A bracket class (`chec[k]`) is read as `?`, a pattern.
+/// ([`brace_words`]), `~+` and `~-`, a word that sets `CDPATH`, and a `cd` to a directory outside
+/// the tree or one the gate cannot tell. A bracket class (`chec[k]`) is read as `?`, a pattern.
 fn split_line(
     line: &str,
     dirs: &[String],
@@ -3089,6 +3178,18 @@ fn split_line(
         }
     }
     split.end()?;
+    // `CDPATH` set (`CDPATH=sub`, `export CDPATH`): a `cd` changes to a directory under one of
+    // its entries, not one the gate follows.
+    if let Some(word) = split
+        .words
+        .iter()
+        .find(|word| word.text == "CDPATH" || word.text.starts_with("CDPATH="))
+    {
+        return Err(format!(
+            "the line sets `CDPATH` (`{}`), under which a `cd` changes to a directory the gate does not follow",
+            word.text
+        ));
+    }
     for name in &split.expanded {
         if split.words.iter().any(|word| {
             word.text == *name
@@ -3898,8 +3999,10 @@ const SPECIFICATION_LISTS: &[&str] = &["ess/ess-inputs.yaml", "ess/system.yaml"]
 /// and a step is not that person, and an entry the base lists in a top-level list of a file of
 /// [`SPECIFICATION_LISTS`] that the revision does not ([`listed_entries`]). A row that only
 /// moved key, its cited path, needles and digest a row of the base's, is not named: inserting a
-/// citation shifts the ordinal in the keys after it. A removed row and a row without a digest are
-/// not named either; a row or a file the gate cannot read with certainty is.
+/// citation shifts the ordinal in the keys after it. Each base row accounts for one revision row
+/// at most, the row under its own key first, so a digest copied onto a second row is named. A
+/// removed row and a row without a digest are not named either; a row or a file the gate cannot
+/// read with certainty is.
 fn trusted_input_changes(tree: &Path, at: &str, revision: &str) -> Result<Vec<String>> {
     let diff = crate::git::bytes(
         tree,
@@ -3927,17 +4030,37 @@ fn trusted_input_changes(tree: &Path, at: &str, revision: &str) -> Result<Vec<St
                     "{path}: a row the gate cannot read with certainty, line {line}"
                 ));
             }
-            for row in rows {
-                let Some(digest) = row.digest else {
+            // Each base row justifies one revision row at most: the row under its own key first,
+            // then one that moved key, so a digest copied onto a second row is named.
+            let mut used = vec![false; base.len()];
+            let mut held = vec![false; rows.len()];
+            for (k, row) in rows.iter().enumerate() {
+                if row.digest.is_none() {
                     continue;
-                };
-                let held = base.iter().any(|old| {
-                    old.digest == Some(digest)
-                        && (old.key == row.key
-                            || (old.needles == row.needles
-                                && cited_path(old.key) == cited_path(row.key)))
-                });
-                if !held {
+                }
+                if let Some(j) = (0..base.len())
+                    .find(|&j| !used[j] && base[j].digest == row.digest && base[j].key == row.key)
+                {
+                    used[j] = true;
+                    held[k] = true;
+                }
+            }
+            for (k, row) in rows.iter().enumerate() {
+                if row.digest.is_none() || held[k] {
+                    continue;
+                }
+                if let Some(j) = (0..base.len()).find(|&j| {
+                    !used[j]
+                        && base[j].digest == row.digest
+                        && base[j].needles == row.needles
+                        && cited_path(base[j].key) == cited_path(row.key)
+                }) {
+                    used[j] = true;
+                    held[k] = true;
+                }
+            }
+            for (row, held) in rows.iter().zip(held) {
+                if row.digest.is_some() && !held {
                     changed.push(format!(
                         "{path}: the digest of the row {}, which the base did not hold",
                         row.key
@@ -4326,9 +4449,10 @@ fn rust_path(tokens: &[RustToken]) -> Option<Vec<String>> {
 /// the level of: an `allow`, `expect` or `warn`, the attributes inside a `cfg_attr` or an
 /// `unsafe( )` besides; `deny`, `forbid` and every other attribute name none. `Err` when it
 /// cannot be read with certainty: a macro's `$` or a quoting `#` where a name stands, a lint
-/// level spelled as a longer path, or a lint level's or `cfg_attr`'s input in no form rustc
-/// takes.
-fn attribute_groups(tokens: &[RustToken]) -> std::result::Result<Vec<String>, ()> {
+/// level spelled as a longer path, a lint level's or `cfg_attr`'s input in no form rustc takes,
+/// or `cfg_attr`s and `unsafe( )`s nested more than [`ATTRIBUTE_NESTING_AT_MOST`] deep, `depth`
+/// the nesting `tokens` stand at.
+fn attribute_groups(tokens: &[RustToken], depth: usize) -> std::result::Result<Vec<String>, ()> {
     let named = tokens
         .iter()
         .position(|token| !matches!(token, RustToken::Word(_) | RustToken::Punct(':')))
@@ -4341,7 +4465,7 @@ fn attribute_groups(tokens: &[RustToken]) -> std::result::Result<Vec<String>, ()
     if !(level || matches!(last, "cfg_attr" | "unsafe")) {
         return Ok(Vec::new());
     }
-    if path.len() > 1 {
+    if path.len() > 1 || (!level && depth >= ATTRIBUTE_NESTING_AT_MOST) {
         return Err(());
     }
     // The input: one `( )` and nothing after it.
@@ -4357,14 +4481,14 @@ fn attribute_groups(tokens: &[RustToken]) -> std::result::Result<Vec<String>, ()
                 return Err(());
             }
             for part in &parts[1..] {
-                groups.extend(attribute_groups(part)?);
+                groups.extend(attribute_groups(part, depth + 1)?);
             }
         }
         "unsafe" => {
             let [part] = parts.as_slice() else {
                 return Err(());
             };
-            groups.extend(attribute_groups(part)?);
+            groups.extend(attribute_groups(part, depth + 1)?);
         }
         _ => {
             for part in parts {
@@ -4387,39 +4511,114 @@ fn attribute_groups(tokens: &[RustToken]) -> std::result::Result<Vec<String>, ()
     Ok(groups)
 }
 
+/// How many `cfg_attr`s and `unsafe( )`s deep, one inside another, the lint-attribute scanner
+/// reads an attribute ([`attribute_groups`]); one nested deeper is not read with certainty.
+const ATTRIBUTE_NESTING_AT_MOST: usize = 16;
+
+/// How many characters of an attribute a summary shows ([`lint_attributes`]).
+const ATTRIBUTE_SHOWN_AT_MOST: usize = 200;
+
+/// The name of the module the item at `tokens[from]` declares, past its outer attributes and
+/// its visibility (`pub`, `pub(crate)`): `Some` for `mod <name>`, `None` for any other item.
+fn module_after(tokens: &[RustToken], mut from: usize) -> Option<&str> {
+    while tokens.get(from) == Some(&RustToken::Punct('#'))
+        && tokens.get(from + 1) == Some(&RustToken::Punct('['))
+    {
+        from = rust_close(tokens, from + 1)? + 1;
+    }
+    if tokens.get(from) == Some(&RustToken::Word("pub".to_owned())) {
+        from += 1;
+        if tokens.get(from) == Some(&RustToken::Punct('(')) {
+            from = rust_close(tokens, from)? + 1;
+        }
+    }
+    match (tokens.get(from), tokens.get(from + 1)) {
+        (Some(RustToken::Word(keyword)), Some(RustToken::Word(name))) if keyword == "mod" => {
+            Some(name.as_str())
+        }
+        _ => None,
+    }
+}
+
 /// The lint-level attributes of the Rust source `text`, inner (`#![...]`) and outer (`#[...]`),
 /// that lower the level of a lint group ([`attribute_groups`]), each shown as plain Rust with
-/// the group; one not read with certainty with `None`. `None` when `text` does not read as Rust
-/// tokens ([`rust_tokens`]).
+/// the group; one not read with certainty with `None`. Each is keyed by its scope: the file's
+/// own (the crate root for a crate's root file) shown as the attribute alone, and a module
+/// apart, `(scope mod a::b)` after it, for an inner attribute inside the block of `mod a { mod
+/// b { … } }` or an outer one on `mod b` there; so an attribute moved from a module to the
+/// file's scope is one the file did not hold. `None` when `text` does not read as Rust tokens
+/// ([`rust_tokens`]). An attribute whose `[` does not close is named once, at the first, and
+/// nothing after it is read.
 fn lint_attributes(text: &str) -> Option<Vec<(String, Option<String>)>> {
     let tokens = rust_tokens(text)?;
+    let shown = |tokens: &[RustToken], scope: &[&str]| {
+        let mut shown = rust_shown(tokens);
+        if let Some((cut, _)) = shown.char_indices().nth(ATTRIBUTE_SHOWN_AT_MOST) {
+            shown.truncate(cut);
+            shown.push('…');
+        }
+        if !scope.is_empty() {
+            shown.push_str(&format!(" (scope mod {})", scope.join("::")));
+        }
+        shown
+    };
     let mut found = Vec::new();
+    // The `mod` blocks the token stands in, each with the brace depth inside its block.
+    let mut modules: Vec<(&str, usize)> = Vec::new();
+    let mut depth = 0_usize;
     for (at, token) in tokens.iter().enumerate() {
-        if *token != RustToken::Punct('#') {
-            continue;
+        match token {
+            RustToken::Punct('{') => {
+                depth += 1;
+                if let (Some(RustToken::Word(keyword)), Some(RustToken::Word(name))) = (
+                    at.checked_sub(2).and_then(|k| tokens.get(k)),
+                    at.checked_sub(1).and_then(|k| tokens.get(k)),
+                ) && keyword == "mod"
+                {
+                    modules.push((name.as_str(), depth));
+                }
+                continue;
+            }
+            RustToken::Punct('}') => {
+                if modules.last().is_some_and(|(_, inside)| *inside == depth) {
+                    modules.pop();
+                }
+                depth = depth.saturating_sub(1);
+                continue;
+            }
+            RustToken::Punct('#') => {}
+            _ => continue,
         }
-        let mut open = at + 1;
-        if tokens.get(open) == Some(&RustToken::Punct('!')) {
-            open += 1;
-        }
+        let inner = tokens.get(at + 1) == Some(&RustToken::Punct('!'));
+        let open = at + 1 + usize::from(inner);
+        let mut scope: Vec<&str> = modules.iter().map(|(name, _)| *name).collect();
         match tokens.get(open) {
             // `#$name[...]`: a macro chooses what follows.
             Some(RustToken::Punct('$')) => {
                 let end = (open + 1).min(tokens.len() - 1);
-                found.push((rust_shown(&tokens[at..=end]), None));
+                found.push((shown(&tokens[at..=end], &scope), None));
             }
-            Some(RustToken::Punct('[')) => match rust_close(&tokens, open) {
-                Some(close) => {
-                    let shown = rust_shown(&tokens[at..=close]);
-                    match attribute_groups(&tokens[open + 1..close]) {
-                        Ok(groups) => {
-                            found.extend(groups.into_iter().map(|g| (shown.clone(), Some(g))));
-                        }
-                        Err(()) => found.push((shown, None)),
-                    }
+            Some(RustToken::Punct('[')) => {
+                let Some(close) = rust_close(&tokens, open) else {
+                    // Every `#` after it stands inside it: named once, here.
+                    let end = (open + 8).min(tokens.len() - 1);
+                    found.push((
+                        format!("{}, its `[` not closed", shown(&tokens[at..=end], &scope)),
+                        None,
+                    ));
+                    break;
+                };
+                if !inner {
+                    scope.extend(module_after(&tokens, close + 1));
                 }
-                None => found.push((rust_shown(&tokens[at..]), None)),
-            },
+                let shown = shown(&tokens[at..=close], &scope);
+                match attribute_groups(&tokens[open + 1..close], 0) {
+                    Ok(groups) => {
+                        found.extend(groups.into_iter().map(|g| (shown.clone(), Some(g))));
+                    }
+                    Err(()) => found.push((shown, None)),
+                }
+            }
             _ => {}
         }
     }
@@ -4453,6 +4652,261 @@ fn lint_attribute_changes(
         }
     }
     Ok(added)
+}
+
+/// How many files pulled into Rust source the branch changed the gate scans at most
+/// ([`pulled_in_changes`]); past it the gate runs nothing.
+const PULLED_IN_AT_MOST: usize = 256;
+
+/// How many bytes of a file pulled into Rust source the gate scans at most
+/// ([`pulled_in_changes`]); a larger one counts as changed.
+const PULLED_IN_BYTES_AT_MOST: usize = 1 << 20;
+
+/// The string a Rust string literal `literal` holds, plain (`"x"`) or raw (`r"x"`, `r#"x"#`);
+/// `None` for any other literal and for one with an escape.
+fn rust_string(literal: &str) -> Option<&str> {
+    let raw = literal.strip_prefix('r');
+    let text = raw.unwrap_or(literal);
+    let hashes = text.len() - text.trim_start_matches('#').len();
+    let inner = text
+        .get(hashes..text.len().checked_sub(hashes)?)?
+        .strip_prefix('"')?
+        .strip_suffix('"')?;
+    (raw.is_some() || (hashes == 0 && !inner.contains('\\'))).then_some(inner)
+}
+
+/// The files the Rust source `tokens` pulls in by name, as written: each `include!("x")`, and
+/// each `path = "x"` in an outer attribute (`#[path = "x"]`, `#[cfg_attr(…, path = "x")]`) of a
+/// module declared outside any inline `mod` block; the error, shown, an `include!` whose input
+/// is not one string literal, a `path` attribute in another form, or one inside an inline `mod`
+/// block, whose file is found under a directory the gate does not follow.
+fn rust_pulls(tokens: &[RustToken]) -> Vec<std::result::Result<String, String>> {
+    let mut pulls = Vec::new();
+    let mut modules: Vec<usize> = Vec::new();
+    let mut depth = 0_usize;
+    for (at, token) in tokens.iter().enumerate() {
+        match token {
+            RustToken::Punct('{') => {
+                depth += 1;
+                if matches!(
+                    at.checked_sub(2).and_then(|k| tokens.get(k)),
+                    Some(RustToken::Word(keyword)) if keyword == "mod"
+                ) && matches!(
+                    at.checked_sub(1).and_then(|k| tokens.get(k)),
+                    Some(RustToken::Word(_))
+                ) {
+                    modules.push(depth);
+                }
+            }
+            RustToken::Punct('}') => {
+                if modules.last() == Some(&depth) {
+                    modules.pop();
+                }
+                depth = depth.saturating_sub(1);
+            }
+            RustToken::Word(word)
+                if word == "include"
+                    && tokens.get(at + 1) == Some(&RustToken::Punct('!'))
+                    && matches!(tokens.get(at + 2), Some(RustToken::Punct('(' | '[' | '{'))) =>
+            {
+                let Some(close) = rust_close(tokens, at + 2) else {
+                    pulls.push(Err(rust_shown(&tokens[at..=at + 2])));
+                    continue;
+                };
+                let file = match &tokens[at + 3..close] {
+                    [RustToken::Literal(literal)]
+                    | [RustToken::Literal(literal), RustToken::Punct(',')] => rust_string(literal),
+                    _ => None,
+                };
+                pulls.push(
+                    file.map(str::to_owned)
+                        .ok_or_else(|| rust_shown(&tokens[at..=close])),
+                );
+            }
+            RustToken::Punct('#') if tokens.get(at + 1) == Some(&RustToken::Punct('[')) => {
+                let Some(close) = rust_close(tokens, at + 1) else {
+                    continue;
+                };
+                let content = &tokens[at + 2..close];
+                let named = match content.first() {
+                    Some(RustToken::Word(name)) if name == "path" || name == "cfg_attr" => name,
+                    _ => continue,
+                };
+                let shown = || rust_shown(&tokens[at..=close]);
+                let mut files: Vec<std::result::Result<String, String>> = content
+                    .windows(3)
+                    .filter_map(|window| match window {
+                        [
+                            RustToken::Word(key),
+                            RustToken::Punct('='),
+                            RustToken::Literal(literal),
+                        ] if key == "path" => {
+                            Some(rust_string(literal).map(str::to_owned).ok_or_else(shown))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if named == "path" && content.len() != 3 {
+                    files = vec![Err(shown())];
+                }
+                if !modules.is_empty() && !files.is_empty() {
+                    files = vec![Err(format!("{}, inside an inline `mod` block", shown()))];
+                }
+                pulls.extend(files);
+            }
+            _ => {}
+        }
+    }
+    pulls
+}
+
+/// What the branch changed between the base `at` and `revision` in Rust source the lint-attribute
+/// scanner does not read by a `.rs` name (story:the-gate-holds-against-lint-allows-in-source),
+/// each named with its file: a `.rs` file that is a link at the revision, which rustc follows and
+/// the scanner does not, when the branch changed the link or the file it names; and every file
+/// the branch changed that is not `.rs` and that a `.rs` file at the revision pulls in
+/// ([`rust_pulls`]), followed into what such a file pulls in, scanned as a `.rs` file is
+/// ([`lint_attribute_changes`]). A file pulled in that is a link or larger than
+/// [`PULLED_IN_BYTES_AT_MOST`], more than [`PULLED_IN_AT_MOST`] of them, and one a `.rs` file the
+/// branch changed pulls in that the gate cannot resolve inside the tree, are named too. `changed`
+/// is every path that differs between the two.
+fn pulled_in_changes(
+    tree: &Path,
+    at: &str,
+    revision: &str,
+    changed: &[&str],
+) -> Result<Vec<String>> {
+    let changed_set: std::collections::BTreeSet<&str> = changed.iter().copied().collect();
+    let listed = crate::git::bytes(
+        tree,
+        &["ls-tree", "-r", "-z", "-l", "--full-tree", revision],
+    )?;
+    // Each blob at the revision: its mode, its object and its size.
+    let mut entries: std::collections::BTreeMap<&str, (&str, &str, Option<usize>)> =
+        std::collections::BTreeMap::new();
+    for entry in nul_fields(&listed, "ls-tree", true)? {
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        if let [mode, "blob", id, size] = meta.split_whitespace().collect::<Vec<_>>()[..] {
+            entries.insert(path, (mode, id, size.parse().ok()));
+        }
+    }
+    let parent = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_owned();
+    let mut named = Vec::new();
+    for (path, (mode, id, _)) in &entries {
+        if !path.ends_with(".rs") || *mode != "120000" {
+            continue;
+        }
+        let target = String::from_utf8_lossy(&crate::git::blob(tree, id)?).into_owned();
+        let pointed = (!target.starts_with('/'))
+            .then(|| tree_dir(&joined(&parent(path), &target)))
+            .flatten();
+        if changed_set.contains(path)
+            || pointed.is_some_and(|pointed| changed_set.contains(pointed.as_str()))
+        {
+            named.push(format!(
+                "{path}: a link to {target}, which rustc reads and the lint-attribute scanner does not follow"
+            ));
+        }
+    }
+    let others: Vec<&str> = changed
+        .iter()
+        .filter(|path| !path.ends_with(".rs") && entries.contains_key(*path))
+        .map(|path| path.rsplit('/').next().unwrap_or_default())
+        .collect();
+    if others.is_empty() {
+        return Ok(named);
+    }
+    let mut reader = crate::git::ObjectReader::open(tree)?;
+    let mut read = |id: &str, size: Option<usize>| -> Result<String> {
+        let bytes = if size.is_some_and(|size| size as u64 <= crate::git::MAX_BLOB) {
+            reader.read(id)?.map(|(_, bytes)| bytes).unwrap_or_default()
+        } else {
+            crate::git::blob(tree, id)?
+        };
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    };
+    // The `.rs` files that may pull a changed file in: the ones the branch changed, and the ones
+    // whose text holds such a file's name, which a string literal naming it spells out.
+    let mut queue: Vec<(String, String)> = Vec::new();
+    for (path, (mode, id, size)) in &entries {
+        if !path.ends_with(".rs") || *mode == "120000" {
+            continue;
+        }
+        let text = read(id, *size)?;
+        if changed_set.contains(path) || others.iter().any(|name| text.contains(name)) {
+            queue.push(((*path).to_owned(), text));
+        }
+    }
+    let mut scanned: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    while let Some((file, text)) = queue.pop() {
+        let Some(tokens) = rust_tokens(&text) else {
+            continue;
+        };
+        let from_changed = changed_set.contains(file.as_str());
+        let dir = parent(&file);
+        for pulled in rust_pulls(&tokens) {
+            let target = pulled.and_then(|written| {
+                (!written.starts_with('/'))
+                    .then(|| tree_dir(&joined(&dir, &written)))
+                    .flatten()
+                    .ok_or(written)
+            });
+            let target = match target {
+                Ok(target) => target,
+                Err(shown) => {
+                    if from_changed {
+                        named.push(format!(
+                            "{file}: {shown}, a file pulled in that the gate cannot resolve inside the tree"
+                        ));
+                    }
+                    continue;
+                }
+            };
+            if target.ends_with(".rs")
+                || !changed_set.contains(target.as_str())
+                || !scanned.insert(target.clone())
+            {
+                continue;
+            }
+            if scanned.len() > PULLED_IN_AT_MOST {
+                named.push(format!(
+                    "{file}: pulls in more than {PULLED_IN_AT_MOST} changed files with the others, more than the gate scans"
+                ));
+                return Ok(named);
+            }
+            let Some((mode, id, size)) = entries.get(target.as_str()) else {
+                continue;
+            };
+            if *mode == "120000" {
+                named.push(format!(
+                    "{target}: a link {file} pulls in, which the lint-attribute scanner does not follow"
+                ));
+                continue;
+            }
+            if size.is_none_or(|size| size > PULLED_IN_BYTES_AT_MOST) {
+                named.push(format!(
+                    "{target}: a file {file} pulls in, larger than the {PULLED_IN_BYTES_AT_MOST} bytes the lint-attribute scanner reads"
+                ));
+                continue;
+            }
+            let after = read(id, *size)?;
+            let before = crate::run::manifest_at(tree, at, &target)?;
+            match lint_attribute_changes(&before, &after) {
+                Ok(added) => named.extend(
+                    added
+                        .into_iter()
+                        .map(|attribute| format!("{target}: {attribute}")),
+                ),
+                Err(side) => named.push(format!(
+                    "{target}: a file {file} pulls in that the lint-attribute scanner cannot read with certainty, {side}"
+                )),
+            }
+            queue.push((target, after));
+        }
+    }
+    Ok(named)
 }
 
 /// What git stores at `path` in the commit `at`: its mode and object, or `None` when the commit
@@ -8249,6 +8703,87 @@ mod tests {
             lint_attribute_changes("/* open", held),
             named("#![allow(warnings)]")
         );
+    }
+
+    /// story:the-gate-holds-against-lint-allows-in-source: an attribute is keyed by its scope,
+    /// so one moved from a module to the crate root is named; an unclosed `#[` is named once
+    /// and nothing after it is read; a `cfg_attr` nested past the cap is not read.
+    #[test]
+    fn lint_attributes_are_keyed_by_scope_and_bounded() {
+        let in_module = "mod generated {\n    #![allow(clippy::all)]\n}\n";
+        assert_eq!(
+            lint_attribute_changes(in_module, "#![allow(clippy::all)]\nmod generated {}\n"),
+            Ok(vec!["#![allow(clippy::all)]".to_owned()])
+        );
+        assert_eq!(
+            lint_attribute_changes(
+                in_module,
+                "#[allow(clippy::all)]\npub(crate) mod generated {}\n"
+            ),
+            Ok(vec![
+                "#[allow(clippy::all)] (scope mod generated)".to_owned()
+            ])
+        );
+        assert_eq!(
+            lint_attribute_changes(
+                in_module,
+                "fn f() {}\nmod generated {\n    #![allow(clippy::all)]\n}\n"
+            ),
+            Ok(Vec::new())
+        );
+        let unclosed = lint_attributes(&"#[".repeat(20_000)).expect("tokens");
+        assert_eq!(unclosed.len(), 1, "{unclosed:?}");
+        assert!(
+            unclosed[0].0.ends_with("its `[` not closed"),
+            "{unclosed:?}"
+        );
+        let deep = format!(
+            "#[{}allow(clippy::all){}]",
+            "cfg_attr(all(), ".repeat(64),
+            ")".repeat(64)
+        );
+        let found = lint_attributes(&deep).expect("tokens");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].1, None);
+        assert!(found[0].0.ends_with('…'), "{found:?}");
+        let shallow = format!(
+            "#[{}allow(clippy::all){}]",
+            "cfg_attr(all(), ".repeat(8),
+            ")".repeat(8)
+        );
+        assert_eq!(
+            lint_attributes(&shallow).expect("tokens")[0].1.as_deref(),
+            Some("clippy::all")
+        );
+    }
+
+    /// story:the-gate-holds-against-lint-allows-in-source: the files Rust source pulls in by
+    /// name, and what the gate cannot resolve.
+    #[test]
+    fn rust_pulls_reads_include_and_path_attributes() {
+        let pulls = |text: &str| rust_pulls(&rust_tokens(text).expect("tokens"));
+        assert_eq!(
+            pulls(
+                "include!(\"one.in\");\n#[path = \"q.inc\"]\nmod q;\nstd::include!(r#\"two.in\"#);"
+            ),
+            vec![
+                Ok("one.in".to_owned()),
+                Ok("q.inc".to_owned()),
+                Ok("two.in".to_owned())
+            ]
+        );
+        assert_eq!(
+            pulls("#[cfg_attr(unix, path = \"u.rs\")]\nmod u;\ninclude_str!(\"x.txt\");"),
+            vec![Ok("u.rs".to_owned())]
+        );
+        assert_eq!(
+            pulls("include!(concat!(env!(\"OUT_DIR\"), \"/g.rs\"));"),
+            vec![Err(
+                "include!(concat!(env!(\"OUT_DIR\"), \"/g.rs\"))".to_owned()
+            )]
+        );
+        assert!(pulls("mod a {\n    #[path = \"b.rs\"]\n    mod b;\n}\n")[0].is_err());
+        assert_eq!(rust_string("\"a\\n\""), None);
     }
 
     /// story:a-gate-script-with-a-colon-is-run, acceptance 2: a path a gate's command names that
