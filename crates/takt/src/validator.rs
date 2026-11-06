@@ -1408,7 +1408,8 @@ enum Judged {
 /// surface extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base,
 /// which records nothing when it does not parse, and by the caller's folded globs `extra`; with
 /// `gate`, the tool configuration by name, a link there included ([`is_tool_config`]), and the
-/// lint tables of every cargo manifest ([`lint_changes`]) besides. A change no step
+/// lint tables of every cargo manifest ([`lint_changes`]) and the lint-level attributes lowering a
+/// lint group in every changed `.rs` file ([`lint_attribute_changes`]) besides. A change no step
 /// could make, because the step guard refuses it, but one that reached the branch by another
 /// route (a commit made outside the loop) would decide the verdict all the same. The store is
 /// guarded at the step too, but it decides no test and no check, and takt itself writes it on
@@ -1516,6 +1517,26 @@ fn judged(
                         "{path}: a line the lints scanner cannot read with certainty, {side}"
                     )),
                 }
+            }
+        }
+        // A lint-level attribute lowering a lint group that Rust source the branch changed
+        // holds and the base did not ([`lint_attribute_changes`]): `#![allow(clippy::all)]`
+        // turns a failing `cargo clippy -- -D warnings` into a passing one.
+        if gate && path.ends_with(".rs") {
+            let before = crate::run::manifest_at(tree, &at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            match lint_attribute_changes(&before, &after) {
+                Ok(added) => {
+                    for attribute in added {
+                        let named = format!("{path}: {attribute}");
+                        if !paths.contains(&named) {
+                            paths.push(named);
+                        }
+                    }
+                }
+                Err(side) => paths.push(format!(
+                    "{path}: a file the lint-attribute scanner cannot read with certainty, {side}"
+                )),
             }
         }
     }
@@ -2420,7 +2441,9 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// What the gates observe runs from the tree only while the base revision and the observed one
 /// agree on it: with a project file, the executables and catalogs it admits, every file its
 /// commands take as an argument, the tool configuration ([`GATE_TOOL_CONFIG`]), the `[lints]`
-/// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]), what Python loads
+/// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]), the lint-level
+/// attributes lowering `warnings` or a lint group in a changed `.rs` file, such as
+/// `#![allow(clippy::all)]` ([`lint_attribute_changes`]; one added is named), what Python loads
 /// from the tree for its commands, a `sh -c` string or shell script of theirs among them, and the
 /// paths such a string or script names ([`python_paths`]; every Python file, shell file and program
 /// while one cannot be read with certainty) and the judge surface the test command's is
@@ -3856,6 +3879,417 @@ fn lint_changes(before: &str, after: &str) -> std::result::Result<Vec<String>, &
     keys.sort();
     keys.dedup();
     Ok(keys)
+}
+
+/// The lint groups a lint-level attribute names to lower the level of more than one lint, folded
+/// to lower case: `warnings`, rustc's groups (`rustc -W help`), clippy's and rustdoc's. A rustc
+/// name ending in `_compatibility` or `_idioms` is taken as a group besides ([`is_lint_group`]).
+const LINT_GROUPS: &[&str] = &[
+    "warnings",
+    "deprecated_safe",
+    "future_incompatible",
+    "keyword_idents",
+    "let_underscore",
+    "nonstandard_style",
+    "refining_impl_trait",
+    "unknown_or_malformed_diagnostic_attributes",
+    "unused",
+    "clippy::all",
+    "clippy::cargo",
+    "clippy::complexity",
+    "clippy::correctness",
+    "clippy::deprecated",
+    "clippy::nursery",
+    "clippy::pedantic",
+    "clippy::perf",
+    "clippy::restriction",
+    "clippy::style",
+    "clippy::suspicious",
+    "rustdoc::all",
+];
+
+/// Whether the lint `name`, folded to lower case, is a group ([`LINT_GROUPS`]).
+fn is_lint_group(name: &str) -> bool {
+    LINT_GROUPS.contains(&name)
+        || (!name.contains("::") && (name.ends_with("_compatibility") || name.ends_with("_idioms")))
+}
+
+/// A token of Rust source as [`rust_tokens`] reads it: a word (an identifier or a keyword, a raw
+/// identifier's `r#` dropped), one punctuation character, or a literal or lifetime as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RustToken {
+    Word(String),
+    Punct(char),
+    Literal(String),
+}
+
+/// The tokens of the Rust source `text`, comments and white space dropped; `None` when a
+/// comment, a string, a character or a raw string does not end.
+fn rust_tokens(text: &str) -> Option<Vec<RustToken>> {
+    let chars: Vec<char> = text.chars().collect();
+    let word = |c: &char| *c == '_' || c.is_alphanumeric();
+    // The end of the literal quoted by `quote` that opens at `start`, escapes read.
+    let quoted = |start: usize, quote: char| -> Option<usize> {
+        let mut at = start + 1;
+        while at < chars.len() {
+            match chars[at] {
+                '\\' => at += 2,
+                c if c == quote => return Some(at + 1),
+                _ => at += 1,
+            }
+        }
+        None
+    };
+    let text_of = |from: usize, to: usize| chars[from..to].iter().collect::<String>();
+    let mut tokens = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        let next = chars.get(at + 1).copied();
+        if c.is_whitespace() {
+            at += 1;
+        } else if c == '/' && next == Some('/') {
+            while at < chars.len() && chars[at] != '\n' {
+                at += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            // Block comments nest.
+            let mut depth = 0_usize;
+            loop {
+                match (chars.get(at), chars.get(at + 1)) {
+                    (Some('/'), Some('*')) => {
+                        depth += 1;
+                        at += 2;
+                    }
+                    (Some('*'), Some('/')) => {
+                        depth -= 1;
+                        at += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    (Some(_), _) => at += 1,
+                    (None, _) => return None,
+                }
+            }
+        } else if c == '"' {
+            let end = quoted(at, '"')?;
+            tokens.push(RustToken::Literal(text_of(at, end)));
+            at = end;
+        } else if c == '\'' {
+            // A character (`'a'`, `'\n'`), or else a lifetime or a label (`'a`).
+            let end = if next == Some('\\') || chars.get(at + 2) == Some(&'\'') {
+                quoted(at, '\'')?
+            } else {
+                let mut end = at + 1;
+                while chars.get(end).is_some_and(word) {
+                    end += 1;
+                }
+                if end == at + 1 {
+                    return None;
+                }
+                end
+            };
+            tokens.push(RustToken::Literal(text_of(at, end)));
+            at = end;
+        } else if c.is_ascii_digit() {
+            let mut end = at;
+            while chars.get(end).is_some_and(word)
+                || (chars.get(end) == Some(&'.')
+                    && chars.get(end + 1).is_some_and(char::is_ascii_digit))
+            {
+                end += 1;
+            }
+            tokens.push(RustToken::Literal(text_of(at, end)));
+            at = end;
+        } else if word(&c) {
+            let mut end = at;
+            while chars.get(end).is_some_and(word) {
+                end += 1;
+            }
+            let prefix = text_of(at, end);
+            match (prefix.as_str(), chars.get(end)) {
+                ("b" | "c", Some('"')) => {
+                    let close = quoted(end, '"')?;
+                    tokens.push(RustToken::Literal(text_of(at, close)));
+                    at = close;
+                }
+                ("b", Some('\'')) => {
+                    let close = quoted(end, '\'')?;
+                    tokens.push(RustToken::Literal(text_of(at, close)));
+                    at = close;
+                }
+                ("r" | "br" | "cr", Some('"' | '#')) => {
+                    let mut open = end;
+                    while chars.get(open) == Some(&'#') {
+                        open += 1;
+                    }
+                    let hashes = open - end;
+                    if chars.get(open) == Some(&'"') {
+                        // A raw string: it ends at a `"` followed by as many `#`.
+                        let mut close = open + 1;
+                        loop {
+                            if close >= chars.len() {
+                                return None;
+                            }
+                            if chars[close] == '"'
+                                && (1..=hashes).all(|k| chars.get(close + k) == Some(&'#'))
+                            {
+                                break;
+                            }
+                            close += 1;
+                        }
+                        tokens.push(RustToken::Literal(text_of(at, close + 1 + hashes)));
+                        at = close + 1 + hashes;
+                    } else if prefix == "r" && hashes == 1 && chars.get(open).is_some_and(word) {
+                        // A raw identifier, read as the word it is.
+                        let mut close = open;
+                        while chars.get(close).is_some_and(word) {
+                            close += 1;
+                        }
+                        tokens.push(RustToken::Word(text_of(open, close)));
+                        at = close;
+                    } else {
+                        return None;
+                    }
+                }
+                _ => {
+                    tokens.push(RustToken::Word(prefix));
+                    at = end;
+                }
+            }
+        } else {
+            tokens.push(RustToken::Punct(c));
+            at += 1;
+        }
+    }
+    Some(tokens)
+}
+
+/// The tokens shown as plain Rust: a space between two words or literals and after a comma,
+/// and around `=`.
+fn rust_shown(tokens: &[RustToken]) -> String {
+    let mut shown = String::new();
+    let mut spaced = false;
+    for token in tokens {
+        match token {
+            RustToken::Word(text) | RustToken::Literal(text) => {
+                if spaced {
+                    shown.push(' ');
+                }
+                shown.push_str(text);
+                spaced = true;
+            }
+            RustToken::Punct(',') => {
+                shown.push_str(", ");
+                spaced = false;
+            }
+            RustToken::Punct('=') => {
+                shown.push_str(" = ");
+                spaced = false;
+            }
+            RustToken::Punct(c) => {
+                shown.push(*c);
+                spaced = false;
+            }
+        }
+    }
+    shown
+}
+
+/// `tokens` split at the commas outside every bracket; a trailing comma leaves no empty part.
+fn rust_split(tokens: &[RustToken]) -> Vec<&[RustToken]> {
+    let mut parts = Vec::new();
+    let (mut depth, mut from) = (0_usize, 0);
+    for (k, token) in tokens.iter().enumerate() {
+        match token {
+            RustToken::Punct('(' | '[' | '{') => depth += 1,
+            RustToken::Punct(')' | ']' | '}') => depth = depth.saturating_sub(1),
+            RustToken::Punct(',') if depth == 0 => {
+                parts.push(&tokens[from..k]);
+                from = k + 1;
+            }
+            _ => {}
+        }
+    }
+    if from < tokens.len() {
+        parts.push(&tokens[from..]);
+    }
+    parts
+}
+
+/// The index of the bracket that closes the one `tokens[open]` opens; `None` when none does.
+fn rust_close(tokens: &[RustToken], open: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (k, token) in tokens.iter().enumerate().skip(open) {
+        match token {
+            RustToken::Punct('(' | '[' | '{') => depth += 1,
+            RustToken::Punct(')' | ']' | '}') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(k);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The path `tokens` hold whole (`a::b`, a leading `::` dropped), its words folded to lower case;
+/// `None` when they hold anything else.
+fn rust_path(tokens: &[RustToken]) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut at = 0;
+    loop {
+        if tokens.get(at..at + 2) == Some([RustToken::Punct(':'), RustToken::Punct(':')].as_slice())
+        {
+            at += 2;
+        } else if at > 0 {
+            return None;
+        }
+        match tokens.get(at) {
+            Some(RustToken::Word(word)) => words.push(word.to_lowercase()),
+            _ => return None,
+        }
+        at += 1;
+        if at == tokens.len() {
+            return Some(words);
+        }
+    }
+}
+
+/// The lint groups ([`is_lint_group`]) an attribute's content `tokens` (inside its `[ ]`) lowers
+/// the level of: an `allow`, `expect` or `warn`, the attributes inside a `cfg_attr` or an
+/// `unsafe( )` besides; `deny`, `forbid` and every other attribute name none. `Err` when it
+/// cannot be read with certainty: a macro's `$` or a quoting `#` where a name stands, a lint
+/// level spelled as a longer path, or a lint level's or `cfg_attr`'s input in no form rustc
+/// takes.
+fn attribute_groups(tokens: &[RustToken]) -> std::result::Result<Vec<String>, ()> {
+    let named = tokens
+        .iter()
+        .position(|token| !matches!(token, RustToken::Word(_) | RustToken::Punct(':')))
+        .unwrap_or(tokens.len());
+    let Some(path) = rust_path(&tokens[..named]) else {
+        return Err(());
+    };
+    let last = path.last().map(String::as_str).unwrap_or_default();
+    let level = matches!(last, "allow" | "expect" | "warn");
+    if !(level || matches!(last, "cfg_attr" | "unsafe")) {
+        return Ok(Vec::new());
+    }
+    if path.len() > 1 {
+        return Err(());
+    }
+    // The input: one `( )` and nothing after it.
+    let rest = &tokens[named..];
+    if rest.first() != Some(&RustToken::Punct('(')) || rust_close(rest, 0) != Some(rest.len() - 1) {
+        return Err(());
+    }
+    let parts = rust_split(&rest[1..rest.len() - 1]);
+    let mut groups = Vec::new();
+    match last {
+        "cfg_attr" => {
+            if parts.len() < 2 || parts.iter().any(|part| part.is_empty()) {
+                return Err(());
+            }
+            for part in &parts[1..] {
+                groups.extend(attribute_groups(part)?);
+            }
+        }
+        "unsafe" => {
+            let [part] = parts.as_slice() else {
+                return Err(());
+            };
+            groups.extend(attribute_groups(part)?);
+        }
+        _ => {
+            for part in parts {
+                if let [
+                    RustToken::Word(key),
+                    RustToken::Punct('='),
+                    RustToken::Literal(_),
+                ] = part
+                    && key == "reason"
+                {
+                    continue;
+                }
+                let name = rust_path(part).ok_or(())?.join("::");
+                if is_lint_group(&name) {
+                    groups.push(name);
+                }
+            }
+        }
+    }
+    Ok(groups)
+}
+
+/// The lint-level attributes of the Rust source `text`, inner (`#![...]`) and outer (`#[...]`),
+/// that lower the level of a lint group ([`attribute_groups`]), each shown as plain Rust with
+/// the group; one not read with certainty with `None`. `None` when `text` does not read as Rust
+/// tokens ([`rust_tokens`]).
+fn lint_attributes(text: &str) -> Option<Vec<(String, Option<String>)>> {
+    let tokens = rust_tokens(text)?;
+    let mut found = Vec::new();
+    for (at, token) in tokens.iter().enumerate() {
+        if *token != RustToken::Punct('#') {
+            continue;
+        }
+        let mut open = at + 1;
+        if tokens.get(open) == Some(&RustToken::Punct('!')) {
+            open += 1;
+        }
+        match tokens.get(open) {
+            // `#$name[...]`: a macro chooses what follows.
+            Some(RustToken::Punct('$')) => {
+                let end = (open + 1).min(tokens.len() - 1);
+                found.push((rust_shown(&tokens[at..=end]), None));
+            }
+            Some(RustToken::Punct('[')) => match rust_close(&tokens, open) {
+                Some(close) => {
+                    let shown = rust_shown(&tokens[at..=close]);
+                    match attribute_groups(&tokens[open + 1..close]) {
+                        Ok(groups) => {
+                            found.extend(groups.into_iter().map(|g| (shown.clone(), Some(g))));
+                        }
+                        Err(()) => found.push((shown, None)),
+                    }
+                }
+                None => found.push((rust_shown(&tokens[at..]), None)),
+            },
+            _ => {}
+        }
+    }
+    Some(found)
+}
+
+/// The lint-level attributes lowering a lint group ([`lint_attributes`]) that the Rust source
+/// `after` holds more often than `before` does, each shown as plain Rust, one not read with
+/// certainty said so; the error: `after` does not read as Rust tokens. A `before` that does not
+/// read holds none.
+fn lint_attribute_changes(
+    before: &str,
+    after: &str,
+) -> std::result::Result<Vec<String>, &'static str> {
+    let after = lint_attributes(after).ok_or("after")?;
+    let mut held = lint_attributes(before).unwrap_or_default();
+    let mut added = Vec::new();
+    for entry in after {
+        if let Some(k) = held.iter().position(|old| *old == entry) {
+            held.swap_remove(k);
+            continue;
+        }
+        let named = match entry {
+            (shown, Some(_)) => shown,
+            (shown, None) => format!(
+                "an attribute the lint-attribute scanner cannot read with certainty, {shown}"
+            ),
+        };
+        if !added.contains(&named) {
+            added.push(named);
+        }
+    }
+    Ok(added)
 }
 
 /// What git stores at `path` in the commit `at`: its mode and object, or `None` when the commit
@@ -7571,6 +8005,84 @@ mod tests {
         assert_eq!(changed("[lints] x\n"), Err("after"));
         assert_eq!(changed("d = \"\"\"\n[package]\n\"\"\"\n"), Err("after"));
         assert_eq!(changed("d = [\n"), Err("after"));
+    }
+
+    /// story:the-gate-holds-against-lint-allows-in-source: the lint-level attributes lowering a
+    /// group that Rust source adds, read past comments, strings, characters and lifetimes, and
+    /// what the scanner does not read with certainty.
+    #[test]
+    fn lint_attribute_changes_names_each_group_an_attribute_adds() {
+        let base = "pub fn one() -> u8 {\n    1\n}\n";
+        let added = |after: &str| lint_attribute_changes(base, &format!("{after}\n{base}"));
+        let named = |shown: &str| Ok(vec![shown.to_owned()]);
+        assert_eq!(
+            added("#![allow(clippy::all)]"),
+            named("#![allow(clippy::all)]")
+        );
+        assert_eq!(added("#![allow(r#warnings)]"), named("#![allow(warnings)]"));
+        assert_eq!(
+            added("#![allow(CLIPPY::Pedantic, dead_code)]"),
+            named("#![allow(CLIPPY::Pedantic, dead_code)]")
+        );
+        assert_eq!(
+            added("#![allow(rust_2027_compatibility)]"),
+            named("#![allow(rust_2027_compatibility)]")
+        );
+        assert_eq!(
+            added("#![unsafe(allow(unused))]"),
+            named("#![unsafe(allow(unused))]")
+        );
+        assert_eq!(
+            added("#[cfg_attr(test, deny(warnings), allow(clippy::style))] fn f() {}"),
+            named("#[cfg_attr(test, deny(warnings), allow(clippy::style))]")
+        );
+        // A single lint, raising a level, or another attribute: nothing.
+        for quiet in [
+            "#![allow(clippy::needless_return, dead_code, reason = \"x\")]",
+            "#![deny(warnings)]",
+            "#![forbid(clippy::all)]",
+            "#![doc = \"#![allow(warnings)]\"]",
+            "#[rustfmt::skip] fn f() {}",
+            "// #![allow(warnings)]",
+            "/* /* #![allow(warnings)] */ #![allow(unused)] */",
+            "const S: &str = \"\\\"#![allow(warnings)]\";",
+            "const R: &str = r##\"\"# #![allow(warnings)]\"##;",
+            "const B: &[u8] = br#\"#[allow(unused)]\"#;",
+            "const C: char = '#'; const Q: char = '\\''; fn g<'a>(_: &'a str) {}",
+            "#!/usr/bin/env rust-script",
+        ] {
+            assert_eq!(added(quiet), Ok(Vec::new()), "{quiet}");
+        }
+        // Not read with certainty: fails closed, shown as written.
+        let uncertain = |shown: &str| {
+            Ok(vec![format!(
+                "an attribute the lint-attribute scanner cannot read with certainty, {shown}"
+            )])
+        };
+        assert_eq!(added("#![$a]"), uncertain("#![$a]"));
+        assert_eq!(added("#[allow($lint)]"), uncertain("#[allow($lint)]"));
+        assert_eq!(added("#$bang[x]"), uncertain("#$bang"));
+        assert_eq!(added("#[allow(#lint)]"), uncertain("#[allow(#lint)]"));
+        assert_eq!(added("#[allow]"), uncertain("#[allow]"));
+        assert_eq!(added("#[core::allow(x)]"), uncertain("#[core::allow(x)]"));
+        assert_eq!(added("#[cfg_attr(test)]"), uncertain("#[cfg_attr(test)]"));
+        assert_eq!(added("#[allow(a b)]"), uncertain("#[allow(a b)]"));
+        assert_eq!(added("const S: &str = \"open"), Err("after"));
+        assert_eq!(added("/* open"), Err("after"));
+        // One the base holds is the base's; a second one is added.
+        let held = "#![allow(warnings)]\nfn f() {}\n";
+        assert_eq!(
+            lint_attribute_changes(held, &format!("{held}fn g() {{}}\n")),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            lint_attribute_changes(held, &format!("{held}#[allow(warnings)] fn g() {{}}\n")),
+            named("#[allow(warnings)]")
+        );
+        assert_eq!(
+            lint_attribute_changes("/* open", held),
+            named("#![allow(warnings)]")
+        );
     }
 
     /// story:a-gate-script-with-a-colon-is-run, acceptance 2: a path a gate's command names that
