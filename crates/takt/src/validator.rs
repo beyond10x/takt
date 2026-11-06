@@ -2450,6 +2450,11 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// compared on. One that differs, was added or was deleted runs
 /// nothing and writes no record; the summary names it.
 ///
+/// What the specification and citation commands trust is compared too
+/// ([`trusted_input_changes`]): a digest a `*.citations.tsv` under `ess/` holds that the base did
+/// not hold for the same row key, and an entry the base lists in `ess/ess-inputs.yaml` or
+/// `ess/system.yaml` that the revision does not.
+///
 /// Code that runs while cargo builds (a build script, a procedural macro, a dependency's) is
 /// not closed by comparing files: the step writes the code under test, and a gate whose
 /// commands build it runs what the step wrote. `gate.green` cannot vouch for such code; the
@@ -3881,6 +3886,164 @@ fn lint_changes(before: &str, after: &str) -> std::result::Result<Vec<String>, &
     Ok(keys)
 }
 
+/// The files whose top-level lists name what the specification commands read: an entry the
+/// base lists and the revision does not is one `ess specify validate` no longer reads
+/// ([`trusted_input_changes`]).
+const SPECIFICATION_LISTS: &[&str] = &["ess/ess-inputs.yaml", "ess/system.yaml"];
+
+/// What the specification and citation commands trust that the case's branch changed between
+/// the base `at` and `revision` (story:the-gate-does-not-trust-a-step-accepted-citation), each
+/// named with its file: a digest a `*.citations.tsv` under `ess/` holds that the base did not
+/// hold for the same row key ([`citation_rows`]), since a digest says a person read the lines
+/// and a step is not that person, and an entry the base lists in a top-level list of a file of
+/// [`SPECIFICATION_LISTS`] that the revision does not ([`listed_entries`]). A row that only
+/// moved key, its cited path, needles and digest a row of the base's, is not named: inserting a
+/// citation shifts the ordinal in the keys after it. A removed row and a row without a digest are
+/// not named either; a row or a file the gate cannot read with certainty is.
+fn trusted_input_changes(tree: &Path, at: &str, revision: &str) -> Result<Vec<String>> {
+    let diff = crate::git::bytes(
+        tree,
+        &[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--name-only",
+            at,
+            revision,
+            "--",
+            "ess",
+        ],
+    )?;
+    let mut changed = Vec::new();
+    for path in nul_fields(&diff, "diff-tree", false)? {
+        if path.ends_with(".citations.tsv") {
+            let before = crate::run::manifest_at(tree, at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            let (base, _) = citation_rows(&before);
+            let (rows, unread) = citation_rows(&after);
+            if let Some(line) = unread {
+                changed.push(format!(
+                    "{path}: a row the gate cannot read with certainty, line {line}"
+                ));
+            }
+            for row in rows {
+                let Some(digest) = row.digest else {
+                    continue;
+                };
+                let held = base.iter().any(|old| {
+                    old.digest == Some(digest)
+                        && (old.key == row.key
+                            || (old.needles == row.needles
+                                && cited_path(old.key) == cited_path(row.key)))
+                });
+                if !held {
+                    changed.push(format!(
+                        "{path}: the digest of the row {}, which the base did not hold",
+                        row.key
+                    ));
+                }
+            }
+        } else if SPECIFICATION_LISTS.contains(&path) {
+            let before = crate::run::manifest_at(tree, at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            let (Some(listed), Some(kept)) = (listed_entries(&before), listed_entries(&after))
+            else {
+                changed.push(format!(
+                    "{path}: a file the gate cannot read with certainty at the base or the revision"
+                ));
+                continue;
+            };
+            for (list, entry) in listed {
+                if kept.iter().any(|(at, kept)| *at == list && *kept == entry) {
+                    continue;
+                }
+                let shown = match &entry {
+                    serde_yaml_ng::Value::String(text) => text.clone(),
+                    other => serde_yaml_ng::to_string(other)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned(),
+                };
+                changed.push(format!(
+                    "{path}: the {list} entry {shown}, which the revision no longer lists"
+                ));
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// A row of a `*.citations.tsv`: its key, its needles as written, and its digest when it has
+/// one.
+struct CitationRow<'a> {
+    key: &'a str,
+    needles: &'a str,
+    digest: Option<&'a str>,
+}
+
+/// The rows of the citations table `text`, read as `scripts/check-citations` reads them: lines
+/// split on `\n`, a trailing `\r` dropped, a blank line or one starting with `#` skipped, each
+/// other line `<key>\t<needles>[\tsha256:<64 lower-case hex digits>]`; with the number of the
+/// first line in no such form, which no row is read from.
+fn citation_rows(text: &str) -> (Vec<CitationRow<'_>>, Option<usize>) {
+    let digest_like = |field: &str| {
+        field.strip_prefix("sha256:").is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+    };
+    let (mut rows, mut unread) = (Vec::new(), None);
+    for (n, line) in text.split('\n').enumerate() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let row = match line.split('\t').collect::<Vec<_>>().as_slice() {
+            [key, needles] if !key.is_empty() => Some((*key, *needles, None)),
+            [key, needles, digest] if !key.is_empty() && digest_like(digest) => {
+                Some((*key, *needles, Some(*digest)))
+            }
+            _ => None,
+        };
+        match row {
+            Some((key, needles, digest)) => rows.push(CitationRow {
+                key,
+                needles,
+                digest,
+            }),
+            None => {
+                unread.get_or_insert(n + 1);
+            }
+        }
+    }
+    (rows, unread)
+}
+
+/// The cited path of a citations key, `<declaration>|<following line>|<path>|<k>`.
+fn cited_path(key: &str) -> Option<&str> {
+    key.rsplit('|').nth(1)
+}
+
+/// Each entry of each top-level list of the YAML `text`, with the list's key: none for an
+/// empty or absent file; `None` when it does not parse or is no mapping.
+fn listed_entries(text: &str) -> Option<Vec<(String, serde_yaml_ng::Value)>> {
+    let mapping = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).ok()? {
+        serde_yaml_ng::Value::Null => return Some(Vec::new()),
+        serde_yaml_ng::Value::Mapping(mapping) => mapping,
+        _ => return None,
+    };
+    let mut entries = Vec::new();
+    for (key, value) in mapping {
+        if let (Some(key), serde_yaml_ng::Value::Sequence(items)) = (key.as_str(), value) {
+            entries.extend(items.into_iter().map(|item| (key.to_owned(), item)));
+        }
+    }
+    Some(entries)
+}
+
 /// The lint groups a lint-level attribute names to lower the level of more than one lint, folded
 /// to lower case: `warnings`, rustc's groups (`rustc -W help`), clippy's and rustdoc's. A rustc
 /// name ending in `_compatibility` or `_idioms` is taken as a group besides ([`is_lint_group`]).
@@ -4773,6 +4936,9 @@ impl GateRun {
                     globs.push(file);
                 }
             }
+            // What the specification and citation commands trust: a digest a step recorded, an
+            // input it dropped ([`trusted_input_changes`]).
+            changed.extend(trusted_input_changes(tree, &at, revision)?);
             let globs = crate::run::parse_judge_list(&serde_yaml_ng::to_string(&globs)?)
                 .map_err(|why| anyhow!("the paths the gate compares at the base: {why}"))?;
             match judged(tree, &dir, revision, &[], globs, true)? {
