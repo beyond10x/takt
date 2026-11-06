@@ -3511,6 +3511,204 @@ fn is_tool_config(path: &str) -> bool {
     })
 }
 
+/// The names task reads in a directory a Taskfile includes, in its order.
+const TASKFILE_NAMES: [&str; 8] = [
+    "Taskfile.yml",
+    "taskfile.yml",
+    "Taskfile.yaml",
+    "taskfile.yaml",
+    "Taskfile.dist.yml",
+    "taskfile.dist.yml",
+    "Taskfile.dist.yaml",
+    "taskfile.dist.yaml",
+];
+
+/// How many Taskfiles [`taskfile_includes`] reads at most; past it nothing is read with certainty.
+const TASKFILE_BOUND: usize = 256;
+
+/// What the Taskfiles of the commit `at` include (story:the-gate-compares-taskfile-includes).
+struct TaskfileIncludes {
+    /// Every path an include names, resolved against its including file; for a directory, each
+    /// name task reads there ([`TASKFILE_NAMES`]).
+    files: Vec<String>,
+    /// Each include the gate cannot resolve with certainty, named with the file that holds it.
+    uncertain: Vec<String>,
+}
+
+/// The files every Taskfile the commit `at` holds (one named as task names it, at any depth)
+/// pulls in through `includes:`, followed into each included file in turn, each read once and
+/// [`TASKFILE_BOUND`] at most. An include is a path or a mapping's `taskfile:` (`dir:`,
+/// `optional:` and the rest decide no file), relative to the including file's directory; one
+/// the commit holds as a directory means the Taskfile task reads there, one it does not hold is
+/// compared all the same, since the branch may add it. Not resolved with certainty, and named:
+/// an include in neither form, a template (`{{`), a home or variable expansion (`~`, `$`), an
+/// absolute path, a backslash, a colon (a remote URL, a drive), one outside the tree, one
+/// through a link, and every include of a Taskfile that is not UTF-8, does not parse or holds a
+/// YAML anchor or alias (read without them, as takt reads YAML elsewhere).
+fn taskfile_includes(tree: &Path, at: &str) -> Result<TaskfileIncludes> {
+    let listed = crate::git::bytes(tree, &["ls-tree", "-r", "-z", "--full-tree", at])?;
+    let mut objects: std::collections::BTreeMap<&str, (&str, &str)> =
+        std::collections::BTreeMap::new();
+    for entry in nul_fields(&listed, "ls-tree", true)? {
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        let mut fields = meta.split_whitespace();
+        if let (Some(mode), Some(_), Some(id)) = (fields.next(), fields.next(), fields.next()) {
+            objects.insert(path, (mode, id));
+        }
+    }
+    let is_dir = |path: &str| {
+        let prefix = format!("{path}/");
+        objects
+            .range(prefix.as_str()..)
+            .next()
+            .is_some_and(|(held, _)| held.starts_with(&prefix))
+    };
+    let named = |path: &str| {
+        let last = path.rsplit('/').next().unwrap_or(path);
+        TASKFILE_NAMES
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(last))
+    };
+    let mut found = TaskfileIncludes {
+        files: Vec::new(),
+        uncertain: Vec::new(),
+    };
+    let mut queue: std::collections::VecDeque<String> = objects
+        .iter()
+        .filter(|(path, (mode, _))| named(path) && *mode != "120000")
+        .map(|(path, _)| (*path).to_owned())
+        .collect();
+    let mut read = std::collections::BTreeSet::new();
+    while let Some(file) = queue.pop_front() {
+        if !read.insert(file.clone()) {
+            continue;
+        }
+        if read.len() > TASKFILE_BOUND {
+            found.uncertain.push(format!(
+                "the Taskfiles include more than {TASKFILE_BOUND} files, which the gate does not follow with certainty"
+            ));
+            break;
+        }
+        let Some((mode, id)) = objects.get(file.as_str()) else {
+            continue;
+        };
+        if *mode == "120000" {
+            continue;
+        }
+        let Ok(text) = String::from_utf8(crate::git::blob(tree, id)?) else {
+            found
+                .uncertain
+                .push(format!("the Taskfile {file} is not UTF-8"));
+            continue;
+        };
+        let doc =
+            match crate::loop_scorecard::read_yaml::<serde_yaml_ng::Value>(Path::new(&file), &text)
+            {
+                Ok(doc) => doc,
+                Err(error) => {
+                    found.uncertain.push(format!(
+                        "the Taskfile {file} is not read with certainty: {error:#}"
+                    ));
+                    continue;
+                }
+            };
+        let includes = match doc.get("includes") {
+            None | Some(serde_yaml_ng::Value::Null) => continue,
+            Some(serde_yaml_ng::Value::Mapping(includes)) => includes,
+            Some(_) => {
+                found.uncertain.push(format!(
+                    "the includes of the Taskfile {file} are no mapping"
+                ));
+                continue;
+            }
+        };
+        let dir = file.rsplit_once('/').map_or("", |(dir, _)| dir);
+        for (key, value) in includes {
+            let key = key.as_str().unwrap_or("?");
+            let target = match value {
+                serde_yaml_ng::Value::String(target) => Some(target.as_str()),
+                serde_yaml_ng::Value::Mapping(entry) => {
+                    entry.get("taskfile").and_then(serde_yaml_ng::Value::as_str)
+                }
+                _ => None,
+            };
+            let Some(target) = target else {
+                found.uncertain.push(format!(
+                    "the Taskfile {file} includes `{key}` neither as a path nor as a mapping's taskfile"
+                ));
+                continue;
+            };
+            let unsure = || {
+                format!(
+                    "the Taskfile {file} includes `{target}`, which the gate cannot resolve with certainty"
+                )
+            };
+            if target.is_empty()
+                || target.contains("{{")
+                || target.starts_with(['/', '~'])
+                || target.contains(['$', '\\', ':'])
+            {
+                found.uncertain.push(unsure());
+                continue;
+            }
+            let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+            let mut outside = false;
+            for part in target.split('/') {
+                match part {
+                    "" | "." => {}
+                    ".." => outside |= parts.pop().is_none(),
+                    part => parts.push(part),
+                }
+            }
+            if outside {
+                found.uncertain.push(unsure());
+                continue;
+            }
+            let through = (1..=parts.len()).find_map(|end| {
+                let prefix = parts[..end].join("/");
+                objects
+                    .get(prefix.as_str())
+                    .is_some_and(|(mode, _)| *mode == "120000")
+                    .then_some(prefix)
+            });
+            if let Some(link) = through {
+                found.uncertain.push(format!(
+                    "the Taskfile {file} includes `{target}`, through the link {link}"
+                ));
+                continue;
+            }
+            let path = parts.join("/");
+            if objects.contains_key(path.as_str()) {
+                found.files.push(path.clone());
+                queue.push_back(path);
+            } else {
+                // A directory is the Taskfile task reads in it; a path the commit does not hold
+                // is compared as a file and as a directory, whichever the branch adds.
+                let held = path.is_empty() || is_dir(&path);
+                if !held {
+                    found.files.push(path.clone());
+                }
+                for name in TASKFILE_NAMES {
+                    let candidate = if path.is_empty() {
+                        name.to_owned()
+                    } else {
+                        format!("{path}/{name}")
+                    };
+                    if held && objects.contains_key(candidate.as_str()) {
+                        queue.push_back(candidate.clone());
+                    }
+                    found.files.push(candidate);
+                }
+            }
+        }
+    }
+    found.files.sort();
+    found.files.dedup();
+    Ok(found)
+}
+
 /// The parts of the TOML key `key` (`a.b`, `"a".'b'`): bare, or quoted without an escape. `None`
 /// for anything else, which the caller does not read with certainty.
 fn key_parts(key: &str) -> Option<Vec<String>> {
@@ -4072,6 +4270,17 @@ impl GateRun {
                     arguments.unread.join("; ")
                 )));
             }
+            // What the base's Taskfiles pull in through `includes:` ([`taskfile_includes`]),
+            // compared as tool configuration is: an include not resolved with certainty runs
+            // nothing.
+            let included = taskfile_includes(tree, &at)?;
+            if !included.uncertain.is_empty() {
+                return Ok(nothing_recorded(format!(
+                    "the gates document {document}: not run; {}; no record, the claim stays unknown",
+                    included.uncertain.join("; ")
+                )));
+            }
+            files.extend(included.files);
             for argument in arguments.paths {
                 if !object_at(tree, &at, &argument)?.is_some_and(|o| o.starts_with("040000 ")) {
                     files.push(argument);

@@ -1976,7 +1976,7 @@ types:
   # underscore in the record. Pass and `not_applicable` are met; the rest are not.
   # read from: crates/takt/src/obligations.rs:18-29
   # read from: crates/takt/src/obligations.rs:335-341
-  # read from: crates/takt/src/validator.rs:4274-4286
+  # read from: crates/takt/src/validator.rs:4483-4495
   - name: takt.work.ObligationStatus
     kind: enum
     variants: [open, pass, fail, not_applicable, not_yet_run]
@@ -2268,9 +2268,9 @@ types:
   # `--test-cmd` split at white space; the `gate.run` validator over the gates document `--gates`
   # names, taken from the case's base commit; `pr.open`, `ci.read` and `repository.merge` through
   # the forge, the last admissible only under a recorded grant at the case's revision.
-  # read from: crates/takt/src/validator.rs:5384
-  # read from: crates/takt/src/validator.rs:4512
-  # read from: crates/takt/src/validator.rs:5163
+  # read from: crates/takt/src/validator.rs:5593
+  # read from: crates/takt/src/validator.rs:4721
+  # read from: crates/takt/src/validator.rs:5372
   # read from: crates/takt/src/validator.rs:2435
   # read from: docs/design/takt.md:78
   # read from: crates/takt/src/validator.rs:1861-1863
@@ -2615,8 +2615,8 @@ types:
   # read from: crates/takt/src/forge/relay.rs:101-112
   # read from: crates/takt/src/forge/relay.rs:177-203
   # read from: crates/takt/src/forge/relay.rs:221-273
-  # read from: crates/takt/src/validator.rs:5003-5005
-  # read from: crates/takt/src/validator.rs:6377-6383
+  # read from: crates/takt/src/validator.rs:5212-5214
+  # read from: crates/takt/src/validator.rs:6586-6592
   # `local` is a bare repository on this machine, the hub the tree's `origin` names by its path,
   # outside the tree and sharing neither its git directory nor its object files with it (a tree
   # cloned with `git clone --no-local`): the push is `git push` to the hub, a request is a record
@@ -2800,7 +2800,7 @@ types:
   # what is left of the hour budget; a run with neither a step nor an hour budget does not wait;
   # a `pass` or `fail` read writes one `ci_result` record about the implementation revision.
   # read from: crates/takt/src/forge/gitlab.rs:786-789
-  # read from: crates/takt/src/validator.rs:5301-5320
+  # read from: crates/takt/src/validator.rs:5510-5529
   # read from: crates/takt/src/run.rs:9683-9686
   # read from: crates/takt/src/run.rs:9710-9713
   # read from: crates/takt/src/run.rs:11050-11055
@@ -3814,14 +3814,14 @@ types:
   # grants nothing at a judge-surface merge and reads as before on any other merge.
   # read from: .engineering/planning/story/judge-guard.md:145
   # read from: crates/takt/src/case.rs:1266-1268
-  # read from: crates/takt/src/validator.rs:6315-6321
+  # read from: crates/takt/src/validator.rs:6524-6530
   # The same rule, through the same function, holds an improvement turn's
   # `candidate.merge_judge_surface`: the owner's grant, or an agent role's under an unrevoked
   # delegation in `.engineering/delegations.yaml` at the mainline's tip (the forge's `main`,
   # the local `main` under `--forge none`), never an agent's for a change to an owner-only
   # file; `takt approve` takes the grant, and `candidate.merge_judge_surface` records nothing
   # on any other (story:self-improvement-protocol, part 2, correction 2).
-  # read from: crates/takt/src/validator.rs:6301-6308
+  # read from: crates/takt/src/validator.rs:6510-6517
   # read from: crates/takt/src/improvement.rs:1330-1336
   # A turn's judge-surface grant authorises only a merge made after it: `takt approve` records
   # the mainline's tip with the grant, read once the grant's instant is taken through the forge
@@ -3857,8 +3857,8 @@ types:
   # capability, it says when it was given, and it holds no revocation.
   # read from: .engineering/planning/story/judge-guard.md:58-62
   # read from: .engineering/planning/design/recursive-self-improvement.md:54-58
-  # read from: crates/takt/src/validator.rs:5539-5559
-  # read from: crates/takt/src/validator.rs:5470-5479
+  # read from: crates/takt/src/validator.rs:5748-5768
+  # read from: crates/takt/src/validator.rs:5679-5688
   # An unattended run grants the merge itself as `agent:takt-delivery`
   # (story:an-unattended-run-merges-under-a-delegated-grant): when an evaluation of the open case
   # finds `repository.merge` approval-required, the case holds no grant of it, and
@@ -3879,8 +3879,8 @@ types:
   # read from: crates/takt/src/run.rs:442-448
   # read from: crates/takt/src/run.rs:11434-11481
   # read from: crates/takt/src/run.rs:12853-12859
-  # read from: crates/takt/src/validator.rs:6388-6420
-  # read from: crates/takt/src/validator.rs:6175-6197
+  # read from: crates/takt/src/validator.rs:6597-6629
+  # read from: crates/takt/src/validator.rs:6384-6406
   # read from: crates/takt/src/case.rs:1214-1231
   - name: takt.work.Delegation
     kind: struct
@@ -4135,7 +4135,7 @@ types:
   # read from: crates/takt/src/confinement.rs:383-389
   # read from: crates/takt/src/confinement.rs:1285-1310
   # read from: crates/takt/src/confinement.rs:1314-1326
-  # read from: crates/takt/src/validator.rs:4173-4192
+  # read from: crates/takt/src/validator.rs:4382-4401
   # read from: crates/takt-cli/src/main.rs:1285-1303
   # read from: crates/takt/src/confinement.rs:330-334
   # read from: crates/takt/src/confinement.rs:360-369
@@ -4662,7 +4662,7 @@ entities:
       # read from: b10x-canon 0.7.0, crates/canon/src/eval/authority.rs:7-21
       # read from: b10x-canon 0.7.0, crates/canon/src/eval/mod.rs:362-368
       # read from: crates/takt/src/case.rs:4090-4107
-      # read from: crates/takt/src/validator.rs:6513
+      # read from: crates/takt/src/validator.rs:6722
       # read from: crates/takt/src/case.rs:667-673
       # read from: crates/takt/src/case.rs:1406-1412
       # read from: crates/takt/src/case.rs:1966-1979
@@ -5417,7 +5417,7 @@ entities:
   # read from: crates/takt/src/run.rs:7255-7287
   # read from: crates/takt/src/run.rs:1461-1477
   # read from: crates/takt/src/run.rs:14267-14368
-  # read from: crates/takt/src/validator.rs:6923-7010
+  # read from: crates/takt/src/validator.rs:7132-7219
   # read from: crates/takt/src/commit_style.rs:360-364
   # read from: crates/takt/src/run.rs:1998-2007
   # read from: crates/takt/src/run.rs:9880-9882
@@ -5579,7 +5579,7 @@ entities:
       # every observation, record or not.
       # read from: crates/takt/src/validator.rs:33-49
       # read from: crates/takt/src/run.rs:12408-12421
-      # read from: crates/takt/src/validator.rs:4313
+      # read from: crates/takt/src/validator.rs:4522
       - name: artifact
         type: Optional<String>
         summary: The retained file's name under the case's `artifacts/`.
@@ -5739,7 +5739,11 @@ entities:
   # command takes as an argument but a directory the base holds there, the tool configuration
   # `.cargo/config`, `.cargo/config.toml`, `clippy.toml`, `.clippy.toml`, `rustfmt.toml`,
   # `.rustfmt.toml`, `Taskfile.yml`, `Taskfile.yaml`, `Taskfile.dist.yml` and
-  # `Taskfile.dist.yaml` by name at any depth, a link there too, the entries of the `[lints]` and
+  # `Taskfile.dist.yaml` by name at any depth, every file a Taskfile the base holds pulls in
+  # through `includes:`, followed into each included file (an include the gate cannot resolve
+  # with certainty, a template, an expansion, an absolute path, one outside the tree or through a
+  # link, or a remote URL, runs nothing and is named), a link there too, the entries of the
+  # `[lints]` and
   # `[workspace.lints]` tables of every cargo manifest (a manifest the scanner cannot read with
   # certainty counts as changed), what Python loads from the tree for its commands and
   # providers, read as the step guard reads a test command, the binding's `env` before its
@@ -5920,45 +5924,45 @@ entities:
   # (story:self-improvement-protocol S1, part 2).
   # Each built-in validator defines its action and kind,
   # and the list the step choice reads is built from them.
-  # read from: crates/takt/src/validator.rs:5393-5397
+  # read from: crates/takt/src/validator.rs:5602-5606
   # read from: crates/takt/src/run.rs:438-440
-  # read from: crates/takt/src/validator.rs:4521-4525
-  # read from: crates/takt/src/validator.rs:5171-5175
+  # read from: crates/takt/src/validator.rs:4730-4734
+  # read from: crates/takt/src/validator.rs:5380-5384
   # read from: crates/takt/src/validator.rs:2398-2418
   # read from: crates/takt/src/validator.rs:2456-2460
-  # read from: crates/takt/src/validator.rs:4152
+  # read from: crates/takt/src/validator.rs:4361
   # read from: crates/takt/src/validator.rs:1-2
   # read from: crates/takt/src/validator.rs:62-116
   # read from: crates/takt/src/validator.rs:2236-2250
   # read from: crates/takt/src/validator.rs:1849-1851
   # read from: crates/takt/src/validator.rs:2329-2344
   # read from: crates/takt/src/forge.rs:1498-1521
-  # read from: crates/takt/src/validator.rs:4958
-  # read from: crates/takt/src/validator.rs:6513
+  # read from: crates/takt/src/validator.rs:5167
+  # read from: crates/takt/src/validator.rs:6722
   # read from: docs/design/takt.md:69-71
   # read from: docs/design/takt.md:86-88
   # read from: crates/takt/src/forge.rs:1684-1731
   # read from: crates/takt/src/validator.rs:1427-1447
-  # read from: crates/takt/src/validator.rs:7024-7047
+  # read from: crates/takt/src/validator.rs:7233-7256
   # read from: crates/takt/src/git.rs:3140-3144
-  # read from: crates/takt/src/validator.rs:7137-7247
+  # read from: crates/takt/src/validator.rs:7346-7456
   # read from: crates/takt/src/git.rs:3811-3818
   # read from: crates/takt/src/validator.rs:2261-2269
   # read from: crates/takt/src/run.rs:12300-12323
   # read from: crates/takt/src/validator.rs:2277-2293
-  # read from: crates/takt/src/validator.rs:3747-3755
-  # read from: crates/takt/src/validator.rs:4167-4172
-  # read from: crates/takt/src/validator.rs:4992-5004
-  # read from: crates/takt/src/validator.rs:6602-6620
+  # read from: crates/takt/src/validator.rs:3945-3953
+  # read from: crates/takt/src/validator.rs:4376-4381
+  # read from: crates/takt/src/validator.rs:5201-5213
+  # read from: crates/takt/src/validator.rs:6811-6829
   # read from: crates/takt/src/validator.rs:1813-1838
   # read from: crates/takt/src/validator.rs:1452
-  # read from: crates/takt/src/validator.rs:6960-6972
+  # read from: crates/takt/src/validator.rs:7169-7181
   # read from: crates/takt/src/forge.rs:806-829
   # read from: crates/takt/src/confinement.rs:461-499
   # read from: crates/takt/src/improvement.rs:515-523
   # read from: crates/takt/src/improvement.rs:666-672
   # read from: crates/takt/src/improvement.rs:845-855
-  # read from: crates/takt/src/validator.rs:6975-6993
+  # read from: crates/takt/src/validator.rs:7184-7202
   # read from: crates/takt/src/improvement.rs:328-402
   # read from: crates/takt/src/improvement.rs:406-475
   # read from: crates/takt/src/confinement.rs:579-637
@@ -5966,8 +5970,8 @@ entities:
   # read from: crates/takt/src/validator.rs:1646-1660
   # read from: crates/takt/src/validator.rs:2589-2647
   # read from: crates/takt/src/validator.rs:3481-3511
-  # read from: crates/takt/src/validator.rs:4050-4138
-  # read from: crates/takt/src/validator.rs:3575-3660
+  # read from: crates/takt/src/validator.rs:4248-4348
+  # read from: crates/takt/src/validator.rs:3773-3858
   # read from: crates/takt/src/validator.rs:1505-1517
   # read from: crates/takt/src/validator.rs:2430-2433
   # read from: crates/takt/src/validator.rs:1456-1487
@@ -5975,9 +5979,9 @@ entities:
   # read from: crates/takt/src/validator.rs:2420-2428
   # read from: crates/takt/src/validator.rs:3124-3153
   # read from: crates/takt/src/validator.rs:3437-3441
-  # read from: crates/takt/src/validator.rs:4090-4094
-  # read from: crates/takt/src/validator.rs:4095-4120
-  # read from: crates/takt/src/validator.rs:4143-4148
+  # read from: crates/takt/src/validator.rs:4299-4303
+  # read from: crates/takt/src/validator.rs:4304-4329
+  # read from: crates/takt/src/validator.rs:4352-4357
   # read from: crates/takt/src/validator.rs:3220-3228
   # read from: crates/takt/src/validator.rs:3252-3272
   # read from: crates/takt/src/validator.rs:3319-3332
@@ -6003,25 +6007,25 @@ entities:
   # read from: crates/takt/src/run.rs:6353-6401
   # read from: crates/takt/src/run.rs:6432-6435
   # read from: crates/takt/src/run.rs:3820-3827
-  # read from: crates/takt/src/validator.rs:7038-7045
-  # read from: crates/takt/src/validator.rs:7058-7115
-  # read from: crates/takt/src/validator.rs:7257-7278
+  # read from: crates/takt/src/validator.rs:7247-7254
+  # read from: crates/takt/src/validator.rs:7267-7324
+  # read from: crates/takt/src/validator.rs:7466-7487
   # read from: crates/takt/src/git.rs:3171-3234
   # read from: crates/takt/src/run.rs:14454-14463
   # read from: crates/takt/src/run.rs:14468-14513
   # read from: crates/takt/src/run.rs:14517-14525
-  # read from: crates/takt/src/validator.rs:4496-4500
-  # read from: crates/takt/src/validator.rs:5039-5115
+  # read from: crates/takt/src/validator.rs:4705-4709
+  # read from: crates/takt/src/validator.rs:5248-5324
   # read from: crates/takt/src/forge.rs:795-804
   # read from: crates/takt-cli/src/main.rs:3121-3125
-  # read from: crates/takt/src/validator.rs:4504-4511
-  # read from: crates/takt/src/validator.rs:5373-5383
-  # read from: crates/takt/src/validator.rs:5415-5464
-  # read from: crates/takt/src/validator.rs:6756-6827
-  # read from: crates/takt/src/validator.rs:6789-6804
-  # read from: crates/takt/src/validator.rs:5782-5807
-  # read from: crates/takt/src/validator.rs:5865-5879
-  # read from: crates/takt/src/validator.rs:6560-6591
+  # read from: crates/takt/src/validator.rs:4713-4720
+  # read from: crates/takt/src/validator.rs:5582-5592
+  # read from: crates/takt/src/validator.rs:5624-5673
+  # read from: crates/takt/src/validator.rs:6965-7036
+  # read from: crates/takt/src/validator.rs:6998-7013
+  # read from: crates/takt/src/validator.rs:5991-6016
+  # read from: crates/takt/src/validator.rs:6074-6088
+  # read from: crates/takt/src/validator.rs:6769-6800
   # read from: crates/takt/src/forge/gitlab.rs:725-762
   # read from: crates/takt/src/forge/gitlab.rs:524-533
   # read from: crates/takt/src/forge/local.rs:658-707
@@ -6197,8 +6201,8 @@ entities:
   # read from: crates/takt/src/case.rs:597-598
   # read from: crates/takt/src/case.rs:564-591
   # read from: crates/takt/src/case.rs:168-196
-  # read from: crates/takt/src/validator.rs:4802-4806
-  # read from: crates/takt/src/validator.rs:4909
+  # read from: crates/takt/src/validator.rs:5011-5015
+  # read from: crates/takt/src/validator.rs:5118
   - name: takt.work.CaseBranch
     naming:
       summary: >-
@@ -6875,8 +6879,8 @@ entities:
   # read from: .engineering/planning/story/judge-guard.md:122
   # Decided by the planner (story:judge-guard, D3, D7): both files are read at the merge target's
   # tip as the forge reports it; a forge that cannot report it merges nothing.
-  # read from: crates/takt/src/validator.rs:5470-5475
-  # read from: crates/takt/src/validator.rs:5565-5579
+  # read from: crates/takt/src/validator.rs:5679-5684
+  # read from: crates/takt/src/validator.rs:5774-5788
   # read from: crates/takt/src/forge.rs:617-620
   - name: takt.work.DelegationRecord
     naming:
@@ -6937,16 +6941,16 @@ entities:
   # read from: .engineering/planning/story/judge-guard.md:87
   # read from: .engineering/planning/story/judge-guard.md:122
   # read from: .engineering/judge-allow.yaml
-  # read from: crates/takt/src/validator.rs:5466-5468
+  # read from: crates/takt/src/validator.rs:5675-5677
   # read from: crates/takt/src/run.rs:6714-6722
-  # read from: crates/takt/src/validator.rs:6050-6054
-  # read from: crates/takt/src/validator.rs:6094
-  # read from: crates/takt/src/validator.rs:6199
-  # read from: crates/takt/src/validator.rs:5981
+  # read from: crates/takt/src/validator.rs:6259-6263
+  # read from: crates/takt/src/validator.rs:6303
+  # read from: crates/takt/src/validator.rs:6408
+  # read from: crates/takt/src/validator.rs:6190
   # read from: crates/takt/src/git.rs:3816-3817
-  # read from: crates/takt/src/validator.rs:6035
-  # read from: crates/takt/src/validator.rs:6213
-  # read from: crates/takt/src/validator.rs:6744
+  # read from: crates/takt/src/validator.rs:6244
+  # read from: crates/takt/src/validator.rs:6422
+  # read from: crates/takt/src/validator.rs:6953
   # read from: crates/takt/src/git.rs:3696
   - name: takt.work.JudgeAllowList
     naming:
