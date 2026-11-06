@@ -4,7 +4,7 @@ metadata:
   name: takt-demo
   namespace: agents
 spec:
-  image: {repository: registry.example/takt, tag: "0.33.0"}
+  image: {repository: registry.example/takt, tag: "0.34.0"}
   command:
     entrypoint:
       - tini

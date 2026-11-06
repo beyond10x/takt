@@ -1,6 +1,6 @@
 # Wave 56: work sources, the aep and command sources
 
-Stage: **approved**, units a-d and the review corrections committed, gate next. `wave/56` branches from fedfbc28c, the release of 0.33.0, and merges `store/close-wave-55` (the
+Stage: **approved**, units a-d, the review corrections and the release preparation committed, gate next. `wave/56` branches from fedfbc28c, the release of 0.33.0, and merges `store/close-wave-55` (the
 close-out of wave 55) first, as 407ff3e56. Skill version 0.26.0 (aep:implementing, wave mode). Approved: approval-record:wave-56-work-sources.
 Release: 0.34.0.
 
