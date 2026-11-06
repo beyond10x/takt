@@ -1,6 +1,6 @@
 # Wave 55: the gate holds against a step's edits
 
-Stage: **gate**: units a-d, the review correction and the release preparation are in. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
+Stage: **pull request**: the local gate passed at 017b756f6. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
 close-out of wave 54) first, as bfe7871f5. Skill version 0.26.0 (aep:implementing, wave mode). Approved: approval-record:wave-55-gate-holds.
 Release: 0.33.0.
 
@@ -80,3 +80,20 @@ The adversary pass found 8 red cases of 11, the security review 2 blockers and 4
 approval-record:wave-55-review-correction decided them: the ones inside the stories' acceptance were fixed in
 dbd7bba5f, and nine `rsi` drafts take the rest. Unit b keeps the strict anchor rule
 (approval-record:wave-55-taskfile-anchors).
+
+## Gate
+
+| stage | head | exit | wall | in slot | peak `target/` | result |
+|---|---|---|---|---|---|---|
+| `task check-static` | 017b756f6 | 0 | 381 s | 29 s | 4.7G | every step 0; citations 1480 resolved, 43 releases in form |
+| `task test-cli` | 017b756f6 | 201 | 389 s | 189 s | 11G | stopped after 24 of 131 binaries at the one failure below |
+| `cargo test --locked -p b10x-takt-cli --no-fail-fast` | 017b756f6 | 101 | 732 s | 460 s | 11G | 938 passed, 1 failed, 5 ignored, 131 binaries |
+| library, targeted: `-p b10x-takt --lib` and 13 test targets | 017b756f6 | 0 | 182 s | 182 s | 4.2G | 436 passed, 0 failed, 3 ignored, 14 binaries |
+
+- The one `test-cli` failure, `finding_scripts::the_predicate_reaches_no_network_ipc_or_socket_of_the_host`, is the
+  host's, as in wave 54: the `ipip` module is loaded, so every new network namespace holds `tunl0` beside `lo` ("interfaces
+  lo tunl0" in the log). No commit of the wave touches it; it counts green, and CI runs it on hosts without `tunl0`.
+- The build cache was discarded between `test-cli` and the library stage (10634 MiB).
+- The library stage's 13 targets: the five gate targets, `w55_adversary`, `w55_security`, `gate_validator`,
+  `confinement`, `step_cannot_forge_its_validators`, `step_forge_reviewer_routes`, `step_cannot_forge_adv2` and
+  `w54_adversary`. The whole library suite runs on the pull request's CI.
