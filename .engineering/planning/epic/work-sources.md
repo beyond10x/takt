@@ -7,7 +7,7 @@ title: 'Work sources: a run takes its work from the tracker a team plans in'
 summary: '--work <key> and an ordered work list: aep, jira, github, gitlab, command'
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # Epic: work-sources
 
@@ -29,7 +29,8 @@ the work comes from.
   `work = ["aep", "jira@team-a?label=takt-ready"]`; takt takes the first ready item.
 - The case keeps the item's key, its revision and its text as `intent.md` with its digest, as a story case does today
   (`crates/takt/src/case.rs`, the `intent` artifact revision); a later edit of the ticket changes nothing in an open case.
-- The commit trailer `Refs:` (`crates/takt/src/commit_style.rs`) carries the item's key.
+- The commit trailer `Refs:` (`crates/takt/src/commit_style.rs`) carries the item's key; an `aep` item keeps `Refs: <story id>`
+  (approval-record:wave-56-work-model-points).
 - The source runs in takt's control plane, outside the harness session: no tracker credential reaches the harness, a
   prompt or a case record.
 

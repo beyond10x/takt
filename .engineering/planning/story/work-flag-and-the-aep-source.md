@@ -20,7 +20,7 @@ scope:
   path: crates/takt/src/frontier.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 7}
 - {from: "proposed", to: "active", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 8}
@@ -32,7 +32,8 @@ transitions:
 `takt run --work <key>` names the item a run works on, and the run file's `work` key lists the sources the next ready
 item comes from, in order. The `aep` source is today's planning store behind the new noun: `--work aep:story:x` behaves
 as `--story story:x` does (the story must be ready; its open case is resumed first), and `work = ["aep"]` is the
-default. The case records the item's key; the `Refs:` trailer carries it.
+default. The case records the item's key; the `Refs:` trailer carries the full key for every source but `aep`, whose
+trailer stays `Refs: <story id>`.
 
 ## Context
 
@@ -44,11 +45,12 @@ default. The case records the item's key; the `Refs:` trailer carries it.
 
 ## Case id for a tracker key
 
-`aep` keeps `story-<name>-<instant>`. Any other source mints `<source>-<slug>-<instant>`: the key's id part lowercased,
-each run of characters outside `[a-z0-9._]` one `-`, at most 48 characters, and, when that loses anything (case, a
-character mapped, a cut), `-` and the first 8 hex digits of the sha256 of the full key. `jira:ABC-12` is
-`jira-abc-12-<h8>-<instant>`; `github:owner/repo#42` is `github-owner-repo-42-<h8>-<instant>`. The id passes
-`check_id`, and two keys never share a slug. The full key is recorded in the case beside the id.
+`aep` keeps `story-<name>-<instant>`. Any other source mints `<source>-<slug>-<h8>-<instant>`: the slug is the key's
+connection and id (`team-a-abc-12` for `jira@team-a:ABC-12`), lowercased, each run of characters outside `[a-z0-9_]` one
+`-`, at most 48 characters; `<h8>` is the first 8 hex digits of the sha256 of the full key, always
+(approval-record:wave-56-work-model-points, point 9). `jira:ABC-12` is `jira-abc-12-<h8>-<instant>`;
+`github:owner/repo#42` is `github-owner-repo-42-<h8>-<instant>`. The id passes `check_id`, and two keys never share an
+id. The full key is recorded in the case beside the id.
 
 ## Acceptance
 

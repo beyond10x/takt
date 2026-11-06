@@ -47,6 +47,18 @@ types:
   # naming it, and takes the next. A branch the validators resolve the case from, or a case's
   # branch a run reads the base from (to read the store, or to fork a new case), is shown the
   # same way and refused when it names no case, before its name is joined to a path.
+  # Declared ahead of the code (story:work-flag-and-the-aep-source): a case opened on a work item
+  # (takt.work.Key) of the `aep` source keeps `story-<name>-<instant>`; one of any other source
+  # mints `<source>-<slug>-<h8>-<instant>`. The slug is the key's connection, when it names one,
+  # then `-` and the key's id, lowercased, each run of characters outside `[a-z0-9_]` one `-`
+  # (so no `.` and never `..`), at most 48 characters; `<h8>` is the first 8 hex digits of the
+  # sha256 of the full key, always, so keys that differ only in case, in a mapped character or
+  # in their connection get different ids: `jira:ABC-12`
+  # is `jira-abc-12-<h8>-<instant>`, `jira@team-a:ABC-12` `jira-team-a-abc-12-<h8>-<instant>`,
+  # `github:owner/repo#42` `github-owner-repo-42-<h8>-<instant>`. The minted id passes the case
+  # id rule above, and the full key is recorded in the case beside it (takt.work.Case
+  # `item_key`). The slug's alphabet, the connection in it and the hash on every id are
+  # approval-record:wave-56-work-model-points (point 9).
   # read from: crates/takt/src/run.rs:9888
   # read from: crates/takt/src/frontier.rs:71-75
   # read from: crates/takt/src/case.rs:3255
@@ -58,6 +70,8 @@ types:
   # read from: crates/takt/src/run.rs:8725-8726
   # read from: crates/takt/src/run.rs:10494-10501
   # read from: crates/takt/src/case.rs:150-152
+  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:48-53
+  # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:35-39
   - name: takt.work.CaseId
     kind: newtype
     of: String
@@ -142,6 +156,11 @@ types:
   # recorded for it already), is refused before any case opens, exit 1, naming the story and
   # why, the tree put back on the branch or commit it was on; a `self.improvement/1` turn,
   # which opens on its finding, refuses `--story`.
+  # Widened ahead of the code (story:work-items-in-the-ess-model): the unit is an intent or a
+  # work item (takt.work.Item) from a work source, and a story of the planning store is the `aep`
+  # item, its key `aep:<story id>`, so the `item` variant replaces the `story` one. The kernel
+  # today holds the story alone, `Unit::Story` with the story's id, title and body: the `aep`
+  # item before it carries a key, a URL and a revision.
   # read from: docs/design/takt.md:44
   # read from: crates/takt/src/frontier.rs:175-183
   # read from: crates/takt/src/frontier.rs:191
@@ -154,12 +173,131 @@ types:
   # read from: crates/takt-cli/src/main.rs:2206-2269
   # read from: crates/takt-cli/src/main.rs:4309-4313
   # read from: crates/takt-cli/src/main.rs:4367-4396
+  # read from: crates/takt/src/frontier.rs:80-88
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:25-26
   - name: takt.work.Unit
     kind: union
     tag: kind
     variants:
       intent: String
-      story: takt.work.StoryId
+      item: takt.work.Item
+
+  # Where a run's work comes from, named by the tracker a team plans in and not by the transport
+  # that reaches it: `aep`, takt's planning store, the one source a run had before; `jira`, a
+  # Jira instance; `github` and `gitlab`, the issues of a project there; `command`, a team's own
+  # CLI the run file's `work_commands` names (takt.work.WorkCommands), for a tracker no connector
+  # serves. Connectors is how takt reaches `jira`, `github` and `gitlab`, and is no source name.
+  # A source runs in takt's control plane, outside the harness session: no tracker credential
+  # reaches the harness, a prompt or a case record. Declared ahead of the code.
+  # read from: .engineering/planning/epic/work-sources.md:23-24
+  # read from: .engineering/planning/epic/work-sources.md:34-35
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:23-24
+  - name: takt.work.SourceName
+    kind: enum
+    variants: [aep, jira, github, gitlab, command]
+
+  # A work source: its name and the connection that tells several connections of one tracker
+  # apart, written `<name>@<connection>` (`jira@team-a`). A connection holds what a forge
+  # instance does: letters, digits, `.`, `_` and `-`, and is not empty. Written without one, the
+  # connection is implicit when the tracker has only one; when it has several, the source is
+  # refused before a case opens, naming them. An entry of the run file's `work` list is a source
+  # in that written form. Declared ahead of the code; the connection's characters and the
+  # refusal are approval-record:wave-56-work-model-points (points 1 and 2). As a forge instance
+  # (`is_instance_name`), a connection does not start with `-` and holds at most 128 bytes (the
+  # record's addendum).
+  # read from: .engineering/planning/epic/work-sources.md:25-26
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:24-25
+  # read from: crates/takt/src/forge/connectors.rs:471-481
+  # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:23-25
+  # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:46-47
+  - name: takt.work.Source
+    kind: struct
+    fields:
+      - name: name
+        type: takt.work.SourceName
+      - name: connection
+        type: Optional<String>
+
+  # A work item's key, naming its source: `<source>[@<connection>]:<id>`, the source a
+  # takt.work.SourceName, the connection as takt.work.Source writes it, and the id, everything
+  # after the first `:`, the source's own id of the item, which may itself hold `:`, `/` and `#`.
+  # `aep:story:x` is the planning store's story `story:x`; `jira:ABC-12` an issue of the only
+  # Jira connection, `jira@team-a:ABC-12` one of the connection `team-a`; `github:owner/repo#42`
+  # and `gitlab:group/project#7` an issue of a project there. `takt run --work <key>` names one
+  # item; `--story <id>` stays and means `--work aep:<id>`, with its ready check and its resume of
+  # an open case. The case records the key beside its id (takt.work.Case `item_key`), and the
+  # commit trailer of an item of any source but `aep` carries it (takt.work.CommitSettings).
+  # Declared ahead of the code.
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:38-39
+  # read from: .engineering/planning/epic/work-sources.md:25-27
+  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:32-36
+  - name: takt.work.Key
+    kind: newtype
+    of: String
+
+  # A work item as its source hands it over, a `takt.work-item/1` document: its format, its key,
+  # its title, its body, the URL a person opens it at, its revision, and its labels when it has
+  # any. A document of another `format` is refused. An `aep` item has no URL; its revision is the
+  # store's revision of the story. A tracker's revision is the item's etag or its update time.
+  # The case's `intent.md` is the title, a blank line and the body, as a story's is, and the case
+  # keeps the key and the revision, so a later edit of the item changes nothing in an open case.
+  # A story the frontier takes is the `aep` item; the kernel's `Story` holds its id, title and
+  # body today. The `command` source's `read` and `select` print one as JSON; output that is not
+  # one, or names another key than the one asked for, is refused before a case opens, naming the
+  # command. Declared ahead of the code; `format`, the optional `url` and the revision of each
+  # source are approval-record:wave-56-work-model-points (points 3 and 4).
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:25-26
+  # read from: .engineering/planning/story/the-command-work-source.md:28-31
+  # read from: .engineering/planning/story/the-command-work-source.md:44-45
+  # read from: .engineering/planning/epic/work-sources.md:30-31
+  # read from: crates/takt/src/frontier.rs:50-66
+  # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:26-28
+  - name: takt.work.Item
+    kind: struct
+    fields:
+      - name: format
+        type: String
+        summary: The only accepted value is `takt.work-item/1`.
+      - name: key
+        type: takt.work.Key
+      - name: title
+        type: String
+      - name: body
+        type: String
+      - name: url
+        type: Optional<String>
+      - name: revision
+        type: String
+      - name: labels
+        type: Optional<List<String>>
+
+  # The `work_commands` section of a run file, read for the `command` source: one argument list
+  # per action, a list of strings and never a shell line, as `forge_commands` is
+  # (takt.work.ForgeCommands). `read` prints the item of one id, for `--work command:<id>`, and
+  # takes the placeholder `{id}`; `select` prints the next ready item, for `command` in the `work`
+  # list, or nothing when none is ready, and the run then says there is no ready work and exits
+  # as a run with no story does. Each prints one `takt.work-item/1` document (takt.work.Item) on
+  # standard output, and each child is started with no credential in its environment beyond what
+  # the run file passes. An exit code in `refused_exit`, from 1 to 255, is a refusal, any other
+  # non-zero exit a failure, as for the command forge. A run whose `--work` key or `work` list
+  # needs an entry the section lacks is refused before a case opens, naming the entry. Declared
+  # ahead of the code; `{id}`, `refused_exit` and the refusal of a missing entry are
+  # approval-record:wave-56-work-model-points (point 5).
+  # read from: .engineering/planning/story/the-command-work-source.md:28-31
+  # read from: .engineering/planning/story/the-command-work-source.md:35-36
+  # read from: .engineering/planning/story/the-command-work-source.md:43-46
+  # read from: crates/takt/src/forge/command.rs:125-126
+  # read from: crates/takt/src/forge/command.rs:341-345
+  # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:29-30
+  - name: takt.work.WorkCommands
+    kind: struct
+    fields:
+      - name: read
+        type: Optional<List<String>>
+      - name: select
+        type: Optional<List<String>>
+      - name: refused_exit
+        type: Optional<List<Integer>>
 
   # An action the protocol declares, by id (`tests.run`, `implementation.edit`, `repository.merge`).
   # Carries canon.protocol.ActionId (protocol.yaml:58).
@@ -743,6 +881,27 @@ types:
         type: Optional<List<takt.work.SetupCommand>>
       - name: credential
         type: Optional<takt.work.CredentialSource>
+      # The sources the next ready item comes from, in order, each a takt.work.Source as written
+      # (`aep`, `jira@team-a`): takt takes the first ready item. A flat key, as `forge_instance`
+      # is. No `work` key is `["aep"]`, the planning store as before; a source name that is no
+      # takt.work.SourceName is refused, naming it. An entry is a source name with an optional
+      # `@<connection>` and nothing else: a filter after `?`, as the epic's example
+      # `jira@team-a?label=takt-ready` carries, is refused in this release and belongs to
+      # story:work-from-jira-github-and-gitlab. Declared ahead of the code; the refusal of a
+      # filter is approval-record:wave-56-work-model-points (point 6).
+      # read from: .engineering/planning/epic/work-sources.md:28-29
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:32-36
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:43-44
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:59-60
+      # read from: crates/takt/src/run_config.rs:268-272
+      # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:31-32
+      - name: work
+        type: Optional<List<String>>
+      # The argument lists the `command` source runs (takt.work.WorkCommands). Declared ahead of
+      # the code.
+      # read from: .engineering/planning/story/the-command-work-source.md:28-31
+      - name: work_commands
+        type: Optional<takt.work.WorkCommands>
 
   # How the message of a step commit is written. `semantic`, the default: the harness's reply
   # carries `commit: {subject, body}`, asked for as `<type>: <imperative subject>` of at most 72
@@ -768,8 +927,17 @@ types:
   # `tests.write` is `test` and `implementation.edit` is `fix` when the story carries the tag
   # `bug` and `feat` otherwise, and an action it does not name is `chore`. A key of another
   # name, a style of another name or a value of another type is refused naming the section.
+  # The trailer's value is the case's story id today, none for a case with no story. Declared
+  # ahead of the code (story:work-flag-and-the-aep-source): an `aep` item keeps its story id
+  # (`Refs: story:x`, unchanged); an item of any other source writes its full key
+  # (takt.work.Key, `Refs: jira@team-a:ABC-12`). The `aep` exception is
+  # approval-record:wave-56-work-model-points.
   # read from: crates/takt/src/commit_style.rs
   # read from: crates/takt/src/run_config.rs
+  # read from: crates/takt/src/commit_style.rs:519-521
+  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:35-36
+  # read from: .engineering/planning/epic/work-sources.md:32-33
+  # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:41-42
   - name: takt.work.CommitSettings
     kind: struct
     fields:
@@ -4593,6 +4761,26 @@ entities:
       # read from: crates/takt/src/run.rs:9919
       - name: story
         type: Optional<takt.work.StoryId>
+      # The key of the work item the case was opened for (takt.work.Key), `item_key` in
+      # `case.yaml`, recorded beside the case id: `aep:<story id>` for a story, beside `story`;
+      # absent for a case opened on a bare intent. A story case opened before the member existed
+      # holds `story` alone and reads as the key `aep:<story id>`. Declared ahead of the code;
+      # the member's name and the reading of an older case are
+      # approval-record:wave-56-work-model-points (point 7).
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:51-53
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:61-63
+      # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:33
+      - name: item_key
+        type: Optional<takt.work.Key>
+      # The item's revision as its source reported it when the case was opened
+      # (takt.work.Item `revision`), `item_revision` in `case.yaml`, so a later edit of the item
+      # changes nothing in an open case; absent when `item_key` is absent. Declared ahead of the
+      # code; the member's name is approval-record:wave-56-work-model-points (point 8).
+      # read from: .engineering/planning/epic/work-sources.md:30-31
+      # read from: .engineering/planning/story/the-command-work-source.md:41-42
+      # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:34
+      - name: item_revision
+        type: Optional<String>
       # The case that dispatched this one, `parent` in `case.yaml`: absent for a case a run
       # opened itself, set for a child `case.dispatch` opened (takt.work.Dispatch). Canon reads
       # neither this key nor `worktree`; it is takt's own record of where the child belongs.
