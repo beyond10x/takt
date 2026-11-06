@@ -3924,13 +3924,19 @@ mod tests {
                 Err(std::io::Error::other("the pipe broke"))
             }
         }
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("start a process that outlives the read");
+        // A git as takt starts every git, through the confinement seam, that waits on its
+        // standard input, held open below, so it outlives the read.
+        let mut child = command(
+            Path::new(env!("CARGO_MANIFEST_DIR")),
+            &["hash-object", "--stdin"],
+        )
+        .expect("a git command")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start a git that outlives the read");
+        let _input = child.stdin.take().expect("its standard input");
         let pid = libc::pid_t::try_from(child.id()).expect("a process id");
         let mut stream = child.stderr.take().expect("its standard error");
         let joined = Arc::new(AtomicBool::new(false));

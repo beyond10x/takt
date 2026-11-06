@@ -1,7 +1,8 @@
 //! Adversary cases for wave 54, library level.
 //!
 //! - story:a-git-read-error-leaves-no-process: a bounded git read leaves no process of this
-//!   test binary behind, on the over-limit path and on a git that exits non-zero.
+//!   test binary behind, on the over-limit path and on a git that exits non-zero (Linux only:
+//!   the children of this process are read from `/proc`).
 //! - story:test-cmd-checked-before-open: `TestsRun::check_program` admits what the test step
 //!   can start and refuses what it cannot, the step being `TestsRun::observe` under `none`.
 //!
@@ -71,7 +72,8 @@ fn repository(outer: &Path, files: &[(&str, &[u8], u32)]) -> (PathBuf, String) {
 }
 
 /// The process ids that are children of this process, zombies included, read from every
-/// thread's `children` list.
+/// thread's `children` list. Linux only: it reads `/proc`.
+#[cfg(target_os = "linux")]
 fn children() -> Vec<String> {
     let mut found = Vec::new();
     for task in fs::read_dir("/proc/self/task")
@@ -88,6 +90,7 @@ fn children() -> Vec<String> {
 
 /// story:a-git-read-error-leaves-no-process: `run_bounded` past its limit kills git and waits
 /// for it; no process of this binary is left, not even an unwaited one.
+#[cfg(target_os = "linux")]
 #[test]
 fn w54_a_run_bounded_past_its_limit_leaves_no_git_process() {
     let _one = one_at_a_time();
@@ -106,6 +109,7 @@ fn w54_a_run_bounded_past_its_limit_leaves_no_git_process() {
 
 /// story:a-git-read-error-leaves-no-process: a git that exits non-zero is an error naming what
 /// git said, and leaves no process.
+#[cfg(target_os = "linux")]
 #[test]
 fn w54_a_run_bounded_on_a_failing_git_names_it_and_leaves_no_process() {
     let _one = one_at_a_time();
