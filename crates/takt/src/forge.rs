@@ -655,6 +655,51 @@ pub trait Runner {
     /// Runs `argv` in `tree` with `env` set for this line alone. No default: every runner says
     /// what it does with `env`, one that starts no process (a test's) that it drops it.
     fn run_env(&self, tree: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<Exit>;
+    /// Runs `argv` in `tree` as [`Self::run`] does, for a line whose standard output is read
+    /// whole, as one document: a runner that keeps only the last bytes of a longer output
+    /// refuses it ([`OutputCut`]) instead of answering what is left. By default [`Self::run`],
+    /// for a runner that never cuts (a test's).
+    fn run_whole(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
+        self.run(tree, argv)
+    }
+}
+
+/// The error [`Runner::run_whole`] answers for a program whose standard output was longer than
+/// the runner keeps: its text names the program and the limit, and nothing it printed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OutputCut {
+    /// The program's file name.
+    pub program: String,
+    /// How many bytes of standard output the runner keeps.
+    pub limit: usize,
+    /// How many bytes it printed in all.
+    pub printed: u64,
+}
+
+impl fmt::Display for OutputCut {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} printed {} bytes on its standard output, past the limit of {}, of which only the last are kept",
+            self.program,
+            self.printed,
+            OutputCut::size(self.limit)
+        )
+    }
+}
+
+impl std::error::Error for OutputCut {}
+
+impl OutputCut {
+    /// `bytes` as a person reads a limit: whole MiB as `8 MiB`, else the bytes.
+    #[must_use]
+    pub fn size(bytes: usize) -> String {
+        if bytes >= 1 << 20 && bytes.is_multiple_of(1 << 20) {
+            format!("{} MiB", bytes >> 20)
+        } else {
+            format!("{bytes} bytes")
+        }
+    }
 }
 
 /// What a child process takt starts is held to: killed, with what it started, once it has run
@@ -1689,6 +1734,19 @@ impl Runner for Process {
     fn run_env(&self, tree: &Path, argv: &[String], env: &[(&str, &str)]) -> Result<Exit> {
         self.run_with(tree, argv, env)
     }
+
+    fn run_whole(&self, tree: &Path, argv: &[String]) -> Result<Exit> {
+        let finished = self.finish_keeping(tree, argv, &[], |_| false)?;
+        if finished.stdout_cut {
+            return Err(OutputCut {
+                program: argv[0].clone(),
+                limit: self.limits.output,
+                printed: finished.stdout_len,
+            }
+            .into());
+        }
+        Ok(Self::exit_of(&finished))
+    }
 }
 
 impl Process {
@@ -1713,6 +1771,27 @@ impl Process {
         env: &[(&str, &str)],
         keep: fn(&str) -> bool,
     ) -> Result<Exit> {
+        Ok(Self::exit_of(&self.finish_keeping(tree, argv, env, keep)?))
+    }
+
+    /// What [`Self::run_keeping`] answers of `finished`: its code, and its output as text.
+    fn exit_of(finished: &Finished) -> Exit {
+        Exit {
+            code: finished.code,
+            stdout: String::from_utf8_lossy(&finished.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&finished.stderr).into_owned(),
+        }
+    }
+
+    /// Runs `argv` as [`Self::run_keeping`] does, answering how it finished, whether its
+    /// output was cut among it.
+    fn finish_keeping(
+        &self,
+        tree: &Path,
+        argv: &[String],
+        env: &[(&str, &str)],
+        keep: fn(&str) -> bool,
+    ) -> Result<Finished> {
         let (program, args) = argv
             .split_first()
             .ok_or_else(|| anyhow!("an empty argument line"))?;
@@ -1728,13 +1807,8 @@ impl Process {
             .envs(NO_PROMPT)
             .envs(env.iter().copied());
         without_credentials(&mut command, keep);
-        let finished = run_child(&mut command, self.limits)
-            .with_context(|| format!("run {} in {}", argv.join(" "), tree.display()))?;
-        Ok(Exit {
-            code: finished.code,
-            stdout: String::from_utf8_lossy(&finished.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&finished.stderr).into_owned(),
-        })
+        run_child(&mut command, self.limits)
+            .with_context(|| format!("run {} in {}", argv.join(" "), tree.display()))
     }
 }
 

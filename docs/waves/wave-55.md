@@ -1,6 +1,6 @@
 # Wave 55: the gate holds against a step's edits
 
-Stage: **pull request**: the local gate passed at 017b756f6. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
+Stage: **delivered**. Released as 0.33.0 from fedfbc28c, the merge of pull request 62. `wave/55` branches from 9e7a3904e, the release of 0.32.0, and merges `store/close-wave-54` (the
 close-out of wave 54) first, as bfe7871f5. Skill version 0.26.0 (aep:implementing, wave mode). Approved: approval-record:wave-55-gate-holds.
 Release: 0.33.0.
 
@@ -97,3 +97,16 @@ dbd7bba5f, and nine `rsi` drafts take the rest. Unit b keeps the strict anchor r
 - The library stage's 13 targets: the five gate targets, `w55_adversary`, `w55_security`, `gate_validator`,
   `confinement`, `step_cannot_forge_its_validators`, `step_forge_reviewer_routes`, `step_cannot_forge_adv2` and
   `w54_adversary`. The whole library suite runs on the pull request's CI.
+
+## Delivery
+
+Pull request 62 first went red on CI on two jobs, neither from a change of the wave: `takt / darwin (test-cli)` was never
+picked up by a runner ("The job was not acquired by Runner of type hosted even after multiple attempts"), and `takt /
+task check (test-library)` failed `macos_confinement::a_marked_process_in_a_session_of_its_own_is_killed_by_the_sweep_and_by_the_end_of_run_child`
+("stage 2 wrote no pid" within 10 s), a test no commit of the wave touches; the same target passed 5/5 locally at
+7ad1ad146. Both failed jobs were run again and passed, and the pull request passed its 7 checks. It was merged as
+fedfbc28c, main's check run 42215134770 passed, and the tag 0.33.0 was pushed; Release run 42217830116 published the
+release with its assets, and verify-release passed. review-result:w55-adv-1 records the review.
+
+The stories' close-out is a store-only commit on `store/close-wave-55`, cut from fedfbc28c. It rides along with the
+next takt wave, whose integration branch merges it.

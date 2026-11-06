@@ -11,7 +11,7 @@ tags:
 - rsi
 relations:
 - serves: vision:safe-agentic-coding
-revision: 1
+revision: 2
 ---
 # The current Claude Code is not a qualified harness binary
 
@@ -46,3 +46,9 @@ Code. The fix is upstream (metaharness), then a loom and takt pin move.
 
 The default harness runs with the Claude Code a newcomer installs today, or the install guide
 names the version to install and the command that installs it.
+
+## Trial, 2026-11-06
+
+A takt trial on 2026-11-06 found Claude Code 2.1.319 installed, which the pinned metaharness Claude adapter
+(`metaharness-claude` 0.23.0 in `Cargo.lock`) does not qualify either: the default harness stops `HarnessUnqualified`
+before its first step. The predicate above still holds at 0.33.0.

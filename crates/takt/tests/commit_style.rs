@@ -250,6 +250,8 @@ struct Case<'a> {
     agents: Option<&'a str>,
     story: bool,
     settings: Option<Settings>,
+    /// The key of the work item the case records as it opens, as `takt run` records it.
+    item: Option<&'a str>,
     turns: Vec<Turn>,
 }
 
@@ -261,6 +263,7 @@ impl<'a> Case<'a> {
             agents: None,
             story: true,
             settings: None,
+            item: None,
             turns,
         }
     }
@@ -305,6 +308,11 @@ impl<'a> Case<'a> {
             Run::open(&tree, options, &harness, &validators)
         }
         .expect("opens");
+        if let Some(key) = self.item {
+            run.case
+                .record_item(key, Some("1"))
+                .expect("the item is recorded");
+        }
         if let Some(settings) = self.settings {
             run.commit_settings(settings);
         }
@@ -523,6 +531,43 @@ fn an_intent_case_has_no_trailer() {
         "feat: add the numbers instead of subtracting"
     );
     assert!(left.case.starts_with("commit-style"));
+}
+
+/// story:the-command-work-source: a case opened on an item of the `command` source writes its
+/// full key as the trailer, `Refs: command:<id>`; a story case that records its `aep` key keeps
+/// `Refs: <story id>` (approval-record:wave-56-work-model-points).
+#[test]
+fn an_item_case_writes_its_key_and_an_aep_item_its_story() {
+    let mut case = Case::of(
+        "command-item",
+        vec![Turn::edit(semantic(
+            "feat: add the numbers instead of subtracting",
+        ))],
+    );
+    case.story = false;
+    case.item = Some("command:T-1");
+    let left = case.run();
+    assert_eq!(
+        trailers(&left.tree, &left.messages[0]),
+        ["Refs: command:T-1"],
+        "{}",
+        left.messages[0]
+    );
+
+    let mut case = Case::of(
+        "aep-item",
+        vec![Turn::edit(semantic(
+            "feat: add the numbers instead of subtracting",
+        ))],
+    );
+    case.item = Some("aep:story:add");
+    let left = case.run();
+    assert_eq!(
+        trailers(&left.tree, &left.messages[0]),
+        ["Refs: story:add"],
+        "{}",
+        left.messages[0]
+    );
 }
 
 /// Acceptance 6: `style: action` gives `<action>: <summary>` plus the trailer.

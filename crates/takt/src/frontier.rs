@@ -315,12 +315,17 @@ pub fn is_story_store_path(path: &str, story: &str) -> bool {
 /// fall together, and a record that cannot be written takes the commit back, the case's branch
 /// reset to where it was, and is the error. A refusal records nothing here; it is the
 /// caller's to record. The commit carries `identity`, the case's ([`crate::case::CaseDir::committer`]).
+/// An untracked or ignored file under the deployment's paths `own` is no uncommitted work and
+/// no part of what the write changed: it is neither refused, nor committed, nor discarded
+/// ([`crate::git::DeploymentPaths`]).
+#[allow(clippy::too_many_arguments)]
 pub fn write_on_case_branch(
     tree: &Path,
     branch: &str,
     identity: &crate::git::CommitIdentity,
     story: &str,
     subject: &str,
+    own: &crate::git::DeploymentPaths,
     write: impl FnOnce() -> Result<Written>,
     recorded: impl FnOnce(Option<&str>) -> Result<()>,
 ) -> Result<std::result::Result<Option<String>, String>> {
@@ -332,7 +337,7 @@ pub fn write_on_case_branch(
             on.as_deref().unwrap_or("a detached HEAD")
         ));
     }
-    let uncommitted = crate::git::uncommitted(tree)?;
+    let uncommitted = crate::git::uncommitted_outside(tree, own)?;
     if !uncommitted.is_empty() {
         return Err(anyhow!(
             "the tree {} has uncommitted work: {}; the store's write is committed on {branch} with exactly what it changes; nothing was written",
@@ -342,7 +347,7 @@ pub fn write_on_case_branch(
     }
     let before = crate::git::head(tree)?;
     let discard = |why: String| -> anyhow::Error {
-        match crate::git::discard_uncommitted(tree) {
+        match crate::git::discard_uncommitted_outside(tree, own) {
             Ok(()) => anyhow!("{why}; what it changed was discarded"),
             Err(error) => anyhow!("{why}; what it changed could not be discarded: {error:#}"),
         }
@@ -350,14 +355,14 @@ pub fn write_on_case_branch(
     let written = match write() {
         Ok(written) => written,
         Err(error) => {
-            return Err(if crate::git::uncommitted(tree)?.is_empty() {
+            return Err(if crate::git::uncommitted_outside(tree, own)?.is_empty() {
                 error
             } else {
                 discard(format!("{error:#}"))
             });
         }
     };
-    let changed = crate::git::uncommitted(tree)?;
+    let changed = crate::git::uncommitted_outside(tree, own)?;
     if let Written::Refused(refusal) = written {
         if !changed.is_empty() {
             return Err(discard(format!(
@@ -778,6 +783,277 @@ impl Frontier for Aep {
     }
 }
 
+/// Where a run's work comes from (`takt.work.SourceName`), named by the tracker a team plans in:
+/// `aep`, the planning store; `jira`; `github` and `gitlab`, the issues of a project there; and
+/// `command`, a team's own command line. This release serves [`SERVED`] alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SourceName {
+    /// The planning store, read through the `aep` command line ([`Aep`]).
+    Aep,
+    /// A Jira instance.
+    Jira,
+    /// The issues of a GitHub project.
+    Github,
+    /// The issues of a GitLab project.
+    Gitlab,
+    /// A team's own command line.
+    Command,
+}
+
+impl SourceName {
+    /// Every source name, in the order the model declares them.
+    pub const ALL: [Self; 5] = [
+        Self::Aep,
+        Self::Jira,
+        Self::Github,
+        Self::Gitlab,
+        Self::Command,
+    ];
+
+    /// The name as a key and a `work` entry write it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Aep => "aep",
+            Self::Jira => "jira",
+            Self::Github => "github",
+            Self::Gitlab => "gitlab",
+            Self::Command => "command",
+        }
+    }
+
+    /// The source `text` names, exactly; `None` for any other text.
+    #[must_use]
+    pub fn named(text: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|name| name.as_str() == text)
+    }
+}
+
+/// The sources this release serves: a key or a `work` entry of any other is refused before a
+/// case opens, naming these ([`Source::served`]). `command` runs the run file's `work_commands`
+/// ([`crate::work::command`]).
+pub const SERVED: [SourceName; 2] = [SourceName::Aep, SourceName::Command];
+
+/// `names` as a list in words: `a`, `a and b`, `a, b and c`.
+fn listed_in_words(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => (*one).to_owned(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+/// A work source (`takt.work.Source`): its name and, written `<name>@<connection>`, the
+/// connection that tells several connections of one tracker apart. A run file's `work` entry is
+/// one in this written form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Source {
+    /// The source's name.
+    pub name: SourceName,
+    /// The connection, when one is written.
+    pub connection: Option<String>,
+}
+
+impl Source {
+    /// The planning store, `aep`: the source of a run with no `work` key.
+    #[must_use]
+    pub fn aep() -> Self {
+        Self {
+            name: SourceName::Aep,
+            connection: None,
+        }
+    }
+
+    /// The source `text` writes, `<name>[@<connection>]`; why it is none: a filter after `?`
+    /// (refused in this release, approval-record:wave-56-work-model-points point 6), a name that
+    /// is no [`SourceName`], a connection that is no word a forge instance takes
+    /// ([`crate::forge::connectors::is_instance_name`], point 1 and its addendum), or a
+    /// connection on `aep`, the one planning store of the repository, or on `command`, the one
+    /// `work_commands` section of the run file.
+    pub fn parse(text: &str) -> std::result::Result<Self, String> {
+        if text.contains('?') {
+            return Err(format!(
+                "`{}`: a filter after `?` is refused in this release; a source is its name with an optional `@<connection>`",
+                text.escape_debug()
+            ));
+        }
+        let (name, connection) = match text.split_once('@') {
+            Some((name, connection)) => (name, Some(connection)),
+            None => (text, None),
+        };
+        let Some(name) = SourceName::named(name) else {
+            let all: Vec<&str> = SourceName::ALL.iter().map(|name| name.as_str()).collect();
+            return Err(format!(
+                "`{}` is no work source; the sources are {}",
+                name.escape_debug(),
+                listed_in_words(&all)
+            ));
+        };
+        if let Some(connection) = connection {
+            if name == SourceName::Aep {
+                return Err(
+                    "the source aep takes no connection: it is the repository's own planning store"
+                        .to_owned(),
+                );
+            }
+            if name == SourceName::Command {
+                return Err(
+                    "the source command takes no connection: it runs the one `work_commands` section of the run file"
+                        .to_owned(),
+                );
+            }
+            if !crate::forge::connectors::is_instance_name(connection) {
+                return Err(format!(
+                    "`{}` is no connection of {}: a connection is a word of letters, digits, `.`, `_` and `-`, at most 128 bytes, not starting with `-`",
+                    connection.escape_debug(),
+                    name.as_str()
+                ));
+            }
+        }
+        Ok(Self {
+            name,
+            connection: connection.map(str::to_owned),
+        })
+    }
+
+    /// Refuses a source this release does not serve ([`SERVED`]), naming the ones it serves.
+    pub fn served(&self) -> std::result::Result<(), String> {
+        if SERVED.contains(&self.name) {
+            return Ok(());
+        }
+        let served: Vec<&str> = SERVED.iter().map(|name| name.as_str()).collect();
+        Err(match served.as_slice() {
+            [one] => format!(
+                "`{self}` is a work source this release does not serve: this release serves the work source {one} alone"
+            ),
+            all => format!(
+                "`{self}` is a work source this release does not serve: this release serves the work sources {}",
+                listed_in_words(all)
+            ),
+        })
+    }
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name.as_str())?;
+        if let Some(connection) = &self.connection {
+            write!(f, "@{connection}")?;
+        }
+        Ok(())
+    }
+}
+
+/// The most characters of a case id's slug minted from a key ([`Key::case_id_at`]).
+pub const SLUG_MAX: usize = 48;
+
+/// A work item's key (`takt.work.Key`), `<source>[@<connection>]:<id>`: the source as [`Source`]
+/// writes it and the id, everything after the first `:`, the source's own id of the item, which
+/// may itself hold `:`, `/` and `#`. `aep:story:x` is the planning store's story `story:x`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Key {
+    source: Source,
+    id: String,
+}
+
+impl Key {
+    /// The key `text` writes; why it is none: no `:`, a source [`Source::parse`] refuses, no id,
+    /// an id starting with `-`, which a command line given it as an argument of its own reads
+    /// as an option, or an id holding a character that would not show as itself in a trailer
+    /// or a message: a control, whitespace, separator or format character, or a
+    /// default-ignorable code point, as the case id rule refuses ([`crate::case::check_id`]).
+    pub fn parse(text: &str) -> std::result::Result<Self, String> {
+        let Some((source, id)) = text.split_once(':') else {
+            return Err(
+                "a key is `<source>[@<connection>]:<id>`, such as `aep:story:x` or `jira:ABC-12`"
+                    .to_owned(),
+            );
+        };
+        let source = Source::parse(source)?;
+        if id.is_empty() {
+            return Err(format!("the key names no id after `{source}:`"));
+        }
+        if id.starts_with('-') {
+            return Err(
+                "its id starts with `-`, which a command line reads as an option".to_owned(),
+            );
+        }
+        if let Some(c) = id.chars().find(|c| crate::case::is_unshowable(*c)) {
+            return Err(format!(
+                "its id holds U+{:04X}, a character that does not show as itself",
+                u32::from(c)
+            ));
+        }
+        Ok(Self {
+            source,
+            id: id.to_owned(),
+        })
+    }
+
+    /// The key of the planning store's story `story`, `aep:<story id>`.
+    #[must_use]
+    pub fn aep(story: &str) -> Self {
+        Self {
+            source: Source::aep(),
+            id: story.to_owned(),
+        }
+    }
+
+    /// The source.
+    #[must_use]
+    pub fn source(&self) -> &Source {
+        &self.source
+    }
+
+    /// The source's own id of the item: a story id for `aep`.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// The id of a case opened for the item at `instant`, the instant as [`crate::now`] writes it
+    /// with its separators dropped. An `aep` key keeps a story's, `story-<name>-<instant>`
+    /// ([`Story::case_id`]). Any other mints `<source>-<slug>-<h8>-<instant>`
+    /// (approval-record:wave-56-work-model-points point 9): the slug the connection, when the
+    /// key names one, then `-` and the id, lowercased, each run of characters outside
+    /// `[a-z0-9_]` one `-`, at most [`SLUG_MAX`] characters; `<h8>` the first 8 hex digits of the
+    /// sha256 of the full key, always, so keys that differ only in case, in a mapped character or
+    /// in their connection get different ids. The id holds no `.`, so no `..`, and passes
+    /// [`crate::case::check_id`].
+    #[must_use]
+    pub fn case_id_at(&self, instant: &str) -> String {
+        let instant = instant.replace([':', '-'], "");
+        if self.source.name == SourceName::Aep {
+            return format!("{}-{instant}", self.id.replace(':', "-"));
+        }
+        let written = match &self.source.connection {
+            Some(connection) => format!("{connection}-{}", self.id),
+            None => self.id.clone(),
+        };
+        let mut slug = String::new();
+        for c in written.chars().map(|c| c.to_ascii_lowercase()) {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' {
+                slug.push(c);
+            } else if !slug.ends_with('-') {
+                slug.push('-');
+            }
+        }
+        slug.truncate(SLUG_MAX);
+        let h8: String = Sha256::digest(self.to_string().as_bytes())
+            .iter()
+            .take(4)
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        format!("{}-{slug}-{h8}-{instant}", self.source.name.as_str())
+    }
+}
+
+impl std::fmt::Display for Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.source, self.id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -965,5 +1241,167 @@ mod tests {
             "takt&x=y",
         );
         assert_eq!(reference.matches('#').count(), 1, "{reference}");
+    }
+
+    /// story:work-flag-and-the-aep-source: a key is `<source>[@<connection>]:<id>`, the id
+    /// everything after the first `:`; the source one of the five names, the connection a forge
+    /// instance's word (approval-record:wave-56-work-model-points, point 1 and its addendum).
+    #[test]
+    fn a_key_reads_its_source_connection_and_id() {
+        let key = Key::parse("aep:story:x").expect("an aep key");
+        assert_eq!(key.source().name, SourceName::Aep);
+        assert_eq!(key.source().connection, None);
+        assert_eq!(key.id(), "story:x");
+        assert_eq!(key.to_string(), "aep:story:x");
+        assert_eq!(Key::aep("story:x"), key);
+        let key = Key::parse("jira@team-a:ABC-12").expect("a jira key");
+        assert_eq!(key.source().name, SourceName::Jira);
+        assert_eq!(key.source().connection.as_deref(), Some("team-a"));
+        assert_eq!(key.id(), "ABC-12");
+        assert_eq!(key.to_string(), "jira@team-a:ABC-12");
+        let key = Key::parse("github:owner/repo#42").expect("a github key");
+        assert_eq!(key.source().name, SourceName::Github);
+        assert_eq!(key.id(), "owner/repo#42");
+        for name in ["aep", "jira", "github", "gitlab", "command"] {
+            assert_eq!(
+                Key::parse(&format!("{name}:x"))
+                    .expect("a key")
+                    .source()
+                    .name
+                    .as_str(),
+                name
+            );
+        }
+        let long = "a".repeat(128);
+        assert!(Key::parse(&format!("jira@{long}:x")).is_ok());
+        for (text, why) in [
+            ("aep", "a key is `<source>[@<connection>]:<id>`"),
+            ("aep:", "names no id"),
+            ("linear:X-1", "`linear` is no work source"),
+            ("Jira:X-1", "`Jira` is no work source"),
+            ("jira@:X-1", "connection"),
+            ("jira@-a:X-1", "connection"),
+            ("jira@a/b:X-1", "connection"),
+            ("jira@a b:X-1", "connection"),
+            (&format!("jira@{long}a:X-1"), "connection"),
+            ("aep@main:story:x", "the source aep takes no connection"),
+            ("jira:A\nB", "a character that does not show"),
+            ("jira:A B", "a character that does not show"),
+        ] {
+            let refusal = Key::parse(text).expect_err(text);
+            assert!(refusal.contains(why), "{text}: ({why}) {refusal}");
+        }
+    }
+
+    /// A `work` entry is a source name with an optional `@<connection>` and nothing else
+    /// (point 6): a filter after `?` is refused, and so is a name no source has.
+    #[test]
+    fn a_work_entry_is_a_source_and_its_connection() {
+        assert_eq!(Source::parse("aep"), Ok(Source::aep()));
+        let source = Source::parse("jira@team-a").expect("a source");
+        assert_eq!(source.name, SourceName::Jira);
+        assert_eq!(source.connection.as_deref(), Some("team-a"));
+        assert_eq!(source.to_string(), "jira@team-a");
+        for (text, why) in [
+            (
+                "jira@team-a?label=takt-ready",
+                "a filter after `?` is refused",
+            ),
+            ("jira?label=x", "a filter after `?` is refused"),
+            ("linear", "`linear` is no work source"),
+            ("", "`` is no work source"),
+            ("jira@", "connection"),
+            ("aep@x", "the source aep takes no connection"),
+            ("command@x", "the source command takes no connection"),
+        ] {
+            let refusal = Source::parse(text).expect_err(text);
+            assert!(refusal.contains(why), "{text}: ({why}) {refusal}");
+        }
+    }
+
+    /// This release serves `aep` and, since story:the-command-work-source, `command`; every
+    /// other source is refused naming the served ones.
+    #[test]
+    fn only_aep_and_command_are_served() {
+        assert_eq!(Source::aep().served(), Ok(()));
+        assert_eq!(Source::parse("command").expect("a source").served(), Ok(()));
+        for name in ["jira", "github", "gitlab", "jira@team-a"] {
+            let refusal = Source::parse(name)
+                .expect("a source")
+                .served()
+                .expect_err(name);
+            assert!(
+                refusal.contains("this release serves the work sources aep and command"),
+                "{name}: {refusal}"
+            );
+            assert!(refusal.contains(&format!("`{name}`")), "{name}: {refusal}");
+        }
+    }
+
+    /// Point 9: an `aep` key keeps `story-<name>-<instant>`; any other mints
+    /// `<source>-<slug>-<h8>-<instant>`, the slug the connection and the id lowercased with each
+    /// run outside `[a-z0-9_]` one `-`, at most 48 characters, `<h8>` the first 8 hex digits of
+    /// the sha256 of the full key. Every id passes the case id rule, and keys that differ only in
+    /// case, in one mapped character or in their connection get different ids.
+    #[test]
+    fn a_tracker_key_mints_a_case_id_with_its_hash() {
+        const AT: &str = "2026-10-18T12:00:00Z";
+        let story = Story {
+            id: "story:ready-one".to_owned(),
+            title: String::new(),
+            body: String::new(),
+        };
+        assert_eq!(
+            Key::aep("story:ready-one").case_id_at(AT),
+            story.case_id(AT)
+        );
+        assert_eq!(
+            Key::aep("story:ready-one").case_id_at(AT),
+            "story-ready-one-20261018T120000Z"
+        );
+        let h8 = |key: &str| -> String {
+            Sha256::digest(key.as_bytes())
+                .iter()
+                .take(4)
+                .map(|byte| format!("{byte:02x}"))
+                .collect()
+        };
+        for (key, slug) in [
+            ("jira:ABC-12", "jira-abc-12"),
+            ("jira@team-a:ABC-12", "jira-team-a-abc-12"),
+            ("github:owner/repo#42", "github-owner-repo-42"),
+            ("gitlab:group/sub/project#7", "gitlab-group-sub-project-7"),
+            ("jira:A..B", "jira-a-b"),
+            ("command:snake_case.ID", "command-snake_case-id"),
+            ("jira@team-:#x", "jira-team-x"),
+        ] {
+            let id = Key::parse(key).expect(key).case_id_at(AT);
+            assert_eq!(id, format!("{slug}-{}-20261018T120000Z", h8(key)), "{key}");
+            crate::case::check_id(&id).unwrap_or_else(|error| panic!("{key}: {id}: {error:#}"));
+        }
+        let long = format!("jira:{}", "Ab.".repeat(40));
+        let id = Key::parse(&long).expect("a long key").case_id_at(AT);
+        let slug = id
+            .strip_prefix("jira-")
+            .and_then(|rest| rest.strip_suffix(&format!("-{}-20261018T120000Z", h8(&long))))
+            .expect("the shape");
+        assert_eq!(slug.len(), 48, "{id}");
+        crate::case::check_id(&id).expect("a long key's id");
+        for (one, other) in [
+            ("jira:ABC-12", "jira:abc-12"),
+            ("jira:ABC-12", "jira:ABC.12"),
+            ("jira:ABC-12", "jira:ABC_12"),
+            ("github:o/r#1", "github:o/r-1"),
+            ("jira@a:x-1", "jira@b:x-1"),
+            ("jira@a:x-1", "jira:a-x-1"),
+        ] {
+            let (one_id, other_id) = (
+                Key::parse(one).expect(one).case_id_at(AT),
+                Key::parse(other).expect(other).case_id_at(AT),
+            );
+            assert_ne!(one_id, other_id, "{one} and {other}");
+            crate::case::check_id(&one_id).expect(one);
+            crate::case::check_id(&other_id).expect(other);
+        }
     }
 }

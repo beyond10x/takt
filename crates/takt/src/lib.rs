@@ -32,6 +32,7 @@ pub mod scorecard;
 pub mod trace;
 pub mod validator;
 pub mod view;
+pub mod work;
 pub mod workspace;
 
 pub use case::{CaseDir, Decision};

@@ -809,6 +809,19 @@ impl Declined {
     }
 }
 
+/// The decline that holds for the case `case_id` at `case_dir` now ([`Declined::now`]), as
+/// `(case revision, reason as its stop line names it)`: for a reader outside the run, such as
+/// [`crate::case::resumable_item`], which passes such a case over as
+/// [`Run::next_to_resume`] does.
+pub(crate) fn declined_now(
+    tree: &Path,
+    case_id: &str,
+    case_dir: &Path,
+) -> Option<(String, String)> {
+    Declined::now(tree, case_id, case_dir)
+        .map(|declined| (declined.case_revision, declined_reason(&declined.reason)))
+}
+
 /// `summary`, a decline's reason, as its stop line names it: each control character escaped,
 /// cut to [`REASON_AT_MOST`] bytes ([`reason_bounded`]), [`NO_REASON`] when it is empty.
 fn declined_reason(summary: &str) -> String {
@@ -8711,14 +8724,15 @@ fn on_a_case_branch(tree: &Path) -> Result<bool> {
     Ok(crate::case::case_of_branch(tree, &branch)?.is_some())
 }
 
-/// Puts the tree on the base of the case whose branch it is on, so that the store is read as
-/// the base has it, never as a case's branch, which carries a model's commits, has it. A tree
-/// on any other branch, or detached, stays where it is. Refused when the branch is under takt's
+/// Puts the tree on the base of the case whose branch it is on, so that the store, and a work
+/// source's command run in the tree, read the base, never a case's branch, which carries a
+/// model's commits. A tree on any other branch, or detached, stays where it is. Refused when
+/// the branch is under takt's
 /// reserved prefix and is no case's ([`crate::case::case_of_branch`]), when it names no case
 /// ([`crate::case::check_id`], checked before the name is joined to a path), when the case's
 /// base is not known, or when the tree has uncommitted work, which the checkout would carry
 /// along.
-fn to_base(tree: &Path) -> Result<()> {
+pub fn to_base(tree: &Path, own: &crate::git::DeploymentPaths) -> Result<()> {
     let Some(branch) = crate::git::current_branch(tree)? else {
         return Ok(());
     };
@@ -8734,7 +8748,7 @@ fn to_base(tree: &Path) -> Result<()> {
             tree.display()
         );
     };
-    let uncommitted = crate::git::uncommitted(tree)?;
+    let uncommitted = crate::git::uncommitted_outside(tree, own)?;
     if !uncommitted.is_empty() {
         bail!(
             "the tree {} is on {branch} with uncommitted work: {}; the next story is read from {base}, and checking it out would carry the work along: commit it, or move it out of the tree, first",
@@ -9167,6 +9181,20 @@ impl Seek {
         self.last = Some((from, found));
         found
     }
+}
+
+/// Why `proposal` is refused for a file the run file names as the deployment's (`own`,
+/// [`Run::declare_deployment_paths`]): a proposal is the step's change, which no step commit of
+/// such a path carries, so takt never writes one. None when it names none.
+fn proposed_deployment_path(
+    proposal: &crate::harness::Proposal,
+    own: &crate::git::DeploymentPaths,
+) -> Option<String> {
+    let path = proposal.files.iter().find(|file| own.covers(&file.path))?;
+    Some(format!(
+        "{} proposes {}, a path the run file names as the deployment's, which no step changes",
+        proposal.action, path.path
+    ))
 }
 
 /// Why a path `proposal` names may not reach the tree, the record or a refusal: it holds text of
@@ -9633,6 +9661,9 @@ pub struct Run<'a> {
     stops_red_base: bool,
     /// The run file's `setup` commands, run when the case opens ([`Run::declare_setup`]).
     setup: Vec<crate::run_config::SetupCommand>,
+    /// The run file's `deployment_paths`, as read when the run opened
+    /// ([`Run::declare_deployment_paths`]): no change a step made.
+    deployment_paths: crate::git::DeploymentPaths,
     /// The managed tree of a dispatched child and the seam that leaves it when the run ends
     /// ([`Run::dispatch`]); none for a run no dispatcher opened.
     workspace: Option<Attached>,
@@ -9765,8 +9796,35 @@ impl<'a> Run<'a> {
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
+        Self::open_unit_owning(
+            tree,
+            options,
+            unit,
+            commit_as,
+            set_aside,
+            &crate::git::DeploymentPaths::default(),
+            harness,
+            validators,
+        )
+    }
+
+    /// [`Run::open_unit_in`] with the run file's `deployment_paths` `own`, read once when the
+    /// run opened: an untracked or ignored file under one does not keep the case from opening on
+    /// a tree that is otherwise clean, a case discarded at open leaves it where it is, and the
+    /// run carries the list into every step ([`Run::declare_deployment_paths`]).
+    #[allow(clippy::too_many_arguments)]
+    pub fn open_unit_owning(
+        tree: &Path,
+        options: RunOptions,
+        unit: Unit,
+        commit_as: &CommitAs,
+        set_aside: Option<&Path>,
+        own: &crate::git::DeploymentPaths,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+    ) -> Result<Self> {
         Self::open_unit_placed(
-            None, tree, options, unit, commit_as, set_aside, harness, validators,
+            None, tree, options, unit, commit_as, set_aside, own, harness, validators,
         )
     }
 
@@ -9818,6 +9876,7 @@ impl<'a> Run<'a> {
                     unit,
                     &CommitAs::Takt,
                     None,
+                    &crate::git::DeploymentPaths::default(),
                     harness,
                     validators,
                 )
@@ -9860,6 +9919,7 @@ impl<'a> Run<'a> {
         unit: Unit,
         commit_as: &CommitAs,
         set_aside: Option<&Path>,
+        own: &crate::git::DeploymentPaths,
         harness: &'a dyn Harness,
         validators: &'a [Box<dyn Validator>],
     ) -> Result<Self> {
@@ -9894,11 +9954,12 @@ impl<'a> Run<'a> {
             &options.intent,
             &options.inputs,
             commit_as,
+            own,
         )?;
         let committer = match case.committer() {
             Ok(committer) => committer,
             Err(error) => {
-                case.discard()?;
+                case.discard_keeping(own)?;
                 return Err(error);
             }
         };
@@ -9908,7 +9969,7 @@ impl<'a> Run<'a> {
         if validators.iter().any(|v| v.action() == "pr.open")
             && crate::case::Branch::read(&case.dir)?.base.is_none()
         {
-            case.discard()?;
+            case.discard_keeping(own)?;
             bail!(
                 "the case {id} has no base branch to open its pull request against: the tree is on a detached HEAD; check out the branch the pull request is against, or run without a forge"
             );
@@ -9918,7 +9979,7 @@ impl<'a> Run<'a> {
         if let Unit::Story(story) = &unit
             && let Err(error) = case.set_story(&story.id)
         {
-            case.discard()?;
+            case.discard_keeping(own)?;
             return Err(error);
         }
         // What a validator reads from the base revision pinned at open, the gate's gates document
@@ -9927,7 +9988,7 @@ impl<'a> Run<'a> {
         // here, before the first model call, rather than at its step; the case is discarded.
         for validator in validators {
             if let Err(error) = validator.check_at_open(tree, &case.dir) {
-                case.discard()?;
+                case.discard_keeping(own)?;
                 return Err(error);
             }
         }
@@ -9937,7 +9998,7 @@ impl<'a> Run<'a> {
         let modules = match Modules::of_case(&case.dir, &runs, tree) {
             Ok(modules) => modules,
             Err(error) => {
-                case.discard()?;
+                case.discard_keeping(own)?;
                 return Err(error);
             }
         };
@@ -9974,6 +10035,7 @@ impl<'a> Run<'a> {
             stops_unperformable: false,
             stops_red_base: true,
             setup: Vec::new(),
+            deployment_paths: own.clone(),
             workspace: None,
             records: Records::Trial,
             min_free: 0,
@@ -10278,6 +10340,7 @@ impl<'a> Run<'a> {
             stops_unperformable: false,
             stops_red_base,
             setup: Vec::new(),
+            deployment_paths: crate::git::DeploymentPaths::default(),
             workspace: None,
             records,
             min_free: 0,
@@ -10475,7 +10538,36 @@ impl<'a> Run<'a> {
         validators: &'a [Box<dyn Validator>],
         out: &mut dyn Write,
     ) -> Result<Option<Self>> {
-        to_base(tree)?;
+        Self::take_next_owning(
+            tree,
+            options,
+            frontier,
+            commit_as,
+            set_aside,
+            &crate::git::DeploymentPaths::default(),
+            harness,
+            validators,
+            out,
+        )
+    }
+
+    /// [`Run::take_next_as_in`] with the run file's `deployment_paths` `own`, read once when the
+    /// run opened: an untracked or ignored file under one keeps neither the tree off its base nor
+    /// a case from opening ([`Run::open_unit_owning`]), the take's commit never carries it, and a
+    /// case the store would not take is removed with the file left where it is.
+    #[allow(clippy::too_many_arguments)]
+    pub fn take_next_owning(
+        tree: &Path,
+        options: RunOptions,
+        frontier: &dyn Frontier,
+        commit_as: &CommitAs,
+        set_aside: Option<&Path>,
+        own: &crate::git::DeploymentPaths,
+        harness: &'a dyn Harness,
+        validators: &'a [Box<dyn Validator>],
+        out: &mut dyn Write,
+    ) -> Result<Option<Self>> {
+        to_base(tree, own)?;
         let cased = cases_with_story(tree)?;
         for id in frontier.candidates(tree)? {
             if let Some((case, _)) = cased.iter().find(|(_, story)| *story == id) {
@@ -10499,12 +10591,13 @@ impl<'a> Run<'a> {
                 }
                 options.case_id = Some(minted);
             }
-            let mut run = Self::open_unit_in(
+            let mut run = Self::open_unit_owning(
                 tree,
                 options,
                 Unit::Story(story),
                 commit_as,
                 set_aside,
+                own,
                 harness,
                 validators,
             )?;
@@ -10514,7 +10607,8 @@ impl<'a> Run<'a> {
             };
             match taken {
                 Take::Taken => {
-                    let changed = match crate::git::uncommitted(tree) {
+                    let changed = match crate::git::uncommitted_outside(tree, &run.deployment_paths)
+                    {
                         Ok(changed) => changed,
                         Err(error) => return Err(Self::discarded(run, error)),
                     };
@@ -10537,9 +10631,11 @@ impl<'a> Run<'a> {
                     // The case goes whole: its directory, the cases directory when it was the
                     // last, and its branch, the tree back on the branch the case left.
                     let dir = run.case.dir.clone();
-                    run.case.discard().with_context(|| {
-                        format!("remove the case {} the store would not take", dir.display())
-                    })?;
+                    run.case
+                        .discard_keeping(&run.deployment_paths)
+                        .with_context(|| {
+                            format!("remove the case {} the store would not take", dir.display())
+                        })?;
                     writeln!(out, "frontier: {id} not taken: {refusal}")?;
                 }
             }
@@ -10575,7 +10671,7 @@ impl<'a> Run<'a> {
     /// error; a removal that fails too is added to it.
     fn discarded(run: Self, error: anyhow::Error) -> anyhow::Error {
         let dir = run.case.dir.clone();
-        match run.case.discard() {
+        match run.case.discard_keeping(&run.deployment_paths) {
             Ok(()) => error,
             Err(removal) => error.context(format!(
                 "and the case {} could not be removed: {removal:#}",
@@ -10584,7 +10680,8 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// The checkpoint of the tree before the step being taken, the branches of
+    /// The checkpoint of the tree before the step being taken, the deployment's paths left out
+    /// ([`Run::declare_deployment_paths`]) and the branches of
     /// [`Self::kept_branches`] guarded; for a harness step (`harness`), what discarding it moves
     /// aside going to `<set-aside>/<case id>/step-<n>` ([`Run::set_aside`]), made new when
     /// something is moved: one that exists already, a run before this one under the same case
@@ -10593,7 +10690,11 @@ impl<'a> Run<'a> {
     /// aside: what its command rewrote inside an ignored directory is its own build output, kept
     /// in place as a pass keeps it.
     fn checkpoint(&self, harness: bool) -> Result<crate::git::Checkpoint> {
-        let checkpoint = crate::git::Checkpoint::take_guarding(&self.tree, &self.kept_branches())?;
+        let checkpoint = crate::git::Checkpoint::take_owning(
+            &self.tree,
+            &self.kept_branches(),
+            &self.deployment_paths,
+        )?;
         let (Some(id), Some(root)) = (
             self.case.dir.file_name().filter(|_| harness),
             self.set_aside.clone(),
@@ -10779,6 +10880,16 @@ impl<'a> Run<'a> {
     /// no setup.
     pub fn declare_setup(&mut self, commands: Vec<crate::run_config::SetupCommand>) {
         self.setup = commands;
+    }
+
+    /// Takes `paths` as the deployment's, the run file's `deployment_paths` as it was read when
+    /// the run opened: an untracked or ignored path they cover is no change a step made. The
+    /// step guard does not refuse a step for it, set it aside or put it back, no step commit
+    /// carries it, and a validator observes with it there ([`crate::git::DeploymentPaths`]).
+    /// The list is held as given: a step that rewrites the run file or `.git/info/exclude`
+    /// does not move it. Without this call a run has none.
+    pub fn declare_deployment_paths(&mut self, paths: crate::git::DeploymentPaths) {
+        self.deployment_paths = paths;
     }
 
     /// Whether the record already holds every declared setup command ended 0 at `base`, each
@@ -11293,6 +11404,7 @@ impl<'a> Run<'a> {
                     identity,
                     story,
                     &evidence_subject,
+                    &self.deployment_paths,
                     || store.record_test_result(&self.tree, story, &reference, &at),
                     |commit| {
                         self.kept_and_recorded(commit, KEPT_TEST_RESULT, || {
@@ -11341,6 +11453,7 @@ impl<'a> Run<'a> {
                 identity,
                 story,
                 &move_subject,
+                &self.deployment_paths,
                 || store.implemented(&self.tree, story),
                 |commit| {
                     self.kept_and_recorded(commit, KEPT_MOVE, || {
@@ -12059,7 +12172,8 @@ impl<'a> Run<'a> {
         // A record is bound to the revision, `HEAD`: a tree with uncommitted changes
         // outside the cases directory would be observed on other content than the one
         // the record names. Nothing is observed, and the changes are left as they are.
-        let uncommitted = crate::git::uncommitted(&self.tree)?;
+        // The deployment's paths are no one's change ([`Run::declare_deployment_paths`]).
+        let uncommitted = crate::git::uncommitted_outside(&self.tree, &self.deployment_paths)?;
         if !uncommitted.is_empty() {
             let why = format!(
                 "{} would observe {} with uncommitted changes: {}",
@@ -13567,6 +13681,7 @@ impl<'a> Run<'a> {
                                 &self.tree, &proposal, offered, approvals, &surface, shape,
                             )
                         })
+                        .or_else(|| proposed_deployment_path(&proposal, &self.deployment_paths))
                         .or(unscanned)
                     {
                         Some(why) => {
@@ -14023,11 +14138,19 @@ impl<'a> Run<'a> {
             )?;
             return Ok(Judgement::Stop(Stop::StepRefused(why)));
         }
-        // What only takt does, or what nobody may: `.git/`, `HEAD`, the index, ignored
-        // paths, and a path that was uncommitted before the step, whose change cannot be
-        // told apart from what was there.
+        // What only takt does, or what nobody may: a link at the deployment's paths, `.git/`,
+        // `HEAD`, the index, ignored paths, and a path that was uncommitted before the step,
+        // whose change cannot be told apart from what was there.
+        // A link at a path of the deployment's, or at a directory above one, would send what
+        // the deployment writes there into the tree's own files and into a commit: refused
+        // whatever the action, and put back.
         let action = &report.action;
-        let overreach = if !git_dir.touched.is_empty() {
+        let overreach = if !change.deployment_links.is_empty() {
+            Some(format!(
+                "{action} left a link at {}, a path the run file names as the deployment's or a directory above one, through which the deployment's writes would land where the link points and be committed",
+                change.deployment_links.join(", ")
+            ))
+        } else if !git_dir.touched.is_empty() {
             let mut why = format!(
                 "{action} wrote under .git, where git runs or reads it: {}",
                 git_dir.touched.join(", ")
@@ -14380,11 +14503,12 @@ impl<'a> Run<'a> {
             return Ok((false, None));
         }
         // The message is the harness's `commit` when it passes its check, else the fallback,
-        // said in the record before the step's effect; the trailer is takt's, from the case's
-        // story, never from the reply.
+        // said in the record before the step's effect; the trailer is takt's, from the item the
+        // case records (the story id for a story, the full key for a tracker's item) or else
+        // its story, never from the reply.
         let plan = self.commit_plan_now();
         let reply = self.harness.take_commit();
-        let story = self.case.story()?;
+        let story = crate::case::reference_of(&self.case.dir)?;
         let title = match &self.unit {
             Unit::Story(story) => story.title.clone(),
             Unit::Intent(intent) => intent.lines().next().unwrap_or_default().to_owned(),

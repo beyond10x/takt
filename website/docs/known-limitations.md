@@ -42,7 +42,8 @@ open the pull request, read its CI and merge it under a grant.
 | limitation | what to do today | planned fix |
 |---|---|---|
 | Resuming an intent's case without `--case`, in a repository with no planning store, is refused: `has no planning store: no .engineering/project.yaml`. | Name the case: `takt run --repo . --case <case>`. | none planned yet |
-| A file the repository's git excludes (`.git/info/exclude`) still counts as a change a step made. | Keep a deployment's own files out of the checkout. | git-excluded files are not step changes |
+| A file excluded only through `.git/info/exclude` (or a global excludes file) counts as a change a step made, by design. | Name the path in the run file's [`deployment_paths`](./reference/configuration.md#every-field); a directory ends in `/` (`.autodev/`), and an entry without it names that one path, never a directory. | none: by design (the guard reads no excludes file a step can write) |
+| A step that removes the deployment's own files to put a link at a [`deployment_paths`](./reference/configuration.md#every-field) entry (`.autodev/` replaced by a link) is refused and its link removed, but takt keeps no copy of the deployment's untracked files, so what the step removed stays removed. | Keep what the deployment must not lose (a wrapper's earlier logs) outside the tree, or copy it out before the run. | none planned yet |
 | A key held twice in a YAML run file is refused at the duplicate's line, except in three cases, which are refused at the line the mapping starts: a duplicate after a key the reader cannot resolve, a key equal to one it passed over as an alias of a mapping or a sequence, and the keys `-0.0` and `0.0`. The file is refused in every case; only the line and the key are lost. | Read the file for a repeated key. | none planned yet |
 
 ## Running under Loom

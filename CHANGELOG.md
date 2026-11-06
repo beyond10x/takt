@@ -6,6 +6,27 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-06
+
+`takt run --work <key>` names the work item, from the planning store or a team's own command line; the run file's `deployment_paths` keep a deployment's files out of step changes.
+
+### Added
+
+- `takt run --work <source>[@<connection>]:<id>` names the item a run delivers; `aep:<story id>` takes, resumes and refuses a story as `--story` does.
+- A key of a source this release does not serve, or holding a character that does not show as itself, is refused before a case opens, exit 1.
+- The run file's `work` list names the sources the next ready item comes from, in order; the default is `["aep"]`.
+- The `command` source: the run file's `work_commands` name a `read` and a `select` command, each printing a `takt.work-item/1` document.
+- They run without a shell, with the tree on the base and no credential; the item's title and body become the case's intent.
+- A case on a work item records its key and revision; its commits carry `Refs: <key>`, and a story's stay `Refs: <story id>`.
+- A tracker item's case id is `<source>-<slug>-<hash>-<instant>`, so two keys never share one.
+- The run file's `deployment_paths` name paths the deployment owns; an untracked or ignored file under them is no step change.
+- Such a file is never committed or discarded, at open, take or any step; a step that puts a link at or above one is refused and put back.
+
+### Changed
+
+- An argument-less run passes a declined case of a work item over.
+- A `select` offering an item whose case is open, declined or finished at the same revision opens no second case.
+
 ## [0.33.0] - 2026-11-06
 
 The gate compares at the case's base what a branch edit could use to decide it: paths inside arguments, included Taskfiles, lint allows, citation digests and specification inputs.
@@ -1117,7 +1138,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.33.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.34.0...HEAD
+[0.34.0]: https://github.com/beyond10x/takt/compare/0.33.0...0.34.0
 [0.33.0]: https://github.com/beyond10x/takt/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/beyond10x/takt/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/beyond10x/takt/compare/0.30.1...0.31.0

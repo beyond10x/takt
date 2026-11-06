@@ -683,6 +683,7 @@ impl ScenarioRunArgs {
                 path.display()
             ));
         }
+        file.check_run_file_outside_deployment(path, &self.repo)?;
         self.declared_scan = file.scan;
         self.forge_settings = file.forge_settings();
         self.looping.configured(file, matches, &self.repo)?;
@@ -724,12 +725,35 @@ struct RunArgs {
     /// resumed, if it has one; else it is taken as the frontier takes a story, which it must be
     /// ready for (`proposed`, nothing blocking it, every dependency done). A story the store
     /// does not list, or one not ready, is refused before any case opens, naming why. Not with
-    /// --intent or --case.
+    /// --intent or --case. The same as --work aep:<ID>.
     #[arg(long, value_name = "ID", conflicts_with_all = ["intent", "case"])]
     story: Option<String>,
+    /// The work item to deliver, by its key `<source>[@<connection>]:<id>`, instead of the
+    /// frontier's next ready one. `aep:<story id>` is a story of the planning store, taken,
+    /// resumed and refused exactly as --story <story id> is. `command:<id>` is read by the run
+    /// file's `work_commands.read` and opens a case as --intent does, its intent the item's
+    /// title and body, its record the key and the item's revision; the open case of the same
+    /// key is resumed instead, and an item whose case is finished at the revision `read` prints
+    /// is refused, naming the case. This release serves the sources `aep` and `command`: a key
+    /// of `jira`, `github` or `gitlab`, of a source takt does not know, text that is no key (an
+    /// id starting with `-` or holding a character that does not show as itself among it), or
+    /// a `command` key with no `work_commands.read` is refused before any case opens, exit 1,
+    /// naming why. Not with --story, --intent or --case.
+    #[arg(long, value_name = "KEY", conflicts_with_all = ["story", "intent", "case"])]
+    work: Option<String>,
     /// The run configuration file `story` came from, when --story did not name it.
     #[arg(skip)]
     story_from: Option<PathBuf>,
+    /// The item --work names when it is no story of the planning store: its key.
+    #[arg(skip)]
+    work_item: Option<takt::frontier::Key>,
+    /// The sources the next ready item comes from, in order: the run file's `work`, else the
+    /// planning store alone, which is also what a command line parsed without a run file holds.
+    #[arg(skip = vec![takt::frontier::Source::aep()])]
+    work_sources: Vec<takt::frontier::Source>,
+    /// The run file's `work_commands`, which the source `command` runs.
+    #[arg(skip)]
+    work_commands: Option<takt::work::command::WorkCommands>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
     /// the planning store gives opens on its tag `protocol:<name>/<major>`, else the run file's
     /// `protocol`, else `story.delivery/3`, an --intent on `software.change/1` (takt's defaults document),
@@ -833,12 +857,25 @@ fn unset(matches: &clap::ArgMatches, id: &str) -> bool {
 impl RunArgs {
     /// Fills each flag `matches` did not take from the command line with `--config`'s value,
     /// when the file sets it; without `--config`, nothing changes. The file's `story` names
-    /// the work only when no flag does (--story, --intent, --case), and is kept with the file
-    /// it came from, so a refusal names that file; a run that opens no story (a
-    /// `self.improvement/1` turn) leaves it out.
+    /// the work only when no flag does (--story, --work, --intent, --case), and is kept with the
+    /// file it came from, so a refusal names that file; a run that opens no story (a
+    /// `self.improvement/1` turn) leaves it out. `--work aep:<id>` names the story `<id>`, as
+    /// `--story <id>` does; `--work command:<id>` names an item `work_commands.read` reads,
+    /// refused here when the file names no `read`; a key of a source not served is refused
+    /// here, before anything is read. The file's `work` and `work_commands` are kept.
     fn configured(&mut self, matches: &clap::ArgMatches) -> Result<()> {
         self.looping.renamed(matches);
+        if let Some(work) = &self.work {
+            let key = key_of_work(work)?;
+            if key.source().name == takt::frontier::SourceName::Aep {
+                self.story = Some(key.id().to_owned());
+            } else {
+                self.work_item = Some(key);
+            }
+        }
         let Some(path) = &self.config else {
+            self.work_sources = vec![takt::frontier::Source::aep()];
+            self.check_work_item()?;
             return self.looping.configured(
                 takt::run_config::RunConfig::default(),
                 matches,
@@ -846,8 +883,11 @@ impl RunArgs {
             );
         };
         let mut file = takt::run_config::RunConfig::read(path)?;
+        self.work_sources = file.work_sources();
+        self.work_commands = file.work_commands.clone();
+        self.check_work_item()?;
         if let Some(story) = file.story.take()
-            && ["story", "intent", "case"]
+            && ["story", "work", "intent", "case"]
                 .into_iter()
                 .all(|id| unset(matches, id))
         {
@@ -857,7 +897,29 @@ impl RunArgs {
         self.declared_scan = file.scan;
         self.protocol_settings = file.protocol_settings.clone();
         self.forge_settings = file.forge_settings();
+        file.check_run_file_outside_deployment(path, &self.repo)?;
         self.looping.configured(file, matches, &self.repo)
+    }
+
+    /// Refuses `--work command:<id>` when the run file names no `work_commands.read`, which
+    /// reads the item, before anything is read or written.
+    fn check_work_item(&self) -> Result<()> {
+        let read = takt::work::command::Entry::Read;
+        match &self.work_item {
+            Some(key)
+                if self
+                    .work_commands
+                    .as_ref()
+                    .and_then(|commands| commands.argv(read))
+                    .is_none() =>
+            {
+                Err(anyhow!(
+                    "--work {key}: the source {} reads an item through `{read}`, and the run file (--config) names none; nothing was changed",
+                    key.source()
+                ))
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -968,6 +1030,7 @@ impl LoopArgs {
             looping.continue_past_red_base = go_on;
         }
         looping.setup = file.setup.unwrap_or_default();
+        looping.deployment_paths = file.deployment_paths.unwrap_or_default();
         looping.records_of_file = file.records.filter(|_| unset("records"));
         looping.commit = looping.commit_settings(file.commit.as_ref())?;
         Ok(())
@@ -1348,6 +1411,11 @@ struct LoopArgs {
     /// a flag.
     #[arg(skip)]
     setup: Vec<takt::run_config::SetupCommand>,
+    /// The `deployment_paths` `--config` gave, as read when the run opens and never again: the
+    /// paths the deployment keeps in the tree, which no step changes. Set from the file, never
+    /// from a flag.
+    #[arg(skip)]
+    deployment_paths: takt::git::DeploymentPaths,
     /// The digest of the `llm.routes/1` document `--config` gave, recorded on the run's `opened`
     /// line; set from the file, never from a flag.
     #[arg(skip)]
@@ -1792,7 +1860,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 intent,
                 case,
                 story,
+                work,
                 story_from,
+                work_item,
+                work_sources,
+                work_commands,
                 protocol,
                 inputs,
                 case_id,
@@ -1832,14 +1904,16 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 .transpose()?;
             // `--protocol`, else the run file's `protocol` for a story of the store, else the
             // default for the unit. A story's own `protocol:` tag is read once the story is known.
+            // An item --work names that is no story opens as an intent does.
+            let story_like = intent.is_none() && work_item.is_none();
             let (opening, _, opens_on) =
                 takt::protocol::choose_protocol(&takt::protocol::SettingsRequest {
                     file: &protocol_settings,
                     flag_protocol: protocol.as_deref(),
                     flag_inputs: &inputs,
                     tags: &[],
-                    default_protocol: takt::protocol::default_protocol(intent.is_none()),
-                    file_protocol_applies: intent.is_none() && case.is_none(),
+                    default_protocol: takt::protocol::default_protocol(story_like),
+                    file_protocol_applies: story_like && case.is_none(),
                 })?;
             // The case this run resumes, found before anything is resumed: resuming checks the
             // tree out onto the case's branch and records its head, so every refusal of what was
@@ -1852,15 +1926,26 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
             // --story is refused.
             let story = story.filter(|_| !(opens_turn && story_from.is_some()));
             // What named the story, for its refusals.
-            let named_by = |story: &str| match &story_from {
-                Some(file) => format!("story {story} from {}", file.display()),
-                None => format!("--story {story}"),
+            let named_by = |story: &str| match (&work, &story_from) {
+                (Some(key), _) => format!("--work {key}"),
+                (None, Some(file)) => format!("story {story} from {}", file.display()),
+                (None, None) => format!("--story {story}"),
             };
             if let Some(story) = &story
                 && opens_turn
             {
                 return Err(anyhow!(
-                    "--story {story}: a {} turn opens on its finding (--input {}=<story id>), never on a named story; nothing was changed",
+                    "{}: a {} turn opens on its finding (--input {}=<story id>), never on a named story; nothing was changed",
+                    named_by(story),
+                    takt::case::TURN_PROTOCOL,
+                    takt::case::TURN_FINDING
+                ));
+            }
+            if let Some(key) = &work_item
+                && opens_turn
+            {
+                return Err(anyhow!(
+                    "--work {key}: a {} turn opens on its finding (--input {}=<story id>), never on a named item; nothing was changed",
                     takt::case::TURN_PROTOCOL,
                     takt::case::TURN_FINDING
                 ));
@@ -1875,9 +1960,40 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 &repo,
                 case.as_deref(),
                 story.as_deref(),
+                work_item.as_ref(),
+                &work_sources,
                 intent.is_some() || opens_turn,
                 out,
             )?;
+            // An item --work names that has no open case is read now, before anything is
+            // opened, with the tree put on its base first, as the store is read, never on a
+            // case's branch, which carries a model's commits: a refusal of
+            // `work_commands.read`, of what it printed or of another key opens no case, and
+            // neither does an item a finished case records at the revision read. It opens as
+            // an intent does, its case id the tracker scheme's unless --case-id names one, its
+            // key and revision recorded once it is open.
+            let mut opened_item = None;
+            let mut intent = intent;
+            let mut case_id = case_id;
+            if let (Some(key), None) = (&work_item, &resuming) {
+                let item = command_source(work_commands.as_ref(), looping.state_dir.as_deref())
+                    .and_then(|source| {
+                        takt::run::to_base(&repo, &looping.deployment_paths)?;
+                        source.read(&repo, key)
+                    })
+                    .map_err(|error| anyhow!("--work {key}: {error:#}; nothing was opened"))?;
+                if let Some((case, stands)) =
+                    takt::case::item_case_at(&repo, &item.key, &item.revision)?
+                {
+                    return Err(anyhow!(
+                        "--work {key}: the item has the {stands} case {case} at the revision `work_commands.read` printed; nothing was opened"
+                    ));
+                }
+                writeln!(out, "work: read {}: {}", item.key, item.title)?;
+                intent = Some(item.intent());
+                case_id = case_id.or_else(|| Some(item.key.case_id_at(&takt::now())));
+                opened_item = Some(item);
+            }
             // The session's `context` files are checked against the files its copy is made of,
             // before the case opens or resumes: a resumed case's branch, which resuming checks
             // out (from the one remote holding it, when no local branch does), else the work
@@ -2169,12 +2285,13 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     harness,
                     &validators,
                 )?,
-                (None, Some(intent), _) => Run::open_unit_in(
+                (None, Some(intent), _) => Run::open_unit_owning(
                     &repo,
                     options,
                     Unit::Intent(intent),
                     &commit_as,
                     set_aside.as_deref(),
+                    &looping.deployment_paths,
                     harness,
                     &validators,
                 )?,
@@ -2189,9 +2306,12 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                         harness,
                         &validators,
                     )?;
+                    // An item's case is an intent's: its title is the intent's first line.
                     let title = match &run.unit {
                         Unit::Story(story) => story.title.clone(),
-                        Unit::Intent(intent) => intent.clone(),
+                        Unit::Intent(intent) => {
+                            intent.lines().next().unwrap_or_default().to_owned()
+                        }
                     };
                     writeln!(
                         out,
@@ -2204,79 +2324,168 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 // Nothing to resume, as found above: the next ready story is taken, and nothing
                 // is resumed whatever the store says by now, so no case runs that was not
                 // checked. A story `--story` names is taken the same way, the frontier narrowed
-                // to it; one it does not offer is refused, no case opened.
+                // to it; one it does not offer is refused, no case opened. Without one, the
+                // sources of the run file's `work` are asked in order and the first that yields
+                // an item wins: `aep` takes the store's next ready story, `command` opens the
+                // item `work_commands.select` prints, as an intent opens; none is no ready work.
                 (None, None, None) => {
-                    let named = story.as_deref().map(|story| Named {
-                        store: &store,
-                        story,
-                    });
-                    let frontier: &dyn takt::Frontier = match &named {
-                        Some(named) => named,
-                        None => &store,
+                    let sources = match &story {
+                        Some(_) => vec![takt::frontier::Source::aep()],
+                        None => work_sources.clone(),
                     };
-                    // Where the tree is before the take, which reads the store on the base and
-                    // so moves a tree on a case's branch there: a refused `--story` puts it back.
-                    let left = match &story {
-                        Some(_) => Some(match takt::git::current_branch(&repo)? {
-                            Some(branch) => branch,
-                            None => takt::git::head(&repo)?,
-                        }),
-                        None => None,
-                    };
-                    match take_next_with_settings(
-                        &repo,
-                        frontier,
-                        &store,
-                        &|tags| {
+                    let mut taken = None;
+                    for source in &sources {
+                        if source.name == takt::frontier::SourceName::Command {
+                            // `select` runs with the tree on its base, as the store is read,
+                            // never on a case's branch, which carries a model's commits.
+                            let selected = command_source(
+                                work_commands.as_ref(),
+                                looping.state_dir.as_deref(),
+                            )
+                            .and_then(|commands| {
+                                takt::run::to_base(&repo, &looping.deployment_paths)?;
+                                commands.select(&repo)
+                            })
+                            .map_err(|error| {
+                                anyhow!("the work source {source}: {error:#}; nothing was opened")
+                            })?;
+                            let Some(item) = selected else {
+                                continue;
+                            };
+                            // An item offered again at the revision a case recorded is work
+                            // done, declined or under way: the source has no ready item. A new
+                            // revision is new work.
+                            if let Some((case, stands)) =
+                                takt::case::item_case_at(&repo, &item.key, &item.revision)?
+                            {
+                                writeln!(
+                                    out,
+                                    "work: {} has the {stands} case {case} at its revision; the source {source} has no ready item",
+                                    item.key
+                                )?;
+                                continue;
+                            }
+                            writeln!(out, "work: selected {}: {}", item.key, item.title)?;
                             let settings = settings_for(
                                 &protocol_settings,
                                 protocol.as_deref(),
                                 &inputs,
-                                tags,
-                                true,
+                                &[],
+                                false,
                             )?;
                             check_gate(looping.gate.as_deref(), &settings.protocol)?;
-                            Ok(settings)
-                        },
-                        &|settings| {
-                            looping.options(
+                            let options = looping.options(
                                 settings.spec.clone(),
                                 settings.pairs(),
-                                case_id.clone(),
-                            )
-                        },
-                        options,
-                        &commit_as,
-                        set_aside.as_deref(),
-                        harness,
-                        &validators,
-                        out,
-                    )? {
-                        Some((run, settings)) => {
+                                case_id
+                                    .clone()
+                                    .or_else(|| Some(item.key.case_id_at(&takt::now()))),
+                            );
+                            taken = Some(Run::open_unit_owning(
+                                &repo,
+                                options,
+                                Unit::Intent(item.intent()),
+                                &commit_as,
+                                set_aside.as_deref(),
+                                &looping.deployment_paths,
+                                harness,
+                                &validators,
+                            )?);
                             applied = Some(settings);
-                            run
+                            opened_item = Some(item);
+                            break;
                         }
-                        None => {
-                            if let (Some(story), Some(left)) = (&story, &left) {
-                                let refusal =
-                                    match story_not_taken(&repo, &store, story, &named_by(story)) {
+                        let named = story.as_deref().map(|story| Named {
+                            store: &store,
+                            story,
+                        });
+                        let frontier: &dyn takt::Frontier = match &named {
+                            Some(named) => named,
+                            None => &store,
+                        };
+                        // Where the tree is before the take, which reads the store on the base
+                        // and so moves a tree on a case's branch there: a refused `--story`
+                        // puts it back.
+                        let left = match &story {
+                            Some(_) => Some(match takt::git::current_branch(&repo)? {
+                                Some(branch) => branch,
+                                None => takt::git::head(&repo)?,
+                            }),
+                            None => None,
+                        };
+                        match take_next_with_settings(
+                            &repo,
+                            frontier,
+                            &store,
+                            &|tags| {
+                                let settings = settings_for(
+                                    &protocol_settings,
+                                    protocol.as_deref(),
+                                    &inputs,
+                                    tags,
+                                    true,
+                                )?;
+                                check_gate(looping.gate.as_deref(), &settings.protocol)?;
+                                Ok(settings)
+                            },
+                            &|settings| {
+                                looping.options(
+                                    settings.spec.clone(),
+                                    settings.pairs(),
+                                    case_id.clone(),
+                                )
+                            },
+                            options.clone(),
+                            &commit_as,
+                            set_aside.as_deref(),
+                            &looping.deployment_paths,
+                            harness,
+                            &validators,
+                            out,
+                        )? {
+                            Some((run, settings)) => {
+                                applied = Some(settings);
+                                taken = Some(run);
+                                break;
+                            }
+                            None => {
+                                if let (Some(story), Some(left)) = (&story, &left) {
+                                    let refusal = match story_not_taken(
+                                        &repo,
+                                        &store,
+                                        story,
+                                        &named_by(story),
+                                    ) {
                                         Ok(refusal) | Err(refusal) => refusal,
                                     };
-                                return Err(
-                                    match takt::git::run(&repo, &["checkout", "-q", left]) {
-                                        Ok(_) => refusal,
-                                        Err(undo) => refusal.context(format!(
-                                            "and the tree could not be put back on {left}: {undo:#}"
-                                        )),
-                                    },
-                                );
+                                    return Err(
+                                        match takt::git::run(&repo, &["checkout", "-q", left]) {
+                                            Ok(_) => refusal,
+                                            Err(undo) => refusal.context(format!(
+                                                "and the tree could not be put back on {left}: {undo:#}"
+                                            )),
+                                        },
+                                    );
+                                }
                             }
-                            writeln!(out, "frontier: nothing ready")?;
-                            return Ok(EXIT_DONE);
                         }
                     }
+                    let Some(run) = taken else {
+                        writeln!(out, "frontier: nothing ready")?;
+                        return Ok(EXIT_DONE);
+                    };
+                    run
                 }
             };
+            // An item's case just opened records the item: its key and its revision.
+            if let Some(item) = &opened_item {
+                run.case
+                    .record_item(&item.key.to_string(), Some(&item.revision))?;
+            }
+            // A story's case just opened records its item: the key and the story's revision.
+            if !resumed {
+                record_story_item(&repo, &mut run)?;
+            }
             // The loop case just opened gets its baseline and the snapshot of its definitions
             // before any step.
             if let Some(baseline) = &loop_baseline {
@@ -2630,8 +2839,9 @@ impl takt::Frontier for Only<'_> {
     }
 }
 
-/// [`Run::take_next_as_in`] with each story's settings resolved from its own tags: the candidates
-/// are listed as the run reads them (the tree put on the base), then each is offered alone, with
+/// [`Run::take_next_owning`], the deployment's paths `own` kept out, with each story's settings
+/// resolved from its own tags: the candidates are listed as the run reads them (the tree put on
+/// the base), then each is offered alone, with
 /// the options `options_for` makes of the settings `resolve` makes of its tags, until one is
 /// taken. A story whose tags or whose settings are refused is the error, before its case is
 /// opened. The settings of the story taken come back with its run.
@@ -2645,6 +2855,7 @@ fn take_next_with_settings<'a>(
     listing: RunOptions,
     commit_as: &takt::case::CommitAs,
     set_aside: Option<&Path>,
+    own: &takt::git::DeploymentPaths,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
@@ -2653,8 +2864,8 @@ fn take_next_with_settings<'a>(
         inner: frontier,
         seen: std::cell::RefCell::new(Vec::new()),
     };
-    if Run::take_next_as_in(
-        repo, listing, &listed, commit_as, set_aside, harness, validators, out,
+    if Run::take_next_owning(
+        repo, listing, &listed, commit_as, set_aside, own, harness, validators, out,
     )?
     .is_some()
     {
@@ -2667,12 +2878,13 @@ fn take_next_with_settings<'a>(
             inner: frontier,
             story: &id,
         };
-        if let Some(run) = Run::take_next_as_in(
+        if let Some(run) = Run::take_next_owning(
             repo,
             options_for(&settings),
             &only,
             commit_as,
             set_aside,
+            own,
             harness,
             validators,
             out,
@@ -3665,6 +3877,7 @@ fn finish(
         run.continue_past_red_base();
     }
     run.declare_setup(looping.setup.clone());
+    run.declare_deployment_paths(looping.deployment_paths.clone());
     if let Some(settings) = &looping.commit {
         run.commit_settings(settings.clone());
     }
@@ -4057,7 +4270,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
     }
     // A tree with uncommitted work is refused, never discarded: a checkout would carry it onto
     // the trial branch, and a store file a stopped run left changed would be read there.
-    let uncommitted = takt::git::uncommitted(&repo)?;
+    let uncommitted = takt::git::uncommitted_outside(&repo, &looping.deployment_paths)?;
     if !uncommitted.is_empty() {
         return Err(anyhow!(
             "scenario {}: the tree {} has uncommitted work: {}; a scenario run starts only from a clean tree, and checking out its trial branch would carry the work along: commit it, or move it out of the tree, first; nothing was changed",
@@ -4257,6 +4470,7 @@ fn scenario_run(args: ScenarioRunArgs, out: &mut dyn Write) -> Result<u8> {
         story,
         &commit_as,
         set_aside.as_deref(),
+        &looping.deployment_paths,
         harness,
         &validators,
         out,
@@ -4364,6 +4578,50 @@ impl takt::Frontier for Named<'_> {
     }
 }
 
+/// The key `takt run --work <key>` names: an `aep` key's id is a story, which the run then
+/// takes, resumes or refuses as it does `--story <id>`; a `command` key's item is read by
+/// `work_commands.read`. Text that is no key, a source takt does not know, and a key of a
+/// source this release does not serve ([`takt::frontier::SERVED`]) are refused, naming the key
+/// and why, before anything is read or written.
+fn key_of_work(work: &str) -> Result<takt::frontier::Key> {
+    let refused = |why: String| anyhow!("--work {work}: {why}; nothing was changed");
+    let key = takt::frontier::Key::parse(work).map_err(refused)?;
+    key.source().served().map_err(refused)?;
+    Ok(key)
+}
+
+/// The `command` source over `commands`, its commands' standard error kept under the state
+/// directory (`state_dir`, else beside the promotion store, one directory per run), each run
+/// through the forge's process runner: no shell, no credential, nothing that waits on a person.
+fn command_source(
+    commands: Option<&takt::work::command::WorkCommands>,
+    state_dir: Option<&Path>,
+) -> Result<takt::work::command::CommandSource> {
+    let state = match state_dir {
+        Some(dir) => state_under(dir, "work-command"),
+        None => takt::promotion::store()?
+            .with_file_name("work-command")
+            .join(run_directory()),
+    };
+    takt::work::command::CommandSource::new(
+        commands.cloned().unwrap_or_default(),
+        state,
+        Box::new(Process::default()),
+    )
+}
+
+/// Records in the case `run` just opened for a story the item it works: the key
+/// `aep:<story id>` and the store's revision of the story in the case's take, at the tree's
+/// `HEAD` (story:work-flag-and-the-aep-source); a case on an intent records none.
+fn record_story_item(repo: &Path, run: &mut Run<'_>) -> Result<()> {
+    let Unit::Story(story) = &run.unit else {
+        return Ok(());
+    };
+    let key = takt::frontier::Key::aep(&story.id);
+    let revision = takt::case::story_revision(repo, "HEAD", &story.id)?;
+    run.case.record_item(&key.to_string(), revision.as_deref())
+}
+
 /// The refusal of `takt run --story <story>` when the frontier narrowed to it took nothing and
 /// opened no case: why, read from the store as the take read it (on the base), by the frontier's
 /// own rule ([`takt::frontier::is_ready`], [`not_ready`]); `named` says what named the story
@@ -4415,6 +4673,7 @@ fn take_story<'a>(
     story: takt::Story,
     commit_as: &takt::case::CommitAs,
     set_aside: Option<&Path>,
+    own: &takt::git::DeploymentPaths,
     harness: &'a dyn Harness,
     validators: &'a [Box<dyn Validator>],
     out: &mut dyn Write,
@@ -4423,12 +4682,13 @@ fn take_story<'a>(
     let id = story.id.clone();
     let id = id.as_str();
     let title = story.title.clone();
-    let mut run = Run::open_unit_in(
+    let mut run = Run::open_unit_owning(
         repo,
         options,
         Unit::Story(story),
         commit_as,
         set_aside,
+        own,
         harness,
         validators,
     )?;
@@ -4440,14 +4700,14 @@ fn take_story<'a>(
                 return Err(anyhow!("the store would not take {id}: {refusal}"));
             }
         }
-        let changed = takt::git::uncommitted(repo)?;
+        let changed = takt::git::uncommitted_outside(repo, own)?;
         takt::git::commit_paths(repo, &committer, &changed, &takt::run::take_subject(id))
     })();
     let head = match taken {
         Ok(head) => head,
         Err(error) => {
             let dir = run.case.dir.clone();
-            return Err(match run.case.discard() {
+            return Err(match run.case.discard_keeping(own) {
                 Ok(()) => error,
                 Err(removal) => error.context(format!(
                     "and the case {} could not be removed: {removal:#}",
@@ -4459,6 +4719,7 @@ fn take_story<'a>(
     if run.case.revision("implementation").is_some() {
         run.case.set_revision("implementation", &head)?;
     }
+    record_story_item(repo, &mut run)?;
     writeln!(out, "frontier: took {id}: {title}")?;
     Ok(run)
 }
@@ -4490,35 +4751,62 @@ struct Resuming {
     id: String,
     /// The protocol from the case's own `protocol.yaml`.
     protocol: LoadedProtocol,
-    /// The active story whose open case it is, when the store gave it.
+    /// The active story whose open case it is, when the store gave it, or the key of the work
+    /// item it records, when a work source's item named it.
     story: Option<String>,
 }
 
 /// The case a run will resume, read without resuming it: the one `--case` names, when its
-/// directory holds a case; for a run with neither `--case` nor `--intent`, the open case of a
-/// story being worked, as [`Run::next_to_resume`] names it, the one case such a run resumes, a
-/// decision that does not read said on `out`; for a run given `--story`, that story's open case
-/// alone, the first not finished in case order ([`takt::case::resumable`]), whatever other case
-/// is open. `None` when the run opens a case, or when `--case` names none (`Run::resume`
+/// directory holds a case; for a run with neither `--case` nor `--intent`, the open case of
+/// the first of the `work` sources, in order, that has one: for `aep` the open case of a story
+/// being worked, as [`Run::next_to_resume`] names it, a decision that does not read said on
+/// `out`, for `command` the first open case recording a key of `command`
+/// ([`takt::case::resumable_item`]); for a run given `--story`, that story's open case alone,
+/// the first not finished in case order ([`takt::case::resumable`]), whatever other case is
+/// open; for a run given `--work` an item that is no story, the open case recording its key
+/// alone. `None` when the run opens a case, or when `--case` names none (`Run::resume`
 /// refuses that). Nothing is checked out and nothing written.
 fn case_to_resume(
     repo: &Path,
     case: Option<&str>,
     story: Option<&str>,
+    item: Option<&takt::frontier::Key>,
+    sources: &[takt::frontier::Source],
     intent: bool,
     out: &mut dyn Write,
 ) -> Result<Option<Resuming>> {
     let (id, story) = match (case, intent) {
         (Some(id), false) => (id.to_owned(), None),
-        (None, false) => match story {
-            Some(story) => match takt::case::resumable(repo, &[story.to_owned()], out)? {
+        (None, false) => match (story, item) {
+            (Some(story), _) => match takt::case::resumable(repo, &[story.to_owned()], out)? {
                 Some((id, story)) => (id, Some(story)),
                 None => return Ok(None),
             },
-            None => match Run::next_to_resume(repo, &Aep::default(), out)? {
-                Some((id, story)) => (id, Some(story)),
-                None => return Ok(None),
-            },
+            (None, Some(item)) => {
+                match takt::case::resumable_item(repo, &|key| key == item, false, out)? {
+                    Some((id, _)) => (id, Some(item.to_string())),
+                    None => return Ok(None),
+                }
+            }
+            (None, None) => {
+                let mut found = None;
+                for source in sources {
+                    found = if source.name == takt::frontier::SourceName::Aep {
+                        Run::next_to_resume(repo, &Aep::default(), out)?
+                    } else {
+                        let of_source = |key: &takt::frontier::Key| key.source() == source;
+                        takt::case::resumable_item(repo, &of_source, true, out)?
+                            .map(|(id, key)| (id, key.to_string()))
+                    };
+                    if found.is_some() {
+                        break;
+                    }
+                }
+                match found {
+                    Some((id, story)) => (id, Some(story)),
+                    None => return Ok(None),
+                }
+            }
         },
         (_, true) => return Ok(None),
     };

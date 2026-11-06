@@ -523,6 +523,18 @@ pub fn message(
     Message { text, fallback }
 }
 
+/// The value of the trailer a commit of work on the item `key` carries, what [`message`] takes
+/// as `story`: the story id for an `aep` item, so a story's trailer stays `Refs: <story id>`, and
+/// the full key for an item of any other source, `Refs: jira@team-a:ABC-12`
+/// (approval-record:wave-56-work-model-points).
+#[must_use]
+pub fn reference(key: &crate::frontier::Key) -> String {
+    match key.source().name {
+        crate::frontier::SourceName::Aep => key.id().to_owned(),
+        _ => key.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -727,5 +739,36 @@ mod tests {
         assert!(text.contains("`test` for `tests.write`"), "{text}");
         assert!(text.contains("`feat` for `implementation.edit`"), "{text}");
         assert!(text.contains("3 or 4 lines"), "{text}");
+    }
+
+    /// story:work-flag-and-the-aep-source: the trailer of an `aep` item stays its story id; an
+    /// item of any other source writes its full key (approval-record:wave-56-work-model-points).
+    #[test]
+    fn the_trailer_carries_the_story_id_for_aep_and_the_full_key_otherwise() {
+        let plan = Plan::new(&Settings::default(), None, false);
+        let reply = semantic_reply("feat: add the thing", "Adds it.\nTested.\nDone.");
+        for (key, refs) in [
+            ("aep:story:x", "story:x"),
+            ("jira:ABC-12", "jira:ABC-12"),
+            ("jira@team-a:ABC-12", "jira@team-a:ABC-12"),
+            ("github:owner/repo#42", "github:owner/repo#42"),
+            ("command:T-1", "command:T-1"),
+        ] {
+            let key = crate::frontier::Key::parse(key).expect(key);
+            assert_eq!(reference(&key), refs);
+            let message = message(
+                &plan,
+                "implementation.edit",
+                "summary",
+                "Title",
+                Some(&reply),
+                Some(&reference(&key)),
+            );
+            assert!(
+                message.text.ends_with(&format!("\n\nRefs: {refs}\n")),
+                "{key}: {}",
+                message.text
+            );
+        }
     }
 }

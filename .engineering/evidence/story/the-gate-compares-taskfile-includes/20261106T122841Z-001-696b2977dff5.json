@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T12:28:41Z",
+  "actor": "human:timo",
+  "artifact": "story:the-gate-compares-taskfile-includes",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 55 unit b: its new gate test target was red before the change and green after it, and the review cases green after dbd7bba5f",
+    "reference": "fedfbc28c223cc12c2f4bc6c9bb020131f9b8814"
+  }
+}
