@@ -10,7 +10,12 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/validator.rs
+- confidence: inferred
+  path: crates/takt/tests/gate_compares_taskfile_includes.rs
+revision: 3
 ---
 # Story: the-gate-compares-taskfile-includes
 

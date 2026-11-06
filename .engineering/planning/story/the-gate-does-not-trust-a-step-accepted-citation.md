@@ -10,7 +10,12 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/validator.rs
+- confidence: inferred
+  path: crates/takt/tests/gate_does_not_trust_step_citations.rs
+revision: 3
 ---
 # Story: the-gate-does-not-trust-a-step-accepted-citation
 

@@ -10,7 +10,12 @@ tags:
 relations:
 - decomposes: epic:recursive-self-improvement
 - serves: vision:safe-agentic-coding
-revision: 1
+scope:
+- confidence: cited
+  path: crates/takt/src/validator.rs
+- confidence: inferred
+  path: crates/takt/tests/gate_reads_paths_in_arguments.rs
+revision: 3
 ---
 # Story: the-gate-reads-paths-inside-arguments
 
