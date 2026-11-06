@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T12:28:40Z",
+  "actor": "human:timo",
+  "artifact": "story:the-gate-compares-taskfile-includes",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/42215134770 (check on main at the merge of pull request 62: check-static, test-library, test-cli green)",
+    "reference": "fedfbc28c223cc12c2f4bc6c9bb020131f9b8814"
+  }
+}
