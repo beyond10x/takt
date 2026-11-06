@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T03:10:29Z",
+  "actor": "human:timo",
+  "artifact": "story:test-cmd-checked-before-open",
+  "kind": "story",
+  "revision": 5,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/42152410700 (check on main at the merge of pull request 61: check-static, test-library, test-cli green)",
+    "reference": "9e7a3904ed86e34332daaacc80da1bda6512b249"
+  }
+}

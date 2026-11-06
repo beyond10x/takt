@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:resume-names-a-missing-branch
 kind: story
-status: active
+status: implemented
 title: Resuming a case whose branch is gone says how to recover
 tags:
 - finding
@@ -17,10 +17,11 @@ relations:
 scope:
 - confidence: cited
   path: crates/takt/src/case.rs
-revision: 4
+revision: 6
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-05T02:14:03Z", actor: "human:timo", revision: 2}
 - {from: "proposed", to: "active", at: "2026-11-05T02:14:03Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-06T03:10:31Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 ## Outcome
 
@@ -45,3 +46,16 @@ source: .engineering/planning/review-result/findings-hunt-33ab42c.md
 ## Acceptance
 
 In the predicate's run, stderr names `takt/a` as missing and says how to recreate it or abandon the case. No git pathspec text appears, and nothing is written.
+
+## Status
+
+Built in wave 54 (unit c, 92aed883e, corrected in 7501e6380), released in 0.32.0 from 9e7a3904e, the merge of pull
+request 61.
+
+- `crates/takt/src/case.rs`: a resume whose case branch is gone exits 1 naming the branch, the last head the case
+  recorded and where, and a shell-quoted `git branch` line that recreates it, before anything is written. A branch kept
+  only on the one remote that holds it resumes, as git's checkout creates it (`checkout_source`).
+- `crates/takt-cli/tests/resume_missing_branch_cli.rs` (red, then green); the adversary's cases in
+  `w54_adversary_cli.rs` for the remote branch and the quoting.
+
+Review: review-result:w54-adv-1, C1 and C2 fixed.

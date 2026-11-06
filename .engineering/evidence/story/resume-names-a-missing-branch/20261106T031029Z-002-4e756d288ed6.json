@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T03:10:29Z",
+  "actor": "human:timo",
+  "artifact": "story:resume-names-a-missing-branch",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 54: resume_missing_branch_cli was red before the change and green after it, exit 1 naming takt/a with no pathspec text and nothing changed",
+    "reference": "9e7a3904ed86e34332daaacc80da1bda6512b249"
+  }
+}

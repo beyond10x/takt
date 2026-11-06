@@ -1,6 +1,6 @@
 # Wave 54: four finding stories
 
-Stage: **gated**. `wave/54` branches from 410aaddd2, the release of 0.31.0, and merges `store/close-wave-53` (the
+Stage: **delivered**. Released as 0.32.0 from 9e7a3904e, the merge of pull request 61. `wave/54` branches from 410aaddd2, the release of 0.31.0, and merges `store/close-wave-53` (the
 close-out of wave 53) first. Skill version 0.26.0 (aep:implementing, wave mode). Approved:
 approval-record:wave-54-four-findings. Release: 0.32.0.
 
@@ -97,3 +97,15 @@ draft that keeps the case. The release was prepared in dc64f9833.
 - **`test-library`** does not fit the host's disk while other sessions build there (44G peak, 84G floor).
   approval-record:wave-54-gate-on-ci counts `test-cli` green and leaves the library suite to the pull request's CI.
 - A first `test-cli` start was refused by its pre-check at a load average of 66; the second started at 22:06Z.
+
+## Delivery
+
+Pull request 61 first went red on CI in `task test-library`, on Linux and macOS: three library tests the wave had
+made red, which the local gate did not run. The git.rs unit test started a process outside the confinement seam, an
+older adversary case built a quoted test command, and two adversary cases read `/proc`, which macOS lacks. They were
+fixed in the tests in e6012f1e9 (targeted: lib 234/234, `confinement`, `step_cannot_forge_adv2`, `w54_adversary`).
+The pull request then passed its 7 checks, was merged as 9e7a3904e, and main's check run 42152410700 passed before
+the tag 0.32.0. review-result:w54-adv-1 records the adversary pass.
+
+The stories' close-out is a store-only commit on `store/close-wave-54`, cut from 9e7a3904e. It rides along with the
+next takt wave, whose integration branch merges it.
