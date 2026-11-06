@@ -1408,7 +1408,9 @@ enum Judged {
 /// surface extended by the repository's own list ([`crate::run::JUDGE_LIST`]) read at the base,
 /// which records nothing when it does not parse, and by the caller's folded globs `extra`; with
 /// `gate`, the tool configuration by name, a link there included ([`is_tool_config`]), and the
-/// lint tables of every cargo manifest ([`lint_changes`]) besides. A change no step
+/// lint tables of every cargo manifest ([`lint_changes`]) and the lint-level attributes lowering a
+/// lint group in every changed `.rs` file ([`lint_attribute_changes`]) and in every changed file
+/// such a file pulls in ([`pulled_in_changes`]) besides. A change no step
 /// could make, because the step guard refuses it, but one that reached the branch by another
 /// route (a commit made outside the loop) would decide the verdict all the same. The store is
 /// guarded at the step too, but it decides no test and no check, and takt itself writes it on
@@ -1477,7 +1479,8 @@ fn judged(
             "--",
         ],
     )?;
-    for path in nul_fields(&diff, "diff-tree", false)? {
+    let changed = nul_fields(&diff, "diff-tree", false)?;
+    for &path in &changed {
         // While a line of the test command's script fails closed every program is on the
         // surface: one the base held is as much one as the tree's now.
         // In a directory on `PATH` an entry the base held executable is a program a lookup
@@ -1516,6 +1519,35 @@ fn judged(
                         "{path}: a line the lints scanner cannot read with certainty, {side}"
                     )),
                 }
+            }
+        }
+        // A lint-level attribute lowering a lint group that Rust source the branch changed
+        // holds and the base did not ([`lint_attribute_changes`]): `#![allow(clippy::all)]`
+        // turns a failing `cargo clippy -- -D warnings` into a passing one.
+        if gate && path.ends_with(".rs") {
+            let before = crate::run::manifest_at(tree, &at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            match lint_attribute_changes(&before, &after) {
+                Ok(added) => {
+                    for attribute in added {
+                        let named = format!("{path}: {attribute}");
+                        if !paths.contains(&named) {
+                            paths.push(named);
+                        }
+                    }
+                }
+                Err(side) => paths.push(format!(
+                    "{path}: a file the lint-attribute scanner cannot read with certainty, {side}"
+                )),
+            }
+        }
+    }
+    // The same in Rust source not read by a `.rs` name: a file `include!` or a `path`
+    // attribute pulls in, and a `.rs` link ([`pulled_in_changes`]).
+    if gate {
+        for named in pulled_in_changes(tree, &at, revision, &changed)? {
+            if !paths.contains(&named) {
+                paths.push(named);
             }
         }
     }
@@ -1682,6 +1714,12 @@ impl FreshHome {
     /// binding's `env` declares or else on [`FIXED_PATH`], and a binding that declares no `PATH`
     /// runs with [`FIXED_PATH`]; a name found nowhere is refused, naming it and the path searched.
     fn admitting(&self, project: &str, tree: &Path) -> Result<String> {
+        // A shell's `-c` line the gate cannot split into words leaves paths it would run
+        // uncompared at the base ([`argument_paths`]): refused, naming the command.
+        let unread = argument_paths(project)?.unread;
+        if !unread.is_empty() {
+            bail!("{}", unread.join("; "));
+        }
         let mut doc: serde_yaml_ng::Value =
             serde_yaml_ng::from_str(project).context("read the project file")?;
         let Some(top) = doc.as_mapping_mut() else {
@@ -2414,12 +2452,19 @@ pub const DEFAULT_PROJECT: &str = ".engineering/assertions-project.yaml";
 /// What the gates observe runs from the tree only while the base revision and the observed one
 /// agree on it: with a project file, the executables and catalogs it admits, every file its
 /// commands take as an argument, the tool configuration ([`GATE_TOOL_CONFIG`]), the `[lints]`
-/// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]), what Python loads
+/// and `[workspace.lints]` tables of every cargo manifest ([`lint_changes`]), the lint-level
+/// attributes lowering `warnings` or a lint group in a changed `.rs` file, such as
+/// `#![allow(clippy::all)]` ([`lint_attribute_changes`]; one added is named), what Python loads
 /// from the tree for its commands, a `sh -c` string or shell script of theirs among them, and the
 /// paths such a string or script names ([`python_paths`]; every Python file, shell file and program
 /// while one cannot be read with certainty) and the judge surface the test command's is
 /// compared on. One that differs, was added or was deleted runs
 /// nothing and writes no record; the summary names it.
+///
+/// What the specification and citation commands trust is compared too
+/// ([`trusted_input_changes`]): a digest a `*.citations.tsv` under `ess/` holds that the base did
+/// not hold for the same row key, and an entry the base lists in `ess/ess-inputs.yaml` or
+/// `ess/system.yaml` that the revision does not.
 ///
 /// Code that runs while cargo builds (a build script, a procedural macro, a dependency's) is
 /// not closed by comparing files: the step writes the code under test, and a gate whose
@@ -2551,35 +2596,658 @@ fn inside_tree(paths: &[String]) -> Vec<String> {
     inside
 }
 
+/// What the commands and providers a project file admits name in their arguments
+/// ([`argument_paths`]), each relative to the tree ([`inside_tree`]).
+#[derive(Debug, Default)]
+struct ArgumentPaths {
+    /// Compared whatever the base holds there: each argument as it is written, an option's
+    /// value after its `=` (`--path=dir`), and each word of a shell's `-c` line, as it is
+    /// written and from every directory the line changes to.
+    paths: Vec<String>,
+    /// The patterns of a shell's `-c` line (`scripts/*.mk`), compared as globs: every path
+    /// each matches.
+    globs: Vec<String>,
+    /// What a short option's glued value may name (`-fscripts/check.mk`,
+    /// `-qfscripts/check.mk`): each tail after a run of option letters, compared where the base
+    /// or the revision holds something.
+    glued: Vec<String>,
+    /// Why a command's `-c` line cannot be split into words with certainty, naming the
+    /// command: while there is one, the gate runs nothing.
+    unread: Vec<String>,
+}
+
+/// The shells whose `-c` line the gate splits into words ([`shell_lines`]).
+const SHELLS: &[&str] = &["sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish"];
+
+/// The long options of the shells in [`SHELLS`] that take no value and run no line: any other
+/// long option but `--command` (and fish's `--init-command`) is one the gate cannot tell takes a
+/// value, so the shell's words are not read ([`shell_lines`]).
+const SHELL_FLAGS: &[&str] = &[
+    "norc",
+    "noprofile",
+    "login",
+    "posix",
+    "noediting",
+    "restricted",
+    "verbose",
+    "help",
+    "version",
+    "no-config",
+    "private",
+    "interactive",
+    "no-execute",
+];
+
+/// How many `-c` lines deep, one given inside another, the gate reads.
+const SHELL_LINES_AT_MOST: usize = 3;
+
+/// How many directories a `-c` line's words are read from, its `cd`s followed.
+const LINE_DIRS_AT_MOST: usize = 16;
+
 /// The arguments of the commands and providers a project file admits, as paths relative to the
-/// tree ([`inside_tree`]): each argument as it is written, and an option's value after its `=`
-/// (`--path=dir`). Which of them a commit holds is the caller's to read.
-fn argument_paths(project: &str) -> Result<Vec<String>> {
+/// tree ([`ArgumentPaths`]): each argument as it is written, an option's value after its `=`
+/// (`--path=dir`), the tails of a short option with its value glued on, and the words of the
+/// line a shell runs with `-c` ([`shell_lines`]), or why that line cannot be read. Which of
+/// them a commit holds is the caller's to read.
+fn argument_paths(project: &str) -> Result<ArgumentPaths> {
     let doc: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(project).context("read the project file")?;
-    let mut bindings: Vec<&serde_yaml_ng::Value> = Vec::new();
+    let mut bindings: Vec<(String, &serde_yaml_ng::Value)> = Vec::new();
+    let named = |kind: &str, name: &serde_yaml_ng::Value| {
+        format!("{kind} `{}`", name.as_str().unwrap_or("?"))
+    };
     if let Some(commands) = doc["commands"].as_mapping() {
-        bindings.extend(commands.values());
+        bindings.extend(
+            commands
+                .iter()
+                .map(|(name, binding)| (named("command", name), binding)),
+        );
     }
     if let Some(providers) = doc["providers"].as_mapping() {
-        bindings.extend(providers.values().map(|provider| &provider["command"]));
+        bindings.extend(
+            providers
+                .iter()
+                .map(|(name, provider)| (named("provider", name), &provider["command"])),
+        );
     }
-    let mut paths = Vec::new();
-    for argument in bindings
-        .iter()
-        .filter_map(|binding| binding["args"].as_sequence())
-        .flatten()
-        .filter_map(serde_yaml_ng::Value::as_str)
-    {
-        paths.push(argument.to_owned());
-        if let Some((_, value)) = argument
-            .strip_prefix('-')
-            .and_then(|option| option.split_once('='))
-        {
-            paths.push(value.to_owned());
+    let mut found = ArgumentPaths::default();
+    for (name, binding) in bindings {
+        let args: Vec<String> = binding["args"]
+            .as_sequence()
+            .into_iter()
+            .flatten()
+            .filter_map(serde_yaml_ng::Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        for argument in &args {
+            word_paths(argument, "", &mut found);
+        }
+        let words: Vec<String> = binding["executable"]
+            .as_str()
+            .map(str::to_owned)
+            .into_iter()
+            .chain(args)
+            .collect();
+        // Under `CDPATH` a `cd` changes to a directory under one of its entries, which the gate
+        // does not follow ([`split_line`]).
+        if binding["env"].get("CDPATH").is_some() {
+            found.unread.push(format!(
+                "the {name} sets `CDPATH`, under which a `cd` changes to a directory the gate does not follow; the paths it names cannot be compared at the base"
+            ));
+            continue;
+        }
+        if let Err(why) = shell_lines(
+            &words,
+            &[String::new()],
+            &known_variables(binding),
+            0,
+            &mut found,
+        ) {
+            found.unread.push(format!("the {name} {why}"));
         }
     }
-    Ok(inside_tree(&paths))
+    found.paths = inside_tree(&found.paths);
+    found.globs = inside_tree(&found.globs);
+    found.glued = inside_tree(&found.glued);
+    Ok(found)
+}
+
+/// `path` read from the directory `dir` (`""` the tree's root): an absolute one as it is.
+fn joined(dir: &str, path: &str) -> String {
+    if dir.is_empty() || path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("{dir}/{path}")
+    }
+}
+
+/// What the word `word`, read from the directory `dir`, may name ([`ArgumentPaths`]): the word,
+/// the value after the first `=` of an option or of any other word (`--path=dir`, `dd
+/// if=rules.txt`, `BASH_ENV=scripts/env`) and each `:`-separated entry of that value, and for a
+/// short option (one `-`) every tail after a run of option letters, so `-qfscripts/check.mk`
+/// gives `fscripts/check.mk` and `scripts/check.mk` among them.
+fn word_paths(word: &str, dir: &str, found: &mut ArgumentPaths) {
+    found.paths.push(joined(dir, word));
+    if let Some((_, value)) = word.split_once('=') {
+        found.paths.push(joined(dir, value));
+        if value.contains(':') {
+            found.paths.extend(
+                value
+                    .split(':')
+                    .filter(|entry| !entry.is_empty())
+                    .map(|entry| joined(dir, entry)),
+            );
+        }
+    }
+    if word.starts_with('-') && !word.starts_with("--") {
+        let bytes = word.as_bytes();
+        for k in 2..bytes.len() {
+            if !bytes[k - 1].is_ascii_alphanumeric() || bytes[k] == b'=' {
+                break;
+            }
+            found.glued.push(joined(dir, &word[k..]));
+        }
+    }
+}
+
+/// The variables a gate command runs with whose value the gate knows, for a `-c` line's
+/// expansions: what the binding's `env` sets, and else what the gate sets ([`FreshHome::vars`],
+/// [`FIXED_PATH`]), `HOME` standing for the fresh home outside the tree as `/`.
+fn known_variables(binding: &serde_yaml_ng::Value) -> std::collections::BTreeMap<String, String> {
+    let mut known: std::collections::BTreeMap<String, String> = [
+        ("PATH", FIXED_PATH),
+        ("HOME", "/"),
+        ("PYTHONNOUSERSITE", "1"),
+        ("PYTHONDONTWRITEBYTECODE", "1"),
+    ]
+    .into_iter()
+    .map(|(name, value)| (name.to_owned(), value.to_owned()))
+    .collect();
+    if let Some(env) = binding["env"].as_mapping() {
+        for (name, value) in env {
+            if let (Some(name), Some(value)) = (name.as_str(), value.as_str()) {
+                known.insert(name.to_owned(), value.to_owned());
+            }
+        }
+    }
+    known
+}
+
+/// Reads the line each shell among `words` ([`SHELLS`]) runs with `-c` (alone or in a cluster,
+/// `-ec`) or `--command`, the first operand after its options, or as `--command=<line>`, and
+/// fish's `-C`/`--init-command` line besides: each of its words ([`split_line`]) is what
+/// [`word_paths`] reads, from every directory in `dirs` and every one the line changes to, a
+/// pattern a glob; and a `-c` line among its words is read in turn, up to
+/// [`SHELL_LINES_AT_MOST`] deep. The error is why a line cannot be read, naming it, and a long
+/// option the gate cannot tell takes a value ([`SHELL_FLAGS`]) is one.
+fn shell_lines(
+    words: &[String],
+    dirs: &[String],
+    known: &std::collections::BTreeMap<String, String>,
+    depth: usize,
+    found: &mut ArgumentPaths,
+) -> std::result::Result<(), String> {
+    for (k, word) in words.iter().enumerate() {
+        let shell = word.rsplit('/').next().unwrap_or_default();
+        if !SHELLS.contains(&shell) {
+            continue;
+        }
+        let fish = shell == "fish";
+        let mut line_given = false;
+        let mut lines: Vec<&str> = Vec::new();
+        let mut at = k + 1;
+        while let Some(option) = words.get(at) {
+            if option == "--" {
+                at += 1;
+                break;
+            }
+            if let Some(long) = option.strip_prefix("--") {
+                let (name, value) = match long.split_once('=') {
+                    Some((name, value)) => (name, Some(value)),
+                    None => (long, None),
+                };
+                match (name, value) {
+                    ("command", None) => line_given = true,
+                    ("init-command", None) if fish => {
+                        lines.extend(words.get(at + 1).map(String::as_str));
+                        at += 1;
+                    }
+                    ("command", Some(line)) => lines.push(line),
+                    ("init-command", Some(line)) if fish => lines.push(line),
+                    (name, None) if SHELL_FLAGS.contains(&name) => {}
+                    _ => {
+                        return Err(format!(
+                            "runs `{shell}` with the option `{option}`, which the gate cannot tell takes a value or runs a line; the paths it names cannot be compared at the base"
+                        ));
+                    }
+                }
+            } else {
+                match option.strip_prefix(['-', '+']) {
+                    Some(letters)
+                        if !letters.is_empty()
+                            && letters.chars().all(|c| c.is_ascii_alphabetic()) =>
+                    {
+                        line_given |= option.starts_with('-') && letters.contains('c');
+                        if fish && letters.ends_with('C') {
+                            lines.extend(words.get(at + 1).map(String::as_str));
+                            at += 1;
+                        } else if letters.ends_with(['o', 'O'])
+                            || (fish && letters.ends_with(['d', 'f', 'p', 'D']))
+                        {
+                            at += 1;
+                        }
+                    }
+                    _ => break,
+                }
+            }
+            at += 1;
+        }
+        lines.extend(words.get(at).filter(|_| line_given).map(String::as_str));
+        for line in lines {
+            read_line(line, dirs, known, depth, found)?;
+        }
+    }
+    Ok(())
+}
+
+/// Reads the `-c` line `line` a shell runs from each directory of `dirs`, as [`shell_lines`]
+/// reads it, `depth` lines inside others.
+fn read_line(
+    line: &str,
+    dirs: &[String],
+    known: &std::collections::BTreeMap<String, String>,
+    depth: usize,
+    found: &mut ArgumentPaths,
+) -> std::result::Result<(), String> {
+    if depth >= SHELL_LINES_AT_MOST {
+        return Err(format!(
+            "runs the shell line `{line}` inside {depth} others, deeper than the gate reads"
+        ));
+    }
+    let (line_words, line_dirs) = split_line(line, dirs, known).map_err(|why| {
+            format!(
+                "runs the shell line `{line}`, which the gate cannot split into words with certainty: {why}; the paths it names cannot be compared at the base"
+            )
+        })?;
+    for word in &line_words {
+        for dir in &line_dirs {
+            if word.pattern {
+                found.globs.push(joined(dir, &word.text));
+            } else {
+                word_paths(&word.text, dir, found);
+            }
+        }
+    }
+    let texts: Vec<String> = line_words.into_iter().map(|word| word.text).collect();
+    shell_lines(&texts, &line_dirs, known, depth + 1, found)?;
+    Ok(())
+}
+
+/// A word of a `-c` line ([`split_line`]), its quotes removed and its variables expanded.
+struct LineWord {
+    text: String,
+    /// Whether it holds an unquoted `*` or `?`, a pattern the shell expands.
+    pattern: bool,
+}
+
+/// The words of a `-c` line as they are being split ([`split_line`]).
+#[derive(Default)]
+struct Splitter {
+    words: Vec<LineWord>,
+    word: String,
+    started: bool,
+    pattern: bool,
+    /// Whether the word holds a quoted or escaped `*`, `?`, `[`, `]` or `\`.
+    literal: bool,
+    /// Whether the word holds a quoted, escaped or expanded character.
+    quoted: bool,
+    /// Where in the word an unquoted `[` not yet closed stands.
+    bracket: Option<usize>,
+    /// Whether the word holds an unquoted `{`.
+    braced: bool,
+    /// The variables the line expands.
+    expanded: Vec<String>,
+}
+
+impl Splitter {
+    fn push(&mut self, c: char) {
+        self.started = true;
+        self.word.push(c);
+    }
+
+    fn push_literal(&mut self, c: char) {
+        self.literal |= matches!(c, '*' | '?' | '[' | ']' | '\\');
+        self.quoted = true;
+        self.push(c);
+    }
+
+    /// Ends the word: as it is written and, with an unquoted `{`, each word its brace
+    /// expansion makes ([`brace_words`]), since `bash` makes it and `sh` does not.
+    fn end(&mut self) -> std::result::Result<(), String> {
+        if self.started {
+            if self.pattern && (self.literal || self.word.starts_with('-')) {
+                return Err(format!(
+                    "the pattern `{}` is quoted in part or is an option",
+                    self.word
+                ));
+            }
+            let word = std::mem::take(&mut self.word);
+            let mut texts = Vec::new();
+            if self.braced {
+                texts = brace_words(&word)?;
+                if texts.len() > 1 && self.quoted {
+                    return Err(format!("the brace expansion in `{word}` is quoted in part"));
+                }
+                texts.retain(|text| *text != word);
+            }
+            for text in std::iter::once(word).chain(texts) {
+                self.words.push(LineWord {
+                    text,
+                    pattern: self.pattern,
+                });
+            }
+        }
+        self.word.clear();
+        self.started = false;
+        self.pattern = false;
+        self.literal = false;
+        self.quoted = false;
+        self.bracket = None;
+        self.braced = false;
+        Ok(())
+    }
+
+    /// The expansion after a `$`: a variable of `known`, by its name or as `${NAME}`; anything
+    /// else (a command substitution, arithmetic, a positional or special parameter, an
+    /// operator inside `${…}`, a variable the gate does not set) is the error. Unquoted, a
+    /// value the shell would split or match as a pattern is the error too.
+    fn expand(
+        &mut self,
+        chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+        quoted: bool,
+        known: &std::collections::BTreeMap<String, String>,
+    ) -> std::result::Result<(), String> {
+        let name = match chars.peek() {
+            Some('{') => {
+                chars.next();
+                let mut name = String::new();
+                loop {
+                    match chars.next() {
+                        Some('}') => break,
+                        Some(c) => name.push(c),
+                        None => return Err("an unclosed `${`".to_owned()),
+                    }
+                }
+                if !name.starts_with(|c: char| c.is_ascii_alphabetic() || c == '_')
+                    || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                {
+                    return Err(format!("the expansion `${{{name}}}`"));
+                }
+                name
+            }
+            Some(c) if c.is_ascii_alphabetic() || *c == '_' => {
+                let mut name = String::new();
+                while let Some(c) = chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '_') {
+                    name.push(c);
+                }
+                name
+            }
+            Some(c) => return Err(format!("the expansion `${c}`")),
+            None => return Err("a `$` at the end of the line".to_owned()),
+        };
+        let Some(value) = known.get(&name) else {
+            return Err(format!(
+                "the variable `${name}`, which the gate does not set for the command"
+            ));
+        };
+        if !quoted && value.contains(|c: char| c.is_whitespace() || matches!(c, '*' | '?' | '[')) {
+            return Err(format!(
+                "the variable `${name}`, whose value the shell splits or expands"
+            ));
+        }
+        for c in value.chars() {
+            self.push_literal(c);
+        }
+        self.expanded.push(name);
+        Ok(())
+    }
+}
+
+/// How many words the brace expansions of one word of a `-c` line make at most.
+const BRACE_WORDS_AT_MOST: usize = 64;
+
+/// The words the brace expansions of `word` make, `bash`'s: each `{a,b}` with a `,` at its own
+/// depth gives one word per alternative, nested and in turn; a pair with no such `,` is left as
+/// it is (`{}`, `{fd}`). A sequence (`{1..3}`) and more than [`BRACE_WORDS_AT_MOST`] words are
+/// the error.
+fn brace_words(word: &str) -> std::result::Result<Vec<String>, String> {
+    let mut from = 0;
+    while let Some(open) = word[from..].find('{').map(|at| at + from) {
+        let mut depth = 0usize;
+        let mut commas = Vec::new();
+        let mut close = None;
+        for (at, c) in word[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(open + at);
+                        break;
+                    }
+                }
+                ',' if depth == 1 => commas.push(open + at),
+                _ => {}
+            }
+        }
+        let Some(close) = close else {
+            break;
+        };
+        if commas.is_empty() {
+            if word[open..close].contains("..") {
+                return Err(format!("the sequence expansion in `{word}`"));
+            }
+            from = open + 1;
+            continue;
+        }
+        let mut words = Vec::new();
+        let mut start = open + 1;
+        for end in commas.into_iter().chain([close]) {
+            let alternative = format!(
+                "{}{}{}",
+                &word[..open],
+                &word[start..end],
+                &word[close + 1..]
+            );
+            words.extend(brace_words(&alternative)?);
+            if words.len() > BRACE_WORDS_AT_MOST {
+                return Err(format!(
+                    "the brace expansion in `{word}` makes more than {BRACE_WORDS_AT_MOST} words"
+                ));
+            }
+            start = end + 1;
+        }
+        return Ok(words);
+    }
+    Ok(vec![word.to_owned()])
+}
+
+/// The directory `path` names relative to the tree's root, `""` the root itself; `None` when
+/// it leads out of the tree.
+fn tree_dir(path: &str) -> Option<String> {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in path.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop()?;
+            }
+            part => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
+/// `line`, a `-c` line a shell runs from each directory of `dirs`, split into words as a POSIX
+/// shell splits it, with every directory a `cd` or `pushd` in it may change to besides
+/// (`dirs` first): white space, `;`, `&`, `|`, `(`, `)`, `<` and `>` between words, `'…'` as it
+/// is, `"…"` with `\` escaping `"`, `\`, `$` and a backquote, `\` outside quotes escaping the
+/// next character, a `#` starting a word starting a comment. What would make a word other than
+/// the gate reads it is the error, so the line fails closed: an unclosed quote or a `\` at its
+/// end, a command substitution, an expansion other than a variable the gate sets for the
+/// command ([`known_variables`]) that the line does not itself set, a brace sequence
+/// ([`brace_words`]), `~+` and `~-`, a word that sets `CDPATH`, and a `cd` to a directory outside
+/// the tree or one the gate cannot tell. A bracket class (`chec[k]`) is read as `?`, a pattern.
+fn split_line(
+    line: &str,
+    dirs: &[String],
+    known: &std::collections::BTreeMap<String, String>,
+) -> std::result::Result<(Vec<LineWord>, Vec<String>), String> {
+    let mut split = Splitter::default();
+    let mut chars = line.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => split.end()?,
+            ';' | '&' | '|' | '(' | ')' | '<' | '>' => split.end()?,
+            '#' if !split.started => while chars.next_if(|c| *c != '\n').is_some() {},
+            '\'' => {
+                split.started = true;
+                loop {
+                    match chars.next() {
+                        Some('\'') => break,
+                        Some(c) => split.push_literal(c),
+                        None => return Err("an unclosed `'`".to_owned()),
+                    }
+                }
+            }
+            '"' => {
+                split.started = true;
+                loop {
+                    match chars.next() {
+                        Some('"') => break,
+                        Some('\\') => match chars.next() {
+                            Some('\n') => {}
+                            Some(c @ ('"' | '\\' | '$' | '`')) => split.push_literal(c),
+                            Some(c) => {
+                                split.push_literal('\\');
+                                split.push_literal(c);
+                            }
+                            None => return Err("an unclosed `\"`".to_owned()),
+                        },
+                        Some('$') => split.expand(&mut chars, true, known)?,
+                        Some('`') => return Err("a command substitution in backquotes".to_owned()),
+                        Some(c) => split.push_literal(c),
+                        None => return Err("an unclosed `\"`".to_owned()),
+                    }
+                }
+            }
+            '\\' => match chars.next() {
+                Some('\n') => {}
+                Some(c) => split.push_literal(c),
+                None => return Err("a `\\` at the end of the line".to_owned()),
+            },
+            '$' => split.expand(&mut chars, false, known)?,
+            '`' => return Err("a command substitution in backquotes".to_owned()),
+            '*' | '?' => {
+                split.pattern = true;
+                split.push(c);
+            }
+            '[' if split.bracket.is_none() => {
+                split.bracket = Some(split.word.len());
+                split.push(c);
+            }
+            // A bracket class matches one character of those it names: compared as `?`, every
+            // path it could match and more. A `]` right after `[` or `[!` is one of them.
+            ']' if split
+                .bracket
+                .is_some_and(|at| !matches!(&split.word[at..], "[" | "[!" | "[^")) =>
+            {
+                let at = split.bracket.take().unwrap_or_default();
+                split.word.truncate(at);
+                split.pattern = true;
+                split.push('?');
+            }
+            '{' => {
+                split.braced = true;
+                split.push(c);
+            }
+            '~' if !split.started && matches!(chars.peek(), Some('+' | '-')) => {
+                return Err("a `~+` or `~-`, a directory the shell is in".to_owned());
+            }
+            c => split.push(c),
+        }
+    }
+    split.end()?;
+    // `CDPATH` set (`CDPATH=sub`, `export CDPATH`): a `cd` changes to a directory under one of
+    // its entries, not one the gate follows.
+    if let Some(word) = split
+        .words
+        .iter()
+        .find(|word| word.text == "CDPATH" || word.text.starts_with("CDPATH="))
+    {
+        return Err(format!(
+            "the line sets `CDPATH` (`{}`), under which a `cd` changes to a directory the gate does not follow",
+            word.text
+        ));
+    }
+    for name in &split.expanded {
+        if split.words.iter().any(|word| {
+            word.text == *name
+                || word
+                    .text
+                    .strip_prefix(name.as_str())
+                    .is_some_and(|rest| rest.starts_with('='))
+        }) {
+            return Err(format!("the line sets `{name}`, which it also expands"));
+        }
+    }
+    let mut all: Vec<String> = dirs.to_vec();
+    for (k, word) in split.words.iter().enumerate() {
+        if !matches!(word.text.as_str(), "cd" | "pushd") {
+            continue;
+        }
+        let mut at = k + 1;
+        while let Some(option) = split.words.get(at) {
+            if option.text == "--" {
+                at += 1;
+                break;
+            }
+            if !option.text.starts_with('-') || option.text == "-" {
+                break;
+            }
+            at += 1;
+        }
+        let target = split
+            .words
+            .get(at)
+            .filter(|target| {
+                !target.pattern
+                    && !target.text.is_empty()
+                    && !target.text.starts_with(['/', '~', '-'])
+            })
+            .ok_or_else(|| {
+                format!(
+                    "`{}` changes to a directory the gate cannot tell inside the tree",
+                    word.text
+                )
+            })?;
+        let mut more = Vec::new();
+        for dir in &all {
+            more.push(
+                tree_dir(&joined(dir, &target.text))
+                    .ok_or_else(|| format!("`{} {}` leaves the tree", word.text, target.text))?,
+            );
+        }
+        all.extend(more);
+        all.sort();
+        all.dedup();
+        if all.len() > LINE_DIRS_AT_MOST {
+            return Err(format!(
+                "it changes directory to more than {LINE_DIRS_AT_MOST} places, more than the gate follows"
+            ));
+        }
+    }
+    Ok((split.words, all))
 }
 
 /// What Python loads from the tree for the commands and providers a project file admits, read
@@ -2972,6 +3640,204 @@ fn is_tool_config(path: &str) -> bool {
     })
 }
 
+/// The names task reads in a directory a Taskfile includes, in its order.
+const TASKFILE_NAMES: [&str; 8] = [
+    "Taskfile.yml",
+    "taskfile.yml",
+    "Taskfile.yaml",
+    "taskfile.yaml",
+    "Taskfile.dist.yml",
+    "taskfile.dist.yml",
+    "Taskfile.dist.yaml",
+    "taskfile.dist.yaml",
+];
+
+/// How many Taskfiles [`taskfile_includes`] reads at most; past it nothing is read with certainty.
+const TASKFILE_BOUND: usize = 256;
+
+/// What the Taskfiles of the commit `at` include (story:the-gate-compares-taskfile-includes).
+struct TaskfileIncludes {
+    /// Every path an include names, resolved against its including file; for a directory, each
+    /// name task reads there ([`TASKFILE_NAMES`]).
+    files: Vec<String>,
+    /// Each include the gate cannot resolve with certainty, named with the file that holds it.
+    uncertain: Vec<String>,
+}
+
+/// The files every Taskfile the commit `at` holds (one named as task names it, at any depth)
+/// pulls in through `includes:`, followed into each included file in turn, each read once and
+/// [`TASKFILE_BOUND`] at most. An include is a path or a mapping's `taskfile:` (`dir:`,
+/// `optional:` and the rest decide no file), relative to the including file's directory; one
+/// the commit holds as a directory means the Taskfile task reads there, one it does not hold is
+/// compared all the same, since the branch may add it. Not resolved with certainty, and named:
+/// an include in neither form, a template (`{{`), a home or variable expansion (`~`, `$`), an
+/// absolute path, a backslash, a colon (a remote URL, a drive), one outside the tree, one
+/// through a link, and every include of a Taskfile that is not UTF-8, does not parse or holds a
+/// YAML anchor or alias (read without them, as takt reads YAML elsewhere).
+fn taskfile_includes(tree: &Path, at: &str) -> Result<TaskfileIncludes> {
+    let listed = crate::git::bytes(tree, &["ls-tree", "-r", "-z", "--full-tree", at])?;
+    let mut objects: std::collections::BTreeMap<&str, (&str, &str)> =
+        std::collections::BTreeMap::new();
+    for entry in nul_fields(&listed, "ls-tree", true)? {
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        let mut fields = meta.split_whitespace();
+        if let (Some(mode), Some(_), Some(id)) = (fields.next(), fields.next(), fields.next()) {
+            objects.insert(path, (mode, id));
+        }
+    }
+    let is_dir = |path: &str| {
+        let prefix = format!("{path}/");
+        objects
+            .range(prefix.as_str()..)
+            .next()
+            .is_some_and(|(held, _)| held.starts_with(&prefix))
+    };
+    let named = |path: &str| {
+        let last = path.rsplit('/').next().unwrap_or(path);
+        TASKFILE_NAMES
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(last))
+    };
+    let mut found = TaskfileIncludes {
+        files: Vec::new(),
+        uncertain: Vec::new(),
+    };
+    let mut queue: std::collections::VecDeque<String> = objects
+        .iter()
+        .filter(|(path, (mode, _))| named(path) && *mode != "120000")
+        .map(|(path, _)| (*path).to_owned())
+        .collect();
+    let mut read = std::collections::BTreeSet::new();
+    while let Some(file) = queue.pop_front() {
+        if !read.insert(file.clone()) {
+            continue;
+        }
+        if read.len() > TASKFILE_BOUND {
+            found.uncertain.push(format!(
+                "the Taskfiles include more than {TASKFILE_BOUND} files, which the gate does not follow with certainty"
+            ));
+            break;
+        }
+        let Some((mode, id)) = objects.get(file.as_str()) else {
+            continue;
+        };
+        if *mode == "120000" {
+            continue;
+        }
+        let Ok(text) = String::from_utf8(crate::git::blob(tree, id)?) else {
+            found
+                .uncertain
+                .push(format!("the Taskfile {file} is not UTF-8"));
+            continue;
+        };
+        let doc =
+            match crate::loop_scorecard::read_yaml::<serde_yaml_ng::Value>(Path::new(&file), &text)
+            {
+                Ok(doc) => doc,
+                Err(error) => {
+                    found.uncertain.push(format!(
+                        "the Taskfile {file} is not read with certainty: {error:#}"
+                    ));
+                    continue;
+                }
+            };
+        let includes = match doc.get("includes") {
+            None | Some(serde_yaml_ng::Value::Null) => continue,
+            Some(serde_yaml_ng::Value::Mapping(includes)) => includes,
+            Some(_) => {
+                found.uncertain.push(format!(
+                    "the includes of the Taskfile {file} are no mapping"
+                ));
+                continue;
+            }
+        };
+        let dir = file.rsplit_once('/').map_or("", |(dir, _)| dir);
+        for (key, value) in includes {
+            let key = key.as_str().unwrap_or("?");
+            let target = match value {
+                serde_yaml_ng::Value::String(target) => Some(target.as_str()),
+                serde_yaml_ng::Value::Mapping(entry) => {
+                    entry.get("taskfile").and_then(serde_yaml_ng::Value::as_str)
+                }
+                _ => None,
+            };
+            let Some(target) = target else {
+                found.uncertain.push(format!(
+                    "the Taskfile {file} includes `{key}` neither as a path nor as a mapping's taskfile"
+                ));
+                continue;
+            };
+            let unsure = || {
+                format!(
+                    "the Taskfile {file} includes `{target}`, which the gate cannot resolve with certainty"
+                )
+            };
+            if target.is_empty()
+                || target.contains("{{")
+                || target.starts_with(['/', '~'])
+                || target.contains(['$', '\\', ':'])
+            {
+                found.uncertain.push(unsure());
+                continue;
+            }
+            let mut parts: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
+            let mut outside = false;
+            for part in target.split('/') {
+                match part {
+                    "" | "." => {}
+                    ".." => outside |= parts.pop().is_none(),
+                    part => parts.push(part),
+                }
+            }
+            if outside {
+                found.uncertain.push(unsure());
+                continue;
+            }
+            let through = (1..=parts.len()).find_map(|end| {
+                let prefix = parts[..end].join("/");
+                objects
+                    .get(prefix.as_str())
+                    .is_some_and(|(mode, _)| *mode == "120000")
+                    .then_some(prefix)
+            });
+            if let Some(link) = through {
+                found.uncertain.push(format!(
+                    "the Taskfile {file} includes `{target}`, through the link {link}"
+                ));
+                continue;
+            }
+            let path = parts.join("/");
+            if objects.contains_key(path.as_str()) {
+                found.files.push(path.clone());
+                queue.push_back(path);
+            } else {
+                // A directory is the Taskfile task reads in it; a path the commit does not hold
+                // is compared as a file and as a directory, whichever the branch adds.
+                let held = path.is_empty() || is_dir(&path);
+                if !held {
+                    found.files.push(path.clone());
+                }
+                for name in TASKFILE_NAMES {
+                    let candidate = if path.is_empty() {
+                        name.to_owned()
+                    } else {
+                        format!("{path}/{name}")
+                    };
+                    if held && objects.contains_key(candidate.as_str()) {
+                        queue.push_back(candidate.clone());
+                    }
+                    found.files.push(candidate);
+                }
+            }
+        }
+    }
+    found.files.sort();
+    found.files.dedup();
+    Ok(found)
+}
+
 /// The parts of the TOML key `key` (`a.b`, `"a".'b'`): bare, or quoted without an escape. `None`
 /// for anything else, which the caller does not read with certainty.
 fn key_parts(key: &str) -> Option<Vec<String>> {
@@ -3119,6 +3985,928 @@ fn lint_changes(before: &str, after: &str) -> std::result::Result<Vec<String>, &
     keys.sort();
     keys.dedup();
     Ok(keys)
+}
+
+/// The files whose top-level lists name what the specification commands read: an entry the
+/// base lists and the revision does not is one `ess specify validate` no longer reads
+/// ([`trusted_input_changes`]).
+const SPECIFICATION_LISTS: &[&str] = &["ess/ess-inputs.yaml", "ess/system.yaml"];
+
+/// What the specification and citation commands trust that the case's branch changed between
+/// the base `at` and `revision` (story:the-gate-does-not-trust-a-step-accepted-citation), each
+/// named with its file: a digest a `*.citations.tsv` under `ess/` holds that the base did not
+/// hold for the same row key ([`citation_rows`]), since a digest says a person read the lines
+/// and a step is not that person, and an entry the base lists in a top-level list of a file of
+/// [`SPECIFICATION_LISTS`] that the revision does not ([`listed_entries`]). A row that only
+/// moved key, its cited path, needles and digest a row of the base's, is not named: inserting a
+/// citation shifts the ordinal in the keys after it. Each base row accounts for one revision row
+/// at most, the row under its own key first, so a digest copied onto a second row is named. A
+/// removed row and a row without a digest are not named either; a row or a file the gate cannot
+/// read with certainty is.
+fn trusted_input_changes(tree: &Path, at: &str, revision: &str) -> Result<Vec<String>> {
+    let diff = crate::git::bytes(
+        tree,
+        &[
+            "diff-tree",
+            "-r",
+            "-z",
+            "--no-renames",
+            "--name-only",
+            at,
+            revision,
+            "--",
+            "ess",
+        ],
+    )?;
+    let mut changed = Vec::new();
+    for path in nul_fields(&diff, "diff-tree", false)? {
+        if path.ends_with(".citations.tsv") {
+            let before = crate::run::manifest_at(tree, at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            let (base, _) = citation_rows(&before);
+            let (rows, unread) = citation_rows(&after);
+            if let Some(line) = unread {
+                changed.push(format!(
+                    "{path}: a row the gate cannot read with certainty, line {line}"
+                ));
+            }
+            // Each base row justifies one revision row at most: the row under its own key first,
+            // then one that moved key, so a digest copied onto a second row is named.
+            let mut used = vec![false; base.len()];
+            let mut held = vec![false; rows.len()];
+            for (k, row) in rows.iter().enumerate() {
+                if row.digest.is_none() {
+                    continue;
+                }
+                if let Some(j) = (0..base.len())
+                    .find(|&j| !used[j] && base[j].digest == row.digest && base[j].key == row.key)
+                {
+                    used[j] = true;
+                    held[k] = true;
+                }
+            }
+            for (k, row) in rows.iter().enumerate() {
+                if row.digest.is_none() || held[k] {
+                    continue;
+                }
+                if let Some(j) = (0..base.len()).find(|&j| {
+                    !used[j]
+                        && base[j].digest == row.digest
+                        && base[j].needles == row.needles
+                        && cited_path(base[j].key) == cited_path(row.key)
+                }) {
+                    used[j] = true;
+                    held[k] = true;
+                }
+            }
+            for (row, held) in rows.iter().zip(held) {
+                if row.digest.is_some() && !held {
+                    changed.push(format!(
+                        "{path}: the digest of the row {}, which the base did not hold",
+                        row.key
+                    ));
+                }
+            }
+        } else if SPECIFICATION_LISTS.contains(&path) {
+            let before = crate::run::manifest_at(tree, at, path)?;
+            let after = crate::run::manifest_at(tree, revision, path)?;
+            let (Some(listed), Some(kept)) = (listed_entries(&before), listed_entries(&after))
+            else {
+                changed.push(format!(
+                    "{path}: a file the gate cannot read with certainty at the base or the revision"
+                ));
+                continue;
+            };
+            for (list, entry) in listed {
+                if kept.iter().any(|(at, kept)| *at == list && *kept == entry) {
+                    continue;
+                }
+                let shown = match &entry {
+                    serde_yaml_ng::Value::String(text) => text.clone(),
+                    other => serde_yaml_ng::to_string(other)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_owned(),
+                };
+                changed.push(format!(
+                    "{path}: the {list} entry {shown}, which the revision no longer lists"
+                ));
+            }
+        }
+    }
+    Ok(changed)
+}
+
+/// A row of a `*.citations.tsv`: its key, its needles as written, and its digest when it has
+/// one.
+struct CitationRow<'a> {
+    key: &'a str,
+    needles: &'a str,
+    digest: Option<&'a str>,
+}
+
+/// The rows of the citations table `text`, read as `scripts/check-citations` reads them: lines
+/// split on `\n`, a trailing `\r` dropped, a blank line or one starting with `#` skipped, each
+/// other line `<key>\t<needles>[\tsha256:<64 lower-case hex digits>]`; with the number of the
+/// first line in no such form, which no row is read from.
+fn citation_rows(text: &str) -> (Vec<CitationRow<'_>>, Option<usize>) {
+    let digest_like = |field: &str| {
+        field.strip_prefix("sha256:").is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        })
+    };
+    let (mut rows, mut unread) = (Vec::new(), None);
+    for (n, line) in text.split('\n').enumerate() {
+        let line = line.strip_suffix('\r').unwrap_or(line);
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let row = match line.split('\t').collect::<Vec<_>>().as_slice() {
+            [key, needles] if !key.is_empty() => Some((*key, *needles, None)),
+            [key, needles, digest] if !key.is_empty() && digest_like(digest) => {
+                Some((*key, *needles, Some(*digest)))
+            }
+            _ => None,
+        };
+        match row {
+            Some((key, needles, digest)) => rows.push(CitationRow {
+                key,
+                needles,
+                digest,
+            }),
+            None => {
+                unread.get_or_insert(n + 1);
+            }
+        }
+    }
+    (rows, unread)
+}
+
+/// The cited path of a citations key, `<declaration>|<following line>|<path>|<k>`.
+fn cited_path(key: &str) -> Option<&str> {
+    key.rsplit('|').nth(1)
+}
+
+/// Each entry of each top-level list of the YAML `text`, with the list's key: none for an
+/// empty or absent file; `None` when it does not parse or is no mapping.
+fn listed_entries(text: &str) -> Option<Vec<(String, serde_yaml_ng::Value)>> {
+    let mapping = match serde_yaml_ng::from_str::<serde_yaml_ng::Value>(text).ok()? {
+        serde_yaml_ng::Value::Null => return Some(Vec::new()),
+        serde_yaml_ng::Value::Mapping(mapping) => mapping,
+        _ => return None,
+    };
+    let mut entries = Vec::new();
+    for (key, value) in mapping {
+        if let (Some(key), serde_yaml_ng::Value::Sequence(items)) = (key.as_str(), value) {
+            entries.extend(items.into_iter().map(|item| (key.to_owned(), item)));
+        }
+    }
+    Some(entries)
+}
+
+/// The lint groups a lint-level attribute names to lower the level of more than one lint, folded
+/// to lower case: `warnings`, rustc's groups (`rustc -W help`), clippy's and rustdoc's. A rustc
+/// name ending in `_compatibility` or `_idioms` is taken as a group besides ([`is_lint_group`]).
+const LINT_GROUPS: &[&str] = &[
+    "warnings",
+    "deprecated_safe",
+    "future_incompatible",
+    "keyword_idents",
+    "let_underscore",
+    "nonstandard_style",
+    "refining_impl_trait",
+    "unknown_or_malformed_diagnostic_attributes",
+    "unused",
+    "clippy::all",
+    "clippy::cargo",
+    "clippy::complexity",
+    "clippy::correctness",
+    "clippy::deprecated",
+    "clippy::nursery",
+    "clippy::pedantic",
+    "clippy::perf",
+    "clippy::restriction",
+    "clippy::style",
+    "clippy::suspicious",
+    "rustdoc::all",
+];
+
+/// Whether the lint `name`, folded to lower case, is a group ([`LINT_GROUPS`]).
+fn is_lint_group(name: &str) -> bool {
+    LINT_GROUPS.contains(&name)
+        || (!name.contains("::") && (name.ends_with("_compatibility") || name.ends_with("_idioms")))
+}
+
+/// A token of Rust source as [`rust_tokens`] reads it: a word (an identifier or a keyword, a raw
+/// identifier's `r#` dropped), one punctuation character, or a literal or lifetime as written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RustToken {
+    Word(String),
+    Punct(char),
+    Literal(String),
+}
+
+/// The tokens of the Rust source `text`, comments and white space dropped; `None` when a
+/// comment, a string, a character or a raw string does not end.
+fn rust_tokens(text: &str) -> Option<Vec<RustToken>> {
+    let chars: Vec<char> = text.chars().collect();
+    let word = |c: &char| *c == '_' || c.is_alphanumeric();
+    // The end of the literal quoted by `quote` that opens at `start`, escapes read.
+    let quoted = |start: usize, quote: char| -> Option<usize> {
+        let mut at = start + 1;
+        while at < chars.len() {
+            match chars[at] {
+                '\\' => at += 2,
+                c if c == quote => return Some(at + 1),
+                _ => at += 1,
+            }
+        }
+        None
+    };
+    let text_of = |from: usize, to: usize| chars[from..to].iter().collect::<String>();
+    let mut tokens = Vec::new();
+    let mut at = 0;
+    while at < chars.len() {
+        let c = chars[at];
+        let next = chars.get(at + 1).copied();
+        if c.is_whitespace() {
+            at += 1;
+        } else if c == '/' && next == Some('/') {
+            while at < chars.len() && chars[at] != '\n' {
+                at += 1;
+            }
+        } else if c == '/' && next == Some('*') {
+            // Block comments nest.
+            let mut depth = 0_usize;
+            loop {
+                match (chars.get(at), chars.get(at + 1)) {
+                    (Some('/'), Some('*')) => {
+                        depth += 1;
+                        at += 2;
+                    }
+                    (Some('*'), Some('/')) => {
+                        depth -= 1;
+                        at += 2;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    (Some(_), _) => at += 1,
+                    (None, _) => return None,
+                }
+            }
+        } else if c == '"' {
+            let end = quoted(at, '"')?;
+            tokens.push(RustToken::Literal(text_of(at, end)));
+            at = end;
+        } else if c == '\'' {
+            // A character (`'a'`, `'\n'`), or else a lifetime or a label (`'a`).
+            let end = if next == Some('\\') || chars.get(at + 2) == Some(&'\'') {
+                quoted(at, '\'')?
+            } else {
+                let mut end = at + 1;
+                while chars.get(end).is_some_and(word) {
+                    end += 1;
+                }
+                if end == at + 1 {
+                    return None;
+                }
+                end
+            };
+            tokens.push(RustToken::Literal(text_of(at, end)));
+            at = end;
+        } else if c.is_ascii_digit() {
+            let mut end = at;
+            while chars.get(end).is_some_and(word)
+                || (chars.get(end) == Some(&'.')
+                    && chars.get(end + 1).is_some_and(char::is_ascii_digit))
+            {
+                end += 1;
+            }
+            tokens.push(RustToken::Literal(text_of(at, end)));
+            at = end;
+        } else if word(&c) {
+            let mut end = at;
+            while chars.get(end).is_some_and(word) {
+                end += 1;
+            }
+            let prefix = text_of(at, end);
+            match (prefix.as_str(), chars.get(end)) {
+                ("b" | "c", Some('"')) => {
+                    let close = quoted(end, '"')?;
+                    tokens.push(RustToken::Literal(text_of(at, close)));
+                    at = close;
+                }
+                ("b", Some('\'')) => {
+                    let close = quoted(end, '\'')?;
+                    tokens.push(RustToken::Literal(text_of(at, close)));
+                    at = close;
+                }
+                ("r" | "br" | "cr", Some('"' | '#')) => {
+                    let mut open = end;
+                    while chars.get(open) == Some(&'#') {
+                        open += 1;
+                    }
+                    let hashes = open - end;
+                    if chars.get(open) == Some(&'"') {
+                        // A raw string: it ends at a `"` followed by as many `#`.
+                        let mut close = open + 1;
+                        loop {
+                            if close >= chars.len() {
+                                return None;
+                            }
+                            if chars[close] == '"'
+                                && (1..=hashes).all(|k| chars.get(close + k) == Some(&'#'))
+                            {
+                                break;
+                            }
+                            close += 1;
+                        }
+                        tokens.push(RustToken::Literal(text_of(at, close + 1 + hashes)));
+                        at = close + 1 + hashes;
+                    } else if prefix == "r" && hashes == 1 && chars.get(open).is_some_and(word) {
+                        // A raw identifier, read as the word it is.
+                        let mut close = open;
+                        while chars.get(close).is_some_and(word) {
+                            close += 1;
+                        }
+                        tokens.push(RustToken::Word(text_of(open, close)));
+                        at = close;
+                    } else {
+                        return None;
+                    }
+                }
+                _ => {
+                    tokens.push(RustToken::Word(prefix));
+                    at = end;
+                }
+            }
+        } else {
+            tokens.push(RustToken::Punct(c));
+            at += 1;
+        }
+    }
+    Some(tokens)
+}
+
+/// The tokens shown as plain Rust: a space between two words or literals and after a comma,
+/// and around `=`.
+fn rust_shown(tokens: &[RustToken]) -> String {
+    let mut shown = String::new();
+    let mut spaced = false;
+    for token in tokens {
+        match token {
+            RustToken::Word(text) | RustToken::Literal(text) => {
+                if spaced {
+                    shown.push(' ');
+                }
+                shown.push_str(text);
+                spaced = true;
+            }
+            RustToken::Punct(',') => {
+                shown.push_str(", ");
+                spaced = false;
+            }
+            RustToken::Punct('=') => {
+                shown.push_str(" = ");
+                spaced = false;
+            }
+            RustToken::Punct(c) => {
+                shown.push(*c);
+                spaced = false;
+            }
+        }
+    }
+    shown
+}
+
+/// `tokens` split at the commas outside every bracket; a trailing comma leaves no empty part.
+fn rust_split(tokens: &[RustToken]) -> Vec<&[RustToken]> {
+    let mut parts = Vec::new();
+    let (mut depth, mut from) = (0_usize, 0);
+    for (k, token) in tokens.iter().enumerate() {
+        match token {
+            RustToken::Punct('(' | '[' | '{') => depth += 1,
+            RustToken::Punct(')' | ']' | '}') => depth = depth.saturating_sub(1),
+            RustToken::Punct(',') if depth == 0 => {
+                parts.push(&tokens[from..k]);
+                from = k + 1;
+            }
+            _ => {}
+        }
+    }
+    if from < tokens.len() {
+        parts.push(&tokens[from..]);
+    }
+    parts
+}
+
+/// The index of the bracket that closes the one `tokens[open]` opens; `None` when none does.
+fn rust_close(tokens: &[RustToken], open: usize) -> Option<usize> {
+    let mut depth = 0_usize;
+    for (k, token) in tokens.iter().enumerate().skip(open) {
+        match token {
+            RustToken::Punct('(' | '[' | '{') => depth += 1,
+            RustToken::Punct(')' | ']' | '}') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(k);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The path `tokens` hold whole (`a::b`, a leading `::` dropped), its words folded to lower case;
+/// `None` when they hold anything else.
+fn rust_path(tokens: &[RustToken]) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut at = 0;
+    loop {
+        if tokens.get(at..at + 2) == Some([RustToken::Punct(':'), RustToken::Punct(':')].as_slice())
+        {
+            at += 2;
+        } else if at > 0 {
+            return None;
+        }
+        match tokens.get(at) {
+            Some(RustToken::Word(word)) => words.push(word.to_lowercase()),
+            _ => return None,
+        }
+        at += 1;
+        if at == tokens.len() {
+            return Some(words);
+        }
+    }
+}
+
+/// The lint groups ([`is_lint_group`]) an attribute's content `tokens` (inside its `[ ]`) lowers
+/// the level of: an `allow`, `expect` or `warn`, the attributes inside a `cfg_attr` or an
+/// `unsafe( )` besides; `deny`, `forbid` and every other attribute name none. `Err` when it
+/// cannot be read with certainty: a macro's `$` or a quoting `#` where a name stands, a lint
+/// level spelled as a longer path, a lint level's or `cfg_attr`'s input in no form rustc takes,
+/// or `cfg_attr`s and `unsafe( )`s nested more than [`ATTRIBUTE_NESTING_AT_MOST`] deep, `depth`
+/// the nesting `tokens` stand at.
+fn attribute_groups(tokens: &[RustToken], depth: usize) -> std::result::Result<Vec<String>, ()> {
+    let named = tokens
+        .iter()
+        .position(|token| !matches!(token, RustToken::Word(_) | RustToken::Punct(':')))
+        .unwrap_or(tokens.len());
+    let Some(path) = rust_path(&tokens[..named]) else {
+        return Err(());
+    };
+    let last = path.last().map(String::as_str).unwrap_or_default();
+    let level = matches!(last, "allow" | "expect" | "warn");
+    if !(level || matches!(last, "cfg_attr" | "unsafe")) {
+        return Ok(Vec::new());
+    }
+    if path.len() > 1 || (!level && depth >= ATTRIBUTE_NESTING_AT_MOST) {
+        return Err(());
+    }
+    // The input: one `( )` and nothing after it.
+    let rest = &tokens[named..];
+    if rest.first() != Some(&RustToken::Punct('(')) || rust_close(rest, 0) != Some(rest.len() - 1) {
+        return Err(());
+    }
+    let parts = rust_split(&rest[1..rest.len() - 1]);
+    let mut groups = Vec::new();
+    match last {
+        "cfg_attr" => {
+            if parts.len() < 2 || parts.iter().any(|part| part.is_empty()) {
+                return Err(());
+            }
+            for part in &parts[1..] {
+                groups.extend(attribute_groups(part, depth + 1)?);
+            }
+        }
+        "unsafe" => {
+            let [part] = parts.as_slice() else {
+                return Err(());
+            };
+            groups.extend(attribute_groups(part, depth + 1)?);
+        }
+        _ => {
+            for part in parts {
+                if let [
+                    RustToken::Word(key),
+                    RustToken::Punct('='),
+                    RustToken::Literal(_),
+                ] = part
+                    && key == "reason"
+                {
+                    continue;
+                }
+                let name = rust_path(part).ok_or(())?.join("::");
+                if is_lint_group(&name) {
+                    groups.push(name);
+                }
+            }
+        }
+    }
+    Ok(groups)
+}
+
+/// How many `cfg_attr`s and `unsafe( )`s deep, one inside another, the lint-attribute scanner
+/// reads an attribute ([`attribute_groups`]); one nested deeper is not read with certainty.
+const ATTRIBUTE_NESTING_AT_MOST: usize = 16;
+
+/// How many characters of an attribute a summary shows ([`lint_attributes`]).
+const ATTRIBUTE_SHOWN_AT_MOST: usize = 200;
+
+/// The name of the module the item at `tokens[from]` declares, past its outer attributes and
+/// its visibility (`pub`, `pub(crate)`): `Some` for `mod <name>`, `None` for any other item.
+fn module_after(tokens: &[RustToken], mut from: usize) -> Option<&str> {
+    while tokens.get(from) == Some(&RustToken::Punct('#'))
+        && tokens.get(from + 1) == Some(&RustToken::Punct('['))
+    {
+        from = rust_close(tokens, from + 1)? + 1;
+    }
+    if tokens.get(from) == Some(&RustToken::Word("pub".to_owned())) {
+        from += 1;
+        if tokens.get(from) == Some(&RustToken::Punct('(')) {
+            from = rust_close(tokens, from)? + 1;
+        }
+    }
+    match (tokens.get(from), tokens.get(from + 1)) {
+        (Some(RustToken::Word(keyword)), Some(RustToken::Word(name))) if keyword == "mod" => {
+            Some(name.as_str())
+        }
+        _ => None,
+    }
+}
+
+/// The lint-level attributes of the Rust source `text`, inner (`#![...]`) and outer (`#[...]`),
+/// that lower the level of a lint group ([`attribute_groups`]), each shown as plain Rust with
+/// the group; one not read with certainty with `None`. Each is keyed by its scope: the file's
+/// own (the crate root for a crate's root file) shown as the attribute alone, and a module
+/// apart, `(scope mod a::b)` after it, for an inner attribute inside the block of `mod a { mod
+/// b { … } }` or an outer one on `mod b` there; so an attribute moved from a module to the
+/// file's scope is one the file did not hold. `None` when `text` does not read as Rust tokens
+/// ([`rust_tokens`]). An attribute whose `[` does not close is named once, at the first, and
+/// nothing after it is read.
+fn lint_attributes(text: &str) -> Option<Vec<(String, Option<String>)>> {
+    let tokens = rust_tokens(text)?;
+    let shown = |tokens: &[RustToken], scope: &[&str]| {
+        let mut shown = rust_shown(tokens);
+        if let Some((cut, _)) = shown.char_indices().nth(ATTRIBUTE_SHOWN_AT_MOST) {
+            shown.truncate(cut);
+            shown.push('…');
+        }
+        if !scope.is_empty() {
+            shown.push_str(&format!(" (scope mod {})", scope.join("::")));
+        }
+        shown
+    };
+    let mut found = Vec::new();
+    // The `mod` blocks the token stands in, each with the brace depth inside its block.
+    let mut modules: Vec<(&str, usize)> = Vec::new();
+    let mut depth = 0_usize;
+    for (at, token) in tokens.iter().enumerate() {
+        match token {
+            RustToken::Punct('{') => {
+                depth += 1;
+                if let (Some(RustToken::Word(keyword)), Some(RustToken::Word(name))) = (
+                    at.checked_sub(2).and_then(|k| tokens.get(k)),
+                    at.checked_sub(1).and_then(|k| tokens.get(k)),
+                ) && keyword == "mod"
+                {
+                    modules.push((name.as_str(), depth));
+                }
+                continue;
+            }
+            RustToken::Punct('}') => {
+                if modules.last().is_some_and(|(_, inside)| *inside == depth) {
+                    modules.pop();
+                }
+                depth = depth.saturating_sub(1);
+                continue;
+            }
+            RustToken::Punct('#') => {}
+            _ => continue,
+        }
+        let inner = tokens.get(at + 1) == Some(&RustToken::Punct('!'));
+        let open = at + 1 + usize::from(inner);
+        let mut scope: Vec<&str> = modules.iter().map(|(name, _)| *name).collect();
+        match tokens.get(open) {
+            // `#$name[...]`: a macro chooses what follows.
+            Some(RustToken::Punct('$')) => {
+                let end = (open + 1).min(tokens.len() - 1);
+                found.push((shown(&tokens[at..=end], &scope), None));
+            }
+            Some(RustToken::Punct('[')) => {
+                let Some(close) = rust_close(&tokens, open) else {
+                    // Every `#` after it stands inside it: named once, here.
+                    let end = (open + 8).min(tokens.len() - 1);
+                    found.push((
+                        format!("{}, its `[` not closed", shown(&tokens[at..=end], &scope)),
+                        None,
+                    ));
+                    break;
+                };
+                if !inner {
+                    scope.extend(module_after(&tokens, close + 1));
+                }
+                let shown = shown(&tokens[at..=close], &scope);
+                match attribute_groups(&tokens[open + 1..close], 0) {
+                    Ok(groups) => {
+                        found.extend(groups.into_iter().map(|g| (shown.clone(), Some(g))));
+                    }
+                    Err(()) => found.push((shown, None)),
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(found)
+}
+
+/// The lint-level attributes lowering a lint group ([`lint_attributes`]) that the Rust source
+/// `after` holds more often than `before` does, each shown as plain Rust, one not read with
+/// certainty said so; the error: `after` does not read as Rust tokens. A `before` that does not
+/// read holds none.
+fn lint_attribute_changes(
+    before: &str,
+    after: &str,
+) -> std::result::Result<Vec<String>, &'static str> {
+    let after = lint_attributes(after).ok_or("after")?;
+    let mut held = lint_attributes(before).unwrap_or_default();
+    let mut added = Vec::new();
+    for entry in after {
+        if let Some(k) = held.iter().position(|old| *old == entry) {
+            held.swap_remove(k);
+            continue;
+        }
+        let named = match entry {
+            (shown, Some(_)) => shown,
+            (shown, None) => format!(
+                "an attribute the lint-attribute scanner cannot read with certainty, {shown}"
+            ),
+        };
+        if !added.contains(&named) {
+            added.push(named);
+        }
+    }
+    Ok(added)
+}
+
+/// How many files pulled into Rust source the branch changed the gate scans at most
+/// ([`pulled_in_changes`]); past it the gate runs nothing.
+const PULLED_IN_AT_MOST: usize = 256;
+
+/// How many bytes of a file pulled into Rust source the gate scans at most
+/// ([`pulled_in_changes`]); a larger one counts as changed.
+const PULLED_IN_BYTES_AT_MOST: usize = 1 << 20;
+
+/// The string a Rust string literal `literal` holds, plain (`"x"`) or raw (`r"x"`, `r#"x"#`);
+/// `None` for any other literal and for one with an escape.
+fn rust_string(literal: &str) -> Option<&str> {
+    let raw = literal.strip_prefix('r');
+    let text = raw.unwrap_or(literal);
+    let hashes = text.len() - text.trim_start_matches('#').len();
+    let inner = text
+        .get(hashes..text.len().checked_sub(hashes)?)?
+        .strip_prefix('"')?
+        .strip_suffix('"')?;
+    (raw.is_some() || (hashes == 0 && !inner.contains('\\'))).then_some(inner)
+}
+
+/// The files the Rust source `tokens` pulls in by name, as written: each `include!("x")`, and
+/// each `path = "x"` in an outer attribute (`#[path = "x"]`, `#[cfg_attr(…, path = "x")]`) of a
+/// module declared outside any inline `mod` block; the error, shown, an `include!` whose input
+/// is not one string literal, a `path` attribute in another form, or one inside an inline `mod`
+/// block, whose file is found under a directory the gate does not follow.
+fn rust_pulls(tokens: &[RustToken]) -> Vec<std::result::Result<String, String>> {
+    let mut pulls = Vec::new();
+    let mut modules: Vec<usize> = Vec::new();
+    let mut depth = 0_usize;
+    for (at, token) in tokens.iter().enumerate() {
+        match token {
+            RustToken::Punct('{') => {
+                depth += 1;
+                if matches!(
+                    at.checked_sub(2).and_then(|k| tokens.get(k)),
+                    Some(RustToken::Word(keyword)) if keyword == "mod"
+                ) && matches!(
+                    at.checked_sub(1).and_then(|k| tokens.get(k)),
+                    Some(RustToken::Word(_))
+                ) {
+                    modules.push(depth);
+                }
+            }
+            RustToken::Punct('}') => {
+                if modules.last() == Some(&depth) {
+                    modules.pop();
+                }
+                depth = depth.saturating_sub(1);
+            }
+            RustToken::Word(word)
+                if word == "include"
+                    && tokens.get(at + 1) == Some(&RustToken::Punct('!'))
+                    && matches!(tokens.get(at + 2), Some(RustToken::Punct('(' | '[' | '{'))) =>
+            {
+                let Some(close) = rust_close(tokens, at + 2) else {
+                    pulls.push(Err(rust_shown(&tokens[at..=at + 2])));
+                    continue;
+                };
+                let file = match &tokens[at + 3..close] {
+                    [RustToken::Literal(literal)]
+                    | [RustToken::Literal(literal), RustToken::Punct(',')] => rust_string(literal),
+                    _ => None,
+                };
+                pulls.push(
+                    file.map(str::to_owned)
+                        .ok_or_else(|| rust_shown(&tokens[at..=close])),
+                );
+            }
+            RustToken::Punct('#') if tokens.get(at + 1) == Some(&RustToken::Punct('[')) => {
+                let Some(close) = rust_close(tokens, at + 1) else {
+                    continue;
+                };
+                let content = &tokens[at + 2..close];
+                let named = match content.first() {
+                    Some(RustToken::Word(name)) if name == "path" || name == "cfg_attr" => name,
+                    _ => continue,
+                };
+                let shown = || rust_shown(&tokens[at..=close]);
+                let mut files: Vec<std::result::Result<String, String>> = content
+                    .windows(3)
+                    .filter_map(|window| match window {
+                        [
+                            RustToken::Word(key),
+                            RustToken::Punct('='),
+                            RustToken::Literal(literal),
+                        ] if key == "path" => {
+                            Some(rust_string(literal).map(str::to_owned).ok_or_else(shown))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                if named == "path" && content.len() != 3 {
+                    files = vec![Err(shown())];
+                }
+                if !modules.is_empty() && !files.is_empty() {
+                    files = vec![Err(format!("{}, inside an inline `mod` block", shown()))];
+                }
+                pulls.extend(files);
+            }
+            _ => {}
+        }
+    }
+    pulls
+}
+
+/// What the branch changed between the base `at` and `revision` in Rust source the lint-attribute
+/// scanner does not read by a `.rs` name (story:the-gate-holds-against-lint-allows-in-source),
+/// each named with its file: a `.rs` file that is a link at the revision, which rustc follows and
+/// the scanner does not, when the branch changed the link or the file it names; and every file
+/// the branch changed that is not `.rs` and that a `.rs` file at the revision pulls in
+/// ([`rust_pulls`]), followed into what such a file pulls in, scanned as a `.rs` file is
+/// ([`lint_attribute_changes`]). A file pulled in that is a link or larger than
+/// [`PULLED_IN_BYTES_AT_MOST`], more than [`PULLED_IN_AT_MOST`] of them, and one a `.rs` file the
+/// branch changed pulls in that the gate cannot resolve inside the tree, are named too. `changed`
+/// is every path that differs between the two.
+fn pulled_in_changes(
+    tree: &Path,
+    at: &str,
+    revision: &str,
+    changed: &[&str],
+) -> Result<Vec<String>> {
+    let changed_set: std::collections::BTreeSet<&str> = changed.iter().copied().collect();
+    let listed = crate::git::bytes(
+        tree,
+        &["ls-tree", "-r", "-z", "-l", "--full-tree", revision],
+    )?;
+    // Each blob at the revision: its mode, its object and its size.
+    let mut entries: std::collections::BTreeMap<&str, (&str, &str, Option<usize>)> =
+        std::collections::BTreeMap::new();
+    for entry in nul_fields(&listed, "ls-tree", true)? {
+        let Some((meta, path)) = entry.split_once('\t') else {
+            continue;
+        };
+        if let [mode, "blob", id, size] = meta.split_whitespace().collect::<Vec<_>>()[..] {
+            entries.insert(path, (mode, id, size.parse().ok()));
+        }
+    }
+    let parent = |path: &str| path.rsplit_once('/').map_or("", |(dir, _)| dir).to_owned();
+    let mut named = Vec::new();
+    for (path, (mode, id, _)) in &entries {
+        if !path.ends_with(".rs") || *mode != "120000" {
+            continue;
+        }
+        let target = String::from_utf8_lossy(&crate::git::blob(tree, id)?).into_owned();
+        let pointed = (!target.starts_with('/'))
+            .then(|| tree_dir(&joined(&parent(path), &target)))
+            .flatten();
+        if changed_set.contains(path)
+            || pointed.is_some_and(|pointed| changed_set.contains(pointed.as_str()))
+        {
+            named.push(format!(
+                "{path}: a link to {target}, which rustc reads and the lint-attribute scanner does not follow"
+            ));
+        }
+    }
+    let others: Vec<&str> = changed
+        .iter()
+        .filter(|path| !path.ends_with(".rs") && entries.contains_key(*path))
+        .map(|path| path.rsplit('/').next().unwrap_or_default())
+        .collect();
+    if others.is_empty() {
+        return Ok(named);
+    }
+    let mut reader = crate::git::ObjectReader::open(tree)?;
+    let mut read = |id: &str, size: Option<usize>| -> Result<String> {
+        let bytes = if size.is_some_and(|size| size as u64 <= crate::git::MAX_BLOB) {
+            reader.read(id)?.map(|(_, bytes)| bytes).unwrap_or_default()
+        } else {
+            crate::git::blob(tree, id)?
+        };
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    };
+    // The `.rs` files that may pull a changed file in: the ones the branch changed, and the ones
+    // whose text holds such a file's name, which a string literal naming it spells out.
+    let mut queue: Vec<(String, String)> = Vec::new();
+    for (path, (mode, id, size)) in &entries {
+        if !path.ends_with(".rs") || *mode == "120000" {
+            continue;
+        }
+        let text = read(id, *size)?;
+        if changed_set.contains(path) || others.iter().any(|name| text.contains(name)) {
+            queue.push(((*path).to_owned(), text));
+        }
+    }
+    let mut scanned: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    while let Some((file, text)) = queue.pop() {
+        let Some(tokens) = rust_tokens(&text) else {
+            continue;
+        };
+        let from_changed = changed_set.contains(file.as_str());
+        let dir = parent(&file);
+        for pulled in rust_pulls(&tokens) {
+            let target = pulled.and_then(|written| {
+                (!written.starts_with('/'))
+                    .then(|| tree_dir(&joined(&dir, &written)))
+                    .flatten()
+                    .ok_or(written)
+            });
+            let target = match target {
+                Ok(target) => target,
+                Err(shown) => {
+                    if from_changed {
+                        named.push(format!(
+                            "{file}: {shown}, a file pulled in that the gate cannot resolve inside the tree"
+                        ));
+                    }
+                    continue;
+                }
+            };
+            if target.ends_with(".rs")
+                || !changed_set.contains(target.as_str())
+                || !scanned.insert(target.clone())
+            {
+                continue;
+            }
+            if scanned.len() > PULLED_IN_AT_MOST {
+                named.push(format!(
+                    "{file}: pulls in more than {PULLED_IN_AT_MOST} changed files with the others, more than the gate scans"
+                ));
+                return Ok(named);
+            }
+            let Some((mode, id, size)) = entries.get(target.as_str()) else {
+                continue;
+            };
+            if *mode == "120000" {
+                named.push(format!(
+                    "{target}: a link {file} pulls in, which the lint-attribute scanner does not follow"
+                ));
+                continue;
+            }
+            if size.is_none_or(|size| size > PULLED_IN_BYTES_AT_MOST) {
+                named.push(format!(
+                    "{target}: a file {file} pulls in, larger than the {PULLED_IN_BYTES_AT_MOST} bytes the lint-attribute scanner reads"
+                ));
+                continue;
+            }
+            let after = read(id, *size)?;
+            let before = crate::run::manifest_at(tree, at, &target)?;
+            match lint_attribute_changes(&before, &after) {
+                Ok(added) => named.extend(
+                    added
+                        .into_iter()
+                        .map(|attribute| format!("{target}: {attribute}")),
+                ),
+                Err(side) => named.push(format!(
+                    "{target}: a file {file} pulls in that the lint-attribute scanner cannot read with certainty, {side}"
+                )),
+            }
+            queue.push((target, after));
+        }
+    }
+    Ok(named)
 }
 
 /// What git stores at `path` in the commit `at`: its mode and object, or `None` when the commit
@@ -3523,11 +5311,42 @@ impl GateRun {
             let mut globs: Vec<String> = Vec::new();
             let mut changed = Vec::new();
             let mut files = admitted_files(text).with_context(read)?;
-            for argument in argument_paths(text).with_context(read)? {
+            // The paths inside an argument besides ([`argument_paths`]): a short option's glued
+            // value where the base or the revision holds it, and the words and patterns of a
+            // shell's `-c` line. A line the gate cannot split runs nothing.
+            let arguments = argument_paths(text).with_context(read)?;
+            if !arguments.unread.is_empty() {
+                return Ok(nothing_recorded(format!(
+                    "the gates document {document}: not run; {}; no record, the claim stays unknown",
+                    arguments.unread.join("; ")
+                )));
+            }
+            // What the base's Taskfiles pull in through `includes:` ([`taskfile_includes`]),
+            // compared as tool configuration is: an include not resolved with certainty runs
+            // nothing.
+            let included = taskfile_includes(tree, &at)?;
+            if !included.uncertain.is_empty() {
+                return Ok(nothing_recorded(format!(
+                    "the gates document {document}: not run; {}; no record, the claim stays unknown",
+                    included.uncertain.join("; ")
+                )));
+            }
+            files.extend(included.files);
+            for argument in arguments.paths {
                 if !object_at(tree, &at, &argument)?.is_some_and(|o| o.starts_with("040000 ")) {
                     files.push(argument);
                 }
             }
+            for tail in arguments.glued {
+                let held = object_at(tree, &at, &tail)?;
+                if held.as_deref().is_some_and(|o| o.starts_with("040000 ")) {
+                    continue;
+                }
+                if held.is_some() || object_at(tree, revision, &tail)?.is_some() {
+                    files.push(tail);
+                }
+            }
+            globs.extend(arguments.globs);
             // What Python loads from the tree for the gate's commands ([`python_paths`]).
             let (python, python_globs, closed) =
                 python_paths(tree, &at, revision, text).with_context(read)?;
@@ -3571,6 +5390,9 @@ impl GateRun {
                     globs.push(file);
                 }
             }
+            // What the specification and citation commands trust: a digest a step recorded, an
+            // input it dropped ([`trusted_input_changes`]).
+            changed.extend(trusted_input_changes(tree, &at, revision)?);
             let globs = crate::run::parse_judge_list(&serde_yaml_ng::to_string(&globs)?)
                 .map_err(|why| anyhow!("the paths the gate compares at the base: {why}"))?;
             match judged(tree, &dir, revision, &[], globs, true)? {
@@ -6803,6 +8625,165 @@ mod tests {
         assert_eq!(changed("[lints] x\n"), Err("after"));
         assert_eq!(changed("d = \"\"\"\n[package]\n\"\"\"\n"), Err("after"));
         assert_eq!(changed("d = [\n"), Err("after"));
+    }
+
+    /// story:the-gate-holds-against-lint-allows-in-source: the lint-level attributes lowering a
+    /// group that Rust source adds, read past comments, strings, characters and lifetimes, and
+    /// what the scanner does not read with certainty.
+    #[test]
+    fn lint_attribute_changes_names_each_group_an_attribute_adds() {
+        let base = "pub fn one() -> u8 {\n    1\n}\n";
+        let added = |after: &str| lint_attribute_changes(base, &format!("{after}\n{base}"));
+        let named = |shown: &str| Ok(vec![shown.to_owned()]);
+        assert_eq!(
+            added("#![allow(clippy::all)]"),
+            named("#![allow(clippy::all)]")
+        );
+        assert_eq!(added("#![allow(r#warnings)]"), named("#![allow(warnings)]"));
+        assert_eq!(
+            added("#![allow(CLIPPY::Pedantic, dead_code)]"),
+            named("#![allow(CLIPPY::Pedantic, dead_code)]")
+        );
+        assert_eq!(
+            added("#![allow(rust_2027_compatibility)]"),
+            named("#![allow(rust_2027_compatibility)]")
+        );
+        assert_eq!(
+            added("#![unsafe(allow(unused))]"),
+            named("#![unsafe(allow(unused))]")
+        );
+        assert_eq!(
+            added("#[cfg_attr(test, deny(warnings), allow(clippy::style))] fn f() {}"),
+            named("#[cfg_attr(test, deny(warnings), allow(clippy::style))]")
+        );
+        // A single lint, raising a level, or another attribute: nothing.
+        for quiet in [
+            "#![allow(clippy::needless_return, dead_code, reason = \"x\")]",
+            "#![deny(warnings)]",
+            "#![forbid(clippy::all)]",
+            "#![doc = \"#![allow(warnings)]\"]",
+            "#[rustfmt::skip] fn f() {}",
+            "// #![allow(warnings)]",
+            "/* /* #![allow(warnings)] */ #![allow(unused)] */",
+            "const S: &str = \"\\\"#![allow(warnings)]\";",
+            "const R: &str = r##\"\"# #![allow(warnings)]\"##;",
+            "const B: &[u8] = br#\"#[allow(unused)]\"#;",
+            "const C: char = '#'; const Q: char = '\\''; fn g<'a>(_: &'a str) {}",
+            "#!/usr/bin/env rust-script",
+        ] {
+            assert_eq!(added(quiet), Ok(Vec::new()), "{quiet}");
+        }
+        // Not read with certainty: fails closed, shown as written.
+        let uncertain = |shown: &str| {
+            Ok(vec![format!(
+                "an attribute the lint-attribute scanner cannot read with certainty, {shown}"
+            )])
+        };
+        assert_eq!(added("#![$a]"), uncertain("#![$a]"));
+        assert_eq!(added("#[allow($lint)]"), uncertain("#[allow($lint)]"));
+        assert_eq!(added("#$bang[x]"), uncertain("#$bang"));
+        assert_eq!(added("#[allow(#lint)]"), uncertain("#[allow(#lint)]"));
+        assert_eq!(added("#[allow]"), uncertain("#[allow]"));
+        assert_eq!(added("#[core::allow(x)]"), uncertain("#[core::allow(x)]"));
+        assert_eq!(added("#[cfg_attr(test)]"), uncertain("#[cfg_attr(test)]"));
+        assert_eq!(added("#[allow(a b)]"), uncertain("#[allow(a b)]"));
+        assert_eq!(added("const S: &str = \"open"), Err("after"));
+        assert_eq!(added("/* open"), Err("after"));
+        // One the base holds is the base's; a second one is added.
+        let held = "#![allow(warnings)]\nfn f() {}\n";
+        assert_eq!(
+            lint_attribute_changes(held, &format!("{held}fn g() {{}}\n")),
+            Ok(Vec::new())
+        );
+        assert_eq!(
+            lint_attribute_changes(held, &format!("{held}#[allow(warnings)] fn g() {{}}\n")),
+            named("#[allow(warnings)]")
+        );
+        assert_eq!(
+            lint_attribute_changes("/* open", held),
+            named("#![allow(warnings)]")
+        );
+    }
+
+    /// story:the-gate-holds-against-lint-allows-in-source: an attribute is keyed by its scope,
+    /// so one moved from a module to the crate root is named; an unclosed `#[` is named once
+    /// and nothing after it is read; a `cfg_attr` nested past the cap is not read.
+    #[test]
+    fn lint_attributes_are_keyed_by_scope_and_bounded() {
+        let in_module = "mod generated {\n    #![allow(clippy::all)]\n}\n";
+        assert_eq!(
+            lint_attribute_changes(in_module, "#![allow(clippy::all)]\nmod generated {}\n"),
+            Ok(vec!["#![allow(clippy::all)]".to_owned()])
+        );
+        assert_eq!(
+            lint_attribute_changes(
+                in_module,
+                "#[allow(clippy::all)]\npub(crate) mod generated {}\n"
+            ),
+            Ok(vec![
+                "#[allow(clippy::all)] (scope mod generated)".to_owned()
+            ])
+        );
+        assert_eq!(
+            lint_attribute_changes(
+                in_module,
+                "fn f() {}\nmod generated {\n    #![allow(clippy::all)]\n}\n"
+            ),
+            Ok(Vec::new())
+        );
+        let unclosed = lint_attributes(&"#[".repeat(20_000)).expect("tokens");
+        assert_eq!(unclosed.len(), 1, "{unclosed:?}");
+        assert!(
+            unclosed[0].0.ends_with("its `[` not closed"),
+            "{unclosed:?}"
+        );
+        let deep = format!(
+            "#[{}allow(clippy::all){}]",
+            "cfg_attr(all(), ".repeat(64),
+            ")".repeat(64)
+        );
+        let found = lint_attributes(&deep).expect("tokens");
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(found[0].1, None);
+        assert!(found[0].0.ends_with('…'), "{found:?}");
+        let shallow = format!(
+            "#[{}allow(clippy::all){}]",
+            "cfg_attr(all(), ".repeat(8),
+            ")".repeat(8)
+        );
+        assert_eq!(
+            lint_attributes(&shallow).expect("tokens")[0].1.as_deref(),
+            Some("clippy::all")
+        );
+    }
+
+    /// story:the-gate-holds-against-lint-allows-in-source: the files Rust source pulls in by
+    /// name, and what the gate cannot resolve.
+    #[test]
+    fn rust_pulls_reads_include_and_path_attributes() {
+        let pulls = |text: &str| rust_pulls(&rust_tokens(text).expect("tokens"));
+        assert_eq!(
+            pulls(
+                "include!(\"one.in\");\n#[path = \"q.inc\"]\nmod q;\nstd::include!(r#\"two.in\"#);"
+            ),
+            vec![
+                Ok("one.in".to_owned()),
+                Ok("q.inc".to_owned()),
+                Ok("two.in".to_owned())
+            ]
+        );
+        assert_eq!(
+            pulls("#[cfg_attr(unix, path = \"u.rs\")]\nmod u;\ninclude_str!(\"x.txt\");"),
+            vec![Ok("u.rs".to_owned())]
+        );
+        assert_eq!(
+            pulls("include!(concat!(env!(\"OUT_DIR\"), \"/g.rs\"));"),
+            vec![Err(
+                "include!(concat!(env!(\"OUT_DIR\"), \"/g.rs\"))".to_owned()
+            )]
+        );
+        assert!(pulls("mod a {\n    #[path = \"b.rs\"]\n    mod b;\n}\n")[0].is_err());
+        assert_eq!(rust_string("\"a\\n\""), None);
     }
 
     /// story:a-gate-script-with-a-colon-is-run, acceptance 2: a path a gate's command names that

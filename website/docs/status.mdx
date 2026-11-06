@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.32.0, 2026-11-05 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.33.0, 2026-11-06 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
@@ -88,6 +88,7 @@ Each release in one line, from the changelog:
 | 0.30.1 | a test binary's `PATH` keeps no relative entry, so `.` on the caller's `PATH` turns no case red; trials started in one second in one checkout are numbered in the order they start |
 | 0.31.0 | a pull request open cut off by a crash is read back on the local and GitLab forges, and the command forge takes an optional `find` command, without which a case whose open stayed unknown refuses another; no merge follows a read that finds the pull request merged, closed or at another head; the step guard sees a program rewritten behind a link in a program directory |
 | 0.32.0 | `takt run` refuses before a case opens a `--test-cmd` holding shell quoting or naming a program the step could not start, a `--gate` naming no approval-required action of the case's protocol, and `--case-id` beside `--case`; a resume whose case branch is gone names the branch, the last head the case recorded and how to recreate it; a failed git read or write leaves no git process |
+| 0.33.0 | the gate compares at the case's base what a branch edit could otherwise use to decide it: a file named glued to a short option or inside a shell's `-c` line, a Taskfile pulled in through `includes:`, a lint group allow added in source, a citation digest and the specification inputs |
 
 ## Every story
 

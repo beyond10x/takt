@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T03:10:29Z",
+  "actor": "human:timo",
+  "artifact": "story:gate-flag-names-a-protocol-action",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 54: gate_flag_checked_cli's three refusal cases were red before the change and green after it, exit 1 naming the protocol's approval-required actions",
+    "reference": "9e7a3904ed86e34332daaacc80da1bda6512b249"
+  }
+}

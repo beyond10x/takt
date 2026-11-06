@@ -6,6 +6,21 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-06
+
+The gate compares at the case's base what a branch edit could use to decide it: paths inside arguments, included Taskfiles, lint allows, citation digests and specification inputs.
+
+### Changed
+
+- The gate compares at the base a file named glued to a short option (`-fscripts/check.mk`) or after `=` in a word (`dd if=`, `BASH_ENV=`).
+- It reads the words of a `-c` line of `sh` and `bash` and fish's `--command`; a line it cannot read, or one that sets `CDPATH`, is refused when the case opens.
+- It compares at the base every Taskfile a compared Taskfile pulls in through `includes:`; an include it cannot resolve refuses the gate, naming it.
+- A base Taskfile holding a YAML anchor or alias refuses the gate.
+- A lint group allow (`warnings`, `clippy::all`, …) an edit adds in source, also through `include!` or `#[path]`, refuses the gate.
+- A linked `.rs` file, `cfg_attr` nesting past its cap and an unclosed attribute in a changed source file refuse the gate.
+- A citation digest the base did not hold for a row refuses the gate; a row only re-pointed keeps passing.
+- A specification entry dropped from `ess/ess-inputs.yaml` or `ess/system.yaml` refuses the gate.
+
 ## [0.32.0] - 2026-11-05
 
 `takt run` checks its test command and its `--gate` before a case opens, a resume names a missing case branch and how to recover it, and a failed read of git's output leaves no git process behind.
@@ -1102,7 +1117,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.32.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.33.0...HEAD
+[0.33.0]: https://github.com/beyond10x/takt/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/beyond10x/takt/compare/0.31.0...0.32.0
 [0.31.0]: https://github.com/beyond10x/takt/compare/0.30.1...0.31.0
 [0.30.1]: https://github.com/beyond10x/takt/compare/0.30.0...0.30.1
