@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T20:55:01Z",
+  "actor": "human:timo",
+  "artifact": "story:a-step-may-not-commit-a-link-at-a-deployment-path",
+  "kind": "story",
+  "revision": 4,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 56: an_edit_step_that_puts_a_link_at_the_deployments_directory_is_refused_and_put_back red then green at 242ea0649",
+    "reference": "2c4f1d7f4304cbbbe5d40bcd9eed8bc8b6893793"
+  }
+}

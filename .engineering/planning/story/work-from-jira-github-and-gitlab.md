@@ -9,6 +9,7 @@ relations:
 - decomposes: epic:work-sources
 - serves: vision:safe-agentic-coding
 - depends_on: story:work-flag-and-the-aep-source
+- depends_on: story:one-served-connectors-client
 revision: 1
 ---
 # Story: work-from-jira-github-and-gitlab

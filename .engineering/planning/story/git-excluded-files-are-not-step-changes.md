@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:git-excluded-files-are-not-step-changes
 kind: story
-status: active
+status: implemented
 title: Paths the run file names as the deployment's are not changes a step made
 summary: a deployment's own files beside the tree, named in the run file and read at open, are not step changes (trial run 2)
 tags:
@@ -18,10 +18,11 @@ scope:
   path: crates/takt/src/run.rs
 - confidence: inferred
   path: crates/takt/src/run_config.rs
-revision: 8
+revision: 10
 transitions:
 - {from: "draft", to: "proposed", at: "2026-10-26T13:48:10Z", actor: "human:timo", revision: 3}
 - {from: "proposed", to: "active", at: "2026-11-06T04:03:36Z", actor: "human:timo", revision: 6}
+- {from: "active", to: "implemented", at: "2026-11-06T20:55:02Z", actor: "human:timo", revision: 10, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 ## Outcome
 
@@ -50,3 +51,17 @@ is not trusted for this: story:git-reads-no-user-excludes holds.
 
 - Inferred: `crates/takt/src/run_config.rs` (the list), `crates/takt/src/git.rs` (the uncommitted and changed paths),
   `crates/takt/src/run.rs` (the step guard).
+
+## Status
+
+Built in wave 56 (unit d, 9a67088ee), released in 0.34.0 from 2c4f1d7f4, the merge of pull request 63.
+
+- `crates/takt/src/run_config.rs`: the run file's `deployment_paths`, read once at open; `.git`, `..`, absolute paths
+  and a list covering the run file are refused.
+- `crates/takt/src/git.rs`, `run.rs`, `case.rs`, `frontier.rs`: an untracked or ignored file under the list is no
+  change at a step, at open, at take, on the return to base and in store writes, and no discard removes it. Since
+  a19b058f2 an entry without `/` covers that path only, and a link there counts as a change.
+- `crates/takt/tests/deployment_paths.rs` (red, then green).
+
+Review: review-result:w56-adv-1; follow-ups story:files-the-run-file-names-are-not-deployment-paths,
+story:takt-approve-keeps-the-deployments-paths and story:git-reads-no-user-excludes.

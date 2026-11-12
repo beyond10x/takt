@@ -70,7 +70,7 @@ types:
   # read from: crates/takt/src/run.rs:8739-8740
   # read from: crates/takt/src/run.rs:10586-10593
   # read from: crates/takt/src/case.rs:150-152
-  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:48-53
+  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:49-54
   # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:35-39
   # read from: crates/takt/src/frontier.rs:1014-1048
   - name: takt.work.CaseId
@@ -175,7 +175,7 @@ types:
   # read from: crates/takt-cli/src/main.rs:4523-4527
   # read from: crates/takt-cli/src/main.rs:4625-4654
   # read from: crates/takt/src/frontier.rs:80-88
-  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:25-26
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:26-27
   - name: takt.work.Unit
     kind: union
     tag: kind
@@ -195,7 +195,7 @@ types:
   # (story:work-from-jira-github-and-gitlab).
   # read from: .engineering/planning/epic/work-sources.md:23-24
   # read from: .engineering/planning/epic/work-sources.md:34-35
-  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:23-24
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:24-25
   # read from: crates/takt/src/frontier.rs:790-801
   # read from: crates/takt/src/frontier.rs:832-835
   - name: takt.work.SourceName
@@ -215,7 +215,7 @@ types:
   # connection among several is ahead of the code: no source this release serves has
   # connections (story:work-from-jira-github-and-gitlab).
   # read from: .engineering/planning/epic/work-sources.md:25-26
-  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:24-25
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:25-26
   # read from: crates/takt/src/forge/connectors.rs:471-481
   # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:23-25
   # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:46-47
@@ -241,9 +241,9 @@ types:
   # option, is refused, and so is one holding a character that does not show as itself in a
   # trailer or a message: a control, whitespace, separator or format character, or a
   # default-ignorable code point, the class the case id rule refuses.
-  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:38-39
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:39-40
   # read from: .engineering/planning/epic/work-sources.md:25-27
-  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:32-36
+  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:33-37
   # read from: crates/takt/src/frontier.rs:950-990
   - name: takt.work.Key
     kind: newtype
@@ -261,9 +261,9 @@ types:
   # command. The title is one line: one holding a control character, U+2028 LINE SEPARATOR or
   # U+2029 PARAGRAPH SEPARATOR is refused. `format`, the optional `url` and the revision of each
   # source are approval-record:wave-56-work-model-points (points 3 and 4).
-  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:25-26
-  # read from: .engineering/planning/story/the-command-work-source.md:28-31
-  # read from: .engineering/planning/story/the-command-work-source.md:44-45
+  # read from: .engineering/planning/story/work-items-in-the-ess-model.md:26-27
+  # read from: .engineering/planning/story/the-command-work-source.md:29-32
+  # read from: .engineering/planning/story/the-command-work-source.md:45-46
   # read from: .engineering/planning/epic/work-sources.md:30-31
   # read from: crates/takt/src/frontier.rs:50-66
   # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:26-28
@@ -307,9 +307,9 @@ types:
   # case: the run names the key and the case and asks the next source. `--work command:<id>` on
   # an item whose case is finished at the revision `read` prints is refused before a case
   # opens, naming the case; an open case of the key is resumed, `read` not run.
-  # read from: .engineering/planning/story/the-command-work-source.md:28-31
-  # read from: .engineering/planning/story/the-command-work-source.md:35-36
-  # read from: .engineering/planning/story/the-command-work-source.md:43-46
+  # read from: .engineering/planning/story/the-command-work-source.md:29-32
+  # read from: .engineering/planning/story/the-command-work-source.md:36-37
+  # read from: .engineering/planning/story/the-command-work-source.md:44-47
   # read from: crates/takt/src/forge/command.rs:125-126
   # read from: crates/takt/src/forge/command.rs:341-345
   # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:29-30
@@ -923,9 +923,9 @@ types:
       # resuming an open case of a listed source first, but one declined at its case revision,
       # which is passed over; none yielding one is no ready work.
       # read from: .engineering/planning/epic/work-sources.md:28-29
-      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:32-36
-      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:43-44
-      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:59-60
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:33-37
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:44-45
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:60-61
       # read from: crates/takt/src/run_config.rs:268-272
       # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:31-32
       # read from: crates/takt/src/run_config.rs:2182-2227
@@ -934,7 +934,7 @@ types:
         type: Optional<List<String>>
       # The argument lists the `command` source runs (takt.work.WorkCommands), its shape
       # checked when the file is read.
-      # read from: .engineering/planning/story/the-command-work-source.md:28-31
+      # read from: .engineering/planning/story/the-command-work-source.md:29-32
       # read from: crates/takt/src/run_config.rs:300-304
       - name: work_commands
         type: Optional<takt.work.WorkCommands>
@@ -960,7 +960,7 @@ types:
       # on the case's branch: no take or store commit carries it, and no discard of a case or a
       # refused store write removes it. `takt approve` reads no run file and counts it as any
       # untracked file.
-      # read from: .engineering/planning/story/git-excluded-files-are-not-step-changes.md:42-47
+      # read from: .engineering/planning/story/git-excluded-files-are-not-step-changes.md:43-48
       # read from: .engineering/planning/decision-blocker/excluded-files-and-user-excludes.md:48-52
       # read from: crates/takt/src/run_config.rs:305-316
       # read from: crates/takt/src/run_config.rs:1956-1968
@@ -1031,7 +1031,7 @@ types:
   # read from: crates/takt/src/commit_style.rs
   # read from: crates/takt/src/run_config.rs
   # read from: crates/takt/src/commit_style.rs:519-521
-  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:35-36
+  # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:36-37
   # read from: .engineering/planning/epic/work-sources.md:32-33
   # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:41-42
   # read from: crates/takt/src/case.rs:4923-4938
@@ -4865,8 +4865,8 @@ entities:
       # holds `story` alone and reads as the key `aep:<story id>`. A case opened on an item of
       # the `command` source records its key and no `story`. The member's name and the reading
       # of an older case are approval-record:wave-56-work-model-points (point 7).
-      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:51-53
-      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:61-63
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:52-54
+      # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:62-64
       # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:33
       # read from: crates/takt/src/case.rs:4833-4854
       - name: item_key
@@ -4876,7 +4876,7 @@ entities:
       # changes nothing in an open case; absent when `item_key` is absent. The member's name is
       # approval-record:wave-56-work-model-points (point 8).
       # read from: .engineering/planning/epic/work-sources.md:30-31
-      # read from: .engineering/planning/story/the-command-work-source.md:41-42
+      # read from: .engineering/planning/story/the-command-work-source.md:42-43
       # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:34
       # read from: crates/takt/src/case.rs:4864-4873
       - name: item_revision

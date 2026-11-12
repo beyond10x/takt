@@ -2,14 +2,18 @@
 format: aep.planning-md/3
 id: story:a-step-may-not-commit-a-link-at-a-deployment-path
 kind: story
-status: draft
+status: implemented
 title: A step may not commit a link at a deployment path
 summary: refuse and put back a step that adds a link at or above a deployment path
 relations:
 - serves: vision:safe-agentic-coding
 - decomposes: epic:takt-as-a-loom-agent
 - informed_by: story:git-excluded-files-are-not-step-changes
-revision: 1
+revision: 5
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-06T20:08:11Z", actor: "human:timo", revision: 2}
+- {from: "proposed", to: "active", at: "2026-11-06T20:08:11Z", actor: "human:timo", revision: 3}
+- {from: "active", to: "implemented", at: "2026-11-06T20:55:03Z", actor: "human:timo", revision: 5, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 # Story: a-step-may-not-commit-a-link-at-a-deployment-path
 
@@ -55,3 +59,15 @@ The removed block, verbatim (from `a_link_the_step_puts_at_a_deployment_path_is_
         ));
     }
 ```
+
+## Status
+
+Built in wave 56 (242ea0649), released in 0.34.0 from 2c4f1d7f4, the merge of pull request 63
+(approval-record:wave-56-link-refusal).
+
+- `crates/takt/src/git.rs`, `crates/takt/src/run.rs`: a step whose change adds or replaces a link at a deployment path,
+  or at a directory above one inside the tree, is refused whatever its action and put back, naming the path.
+- `crates/takt/tests/deployment_paths.rs` (`an_edit_step_that_puts_a_link_at_the_deployments_directory_is_refused_and_put_back`)
+  and the restored step-2 block of `work_and_deployment_w56_sec.rs` (red, then green).
+
+Review: review-result:w56-adv-1.

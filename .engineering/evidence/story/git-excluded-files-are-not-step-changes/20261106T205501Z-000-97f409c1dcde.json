@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-06T20:55:01Z",
+  "actor": "human:timo",
+  "artifact": "story:git-excluded-files-are-not-step-changes",
+  "kind": "story",
+  "revision": 9,
+  "change": {
+    "change": "evidence",
+    "kind": "verification",
+    "source": "wave 56 unit d: deployment_paths red then green (15), work_and_deployment_w56_sec green after a19b058f2 and 242ea0649",
+    "reference": "2c4f1d7f4304cbbbe5d40bcd9eed8bc8b6893793"
+  }
+}
