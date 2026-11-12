@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-12T18:31:47Z",
+  "actor": "human:timo",
+  "artifact": "epic:scheduled-runs-and-connector-actions",
+  "kind": "epic",
+  "revision": 2,
+  "change": {
+    "change": "evidence",
+    "kind": "review_outcome",
+    "source": "review-result:scheduled-runs-scope-round-1",
+    "review": "review-result:scheduled-runs-scope-round-1",
+    "outcome": "fixed"
+  }
+}

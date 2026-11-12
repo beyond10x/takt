@@ -1,6 +1,6 @@
 # Takt: scheduled runs and connector actions
 
-Status: design of 2026-11-12; nothing in it is built yet; the waves that build it are under `docs/waves/`. It is carried by `epic:scheduled-runs-and-connector-actions`; § 7 lists its stories and their waves. § 5 holds one decision that belongs to the owner.
+Status: design of 2026-11-12; nothing in it is built yet; the waves that build it are under `docs/waves/`. It is carried by `epic:scheduled-runs-and-connector-actions`; § 7 lists its stories and their waves. § 5 records the owner's decision on unattended writes.
 
 ## 1. The target
 
@@ -134,7 +134,7 @@ argv without a shell, in the tree, with no credential (`without_credentials`). `
 
 `effect: write`, with `requires: [{capability: connector.write}]` in the protocol. Its precondition reads the render's record about one subject, so the grant has a subject (`crates/takt/src/protocol.rs:188-228`).
 
-- It is performed only under a grant at the case revision and the subject's revision (`takt approve <case> connector.write`).
+- It is performed only under a grant at the case revision and the subject's revision: a declaration in the repository's `.engineering/delegations.yaml` that covers it (§ 5), else `takt approve <case> connector.write`.
 - The operation is the one `input_from` names, refused unless listed in `operations`.
 - The call carries `idempotency_key` from the shared key function (case, operation, descriptor revision, input), so a resumed case never posts twice. Each tick is a new case, so across ticks the key does not deduplicate: the render does, by comparing its text with the message it found in the thread read.
 - The refusal record is per action: `artifacts/connector/<action>.refusals.json`.
@@ -166,15 +166,15 @@ From a reading of `beyond10x/connectors` main at release v0.71.0, 2026-11-12.
 
 ## 5. The owner's decision
 
-takt's grant binds to a revision, so an unattended reconcile that must edit the message whenever it changed needs a person's `takt approve` on every changed tick. Three options:
+takt's grant binds to a revision, so an unattended reconcile that must edit the message whenever it changed would need a person's `takt approve` on every changed tick.
 
-| option | what | cost |
-|---|---|---|
-| A | Keep it: every write waits for `takt approve` (exit 4) | An unattended reconcile cannot post. No change to the rules |
-| B | A delegation record, as `repository.merge` has: the owner adds to `.engineering/delegations.yaml` a delegation of `connector.write` to a named role, scoped to one action id and an expiry; takt grants itself the write per case, as `agent:<role>`, when the delegation holds at the tip and the render's record is `pass` at the revision | The owner amends `AGENTS.md` § Rules ("Add no other path by which takt grants itself"): a widening, judge-surface change |
-| C | No takt capability on the write; only the Connectors standing grant limits it | Contradicts "writes require a capability granted via `takt approve`/authority" |
+The owner decided on 2026-11-12: "in our specific case, there should be no approval, ideally this behavior/permissions can be configured via config file" (`decision-blocker:connector-writes-unattended`, cleared).
 
-Recommendation: B. Built until the owner decides: A, the write under a per-case grant, with B a draft story behind a decision blocker (`decision-blocker:connector-writes-unattended`, § 7).
+- **The declaration.** The repository declares the writes it allows in its `.engineering/delegations.yaml`, a judge surface, so only a change the owner grants can widen it. One entry per allowed write: the capability `connector.write`, the role takt grants as, the connector and its instance, the operations (for a chat, `chat.postMessage` and `chat.update`), the target as JSON pointers and values into the input (for a chat, `/channel` and one channel id), an optional `max_per_hour`, an optional `not_after`, and `revoked_at` once revoked.
+- **The grant.** takt reads the declaration at the revision the case opened on. When a write's operation and target fall inside an entry that is not revoked, not expired and not over its rate, takt records the grant in the case's `authority.yaml` as `agent:<role>`, naming the entry, and the write goes with no `takt approve`. Any other write is refused and nothing is sent. The governor and `CaseAuthority` decide as for any grant; the validator holds no gate of its own.
+- **The rule.** `AGENTS.md` § Rules names this as the second path by which takt grants itself, beside the merge's delegation, with the owner's words and date.
+- **Per-case grants stay.** A write with no declaration covering it still waits for `takt approve` (`story:a-connector-write-under-a-grant`).
+- **Two locks.** The Connectors standing grant on the served instance (one channel, two operations, `max_per_hour`) stays a second, independent limit.
 
 ## 6. Composition and Kubernetes
 
@@ -199,13 +199,13 @@ Stories under `epic:scheduled-runs-and-connector-actions`:
 | 57 | `story:one-served-connectors-client` | F2 groundwork: the client extracted, the forge on it, no behaviour change |
 | 58 | `story:a-command-action` | the command action (§ 4) and the registration of run-file-bound validators |
 | 59 | `story:a-connector-read-action` | the read action (§ 4), on that registration |
-| 60 | `story:a-connector-write-under-a-grant` | the write action under a per-case grant (option A) |
-| 61 | `story:a-reconcile-example` | `examples/reconcile/`: a `protocol/1` file, a run file, three granted cases against a fake served instance that post once, edit once and send nothing, and a schedule that ends at `released` |
-| behind `decision-blocker:connector-writes-unattended` | `story:connector-writes-under-a-delegation` | option B (§ 5) |
+| 60 | `story:a-connector-write-under-a-grant` | the write action under a per-case grant |
+| 61 | `story:connector-writes-under-a-delegation` | the write granted by a declaration in `.engineering/delegations.yaml`, no `takt approve` (§ 5) |
+| 62 | `story:a-reconcile-example` | `examples/reconcile/`: a `protocol/1` file, a run file with a schedule and a declaration, three ticks against a fake served instance that post once, edit once and send nothing, and a tick that ends the schedule at `released` |
 
-Wave 57's two stories each add one `pub mod` line to `crates/takt/src/lib.rs`; the schedule's unit is committed first. Waves 58 to 61 are one story each, because each lands on `run_config.rs`, `ess/domains/takt.yaml` and `configuration.md`, or reads what the one before produces.
+Wave 57's two stories each add one `pub mod` line to `crates/takt/src/lib.rs`; the schedule's unit is committed first. Waves 58 to 62 are one story each, because each lands on `run_config.rs`, `ess/domains/takt.yaml` and `configuration.md`, or reads what the one before produces.
 
-Under option A a scheduled reconcile cannot write: each tick is a fresh case, and a grant given to one case is not used by the next. The example therefore grants and resumes each case by hand; scheduled writes wait for `story:connector-writes-under-a-delegation`.
+Each tick is a fresh case, so a grant given by hand to one case is not used by the next; a scheduled reconcile writes under the repository's declaration (§ 5, `story:connector-writes-under-a-delegation`).
 
 ## 8. Not in this design
 
