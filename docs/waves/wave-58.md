@@ -68,7 +68,11 @@ tests that scan every source file. Wave 57's first CI run failed two of them (`c
 `tests_have_a_home_of_their_own`). On this wave `effects::no_record_reaches_a_case_but_through_the_case_evidence_port`
 failed: two lines of `command_action.rs` read the binding's `evidence` key in the run file, which the scan reads as a
 path into a case. They write no record; both are now listed in its `EVIDENCE_LINES` with what they do.
-`.agents/dispatcher-agent.md` step 5 now names the three tests. The full gate is the pull request's CI.
+The pull request's first CI run failed one more:
+`pr_opens_when_done::the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind` requires every
+`impl Validator` in the library to be in `BUILT_IN`, and `CommandAction` and `RunFileBound` are bound by the run file,
+not built in. The test now keeps a list of the run-file-bound validators apart from the built-ins.
+`.agents/dispatcher-agent.md` step 5 now names the four tests. The full gate is the pull request's CI.
 
 ## Close
 
