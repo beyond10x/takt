@@ -848,15 +848,16 @@ struct RunArgs {
     /// Stay resident and start one pass, a tick, per slot of a schedule: inside each --window,
     /// its start and every DURATION after it up to its end; with no window, a slot every
     /// DURATION from the start. DURATION is whole seconds in `d`, `h`, `m` and `s` (`30m`,
-    /// `1h30m`), at least `1s`. Each tick is a child `takt run` with these arguments, the
+    /// `1h30m`), from `1s` to `7d`. Each tick is a child `takt run` with these arguments, the
     /// schedule's flags removed and `--once` and `--outcome-file` added; one runs at a time, and
     /// a tick still running at its next slot skips that slot (counted, never queued), as a
     /// suspend over several does. Its files are under `<state dir>/schedule/<id>/`
-    /// (`schedule.json`, `ticks.jsonl`, `ticks/<slot>/`, `end.json`). It exits 0 when an --until
-    /// condition holds or no slot is left, 1 or 2 when a tick was refused, 3 on SIGTERM or
-    /// SIGINT after the running tick ends (a second signal is forwarded to it), 5 on its own
-    /// error; a second start while the first runs is refused, exit 1. The run file's
-    /// `schedule` (`every`, `time_zone`, `windows`, `until`) sets the same, a flag winning.
+    /// (`schedule.json`, `ticks.jsonl`, `ticks/<slot>/`, `end.json`, `lock`). It exits 0 when
+    /// an --until condition holds or no slot is left, 1 or 2 when a tick was refused, 3 on
+    /// SIGTERM or SIGINT after the running tick ends (a second signal is forwarded to it), 5 on
+    /// its own error; a second start while the first holds the schedule's `lock` is refused,
+    /// exit 1, naming its pid. The run file's `schedule` (`every`, `time_zone`, `windows`,
+    /// `until`) sets the same, a flag winning.
     #[arg(long, value_name = "DURATION", value_parser = takt::schedule::every)]
     every: Option<u64>,
     /// The IANA time zone the --window times are wall-clock in, from the tz database bundled in
@@ -881,7 +882,9 @@ struct RunArgs {
     /// Write what the run ended with to FILE, `takt.run-outcome/1`: `exit`, `stop` (the stop's
     /// kind, or null), `case` (the case id, or null), `outcome` (the outcome the case reached,
     /// or null), `frontier` (`nothing_ready`, or null), `started` and `ended`. Written on every
-    /// exit of the command; stdout stays as it is.
+    /// exit of the command, a command line the argument parser refuses (exit 2) among them, but
+    /// not for --help or --version; through a new file renamed over FILE, so a reader finds the
+    /// whole document or none; stdout stays as it is.
     #[arg(long, value_name = "FILE")]
     outcome_file: Option<PathBuf>,
     /// The schedule the flags and the run file's `schedule` resolve to, when the run is
@@ -1233,11 +1236,12 @@ impl LoopArgs {
 }
 
 /// The command line parsed, a `takt run --config` or `takt scenario run --config` file applied
-/// under it.
+/// under it. A command line clap refuses is its `clap::Error`, which [`exit_code`] prints and
+/// exits with clap's code, so `main` writes `--outcome-file` for it too.
 fn parsed() -> Result<Cli> {
     use clap::{CommandFactory as _, FromArgMatches as _};
-    let matches = Cli::command().get_matches();
-    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    let matches = Cli::command().try_get_matches()?;
+    let mut cli = Cli::from_arg_matches(&matches)?;
     match &mut cli.command {
         Commands::Run(args) => {
             if let Some(run) = matches.subcommand_matches("run") {
@@ -1693,7 +1697,8 @@ fn observe(change: impl FnOnce(&mut takt::schedule::Observed)) {
 }
 
 /// The FILE of `takt run --outcome-file FILE` on the command line, read from the arguments as
-/// given, so a run refused before its arguments are read through writes one too.
+/// given, so a run refused before its arguments are read through, or a command line clap
+/// refuses, writes one too.
 fn outcome_file_given() -> Option<PathBuf> {
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new("run")) {
@@ -1727,7 +1732,7 @@ fn main() -> ExitCode {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
         let document = observed.document(code, started, takt::schedule::Timestamp::now());
-        if let Err(error) = std::fs::write(&path, format!("{document}\n")) {
+        if let Err(error) = takt::schedule::write_replacing(&path, &format!("{document}\n")) {
             eprintln!(
                 "takt: the outcome file {}: {}",
                 path.display(),
@@ -1743,6 +1748,16 @@ fn exit_code() -> u8 {
     let mut cli = match parsed() {
         Ok(cli) => cli,
         Err(error) => {
+            if let Some(usage) = error.downcast_ref::<clap::Error>() {
+                // --help and --version print to stdout and exit 0 here, writing no outcome
+                // file; a refused command line is clap's message and code (2), and `main`
+                // writes the outcome file.
+                if !usage.use_stderr() {
+                    usage.exit();
+                }
+                let _ = usage.print();
+                return u8::try_from(usage.exit_code()).unwrap_or(EXIT_USAGE);
+            }
             eprintln!("takt: {}", printable(&format!("{error:#}")));
             if error
                 .downcast_ref::<takt::run_config::TokensRefused>()
@@ -1820,12 +1835,14 @@ fn tick_arguments() -> Vec<std::ffi::OsString> {
 /// condition held or no slot is left, 1 or 2 a tick was refused, 3 a signal, 5 its own error).
 fn resident(schedule: &takt::schedule::Schedule, state_dir: Option<&Path>) -> u8 {
     takt::schedule::signals::install();
-    let mut files = None;
-    match resident_run(schedule, state_dir, &mut files) {
+    let mut started = None;
+    match resident_run(schedule, state_dir, &mut started) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("takt: schedule: {}", printable(&format!("{error:#}")));
-            if let Some(files) = files {
+            // The lock is still held here: `end.json` is written before another start can
+            // take the schedule.
+            if let Some((files, _held)) = started {
                 let _ = schedule_end(&files, "error", None, EXIT_ERROR);
             }
             EXIT_ERROR
@@ -1851,11 +1868,12 @@ fn schedule_end(
     Ok(code)
 }
 
-/// The schedule's loop ([`resident`]); `files_out` is set to its files once they are known.
+/// The schedule's loop ([`resident`]); `started` is set to its files and its held lock once it
+/// has started, so the lock outlives the loop until [`resident`] returns.
 fn resident_run(
     schedule: &takt::schedule::Schedule,
     state_dir: Option<&Path>,
-    files_out: &mut Option<takt::schedule::Files>,
+    started_out: &mut Option<(takt::schedule::Files, takt::schedule::Held)>,
 ) -> Result<u8> {
     use takt::schedule::{Timestamp, signals};
     let args = tick_arguments();
@@ -1869,16 +1887,26 @@ fn resident_run(
         &texts,
     )
     .context("the schedule's directory")?;
-    // A schedule started before is rebuilt from its files: refused while its process lives,
-    // else its anchor kept and no slot its ticks hold run again.
-    if let Some(pid) = files.running() {
+    // One start runs the schedule: the one that holds its lock, for the life of this process.
+    // Every other is refused before it reads or writes a file of it. A start that ended, by
+    // any means, released the lock with its process.
+    let Some(held) = files
+        .hold()
+        .with_context(|| format!("the schedule's lock in {}", files.dir.display()))?
+    else {
+        let running = files.recorded_pid().map_or_else(
+            || "is running (another start holds its lock)".to_owned(),
+            |pid| format!("is running as pid {pid}"),
+        );
         eprintln!(
-            "takt: the schedule {} is running as pid {pid} ({}); nothing was started",
+            "takt: the schedule {} {running} ({}); nothing was started",
             files.id,
             files.schedule_file().display()
         );
         return Ok(EXIT_REFUSED);
-    }
+    };
+    // A schedule started before is rebuilt from its files: its anchor kept and no slot its
+    // ticks hold run again.
     let mut schedule = schedule.clone();
     if let Some(anchor) = files.anchor() {
         schedule.anchor = anchor;
@@ -1887,7 +1915,7 @@ fn resident_run(
     files
         .start(&schedule, &texts)
         .with_context(|| format!("the schedule {}", files.schedule_file().display()))?;
-    *files_out = Some(files.clone());
+    *started_out = Some((files.clone(), held));
     let program = std::env::current_exe().context("this takt binary")?;
     let mut forwarded = 0;
     loop {
@@ -1932,6 +1960,11 @@ fn resident_run(
         // alone, which reads it at its boundary and forwards only a second one.
         #[cfg(unix)]
         std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        // A signal since the wait ended still ends the schedule with no tick: read again at
+        // the last moment before the child starts.
+        if signals::received() > 0 {
+            return schedule_end(&files, "signal", None, EXIT_STOPPED);
+        }
         let mut child = command
             .spawn()
             .with_context(|| format!("the tick {}", tick.display()))?;

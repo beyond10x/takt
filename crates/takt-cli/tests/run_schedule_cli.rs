@@ -665,6 +665,12 @@ fn schedule_run_file_refusals() {
         ),
         ("[schedule]\nevery = \"0s\"\n", 2, "`schedule.every`"),
         ("[schedule]\nevery = \"500ms\"\n", 2, "`schedule.every`"),
+        ("[schedule]\nevery = \"7d1s\"\n", 2, "`schedule.every`"),
+        (
+            "schedule:\n  every: 18446744073709551615s\n",
+            2,
+            "`schedule.every`",
+        ),
         (
             "[schedule]\nevery = \"1s\"\nwindows = [\"Monday 7\"]\n",
             3,
@@ -744,4 +750,125 @@ fn outcome_file_without_schedule() {
     assert!(outcome["case"].is_null(), "{outcome}");
     assert!(outcome["stop"].is_null(), "{outcome}");
     assert_eq!(outcome["frontier"], "nothing_ready", "{outcome}");
+}
+
+/// `--every` above seven days is refused by the argument parser, exit 2, and the outcome file
+/// says so; `--help` exits 0 and writes none.
+#[test]
+fn schedule_every_above_a_week_refused_and_help_writes_no_outcome() {
+    let scratch = scratch("every-cap");
+    let state = scratch.state();
+    let refused = scratch.0.join("refused.json");
+    for every in ["8d", "7d1s", "18446744073709551615s"] {
+        let (code, out, err) = run(
+            &scratch.tree(),
+            &state,
+            &[
+                "--outcome-file",
+                refused.to_str().expect("utf-8"),
+                "--every",
+                every,
+            ],
+        );
+        assert_eq!(code, 2, "{every}: stdout {out} stderr {err}");
+        assert!(err.contains("seven days"), "{every}: the rule: {err}");
+        assert_eq!(json(&refused)["exit"], 2, "{every}");
+        fs::remove_file(&refused).expect("removed");
+        assert!(!state.join("schedule").exists(), "{every}: nothing started");
+    }
+    let helped = scratch.0.join("helped.json");
+    let (code, out, err) = run(
+        &scratch.tree(),
+        &state,
+        &["--outcome-file", helped.to_str().expect("utf-8"), "--help"],
+    );
+    assert_eq!(code, 0, "stderr {err}");
+    assert!(out.contains("--outcome-file"), "the help: {out}");
+    assert!(!helped.exists(), "--help writes no outcome file");
+}
+
+/// A `schedule.json` that names a live pid no start holds the lock for blocks nothing: the
+/// lock, not the pid, decides; the schedule starts again from its files.
+#[test]
+fn schedule_stale_pid_does_not_block_a_start() {
+    let scratch = scratch("stale-pid");
+    let config = scratch.config(NOTHING);
+    let state = scratch.state();
+    let args = [
+        "--config",
+        config.to_str().expect("utf-8"),
+        "--every",
+        "1s",
+        "--until",
+        "exit:0",
+    ];
+    let (code, out, err) = run(&scratch.tree(), &state, &args);
+    assert_eq!(code, 0, "stdout {out} stderr {err}");
+    let dir = scratch.schedule_dir();
+    // A pid that lives (this test's own) and no `end.json`: what a crash leaves after its pid
+    // was reused.
+    let mut recorded = json(&dir.join("schedule.json"));
+    recorded["pid"] = serde_json::json!(std::process::id());
+    fs::write(dir.join("schedule.json"), recorded.to_string()).expect("written");
+    fs::remove_file(dir.join("end.json")).expect("removed");
+    let (code, out, err) = run(&scratch.tree(), &state, &args);
+    assert_eq!(code, 0, "stdout {out} stderr {err}");
+    assert_eq!(ticks(&dir).len(), 2, "it ran again");
+    let started = json(&dir.join("schedule.json"));
+    assert_ne!(started["pid"], serde_json::json!(std::process::id()));
+}
+
+/// The outcome file is written through a new file renamed over FILE: a symbolic link at FILE
+/// is replaced, its target untouched; a directory at FILE is an error on stderr.
+#[test]
+fn outcome_file_replaces_a_link_and_refuses_a_directory() {
+    let scratch = scratch("outcome-link");
+    let config = scratch.config(NOTHING);
+    let state = scratch.state();
+    let target = scratch.0.join("target.txt");
+    fs::write(&target, "kept\n").expect("a target");
+    let link = scratch.0.join("link.json");
+    std::os::unix::fs::symlink(&target, &link).expect("a link");
+    let (code, out, err) = run(
+        &scratch.tree(),
+        &state,
+        &[
+            "--config",
+            config.to_str().expect("utf-8"),
+            "--outcome-file",
+            link.to_str().expect("utf-8"),
+        ],
+    );
+    assert_eq!(code, 0, "stdout {out} stderr {err}");
+    assert_eq!(fs::read_to_string(&target).expect("reads"), "kept\n");
+    assert!(
+        !fs::symlink_metadata(&link)
+            .expect("there")
+            .file_type()
+            .is_symlink(),
+        "the link was replaced"
+    );
+    assert_eq!(json(&link)["exit"], 0);
+
+    let directory = scratch.0.join("directory");
+    fs::create_dir_all(&directory).expect("a directory");
+    let (code, out, err) = run(
+        &scratch.tree(),
+        &state,
+        &[
+            "--config",
+            config.to_str().expect("utf-8"),
+            "--outcome-file",
+            directory.to_str().expect("utf-8"),
+        ],
+    );
+    assert_eq!(code, 0, "the run's own exit: stdout {out} stderr {err}");
+    assert!(err.contains("the outcome file"), "{err}");
+    assert!(directory.is_dir());
+    let left: Vec<_> = fs::read_dir(&scratch.0)
+        .expect("reads")
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().ends_with(".partial"))
+        .collect();
+    assert!(left.is_empty(), "no partial file left: {left:?}");
 }

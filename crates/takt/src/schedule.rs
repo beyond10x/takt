@@ -27,7 +27,7 @@ pub const SCHEDULE_FORMAT: &str = "takt.schedule/1";
 pub const END_FORMAT: &str = "takt.schedule-end/1";
 
 /// The rule an `every` breaks.
-pub const EVERY_RULE: &str = "is a duration of at least one second, whole seconds in `d`, `h`, `m` and `s`, such as `30m` or `1h30m`";
+pub const EVERY_RULE: &str = "is a duration from one second to seven days (`7d`), whole seconds in `d`, `h`, `m` and `s`, such as `30m` or `1h30m`";
 /// The rule a `time_zone` breaks.
 pub const ZONE_RULE: &str = "is an IANA time zone name, such as `Europe/Berlin` or `UTC`";
 /// The rule a window breaks.
@@ -41,6 +41,9 @@ pub const SCHEDULE_RULE: &str =
 
 const DAYS: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_SECONDS: u64 = 24 * 60 * 60;
+/// The longest `every`, seven days: a week of windows repeats, and no slot arithmetic of a
+/// longer one is needed.
+pub const EVERY_MAX: u64 = 7 * DAY_SECONDS;
 /// How far ahead the slots of a windowed schedule are looked for: past a year with no slot, the
 /// schedule has none left.
 const HORIZON_DAYS: i64 = 400;
@@ -52,7 +55,8 @@ fn database() -> &'static TimeZoneDatabase {
 }
 
 /// `text` as a duration of whole seconds: one or more `<n><unit>`, the unit `d`, `h`, `m` or
-/// `s`; at least one second. The rule broken otherwise is [`EVERY_RULE`].
+/// `s`; at least one second and at most [`EVERY_MAX`]. The rule broken otherwise is
+/// [`EVERY_RULE`].
 pub fn every(text: &str) -> Result<u64, String> {
     let refused = || EVERY_RULE.to_owned();
     let mut total: u64 = 0;
@@ -79,7 +83,7 @@ pub fn every(text: &str) -> Result<u64, String> {
             .and_then(|seconds| total.checked_add(seconds))
             .ok_or_else(refused)?;
     }
-    if !digits.is_empty() || total < 1 {
+    if !digits.is_empty() || !(1..=EVERY_MAX).contains(&total) {
         return Err(refused());
     }
     Ok(total)
@@ -454,26 +458,30 @@ impl Schedule {
         after: Option<Timestamp>,
         now: Timestamp,
     ) -> Option<(Timestamp, u64)> {
-        let every = i64::try_from(self.every).ok()?;
-        let anchor = self.anchor.as_second();
+        // In i128, where a u64 `every` and any two instants' seconds add without overflow; a
+        // slot past the last instant there is is no slot.
+        let every = i128::from(self.every.max(1));
+        let anchor = i128::from(self.anchor.as_second());
         // The index of the first slot at or after `second`.
-        let index_at = |second: i64| -> i64 {
+        let index_at = |second: i128| -> i128 {
             if second <= anchor {
                 0
             } else {
                 (second - anchor + every - 1) / every
             }
         };
-        let first_not_past = index_at(now.as_second() + i64::from(now.subsec_nanosecond() > 0));
+        let first_not_past =
+            index_at(i128::from(now.as_second()) + i128::from(now.subsec_nanosecond() > 0));
         let (index, skipped) = match after {
             Some(after) => {
-                let next = index_at(after.as_second() + 1);
+                let next = index_at(i128::from(after.as_second()) + 1);
                 let index = next.max(first_not_past);
-                (index, u64::try_from(index - next).unwrap_or(0))
+                (index, u64::try_from(index - next).unwrap_or(u64::MAX))
             }
             None => (first_not_past, 0),
         };
-        let slot = Timestamp::from_second(anchor.checked_add(index.checked_mul(every)?)?).ok()?;
+        let second = index.checked_mul(every)?.checked_add(anchor)?;
+        let slot = Timestamp::from_second(i64::try_from(second).ok()?).ok()?;
         Some((slot, skipped))
     }
 
@@ -488,7 +496,10 @@ impl Schedule {
                 if let Some(slot) = self.instant(date, second) {
                     slots.push(slot);
                 }
-                second += self.every;
+                let Some(next) = second.checked_add(self.every.max(1)) else {
+                    break;
+                };
+                second = next;
             }
         }
         slots.sort();
@@ -568,7 +579,7 @@ pub struct Tick {
 }
 
 /// The files of one schedule, under `<state dir>/schedule/<id>/`: `schedule.json`,
-/// `ticks.jsonl`, `ticks/<slot>/` and `end.json`.
+/// `ticks.jsonl`, `ticks/<slot>/`, `end.json` and `lock`.
 #[derive(Debug, Clone)]
 pub struct Files {
     /// The schedule's id ([`id_of`]).
@@ -600,15 +611,29 @@ impl Files {
             .unwrap_or_default()
     }
 
-    /// The pid an earlier start of the schedule runs as, while it lives: `schedule.json` names
-    /// it, it is not this process, no `end.json` was written after it, and it is alive.
+    /// Takes the schedule's lock, an exclusive lock on `<dir>/lock` (`flock`, not waited for):
+    /// the start that holds it runs the schedule, for as long as it keeps the [`Held`], and the
+    /// kernel releases it when that process ends however it ends. `None` while another start
+    /// holds it; read nothing of the schedule's files before this.
+    pub fn hold(&self) -> std::io::Result<Option<Held>> {
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(self.dir.join("lock"))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(Held { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(error)) => Err(error),
+        }
+    }
+
+    /// The pid `schedule.json` names: the start that holds the lock, once it has written it.
     #[must_use]
-    pub fn running(&self) -> Option<u32> {
-        let pid = self.earlier()["pid"]
+    pub fn recorded_pid(&self) -> Option<u32> {
+        self.earlier()["pid"]
             .as_u64()
-            .and_then(|pid| u32::try_from(pid).ok())?;
-        (pid != std::process::id() && !self.dir.join("end.json").exists() && alive(pid))
-            .then_some(pid)
+            .and_then(|pid| u32::try_from(pid).ok())
     }
 
     /// The anchor an earlier start of the schedule counted its slots from.
@@ -644,7 +669,7 @@ impl Files {
             "pid": std::process::id(),
             "started": Timestamp::now().to_string(),
         });
-        std::fs::write(self.schedule_file(), format!("{document:#}\n"))
+        write_replacing(&self.schedule_file(), &format!("{document:#}\n"))
     }
 
     /// Appends `tick` to `ticks.jsonl`.
@@ -675,8 +700,54 @@ impl Files {
             "exit": exit,
             "ended": Timestamp::now().to_string(),
         });
-        std::fs::write(self.dir.join("end.json"), format!("{document}\n"))
+        write_replacing(&self.dir.join("end.json"), &format!("{document}\n"))
     }
+}
+
+/// The schedule's lock, held while this value lives ([`Files::hold`]).
+#[derive(Debug)]
+pub struct Held {
+    _file: std::fs::File,
+}
+
+/// Writes `text` to `path` through a new file beside it renamed over it: a reader finds the old
+/// file or the whole new one, never a part. The new file is created, never opened, so no link
+/// is followed there (`O_EXCL`, `O_NOFOLLOW`); the rename replaces whatever entry `path` is,
+/// a symbolic link among them, without following it, and refuses a directory.
+pub fn write_replacing(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let Some(name) = path.file_name() else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "names no file",
+        ));
+    };
+    let mut attempt = 0_u32;
+    let (partial, mut file) = loop {
+        let mut partial_name = std::ffi::OsString::from(".");
+        partial_name.push(name);
+        partial_name.push(format!(".{}.{attempt}.partial", std::process::id()));
+        let partial = path.with_file_name(partial_name);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::custom_flags(&mut options, libc::O_NOFOLLOW);
+        match options.open(&partial) {
+            Ok(file) => break (partial, file),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists && attempt < 64 => {
+                attempt += 1;
+            }
+            Err(error) => return Err(error),
+        }
+    };
+    let written = file
+        .write_all(text.as_bytes())
+        .and_then(|()| file.sync_all())
+        .and_then(|()| std::fs::rename(&partial, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    written
 }
 
 /// The first of `until` that a tick which exited `exit` and wrote the outcome file at
@@ -733,25 +804,6 @@ impl Observed {
             "started": started.to_string(),
             "ended": ended.to_string(),
         })
-    }
-}
-
-/// Whether the process `pid` is alive: it exists, whoever owns it.
-#[must_use]
-pub fn alive(pid: u32) -> bool {
-    #[cfg(unix)]
-    {
-        let Ok(pid) = libc::pid_t::try_from(pid) else {
-            return false;
-        };
-        // SAFETY: signal 0 sends nothing; it only asks whether the process exists.
-        let answer = unsafe { libc::kill(pid, 0) };
-        answer == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        false
     }
 }
 
@@ -965,7 +1017,19 @@ mod tests {
     }
 
     #[test]
-    fn a_deadline_with_windows_ends_the_slots_and_without_one_they_repeat_weekly() {
+    fn the_earliest_deadline_is_the_schedules() {
+        let mut schedule = berlin();
+        assert_eq!(schedule.deadline(), None, "no deadline, none");
+        schedule.until = vec![
+            Until::NothingReady,
+            Until::Deadline(at("2026-11-20T00:00:00Z")),
+            Until::Deadline(at("2026-11-19T00:00:00Z")),
+        ];
+        assert_eq!(schedule.deadline(), Some(at("2026-11-19T00:00:00Z")));
+    }
+
+    #[test]
+    fn without_a_deadline_the_windows_repeat_weekly() {
         let schedule = berlin();
         let thursday = at("2026-11-19T12:00:00Z");
         assert_eq!(
@@ -980,7 +1044,21 @@ mod tests {
         assert_eq!(every("1h30m"), Ok(5400));
         assert_eq!(every_text(5400), "1h30m");
         assert_eq!(every_text(2), "2s");
-        for bad in ["", "0s", "500ms", "30", "m", "-1s", "1.5s"] {
+        assert_eq!(every("7d"), Ok(EVERY_MAX));
+        assert_eq!(every("6d23h59m60s"), Ok(EVERY_MAX));
+        for bad in [
+            "",
+            "0s",
+            "500ms",
+            "30",
+            "m",
+            "-1s",
+            "1.5s",
+            "7d1s",
+            "8d",
+            "18446744073709551615s",
+            "99999999999999999999s",
+        ] {
             assert!(every(bad).is_err(), "{bad}");
         }
         assert!(zone("Europe/Berlin").is_ok());
