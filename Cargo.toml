@@ -17,6 +17,7 @@ b10x-loom-sdk = { git = "https://github.com/beyond10x/loom", tag = "0.52.0" }
 b10x-substrate-host = { git = "https://github.com/beyond10x/substrate", tag = "0.14.0" }
 anyhow = "1"
 clap = { version = "4.5", features = ["derive"] }
+jiff = { version = "0.2.38", default-features = false, features = ["std", "tzdb-bundle-always"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"

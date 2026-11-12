@@ -314,6 +314,15 @@ pub struct RunConfig {
     /// refused there, naming it.
     #[serde(skip)]
     pub deployment_paths: Option<crate::git::DeploymentPaths>,
+    /// The `schedule` member as written, which [`RunConfig::read`] checks into
+    /// [`RunConfig::schedule`] or refuses at its line ([`MemberRefused`]).
+    #[serde(rename = "schedule", default, deserialize_with = "written")]
+    schedule_member: Option<serde_yaml_ng::Value>,
+    /// The run's schedule (`takt.work.Schedule`): `every`, `time_zone`, `windows` and `until`,
+    /// each the flag's of that name (`--every`, `--time-zone`, `--window`, `--until`), a flag
+    /// winning. Set by [`RunConfig::read`], never read from the file.
+    #[serde(skip)]
+    pub schedule: Option<crate::schedule::Setting>,
 }
 
 /// What a run file says about the forge beyond its name: the commands, the transport and the
@@ -1197,7 +1206,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, `schedule`, a mapping of `every`, `time_zone`, `windows` and `until`, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1270,7 +1279,8 @@ where
 
 /// The refusal of a run file member whose value does not read as an argument, at the line it is
 /// written on, repeating nothing written there: a `tokens` that is no whole number above zero,
-/// as `--tokens x` is, and a `forge_endpoint` that is no URL the forge calls. `takt run` exits 2
+/// as `--tokens x` is, a `forge_endpoint` that is no URL the forge calls, and a `schedule` member
+/// that does not read ([`crate::schedule::Setting::read`]). `takt run` exits 2
 /// on it, before any case opens.
 #[derive(Debug)]
 pub struct MemberRefused {
@@ -1828,6 +1838,28 @@ impl RunConfig {
                         line: locate(text, extension == Some("toml"), &["tokens"]).unwrap_or(1),
                         member: "tokens",
                         rule: TOKENS_RULE,
+                    }));
+                }
+            }
+        }
+        if let Some(member) = config.schedule_member.take() {
+            let toml = extension == Some("toml");
+            match crate::schedule::Setting::read(&member) {
+                Ok(setting) => config.schedule = Some(setting),
+                Err(refusal) => {
+                    let keys: Vec<&str> = refusal.keys.iter().map(String::as_str).collect();
+                    let under_takt: Vec<&str> = std::iter::once("takt")
+                        .chain(keys.iter().copied())
+                        .collect();
+                    let line = locate(text, toml, &keys)
+                        .or_else(|| locate(text, toml, &under_takt))
+                        .or_else(|| locate(text, toml, &["schedule"]))
+                        .unwrap_or(1);
+                    return Err(anyhow::Error::new(MemberRefused {
+                        path: path.to_owned(),
+                        line,
+                        member: refusal.member,
+                        rule: refusal.rule,
                     }));
                 }
             }

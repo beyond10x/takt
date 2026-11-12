@@ -28,6 +28,7 @@ pub mod report;
 pub mod run;
 pub mod run_config;
 pub mod scan;
+pub mod schedule;
 pub mod scorecard;
 pub mod trace;
 pub mod validator;
