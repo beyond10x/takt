@@ -1,6 +1,6 @@
 # Wave 57: a run on a schedule, and one served Connectors client
 
-Stage: **in review**. `wave/57` branches from 71e8daa9, the plan of epic:scheduled-runs-and-connector-actions, and
+Stage: **merged**. Pull request 65 merged at dabcd934 as 2c1a3a31 (approval-record:pr-65-merge). `wave/57` branches from 71e8daa9, the plan of epic:scheduled-runs-and-connector-actions, and
 merges `main` at 5f782fff (pull request 64: the plan, the owner's decision on connector writes and the spec-first
 rule) as d6d7043f. Approved: approval-record:wave-57-scheduled-runs.
 
@@ -77,5 +77,6 @@ run starts through) and `tests_have_a_home_of_their_own` (`w57_adv_schedule_cli.
 
 ## Close
 
-After the merge, a store-only close moves both stories to `implemented` with the CI run as their `test_result`. It
-rides with wave 58.
+Pull request 65 merged at its granted head dabcd934 as 2c1a3a31, its seven checks green (`check` run
+https://github.com/beyond10x/takt/actions/runs/43318222734). Both stories moved to `implemented` with that run as their
+`test_result`, in a store-only commit that rides with wave 58.
