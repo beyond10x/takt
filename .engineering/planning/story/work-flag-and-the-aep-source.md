@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:work-flag-and-the-aep-source
 kind: story
-status: active
+status: implemented
 title: takt run --work names the item, and the aep source is the planning store behind it
 summary: --work <key>, the ordered work list, aep as today, case ids for tracker keys
 relations:
@@ -20,10 +20,11 @@ scope:
   path: crates/takt/src/frontier.rs
 - confidence: cited
   path: crates/takt/src/run_config.rs
-revision: 10
+revision: 12
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 7}
 - {from: "proposed", to: "active", at: "2026-11-06T13:11:51Z", actor: "human:timo", revision: 8}
+- {from: "active", to: "implemented", at: "2026-11-06T20:55:01Z", actor: "human:timo", revision: 12, decided_on: {"recorded":{"test_result":1,"review_outcome":1,"verification":1}}}
 ---
 # Story: work-flag-and-the-aep-source
 
@@ -66,3 +67,17 @@ id. The full key is recorded in the case beside the id.
 
 - `crates/takt/src/frontier.rs`, `crates/takt/src/run_config.rs`, `crates/takt/src/case.rs`,
   `crates/takt/src/commit_style.rs`, `crates/takt-cli/src/main.rs`; new tests in `crates/takt-cli/tests/`.
+
+## Status
+
+Built in wave 56 (unit b, 7361507b1), released in 0.34.0 from 2c4f1d7f4, the merge of pull request 63.
+
+- `crates/takt/src/frontier.rs`: `Key` parses `<source>[@<connection>]:<id>` and mints tracker case ids; since
+  a19b058f2 it refuses characters that do not show as themselves and an id starting with `-`.
+- `crates/takt-cli/src/main.rs`: `--work <key>`; `aep:<story id>` shares `--story`'s path. The run file's `work` list
+  (`crates/takt/src/run_config.rs`) defaults to `["aep"]`, also for a command line built without a run file
+  (58723b3e3).
+- The case records `item_key` and `item_revision`; `commit_style::reference` gives the trailer.
+- `crates/takt-cli/tests/run_work_cli.rs` (red, then green).
+
+Review: review-result:w56-adv-1.
