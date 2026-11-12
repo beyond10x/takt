@@ -192,6 +192,10 @@ fn relative(path: &Path) -> bool {
 pub struct CommandAction {
     binding: Binding,
     limits: Limits,
+    /// Whether the last observation left its output as no file of its own ([`not_own_file`]):
+    /// then [`Validator::writes`] names nothing, so the loop puts what it left back and refuses
+    /// the step.
+    disowned: std::cell::Cell<bool>,
 }
 
 impl CommandAction {
@@ -205,6 +209,7 @@ impl CommandAction {
         Self {
             binding,
             limits: Process::LIMITS,
+            disowned: std::cell::Cell::new(false),
         }
     }
 
@@ -228,6 +233,109 @@ impl CommandAction {
             .map(|word| word.replace(ARTIFACTS, &artifacts))
             .collect()
     }
+
+    /// Performs the binding, the child held to the smaller of its own timeout and what is left
+    /// before `deadline` when it starts.
+    fn observe_by(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<Observation> {
+        self.disowned.set(false);
+        let case = crate::case::current(tree)?;
+        let artifacts = case.join("artifacts");
+        let file = artifacts.join(&self.binding.writes);
+        if let Some(parent) = file.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        let argv = self.argv_in(&artifacts);
+        let mut limits = self.limits;
+        if let Some(deadline) = deadline {
+            limits.timeout = limits
+                .timeout
+                .min(deadline.saturating_duration_since(std::time::Instant::now()));
+        }
+        let exit = Process { limits }.run(tree, &argv)?;
+        if let Some(why) = not_own_file(&artifacts, &self.binding.writes)? {
+            self.disowned.set(true);
+            anyhow::bail!(
+                "{}: {} is not kept: {why}",
+                self.action(),
+                Path::new("artifacts").join(&self.binding.writes).display()
+            );
+        }
+        let result = self.result_of(exit.code);
+        let code = exit
+            .code
+            .map_or_else(|| "a signal".to_owned(), |code| format!("exit {code}"));
+        let record = Record::new(
+            format!("command-action-{seq}"),
+            self.kind(),
+            Some(result.to_owned()),
+            self.subject(),
+            revision,
+            self.name(),
+        );
+        Ok(Observation {
+            summary: format!("{}: {} ended {code}: {result}", self.action(), argv[0]),
+            records: vec![record],
+            artifact: None,
+        })
+    }
+}
+
+/// Why what is at `writes` under `artifacts` is not the case's own file, by lstat: a link at
+/// `artifacts`, at a directory on the way or at the file, something other than a regular file
+/// there, or a regular file with another name elsewhere (a hard link); `None` when it is one or
+/// when nothing is there.
+fn not_own_file(artifacts: &Path, writes: &Path) -> Result<Option<String>> {
+    let mut at = artifacts.to_path_buf();
+    let mut parts = std::iter::once(None)
+        .chain(writes.components().map(Some))
+        .peekable();
+    while let Some(part) = parts.next() {
+        if let Some(part) = part {
+            at.push(part);
+        }
+        let meta = match std::fs::symlink_metadata(&at) {
+            Ok(meta) => meta,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error).with_context(|| format!("read {}", at.display())),
+        };
+        let kind = meta.file_type();
+        if kind.is_symlink() {
+            return Ok(Some(format!("{} is a link", at.display())));
+        }
+        if parts.peek().is_some() {
+            if !kind.is_dir() {
+                return Ok(Some(format!("{} is no directory", at.display())));
+            }
+        } else if !kind.is_file() {
+            return Ok(Some(format!("{} is no regular file", at.display())));
+        } else if hard_linked(&meta) {
+            return Ok(Some(format!(
+                "{} is a hard link of a file elsewhere",
+                at.display()
+            )));
+        }
+    }
+    Ok(None)
+}
+
+/// Whether the file of `meta` has more than one name.
+#[cfg(unix)]
+fn hard_linked(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt as _;
+    meta.nlink() > 1
+}
+
+/// Whether the file of `meta` has more than one name: not read off Unix.
+#[cfg(not(unix))]
+fn hard_linked(_meta: &std::fs::Metadata) -> bool {
+    false
 }
 
 impl Validator for CommandAction {
@@ -248,38 +356,27 @@ impl Validator for CommandAction {
     }
 
     fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
-        let case = crate::case::current(tree)?;
-        let artifacts = case.join("artifacts");
-        let file = artifacts.join(&self.binding.writes);
-        if let Some(parent) = file.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
-        }
-        let argv = self.argv_in(&artifacts);
-        let exit = Process {
-            limits: self.limits,
-        }
-        .run(tree, &argv)?;
-        let result = self.result_of(exit.code);
-        let code = exit
-            .code
-            .map_or_else(|| "a signal".to_owned(), |code| format!("exit {code}"));
-        let record = Record::new(
-            format!("command-action-{seq}"),
-            self.kind(),
-            Some(result.to_owned()),
-            self.subject(),
-            revision,
-            self.name(),
-        );
-        Ok(Observation {
-            summary: format!("{}: {} ended {code}: {result}", self.action(), argv[0]),
-            records: vec![record],
-            artifact: None,
-        })
+        self.observe_by(tree, revision, seq, None)
+    }
+
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        let observed = self.observe_by(tree, revision, seq, deadline);
+        Ok((
+            crate::validator::ended_by(deadline, self.action(), observed)?,
+            false,
+        ))
     }
 
     fn writes(&self) -> Vec<PathBuf> {
+        if self.disowned.get() {
+            return Vec::new();
+        }
         vec![Path::new("artifacts").join(&self.binding.writes)]
     }
 

@@ -2308,7 +2308,7 @@ impl Validator for TestsRun {
 
 /// What an observation held to `deadline` answers: an error once it returned at or after it,
 /// whatever it observed, so the budget that ended it records nothing; else `observed`.
-fn ended_by(
+pub(crate) fn ended_by(
     deadline: Option<std::time::Instant>,
     action: &str,
     observed: Result<Observation>,
@@ -8298,7 +8298,9 @@ pub struct RunFileBinding {
 
 /// A validator the run file binds under an action id ([`RunFileBinding`]), registered beside the
 /// built-in ones ([`register_bound`]). When a case opens, a binding of an action the case's
-/// protocol does not declare refuses the run at the binding's line
+/// protocol does not declare ([`UNDECLARED_RULE`]), or whose validator's evidence kind the
+/// protocol does not list among what that action may produce ([`UNPRODUCED_RULE`]), refuses the
+/// run at the binding's line
 /// ([`crate::run_config::MemberRefused`], exit 2), the case discarded; otherwise it performs as
 /// the validator it wraps.
 pub struct RunFileBound {
@@ -8316,6 +8318,11 @@ impl RunFileBound {
 
 /// The rule a binding of an action the case's protocol does not declare breaks.
 pub const UNDECLARED_RULE: &str = "binds an action the case's protocol does not declare";
+
+/// The rule a binding whose evidence kind the case's protocol does not let its action produce
+/// breaks.
+pub const UNPRODUCED_RULE: &str =
+    "binds an evidence kind the case's protocol does not list among what its action may produce";
 
 /// Registers each of `bound` in `validators`, after the validators already there.
 pub fn register_bound(validators: &mut Vec<Box<dyn Validator>>, bound: Vec<RunFileBound>) {
@@ -8387,13 +8394,23 @@ impl Validator for RunFileBound {
         self.validator.gates_project()
     }
     fn check_at_open(&self, tree: &Path, case_dir: &Path) -> Result<()> {
-        if !protocol_has_action(case_dir, self.action())? {
-            return Err(anyhow::Error::new(crate::run_config::MemberRefused {
+        let refused = |rule| {
+            Err(anyhow::Error::new(crate::run_config::MemberRefused {
                 path: self.binding.file.clone(),
                 line: self.binding.line,
                 member: self.binding.member,
-                rule: UNDECLARED_RULE,
-            }));
+                rule,
+            }))
+        };
+        if !protocol_has_action(case_dir, self.action())? {
+            return refused(UNDECLARED_RULE);
+        }
+        // A bound validator writes no kind its action does not declare: a claim another
+        // action's kind makes true is that action's to observe.
+        if case_dir.join("protocol.yaml").exists()
+            && !produces_kind(case_dir, self.action(), self.kind())?
+        {
+            return refused(UNPRODUCED_RULE);
         }
         self.validator.check_at_open(tree, case_dir)
     }
@@ -8441,8 +8458,6 @@ impl ChangeRead {
     pub const PATHS_KIND: &str = "paths_changed";
 }
 
-/// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
-/// evidence kind `kind` and lists it among what `action` may produce.
 /// Whether the protocol the case at `case_dir` pinned names `action`. A case with no pinned
 /// protocol file is taken to name it, so the check it guards still runs.
 fn protocol_has_action(case_dir: &Path, action: &str) -> Result<bool> {
@@ -8459,6 +8474,8 @@ fn protocol_has_action(case_dir: &Path, action: &str) -> Result<bool> {
         .is_some_and(|actions| actions.contains_key(action)))
 }
 
+/// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
+/// evidence kind `kind` and lists it among what `action` may produce.
 fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
     let path = case_dir.join("protocol.yaml");
     let text =

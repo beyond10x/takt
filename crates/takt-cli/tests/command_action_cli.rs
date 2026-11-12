@@ -335,3 +335,68 @@ fn command_action_unknown_action() {
         "nothing is recorded"
     );
 }
+
+/// A binding whose `evidence` is a kind its action's `may_produce` does not name is refused at
+/// its line when the case opens, exit 2, and nothing of that kind is recorded.
+#[test]
+fn command_action_kind_its_action_may_not_produce() {
+    let config = "command_actions:\n  status.render:\n    argv: [sh, render.sh, \"{artifacts}\", \"0\", plain]\n    writes: status/out.txt\n    evidence: test_result\n";
+    let scratch = scratch("unproduced", config);
+    let (code, out, err) = run(&scratch, &[]);
+    assert_eq!(code, 2, "stdout {out} stderr {err}");
+    assert!(
+        err.contains(&format!(
+            "the run configuration file {} is refused at line 2",
+            scratch.config().display()
+        )),
+        "{err}"
+    );
+    assert!(err.contains("may produce"), "{err}");
+    for case in cases(&scratch.tree()) {
+        assert!(
+            !case.join("artifacts/status/out.txt").exists(),
+            "the command did not run\n{out}"
+        );
+    }
+}
+
+/// The declared output left under a link on its way from `artifacts/`, or as a hard link of a
+/// file outside the case, is no file of the case's own: the step is refused, put back, and
+/// nothing recorded.
+#[test]
+fn command_action_output_not_its_own_file() {
+    for (name, script) in [
+        (
+            "dir-link",
+            "o=\"$1/../../../../../outside\"; mkdir -p \"$o\"; echo x > \"$o/out.txt\"; rm -rf \"$1/status\"; ln -s \"$o\" \"$1/status\"",
+        ),
+        (
+            "hard-link",
+            "o=\"$1/../../../../../outside.txt\"; echo x > \"$o\"; mkdir -p \"$1/status\"; ln \"$o\" \"$1/status/out.txt\"",
+        ),
+    ] {
+        let config = format!(
+            "command_actions:\n  status.render:\n    argv: [sh, -c, '{script}', sh, \"{{artifacts}}\"]\n    writes: status/out.txt\n    evidence: status_rendered\n"
+        );
+        let scratch = scratch(name, &config);
+        let (_, out, err) = run(&scratch, &[]);
+        assert!(
+            out.contains("wrote what its validator does not"),
+            "{name}: the output is refused\nstdout {out}\nstderr {err}"
+        );
+        let case = the_case(&scratch.tree());
+        assert!(
+            rendered(&case).is_empty(),
+            "{name}: nothing is recorded\n{out}"
+        );
+        let status = case.join("artifacts/status");
+        assert!(
+            !fs::symlink_metadata(&status).is_ok_and(|meta| meta.file_type().is_symlink()),
+            "{name}: the link on the way is put back\n{out}"
+        );
+        assert!(
+            !status.join("out.txt").exists(),
+            "{name}: the output is put back\n{out}"
+        );
+    }
+}
