@@ -8284,6 +8284,129 @@ pub fn is_built_in_kind(kind: &str) -> bool {
     BUILT_IN.iter().any(|built_in| built_in.kind == kind)
 }
 
+/// Where the run file binds a validator to a protocol action by the action's id: the file, the
+/// member that holds the binding (`command_actions`) and the line the binding's key is written on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunFileBinding {
+    /// The run file.
+    pub file: PathBuf,
+    /// The member holding the binding.
+    pub member: &'static str,
+    /// The line of the binding's key, from 1.
+    pub line: usize,
+}
+
+/// A validator the run file binds under an action id ([`RunFileBinding`]), registered beside the
+/// built-in ones ([`register_bound`]). When a case opens, a binding of an action the case's
+/// protocol does not declare refuses the run at the binding's line
+/// ([`crate::run_config::MemberRefused`], exit 2), the case discarded; otherwise it performs as
+/// the validator it wraps.
+pub struct RunFileBound {
+    validator: Box<dyn Validator>,
+    binding: RunFileBinding,
+}
+
+impl RunFileBound {
+    /// `validator`, bound by `binding`.
+    #[must_use]
+    pub fn new(validator: Box<dyn Validator>, binding: RunFileBinding) -> Self {
+        Self { validator, binding }
+    }
+}
+
+/// The rule a binding of an action the case's protocol does not declare breaks.
+pub const UNDECLARED_RULE: &str = "binds an action the case's protocol does not declare";
+
+/// Registers each of `bound` in `validators`, after the validators already there.
+pub fn register_bound(validators: &mut Vec<Box<dyn Validator>>, bound: Vec<RunFileBound>) {
+    validators.extend(
+        bound
+            .into_iter()
+            .map(|bound| Box::new(bound) as Box<dyn Validator>),
+    );
+}
+
+impl Validator for RunFileBound {
+    fn name(&self) -> &str {
+        self.validator.name()
+    }
+    fn action(&self) -> &str {
+        self.validator.action()
+    }
+    fn kind(&self) -> &str {
+        self.validator.kind()
+    }
+    fn subject(&self) -> &str {
+        self.validator.subject()
+    }
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.validator.observe(tree, revision, seq)
+    }
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
+        self.validator.observe_waiting(tree, revision, seq)
+    }
+    fn waits_locally(&self) -> bool {
+        self.validator.waits_locally()
+    }
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        self.validator.observe_within(tree, revision, seq, deadline)
+    }
+    fn writes(&self) -> Vec<PathBuf> {
+        self.validator.writes()
+    }
+    fn runs(&self) -> Vec<String> {
+        self.validator.runs()
+    }
+    fn take_failed(&self) -> Vec<FailedCheck> {
+        self.validator.take_failed()
+    }
+    fn take_obligations(&self) -> Option<Vec<crate::obligations::Obligation>> {
+        self.validator.take_obligations()
+    }
+    fn take_forge_write(&self) -> Option<crate::events::ForgeWrite> {
+        self.validator.take_forge_write()
+    }
+    fn record_sends(&self, sending: Option<Rc<crate::events::Sending>>) {
+        self.validator.record_sends(sending);
+    }
+    fn gates_document(&self) -> Option<&Path> {
+        self.validator.gates_document()
+    }
+    fn gates_project(&self) -> Option<&Path> {
+        self.validator.gates_project()
+    }
+    fn check_at_open(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        if !protocol_has_action(case_dir, self.action())? {
+            return Err(anyhow::Error::new(crate::run_config::MemberRefused {
+                path: self.binding.file.clone(),
+                line: self.binding.line,
+                member: self.binding.member,
+                rule: UNDECLARED_RULE,
+            }));
+        }
+        self.validator.check_at_open(tree, case_dir)
+    }
+    fn delegation_refusal(
+        &self,
+        tree: &Path,
+        revision: &str,
+        role: &str,
+    ) -> Result<Option<String>> {
+        self.validator.delegation_refusal(tree, revision, role)
+    }
+}
+
 /// `change.read`: observes whether the implementation revision's tree differs from the case's
 /// base outside `.engineering/` (the planning store and the cases, which takt's own take,
 /// approval and records change), by content, not by its commits or their messages, and writes

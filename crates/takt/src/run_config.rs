@@ -323,6 +323,15 @@ pub struct RunConfig {
     /// winning. Set by [`RunConfig::read`], never read from the file.
     #[serde(skip)]
     pub schedule: Option<crate::schedule::Setting>,
+    /// The `command_actions` member as written, which [`RunConfig::read`] checks into
+    /// [`RunConfig::command_actions`] or refuses at its line ([`MemberRefused`]).
+    #[serde(rename = "command_actions", default, deserialize_with = "written")]
+    command_actions_member: Option<serde_yaml_ng::Value>,
+    /// The protocol actions bound to argument lists (`takt.work.CommandAction`), each binding
+    /// with its line ([`crate::command_action`]). Set by [`RunConfig::read`], never read from
+    /// the file.
+    #[serde(skip)]
+    pub command_actions: Option<crate::command_action::CommandActions>,
 }
 
 /// What a run file says about the forge beyond its name: the commands, the transport and the
@@ -1206,7 +1215,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, `schedule`, a mapping of a schedule's every, time zone, windows and stop conditions, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, `schedule`, a mapping of a schedule's every, time zone, windows and stop conditions, `command_actions`, a mapping of a protocol action to an argv, the one file it writes under artifacts, the evidence kind it produces and its unchanged and done exits, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1859,6 +1868,38 @@ impl RunConfig {
                         path: path.to_owned(),
                         line,
                         member: refusal.member,
+                        rule: refusal.rule,
+                    }));
+                }
+            }
+        }
+        if let Some(member) = config.command_actions_member.take() {
+            let toml = extension == Some("toml");
+            let line_of = |keys: &[&str]| {
+                (1..=keys.len()).rev().find_map(|depth| {
+                    let under_takt: Vec<&str> = std::iter::once("takt")
+                        .chain(keys[..depth].iter().copied())
+                        .collect();
+                    locate(text, toml, &keys[..depth]).or_else(|| locate(text, toml, &under_takt))
+                })
+            };
+            match crate::command_action::read(&member) {
+                Ok(mut bindings) => {
+                    for binding in &mut bindings {
+                        binding.line =
+                            line_of(&[crate::command_action::MEMBER, &binding.action]).unwrap_or(1);
+                    }
+                    config.command_actions = Some(crate::command_action::CommandActions {
+                        file: path.to_owned(),
+                        bindings,
+                    });
+                }
+                Err(refusal) => {
+                    let keys: Vec<&str> = refusal.keys.iter().map(String::as_str).collect();
+                    return Err(anyhow::Error::new(MemberRefused {
+                        path: path.to_owned(),
+                        line: line_of(&keys).unwrap_or(1),
+                        member: crate::command_action::MEMBER,
                         rule: refusal.rule,
                     }));
                 }
