@@ -68,6 +68,13 @@ No local `cargo test --workspace` or `task check` ran: the host's disk was short
 stopped before its first test. The full gate is the pull request's CI (`check.yml`: check-static, test-library,
 test-cli).
 
+The pull request's first CI run failed two tests the package-scoped lanes above did not run:
+`confinement::no_module_but_the_seam_names_the_process_command` (the resident loop started each tick with
+`std::process::Command`, outside the confinement seam that `takt.work.RunOpened.confinement` says every child of a
+run starts through) and `tests_have_a_home_of_their_own` (`w57_adv_schedule_cli.rs` ran the binary without
+`own_home`). Both are fixed in the commit after f4616dbd; `confinement` 22 passed, `tests_have_a_home_of_their_own`
+4 passed, `run_schedule_cli` 16, `w57_adv_schedule_cli` 2, clippy `-D warnings` exit 0.
+
 ## Close
 
 After the merge, a store-only close moves both stories to `implemented` with the CI run as their `test_result`. It
