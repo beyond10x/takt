@@ -549,7 +549,7 @@ fn after_a_failed_ci_the_next_change_is_pushed_once_it_is_handed_over_again() {
 
 /// The validators the run file binds by action id (`crates/takt/src/validator.rs` `register_bound`),
 /// each with the action and kind its binding names: none is a built-in.
-const RUN_FILE_BOUND: &[&str] = &["CommandAction", "RunFileBound"];
+const RUN_FILE_BOUND: &[&str] = &["ConnectorAction", "CommandAction", "RunFileBound"];
 
 /// The list the choice rule and the offer read (`takt::validator::BUILT_IN`) is the validators'
 /// own: every `impl Validator for` in the library's sources has an entry, and each entry's
