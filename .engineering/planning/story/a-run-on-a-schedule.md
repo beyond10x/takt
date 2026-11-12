@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-run-on-a-schedule
 kind: story
-status: draft
+status: active
 title: takt run stays resident and starts one pass per slot of a schedule in a named time zone
 summary: --every, --window, --time-zone, --until, the run file's schedule, tick files and --outcome-file
 relations:
@@ -29,7 +29,10 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 13
+revision: 15
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-12T18:32:47Z", actor: "human:timo", revision: 14}
+- {from: "proposed", to: "active", at: "2026-11-12T18:32:47Z", actor: "human:timo", revision: 15}
 ---
 # Story: a-run-on-a-schedule
 

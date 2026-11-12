@@ -9,6 +9,7 @@
 pub mod case;
 pub mod commit_style;
 pub mod confinement;
+pub mod connectors_client;
 pub mod console;
 pub mod events;
 pub mod evidence;
@@ -28,6 +29,7 @@ pub mod report;
 pub mod run;
 pub mod run_config;
 pub mod scan;
+pub mod schedule;
 pub mod scorecard;
 pub mod trace;
 pub mod validator;

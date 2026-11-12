@@ -830,7 +830,10 @@ struct RunArgs {
     /// no `--endpoint-*` flag, `endpoint_file` or `endpoint_token_env` may sit beside it.
     /// `protocol`, the protocol a story from the planning store opens on, and `protocols`, a mapping
     /// of a protocol to the values of its declared case inputs; an unknown protocol, input or
-    /// value is refused naming the file and the line.
+    /// value is refused naming the file and the line. `schedule`, a mapping of `every`,
+    /// `time_zone`, `windows` and `until`, each the flag's (--every, --time-zone, --window,
+    /// --until), a flag winning; one that does not read exits 2, naming the file and the line,
+    /// and --once reads none of it.
     #[arg(long, value_name = "FILE")]
     config: Option<PathBuf>,
     /// The scan adapter `--config`'s file declares, read by [`RunArgs::configured`]; no flag.
@@ -842,6 +845,52 @@ struct RunArgs {
     /// The forge settings `--config`'s file sets, read by [`RunArgs::configured`]; no flag.
     #[arg(skip)]
     forge_settings: takt::run_config::ForgeSettings,
+    /// Stay resident and start one pass, a tick, per slot of a schedule: inside each --window,
+    /// its start and every DURATION after it up to its end; with no window, a slot every
+    /// DURATION from the start. DURATION is whole seconds in `d`, `h`, `m` and `s` (`30m`,
+    /// `1h30m`), from `1s` to `7d`. Each tick is a child `takt run` with these arguments, the
+    /// schedule's flags removed and `--once` and `--outcome-file` added; one runs at a time, and
+    /// a tick still running at its next slot skips that slot (counted, never queued), as a
+    /// suspend over several does. Its files are under `<state dir>/schedule/<id>/`
+    /// (`schedule.json`, `ticks.jsonl`, `ticks/<slot>/`, `end.json`, `lock`). It exits 0 when
+    /// an --until condition holds or no slot is left, 1 or 2 when a tick was refused, 3 on
+    /// SIGTERM or SIGINT after the running tick ends (a second signal is forwarded to it), 5 on
+    /// its own error; a second start while the first holds the schedule's `lock` is refused,
+    /// exit 1, naming its pid. The run file's `schedule` (`every`, `time_zone`, `windows`,
+    /// `until`) sets the same, a flag winning.
+    #[arg(long, value_name = "DURATION", value_parser = takt::schedule::every)]
+    every: Option<u64>,
+    /// The IANA time zone the --window times are wall-clock in, from the tz database bundled in
+    /// takt; UTC when none is given. A slot in a DST gap moves to the first valid instant, one
+    /// in a fold is taken once, the earlier. Only with --every.
+    #[arg(long, value_name = "ZONE", value_parser = takt::schedule::zone)]
+    time_zone: Option<takt::schedule::Zone>,
+    /// A window of slots, `<days> <HH:MM>[-<HH:MM>]`: `Mon-Tue 07:00-22:30`, `Wed 07:30` (one
+    /// slot), `Mon,Wed 09:00-12:00`; repeated for several. Without a deadline the windows
+    /// repeat weekly. Only with --every.
+    #[arg(long = "window", value_name = "WINDOW", value_parser = takt::schedule::window)]
+    windows: Vec<takt::schedule::Window>,
+    /// When the schedule stops, repeated for several: `nothing-ready` (a tick found nothing
+    /// ready), `exit:<n>` (a tick exited n), `outcome:<name>` (a tick's case reached that
+    /// outcome), `deadline:<RFC 3339 instant>` (no slot at or after it). Only with --every.
+    #[arg(long, value_name = "CONDITION", value_parser = takt::schedule::until)]
+    until: Vec<takt::schedule::Until>,
+    /// One pass, as without --every: the run file's `schedule` is not read. Each tick of a
+    /// schedule is given it.
+    #[arg(long)]
+    once: bool,
+    /// Write what the run ended with to FILE, `takt.run-outcome/1`: `exit`, `stop` (the stop's
+    /// kind, or null), `case` (the case id, or null), `outcome` (the outcome the case reached,
+    /// or null), `frontier` (`nothing_ready`, or null), `started` and `ended`. Written on every
+    /// exit of the command, a command line the argument parser refuses (exit 2) among them, but
+    /// not for --help or --version; through a new file renamed over FILE, so a reader finds the
+    /// whole document or none; stdout stays as it is.
+    #[arg(long, value_name = "FILE")]
+    outcome_file: Option<PathBuf>,
+    /// The schedule the flags and the run file's `schedule` resolve to, when the run is
+    /// resident, read by [`RunArgs::configured`]; no flag.
+    #[arg(skip)]
+    schedule: Option<takt::schedule::Schedule>,
     #[command(flatten)]
     looping: LoopArgs,
 }
@@ -876,6 +925,7 @@ impl RunArgs {
         let Some(path) = &self.config else {
             self.work_sources = vec![takt::frontier::Source::aep()];
             self.check_work_item()?;
+            self.resolve_schedule(None)?;
             return self.looping.configured(
                 takt::run_config::RunConfig::default(),
                 matches,
@@ -898,7 +948,46 @@ impl RunArgs {
         self.protocol_settings = file.protocol_settings.clone();
         self.forge_settings = file.forge_settings();
         file.check_run_file_outside_deployment(path, &self.repo)?;
+        self.resolve_schedule(file.schedule.take())?;
         self.looping.configured(file, matches, &self.repo)
+    }
+
+    /// The schedule of a resident run: `--every`, `--time-zone`, `--window` and `--until`, each
+    /// over the run file's `schedule` member `file` when it sets it. None with `--once`, which
+    /// reads no `schedule`, and none without an `every` from either; a schedule flag without
+    /// one is refused, nothing started.
+    fn resolve_schedule(&mut self, file: Option<takt::schedule::Setting>) -> Result<()> {
+        let file = if self.once { None } else { file };
+        let file = file.unwrap_or_default();
+        let Some(every) = self.every.or(file.every).filter(|_| !self.once) else {
+            if self.time_zone.is_some() || !self.windows.is_empty() || !self.until.is_empty() {
+                return Err(anyhow!(
+                    "--time-zone, --window and --until belong to a schedule, and neither --every nor the run file's `schedule` gives one (or --once is given); nothing was started"
+                ));
+            }
+            return Ok(());
+        };
+        let now = takt::schedule::Timestamp::now();
+        self.schedule = Some(takt::schedule::Schedule {
+            every,
+            zone: self
+                .time_zone
+                .clone()
+                .or(file.time_zone)
+                .unwrap_or_else(takt::schedule::utc),
+            windows: if self.windows.is_empty() {
+                file.windows.unwrap_or_default()
+            } else {
+                self.windows.clone()
+            },
+            until: if self.until.is_empty() {
+                file.until.unwrap_or_default()
+            } else {
+                self.until.clone()
+            },
+            anchor: takt::schedule::Timestamp::from_second(now.as_second()).unwrap_or(now),
+        });
+        Ok(())
     }
 
     /// Refuses `--work command:<id>` when the run file names no `work_commands.read`, which
@@ -1147,11 +1236,12 @@ impl LoopArgs {
 }
 
 /// The command line parsed, a `takt run --config` or `takt scenario run --config` file applied
-/// under it.
+/// under it. A command line clap refuses is its `clap::Error`, which [`exit_code`] prints and
+/// exits with clap's code, so `main` writes `--outcome-file` for it too.
 fn parsed() -> Result<Cli> {
     use clap::{CommandFactory as _, FromArgMatches as _};
-    let matches = Cli::command().get_matches();
-    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    let matches = Cli::command().try_get_matches()?;
+    let mut cli = Cli::from_arg_matches(&matches)?;
     match &mut cli.command {
         Commands::Run(args) => {
             if let Some(run) = matches.subcommand_matches("run") {
@@ -1564,7 +1654,7 @@ const EXIT_DECLINED: u8 = 9;
 const EXIT_CODES: &str = "Exit codes:
   0  stopped: Completed (an outcome is legitimate), or frontier: nothing ready
   1  refused before the run (an argument, the repository, the protocol or the case); the reason on stderr, no step run; or stopped: HarnessUnqualified (the harness binary does not qualify under the run's hermetic mode, found before any model call: its version, the failing row, the qualified versions and --harness-program), the case stays open and the next run resumes it; or stopped: SetupFailed (<name> exited <code>): a command of the run file's `setup` list did not end 0 when the case opened, before the red-base check and any model call; its output is kept under the state directory
-  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero or its `forge_endpoint` no `https://` URL nor `http://` to a loopback host (the file and the line named), before any case opens
+  2  the arguments do not parse, or the run file's `tokens` is no whole number above zero, its `forge_endpoint` no `https://` URL nor `http://` to a loopback host or its `schedule` a member that does not read (the file and the line named), before any case opens
   3  stopped: a budget (Iterations, Hours, Tokens, Usd, ActiveTime), NothingAdmissible, StepRefused, NoProgress, RedBase (the case's first tests.run failed before any step changed its base, before any model call: the failed tests and the rerun hint), RepeatedTestFailure (2 tests.run results in a row, each at a new revision, failed the same tests: the tests) or RepeatedGateFailure (3 gate.run results in a row, each at a new revision, failed the same gates: the gates); the case stays open
   4  stopped: ApprovalRequired; `takt approve` grants it and the next run resumes the case
   5  stopped: error: the run ended on an error once its case was open (a forge that refused, a validator or the harness that failed; a judgement step whose session ends without the line naming its action is tried 3 times before the run ends on it, each try a step that --iterations counts, charged the tokens its session reported; a budget a try spent stops the run with exit 3); the case stays open
@@ -1587,20 +1677,104 @@ const SCENARIO_EXIT_CODES: &str = "Exit codes:
   8  stopped: DiskLow (<path>: <free> free, under <threshold>): before a step, the file system of the tree or of CARGO_TARGET_DIR had less free than --min-free-gib; the case stays open, but a case with a DiskLow run is a DiskLow trial, which leaves its scenario without a scorecard verdict, so a trial runner discards it rather than resume it
   9  stopped: Declined (<reason>): a judgement step named `decline` instead of an offered action, with no file changed, its reason the reply's summary; recorded as a `decline` line in events.jsonl with the case revision, never as evidence; the case stays open, `takt run --case <case>` at that case revision stops Declined again before any step, and a commit that moves its revision makes it step again";
 
+/// What the run observed for its `--outcome-file`: the stop, the case and its outcome, set by
+/// [`finish`], or the frontier's nothing ready; read once, at the one exit of [`main`].
+static OBSERVED: std::sync::Mutex<takt::schedule::Observed> =
+    std::sync::Mutex::new(takt::schedule::Observed {
+        stop: None,
+        case: None,
+        outcome: None,
+        nothing_ready: false,
+    });
+
+/// Changes what the run observed for its `--outcome-file`.
+fn observe(change: impl FnOnce(&mut takt::schedule::Observed)) {
+    change(
+        &mut OBSERVED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+}
+
+/// The FILE of `takt run --outcome-file FILE` on the command line, read from the arguments as
+/// given, so a run refused before its arguments are read through, or a command line clap
+/// refuses, writes one too.
+fn outcome_file_given() -> Option<PathBuf> {
+    let mut args = std::env::args_os().skip(1);
+    if args.next().as_deref() != Some(std::ffi::OsStr::new("run")) {
+        return None;
+    }
+    let mut found = None;
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg == "--outcome-file" {
+            found = args.next().map(PathBuf::from);
+        } else if let Some(value) = arg
+            .to_str()
+            .and_then(|arg| arg.strip_prefix("--outcome-file="))
+        {
+            found = Some(PathBuf::from(value));
+        }
+    }
+    found
+}
+
 fn main() -> ExitCode {
+    let started = takt::schedule::Timestamp::now();
+    let outcome_file = outcome_file_given();
+    let code = exit_code();
+    // The one exit of `takt run`: the outcome file is written here, whatever the code.
+    if let Some(path) = outcome_file {
+        let observed = OBSERVED
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let document = observed.document(code, started, takt::schedule::Timestamp::now());
+        if let Err(error) = takt::schedule::write_replacing(&path, &format!("{document}\n")) {
+            eprintln!(
+                "takt: the outcome file {}: {}",
+                path.display(),
+                printable(&error.to_string())
+            );
+        }
+    }
+    ExitCode::from(code)
+}
+
+/// The command run, its exit code.
+fn exit_code() -> u8 {
     let mut cli = match parsed() {
         Ok(cli) => cli,
         Err(error) => {
+            if let Some(usage) = error.downcast_ref::<clap::Error>() {
+                // --help and --version print to stdout and exit 0 here, writing no outcome
+                // file; a refused command line is clap's message and code (2), and `main`
+                // writes the outcome file.
+                if !usage.use_stderr() {
+                    usage.exit();
+                }
+                let _ = usage.print();
+                return u8::try_from(usage.exit_code()).unwrap_or(EXIT_USAGE);
+            }
             eprintln!("takt: {}", printable(&format!("{error:#}")));
             if error
                 .downcast_ref::<takt::run_config::TokensRefused>()
                 .is_some()
             {
-                return ExitCode::from(EXIT_USAGE);
+                return EXIT_USAGE;
             }
-            return ExitCode::from(EXIT_REFUSED);
+            return EXIT_REFUSED;
         }
     };
+    // A resident run starts its ticks before anything else is read: each tick is a `takt run`
+    // that reads the run itself, the credential variable among it.
+    if let Commands::Run(args) = &cli.command
+        && let Some(schedule) = &args.schedule
+    {
+        return resident(schedule, args.looping.state_dir.as_deref());
+    }
     // The endpoint's credential variable leaves takt's environment here, on the one thread
     // takt has, before it starts any process.
     let taken = match &mut cli.command {
@@ -1610,15 +1784,227 @@ fn main() -> ExitCode {
     };
     if let Err(error) = taken {
         eprintln!("takt: {}", printable(&format!("{error:#}")));
-        return ExitCode::from(EXIT_REFUSED);
+        return EXIT_REFUSED;
     }
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
     match run(cli, &mut out) {
-        Ok(code) => ExitCode::from(code),
+        Ok(code) => code,
         Err(error) => {
             eprintln!("takt: {}", printable(&format!("{error:#}")));
-            ExitCode::from(EXIT_REFUSED)
+            EXIT_REFUSED
+        }
+    }
+}
+
+/// The flags of a schedule, each with a value, which a tick is not given.
+const SCHEDULE_FLAGS: [&str; 5] = [
+    "--every",
+    "--time-zone",
+    "--window",
+    "--until",
+    "--outcome-file",
+];
+
+/// The arguments of this `takt run` as given, without the program, without the schedule's
+/// flags ([`SCHEDULE_FLAGS`]) and `--once`: what each tick is given before its own `--once` and
+/// `--outcome-file`.
+fn tick_arguments() -> Vec<std::ffi::OsString> {
+    let mut kept = Vec::new();
+    let mut args = std::env::args_os().skip(1);
+    while let Some(arg) = args.next() {
+        let text = arg.to_string_lossy();
+        if SCHEDULE_FLAGS.contains(&text.as_ref()) {
+            args.next();
+            continue;
+        }
+        if text == "--once"
+            || SCHEDULE_FLAGS
+                .iter()
+                .any(|flag| text.starts_with(&format!("{flag}=")))
+        {
+            continue;
+        }
+        kept.push(arg);
+    }
+    kept
+}
+
+/// Runs `schedule` resident: one tick per slot, each a child `takt run --once` with this run's
+/// arguments, its files under `<state dir>/schedule/<id>/`; the exit code (0 an `until`
+/// condition held or no slot is left, 1 or 2 a tick was refused, 3 a signal, 5 its own error).
+fn resident(schedule: &takt::schedule::Schedule, state_dir: Option<&Path>) -> u8 {
+    takt::schedule::signals::install();
+    let mut started = None;
+    match resident_run(schedule, state_dir, &mut started) {
+        Ok(code) => code,
+        Err(error) => {
+            eprintln!("takt: schedule: {}", printable(&format!("{error:#}")));
+            // The lock is still held here: `end.json` is written before another start can
+            // take the schedule.
+            if let Some((files, _held)) = started {
+                let _ = schedule_end(&files, "error", None, EXIT_ERROR);
+            }
+            EXIT_ERROR
+        }
+    }
+}
+
+/// Writes the schedule's `end.json` and says so on stdout; `code`, the exit.
+fn schedule_end(
+    files: &takt::schedule::Files,
+    reason: &str,
+    until: Option<&takt::schedule::Until>,
+    code: u8,
+) -> Result<u8> {
+    files
+        .end(reason, until, code)
+        .with_context(|| format!("the schedule's end in {}", files.dir.display()))?;
+    if code == EXIT_DONE {
+        println!("schedule: done ({reason})");
+    } else {
+        println!("schedule: ended ({reason}), exit {code}");
+    }
+    Ok(code)
+}
+
+/// The schedule's loop ([`resident`]); `started` is set to its files and its held lock once it
+/// has started, so the lock outlives the loop until [`resident`] returns.
+fn resident_run(
+    schedule: &takt::schedule::Schedule,
+    state_dir: Option<&Path>,
+    started_out: &mut Option<(takt::schedule::Files, takt::schedule::Held)>,
+) -> Result<u8> {
+    use takt::schedule::{Timestamp, signals};
+    let args = tick_arguments();
+    let texts: Vec<String> = args
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    let files = takt::schedule::Files::at(
+        &takt::schedule::root(state_dir)?,
+        &schedule.resolved(),
+        &texts,
+    )
+    .context("the schedule's directory")?;
+    // One start runs the schedule: the one that holds its lock, for the life of this process.
+    // Every other is refused before it reads or writes a file of it. A start that ended, by
+    // any means, released the lock with its process.
+    let Some(held) = files
+        .hold()
+        .with_context(|| format!("the schedule's lock in {}", files.dir.display()))?
+    else {
+        let running = files.recorded_pid().map_or_else(
+            || "is running (another start holds its lock)".to_owned(),
+            |pid| format!("is running as pid {pid}"),
+        );
+        eprintln!(
+            "takt: the schedule {} {running} ({}); nothing was started",
+            files.id,
+            files.schedule_file().display()
+        );
+        return Ok(EXIT_REFUSED);
+    };
+    // A schedule started before is rebuilt from its files: its anchor kept and no slot its
+    // ticks hold run again.
+    let mut schedule = schedule.clone();
+    if let Some(anchor) = files.anchor() {
+        schedule.anchor = anchor;
+    }
+    let mut after = files.last_slot();
+    files
+        .start(&schedule, &texts)
+        .with_context(|| format!("the schedule {}", files.schedule_file().display()))?;
+    *started_out = Some((files.clone(), held));
+    let program = std::env::current_exe().context("this takt binary")?;
+    let mut forwarded = 0;
+    loop {
+        let Some((slot, skipped)) = schedule.next_slot(after, Timestamp::now()) else {
+            return schedule_end(&files, "no-slot", None, EXIT_DONE);
+        };
+        if let Some(deadline) = schedule.deadline()
+            && slot >= deadline
+        {
+            let until = schedule.until.iter().find(
+                |until| matches!(until, takt::schedule::Until::Deadline(at) if *at == deadline),
+            );
+            return schedule_end(&files, "deadline", until, EXIT_DONE);
+        }
+        // Waiting for the slot, a signal ends the schedule at once: no tick runs.
+        loop {
+            if signals::received() > 0 {
+                return schedule_end(&files, "signal", None, EXIT_STOPPED);
+            }
+            let now = Timestamp::now();
+            if now >= slot {
+                break;
+            }
+            let left = slot.duration_since(now).unsigned_abs();
+            std::thread::sleep(left.min(std::time::Duration::from_millis(50)));
+        }
+        let tick = takt::schedule::tick_dir(&files.dir, slot);
+        std::fs::create_dir_all(&tick)
+            .with_context(|| format!("the tick's directory {}", tick.display()))?;
+        let outcome = tick.join("outcome.json");
+        let started = Timestamp::now();
+        let mut command = takt::confinement::Command::new(&program);
+        command
+            .args(&args)
+            .arg("--once")
+            .arg("--outcome-file")
+            .arg(&outcome)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::fs::File::create(tick.join("stdout"))?)
+            .stderr(std::fs::File::create(tick.join("stderr"))?);
+        // The tick has its own process group, so a terminal's signal reaches the schedule
+        // alone, which reads it at its boundary and forwards only a second one.
+        #[cfg(unix)]
+        command.process_group(0);
+        // A signal since the wait ended still ends the schedule with no tick: read again at
+        // the last moment before the child starts.
+        if signals::received() > 0 {
+            return schedule_end(&files, "signal", None, EXIT_STOPPED);
+        }
+        let mut child = command
+            .spawn()
+            .with_context(|| format!("the tick {}", tick.display()))?;
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
+            }
+            let received = signals::received();
+            if received > forwarded + 1 {
+                signals::terminate(child.id());
+                forwarded = received - 1;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        let ended = Timestamp::now();
+        #[cfg(unix)]
+        let signal = std::os::unix::process::ExitStatusExt::signal(&status);
+        #[cfg(not(unix))]
+        let signal: Option<i32> = None;
+        let exit = status.code().or(signal.map(|signal| 128 + signal));
+        files
+            .record(&takt::schedule::Tick {
+                slot,
+                started,
+                ended,
+                exit,
+                outcome: outcome.clone(),
+                skipped,
+            })
+            .with_context(|| format!("the schedule's ticks in {}", files.dir.display()))?;
+        after = Some(slot);
+        if signals::received() > 0 {
+            return schedule_end(&files, "signal", None, EXIT_STOPPED);
+        }
+        if let Some(until) = takt::schedule::held(&schedule.until, exit, &outcome) {
+            return schedule_end(&files, until.kind(), Some(until), EXIT_DONE);
+        }
+        if let Some(code @ (1 | 2)) = exit {
+            let code = u8::try_from(code).unwrap_or(EXIT_REFUSED);
+            return schedule_end(&files, "refused", None, code);
         }
     }
 }
@@ -1874,6 +2260,15 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 declared_scan,
                 protocol_settings,
                 forge_settings,
+                // The schedule's flags are read before the run ([`main`]): a resident run never
+                // gets here, and a tick is given --once and --outcome-file.
+                every: _,
+                time_zone: _,
+                windows: _,
+                until: _,
+                once: _,
+                outcome_file: _,
+                schedule: _,
                 looping,
             } = *args;
             looping.check()?;
@@ -2472,6 +2867,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                     }
                     let Some(run) = taken else {
                         writeln!(out, "frontier: nothing ready")?;
+                        observe(|observed| observed.nothing_ready = true);
                         return Ok(EXIT_DONE);
                     };
                     run
@@ -3890,9 +4286,12 @@ fn finish(
             .filter(|dir| !dir.is_empty())
             .map(PathBuf::from),
     );
+    let case = run.case.id.clone();
+    observe(|observed| observed.case = Some(case));
     let stop = match run.run(out) {
         Ok(stop) => stop,
         Err(error) => {
+            observe(|observed| observed.stop = Some("error".to_owned()));
             writeln!(
                 out,
                 "stopped: error: {}; steps {}, tokens {}{}, case {}",
@@ -3905,6 +4304,16 @@ fn finish(
             return Ok(EXIT_ERROR);
         }
     };
+    let kind = stop.to_string();
+    let kind = kind.split(" (").next().unwrap_or_default().to_owned();
+    let reached = match &stop {
+        Stop::Completed(outcome) => Some(outcome.clone()),
+        _ => None,
+    };
+    observe(|observed| {
+        observed.stop = Some(kind);
+        observed.outcome = reached;
+    });
     writeln!(
         out,
         "stopped: {stop}; steps {}, tokens {}{}, case {}",

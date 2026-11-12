@@ -3,7 +3,7 @@ title: Configuration
 sidebar_position: 1
 description: The run configuration file takt run --config reads, the loom.agent/1 takt member, the endpoint file, and every takt run flag grouped by purpose.
 lede: A run's settings come from flags, from one configuration file and from defaults, in that order, and a file with a key takt does not know is refused before any case opens.
-source: crates/takt/src/run_config.rs (RunConfig, SHAPE, from_toml, from_yaml); crates/takt/src/case.rs (Records); crates/takt/src/events.rs (Opened); crates/takt/src/replay.rs; crates/takt/src/scan.rs (Scan, of_run, refused_at_open, refused_to_publish); crates/takt/src/forge/gitlab.rs and forge/local.rs; crates/takt-cli/src/main.rs (RunArgs, LoopArgs, EndpointArgs, configured, local_forge, scenario_forge_of); crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/harness.rs (EndpointFields, EndpointConfig); crates/takt/src/console.rs (LINE_WIDTH, READS_SHOWN, DIFF_SHOWN, fit); CHANGELOG.md 0.19.0 and 0.21.0; takt run --help at 0.14.0; ADR 0099
+source: crates/takt/src/run_config.rs (RunConfig, SHAPE, from_toml, from_yaml); crates/takt/src/case.rs (Records); crates/takt/src/events.rs (Opened); crates/takt/src/replay.rs; crates/takt/src/schedule.rs (Setting, Schedule, Files, Observed); crates/takt/src/scan.rs (Scan, of_run, refused_at_open, refused_to_publish); crates/takt/src/forge/gitlab.rs and forge/local.rs; crates/takt-cli/src/main.rs (RunArgs, LoopArgs, EndpointArgs, configured, local_forge, scenario_forge_of); crates/takt-cli/tests/local_forge_cli.rs; crates/takt/src/harness.rs (EndpointFields, EndpointConfig); crates/takt/src/console.rs (LINE_WIDTH, READS_SHOWN, DIFF_SHOWN, fit); CHANGELOG.md 0.19.0 and 0.21.0; takt run --help at 0.14.0; ADR 0099
 ---
 
 # Configuration
@@ -75,8 +75,8 @@ A YAML file with no `format` is read whole, as the fields themselves. A file wit
 
 ### Every field
 
-Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `forge_endpoint`, `local_checks`, `setup`, `transport`, `credential`, `work` and `work_commands` is the `takt run` flag of the same name, with `-`
-for `_`; those ten have no flag (`--work` names one item by its key, not a list of sources).
+Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `forge_endpoint`, `local_checks`, `setup`, `transport`, `credential`, `work`, `work_commands` and `schedule` is the `takt run` flag of the same name, with `-`
+for `_`; those eleven have no flag of that name (`--work` names one item by its key, not a list of sources; the keys of `schedule` are the flags `--every`, `--time-zone`, `--window` and `--until`).
 
 | field | meaning |
 |---|---|
@@ -108,14 +108,16 @@ for `_`; those ten have no flag (`--work` names one item by its key, not a list 
 | `work` | list of strings: the work sources the next ready item comes from, in order, each a source name with an optional `@<connection>` (a word of letters, digits, `.`, `_` and `-`, not starting with `-`); no `work` is `["aep"]`, the planning store, as before. The first source in list order that yields an item wins: `aep` takes the store's next ready story, `command` opens the item `work_commands.select` prints, and when none yields one the run prints `frontier: nothing ready` and exits 0. An open case of a listed source is resumed first, in list order; one declined at its case revision is passed over, as exit 9 says. This release serves `aep` and `command`: a name that is no work source is refused naming it, a known source it does not serve (`jira`, `github`, `gitlab`) is refused naming the ones it serves, a filter after `?`, an empty list, a connection on `aep` or `command`, and `command` without `work_commands.select` are refused, each at its line before any case opens; no flag |
 | `work_commands` | a mapping read for the `command` source, a team's own command line: `read`, the argument list that prints the item `--work command:<id>` names, its id given as `{id}`, and `select`, the argument list that prints the next ready item, or nothing when none is ready; each element is one argument, run without a shell in the repository, the tree put on the base first when it is on a case's branch, as the planning store is read, its standard error kept under the state directory's `work-command`, and with no credential of takt's environment, as a `forge_commands` program is. Each prints one `takt.work-item/1` JSON object: `format` (`takt.work-item/1`), `key` (`command:<id>`, its id not starting with `-` and holding no control, whitespace, separator, format or default-ignorable character, so that it shows as itself in a trailer), `title` (one line: no control character, U+2028 or U+2029), `body`, `revision` (the tracker's etag or update time), strings, and optionally `url`, a string, and `labels`, a list of strings, and no other member. The case opens as an `--intent` case does, its `intent.md` the title, a blank line and the body, its id `command-<slug>-<h8>-<instant>`, its `case.yaml` recording `item_key` and `item_revision`, and its step commits carry `Refs: command:<id>`. Output that is no such object, an item of another key than `read` was asked for, or one `select` prints of another source is refused before any case opens, naming the command, repeating nothing it printed; so is output longer than 8 MiB, the most takt keeps, naming the command and the limit, never read from what is left. An item `select` offers at the revision a case of it records, finished, declined or open, opens no second case: the run names the key and that case and goes on to the next source; `--work command:<id>` on an item whose case is finished at the revision `read` prints is refused before a case opens, naming the case, and one whose case is open resumes it. The optional `refused_exit` lists the exit codes, 1 to 255, that are a refusal, any other non-zero exit a failure; no flag |
 | `deployment_paths` | list of strings: the paths the deployment keeps in the tree beside the repository's own files, such as a wrapper's log, each relative to the tree: one ending in `/` a directory and everything under it (`.autodev/`), any other that one path alone, never a directory of that name or anything under it. A path at or under a link is never the deployment's: a step of any kind that leaves a link at an entry, under one or at a directory above one inside the tree is refused and put back, naming the path, so the link reaches no commit and what the deployment writes there later never lands where it points. A harness proposal writes no link: each file is written whole, never through one. A path under one that git does not track, untracked or ignored, is no change a step made: the step is not refused for it, nothing of it is set aside or put back, and no step commit carries it, so a harness proposal that names one is refused; a `tests.run` observes with it there. A tracked path stays the repository's, and the judge surface stays guarded, whatever the list says. The list is read once, when the run opens: a step that rewrites the run file or `.git/info/exclude` does not move it, and no excludes file adds to it, so a file `.git/info/exclude` or `core.excludesFile` hides and the list does not name is still a step's change. An entry that is empty, absolute, or holds an empty, `.` or `..` part or a part named `.git` is refused at its line, naming it; so is a list that covers the run file itself inside the tree. Such an untracked path is no uncommitted work either when the case opens, the story is taken, the tree is put back on its base to read the store, or the store's record is committed: it is there before the run as after, and no take or store commit carries it; `takt approve` reads no run file and still counts it. No flag sets the list. |
+| `schedule` | a mapping that makes `takt run` resident ([A run on a schedule](#a-run-on-a-schedule)): `every`, a duration of whole seconds in `d`, `h`, `m` and `s`, from `1s` to `7d` (`30m`, `1h30m`), required; `time_zone`, an IANA name from the tz database bundled in takt, default `UTC`; `windows`, a list of `<days> <HH:MM>[-<HH:MM>]` strings; `until`, a list of stop conditions. Each member is the flag of its name (`--every`, `--time-zone`, `--window`, `--until`) and the flag wins; a flag that is given at all replaces the file's whole list. A `schedule` that names no `every` is refused, and without `--every` and with no `schedule`, a run is one pass. `--once` reads none of it. A member that does not read is refused at its line, exit 2 |
 
-`takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol` and `protocols` and applies neither.
+`takt scenario run --config <FILE>` reads the same file, without `story`; it checks the shape of `protocol`, `protocols` and `schedule` and applies none.
 
 Other `takt run` flags have no key: `--repo`, `--intent`, `--case`, `--input`,
 `--active-seconds`, `--min-free-gib`, `--verbose`, `--color`, `--quiet-steps`, `--gate`, `--gates`, `--project`,
-`--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
+`--once`, `--outcome-file`, `--commit-identity`, `--confinement`, `--confinement-needs`, `--confinement-cgroup-root`, `--llm-config`, `--model-endpoint`, `--model-wire`,
 `--subscription-token-file`, `--subscription-token-pointer` and `--api-key-secret`, and the old
-`--endpoint-*` names of the endpoint flags below. A key for one of them is refused.
+`--endpoint-*` names of the endpoint flags below. A key for one of them is refused. The four
+schedule flags are keys of `schedule` alone, not of the top level.
 
 ### What is refused
 
@@ -129,6 +131,7 @@ which it names so the entry can be found:
 | a value of another type (`iterations: 1.5`, a number for a string) | `refused at line 1`, then the shape |
 | `tokens` that is no whole number above zero (`tokens: 0`, `tokens: x`) | `refused at line 2`, exit 2, as `--tokens x` does not parse |
 | `forge_endpoint` that is no `https://` URL and no `http://` URL to a loopback host (`forge_endpoint: http://example.com`) | `refused at line 3`, naming `forge_endpoint` and the rule it breaks, never the URL, exit 2, as for `tokens` |
+| a `schedule` that is no mapping, holds a key but `every`, `time_zone`, `windows` and `until`, or names no `every`; an `every` below one second, above seven days or not in `d`, `h`, `m` and `s`; a `time_zone` that is no IANA name; a `windows` entry or an `until` condition that does not read | `refused at line 3`, the line of the member at fault (of `schedule` when it names no `every`), naming `schedule`, `schedule.every`, `schedule.time_zone`, `schedule.windows` or `schedule.until` and the rule it breaks, never the value, exit 2, as for `tokens` |
 | a key written twice, TOML or YAML | `refused at line 4`, the duplicate's own line, saying it holds the key twice in one mapping (a table in TOML) and naming the key when takt or Loom declares it ([an example](../guides/configure-a-run.md#a-key-written-twice)); three rare YAML shapes keep the line where the mapping starts, without the key ([Known limitations](../known-limitations.md)) |
 | a `deployment_paths` entry that is empty, absolute, or holds an empty, `.` or `..` part or a part named `.git` (`deployment_paths: [../logs/]`) | `refused at line 2`, naming `deployment_paths` and the entry |
 | a `deployment_paths` that covers the run file itself, inside the tree | `refused`, naming the run file's path in the tree |
@@ -148,7 +151,7 @@ An unknown key in a TOML file, run for real:
 
 ```console
 $ takt run --repo ~/demo --intent x --config unknown.toml
-takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
+takt: the run configuration file unknown.toml is refused at line 3: a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, `schedule`, a mapping of a schedule's every, time zone, windows and stop conditions, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`
 ```
 
 An unknown member of a `loom.agent/1` document, and a file name no format claims:
@@ -684,6 +687,123 @@ opened on an intent) with the summary as its body, and a `commit.fallback` event
 takt writes the trailer itself, after a blank line, as `<trailer>: <story id>` from the case's
 story; it never reads one from the reply, and a case opened on an intent has none.
 
+## A run on a schedule
+
+`takt run --every 30m` stays resident. It starts one pass, a tick, at each slot of a schedule, and
+stops on a condition. The same schedule is the run file's `schedule` mapping; a flag wins over it.
+
+```console
+$ takt run --repo ~/demo --config run.yaml --every 30m --time-zone Europe/Berlin \
+    --window 'Mon-Fri 07:00-18:00' --until nothing-ready
+```
+
+A tick is a child `takt run` that is given this run's arguments without `--every`, `--time-zone`,
+`--window`, `--until`, `--once` and `--outcome-file`, then `--once` and `--outcome-file <tick
+dir>/outcome.json`. It reads no standard input, writes its standard output and error to files, and
+runs in a process group of its own. One tick runs at a time. Each tick is a new `takt run`: nothing
+is kept in the resident process that is not in the files below.
+
+### Slots
+
+- **With windows.** Inside each window the slots are its start and every `every` after it, up to
+  and including its end; a window with no end is one slot. The days are `Mon` to `Sun`, written as
+  a range `Mon-Tue` (which may wrap past `Sun`) or a list `Mon,Wed`; the end is not before the
+  start. The windows repeat weekly. The times are wall-clock in `--time-zone`.
+- **Without a window.** A slot every `every`, counted from the instant the schedule started.
+- **Daylight saving.** A slot in a gap moves to the first valid instant after it; a slot in a fold
+  is taken once, at the earlier instant.
+- **Missed slots.** A slot that is past when the schedule is ready for it, because a tick was still
+  running or the host was suspended, is skipped, never queued: the next tick runs at the first slot
+  that is not past, and the slots skipped before it are counted in its `skipped`.
+
+### Files
+
+Everything is under `<state dir>/schedule/<schedule id>/`, the state directory as
+[The state directory](#the-state-directory) names it. The schedule id is the first 16 hexadecimal
+digits of a SHA-256 over the resolved schedule and the tick's argument list, so the same schedule
+with the same arguments is the same directory.
+
+| file | holds |
+|---|---|
+| `schedule.json` | `takt.schedule/1`: `id`, `resolved` (`every`, `time_zone`, `windows` and `until`, the same however the schedule was given), `anchor` (the instant a schedule without windows counts from), `args` (the tick's arguments), `pid`, `started` |
+| `ticks.jsonl` | one `takt.schedule-tick/1` line per tick: `slot`, `started`, `ended`, `exit`, `outcome` (the path of the tick's outcome file) and `skipped` (the slots skipped before it) |
+| `ticks/<slot>/stdout`, `stderr` | what the tick printed; `<slot>` is the slot in UTC as `YYYYMMDDTHHMMSSZ` |
+| `ticks/<slot>/outcome.json` | the tick's `takt.run-outcome/1` ([below](#the-run-outcome-file)) |
+| `end.json` | `takt.schedule-end/1`, written when the schedule ends: `reason`, `until` (the condition that held, or null), `exit` and `ended` |
+| `lock` | the exclusive lock the running start holds for its life |
+
+A tick's `exit` is the exit code of its process, 128 plus the signal for a tick a signal ended,
+and null when neither is known. `schedule.json` and `end.json` are each written to a new file that
+is renamed over the old one, so a reader finds the old file or the whole new one.
+
+A second start of the same schedule is refused, exit 1, while another start holds its `lock`; it
+reads and writes no other file of the schedule first. The kernel releases the lock when the holding
+process ends, however it ends, so a recorded pid alone blocks nothing: the refusal names the pid
+`schedule.json` records, or says another start holds the lock when it records none yet. A start
+that takes the lock begins again with the same anchor, removes `end.json`, and runs no slot that
+`ticks.jsonl` already holds.
+
+### Stop conditions
+
+`--until` and `until` hold any of:
+
+| condition | holds when |
+|---|---|
+| `nothing-ready` | a tick's outcome file says `frontier: nothing_ready` |
+| `exit:<n>` | a tick exited `n`, 0 to 255 |
+| `outcome:<name>` | a tick's case reached that outcome of its protocol; `name` is letters, digits, `_`, `-` and `.` |
+| `deadline:<RFC 3339 instant>` | no slot falls at or after the instant; the earliest deadline counts |
+
+The conditions are read after each tick, in the order given. The schedule also ends when no slot is
+left: a schedule with windows looks 400 days ahead. A tick that exits 1 or 2, a refusal or a usage
+error, ends it with that exit unless an `exit:<n>` condition holds first; any other tick exit does
+not end it.
+
+`end.json` gives the reason, and the schedule prints `schedule: done (<reason>)` on exit 0 and
+`schedule: ended (<reason>), exit <n>` otherwise:
+
+| `reason` | when | exit |
+|---|---|---|
+| `nothing-ready`, `exit`, `outcome`, `deadline` | the `--until` condition of that kind held | 0 |
+| `no-slot` | no slot is left | 0 |
+| `refused` | a tick exited 1 or 2 | 1 or 2, the tick's |
+| `signal` | SIGTERM or SIGINT, see below | 3 |
+| `error` | the schedule's own error, such as a file it cannot write | 5 |
+
+A run refused before it starts, by the flags, by the run file's `schedule` or by a second start of
+the same schedule, writes no `end.json`: its exit is 1, or 2 for the run file and for flags that do
+not parse.
+
+### Signals
+
+The first SIGTERM or SIGINT starts no further tick. A tick that is running ends on its own, its
+line goes to `ticks.jsonl` with its own exit, and `end.json` gets reason `signal`; the schedule
+exits 3. A signal while it waits for a slot ends it at once, with no tick. Nothing is forwarded to
+the tick, since the tick's process group is its own and a terminal's interrupt reaches the schedule
+alone. Each signal after the first is forwarded to the running tick as SIGTERM.
+
+### The run outcome file
+
+`--outcome-file <FILE>` writes one JSON document, `takt.run-outcome/1`, at the single exit of
+`takt run`, whatever the exit code, a run file's refusal and a command line the argument parser
+refuses (exit 2) included. It is not written for `--help` or `--version`. The document goes to a
+new file beside `FILE` that is renamed over it, so a reader finds the old file or the whole new
+one, and a symbolic link at `FILE` is replaced, not followed. It is how a schedule reads a tick,
+and it is usable on a run that is no schedule.
+
+| member | holds |
+|---|---|
+| `format` | `takt.run-outcome/1` |
+| `exit` | the exit code of the run |
+| `stop` | the stop's kind (`Completed`, `Iterations`, `ApprovalRequired`, and `error` for a run that ended on an error once its case was open), or null |
+| `case` | the id of the case the run opened or resumed, or null |
+| `outcome` | the outcome a case reached when it stopped `Completed`, or null |
+| `frontier` | `nothing_ready` when the frontier had nothing ready, or null |
+| `started`, `ended` | the instants the process began and wrote the file, RFC 3339 |
+
+On a resident run, `--outcome-file` holds the schedule's own `exit` and null for the rest; a tick
+is never given the flag's value, it gets its own file.
+
 ## Every takt run flag
 
 One line each, from `takt run --help` at 0.14.0, and the console flags from `LoopArgs` in
@@ -717,6 +837,22 @@ full text of each, and the [exit codes](./exit-codes.md) are generated from the 
 | `--min-free-gib <GIB>` | stop `DiskLow` under this much free disk; default 10; `0` turns the check off |
 
 How each ends a run: [How a run ends](../concepts/how-a-run-ends.md).
+
+### Schedule
+
+| flag | meaning |
+|---|---|
+| `--every <DURATION>` | stay resident and start one pass, a tick, per slot ([A run on a schedule](#a-run-on-a-schedule)); `DURATION` is whole seconds in `d`, `h`, `m` and `s` (`30m`, `1h30m`), from `1s` to `7d`, a longer one refused; the run file's `schedule.every` gives it too, and the flag wins; with neither, a run is one pass |
+| `--time-zone <ZONE>` | the IANA time zone the `--window` times are wall-clock in, from the tz database bundled in takt; `UTC` when none is given; needs `--every` |
+| `--window <WINDOW>` | a window of slots, `<days> <HH:MM>[-<HH:MM>]`: `Mon-Tue 07:00-22:30`, `Wed 07:30` (one slot), `Mon,Wed 09:00-12:00`; repeatable; needs `--every`; none: a slot every `DURATION` from the start |
+| `--until <CONDITION>` | when the schedule stops: `nothing-ready`, `exit:<n>`, `outcome:<name>` or `deadline:<RFC 3339 instant>`; repeatable; needs `--every` |
+| `--once` | one pass, as without `--every`, and the run file's `schedule` is not read; each tick of a schedule is started with it |
+| `--outcome-file <FILE>` | write what the run ended with to `FILE`, as `takt.run-outcome/1` ([The run outcome file](#the-run-outcome-file)); also without a schedule; standard output stays as it is |
+
+`--time-zone`, `--window` or `--until` with neither `--every` nor a `schedule` in the run file, or
+with `--once`, is refused, exit 1, and nothing starts. A schedule flag that does not parse is
+refused by the argument parser, exit 2. Each of `--window` and `--until` given at all replaces the
+run file's list of that name.
 
 ### Console
 
