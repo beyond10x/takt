@@ -1,6 +1,9 @@
 //! Adversarial cases for `takt run --every` and `--outcome-file` (wave 57,
 //! story:a-run-on-a-schedule), through the binary.
 
+#[path = "../../takt/tests/support/own_home.rs"]
+mod own_home;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

@@ -1947,7 +1947,7 @@ fn resident_run(
             .with_context(|| format!("the tick's directory {}", tick.display()))?;
         let outcome = tick.join("outcome.json");
         let started = Timestamp::now();
-        let mut command = std::process::Command::new(&program);
+        let mut command = takt::confinement::Command::new(&program);
         command
             .args(&args)
             .arg("--once")
@@ -1959,7 +1959,7 @@ fn resident_run(
         // The tick has its own process group, so a terminal's signal reaches the schedule
         // alone, which reads it at its boundary and forwards only a second one.
         #[cfg(unix)]
-        std::os::unix::process::CommandExt::process_group(&mut command, 0);
+        command.process_group(0);
         // A signal since the wait ended still ends the schedule with no tick: read again at
         // the last moment before the child starts.
         if signals::received() > 0 {
