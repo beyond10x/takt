@@ -333,18 +333,24 @@ types:
   # `argv` runs as a process, never through a shell, in the tree, with no credential in its
   # environment, each `{artifacts}` in it replaced by the case's artifacts directory. Its one
   # output file is `writes`, a path relative to `artifacts/` with no empty, `.` or `..` part,
-  # kept there; any other file it writes under the case, or a change in the tree, refuses the
-  # step and is put back, nothing recorded. `evidence` is the kind of the one `canon-evidence/1`
-  # record it writes, about the implementation at the case revision, its result a
-  # takt.work.CommandActionResult. `unchanged_exit` and `done_exit` are optional exit codes from
+  # kept there only as a regular file of its own: one the child leaves as a link, under a link on
+  # its way from `artifacts/`, or as a hard link of another file, is no output of it; that, any
+  # other file it writes under the case, or a change in the tree, refuses the step and is put
+  # back, nothing recorded. The child is held to
+  # a forge program's five minutes and to the run's hour budget (`takt run --hours`): killed when
+  # the budget ends, and what it came to then is not recorded. `evidence` is the kind of the one
+  # `canon-evidence/1` record it writes, about the implementation at the case revision, its result
+  # a takt.work.CommandActionResult. `unchanged_exit` and `done_exit` are optional exit codes from
   # 1 to 255, not the same one. A binding of an action takt's own validators perform, an
   # empty `argv`, another key or a value of another shape is refused at its line when the file is
-  # read, exit 2; a binding of an action the case's protocol does not declare is refused at its
-  # line when the case opens, the case discarded, exit 2.
+  # read, exit 2; a binding of an action the case's protocol does not declare, or whose
+  # `evidence` is a kind the protocol does not list among what that action may produce
+  # (`may_produce`), is refused at its line when the case opens, the case discarded, exit 2.
   # read from: docs/design/scheduled-runs-and-connector-actions.md (§ Command action)
   # read from: .engineering/planning/story/a-command-action.md:37-41
-  # read from: crates/takt/src/command_action.rs:258-262
-  # read from: crates/takt/src/validator.rs:8390-8397
+  # read from: crates/takt/src/command_action.rs:254-261
+  # read from: crates/takt/src/command_action.rs:262-263
+  # read from: crates/takt/src/validator.rs:8405-8413
   - name: takt.work.CommandAction
     kind: struct
     fields:
@@ -363,7 +369,7 @@ types:
   # `unchanged` on the declared `unchanged_exit`, `done` on the declared `done_exit`, `fail` on any
   # other exit or a signal. A protocol's claim reads it as any other result.
   # read from: docs/design/scheduled-runs-and-connector-actions.md (§ Command action)
-  # read from: crates/takt/src/command_action.rs:213-220
+  # read from: crates/takt/src/command_action.rs:218-225
   - name: takt.work.CommandActionResult
     kind: enum
     variants: [pass, unchanged, done, fail]
@@ -6409,9 +6415,9 @@ entities:
   # read from: docs/design/takt.md:86-88
   # read from: crates/takt/src/forge.rs:1729-1810
   # read from: crates/takt/src/validator.rs:1429-1449
-  # read from: crates/takt/src/validator.rs:8410-8433
+  # read from: crates/takt/src/validator.rs:8427-8450
   # read from: crates/takt/src/git.rs:3383-3387
-  # read from: crates/takt/src/validator.rs:8523-8633
+  # read from: crates/takt/src/validator.rs:8540-8650
   # read from: crates/takt/src/git.rs:4054-4061
   # read from: crates/takt/src/validator.rs:2293-2301
   # read from: crates/takt/src/run.rs:12414-12437
@@ -6473,9 +6479,9 @@ entities:
   # read from: crates/takt/src/run.rs:6366-6414
   # read from: crates/takt/src/run.rs:6445-6448
   # read from: crates/takt/src/run.rs:3833-3840
-  # read from: crates/takt/src/validator.rs:8424-8431
-  # read from: crates/takt/src/validator.rs:8444-8501
-  # read from: crates/takt/src/validator.rs:8643-8664
+  # read from: crates/takt/src/validator.rs:8441-8448
+  # read from: crates/takt/src/validator.rs:8477-8518
+  # read from: crates/takt/src/validator.rs:8660-8681
   # read from: crates/takt/src/git.rs:3414-3477
   # read from: crates/takt/src/run.rs:14578-14587
   # read from: crates/takt/src/run.rs:14592-14637
