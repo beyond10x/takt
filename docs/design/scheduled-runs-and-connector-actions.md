@@ -51,7 +51,7 @@ until = ["nothing-ready", "deadline:2026-11-19T00:00:00+01:00"]
 
 A run-file key is a flag first (§ 2), so each key of `schedule` is a flag of `takt run`.
 
-- `--every <duration>` turns `takt run` resident. Without it nothing changes: one pass, as today.
+- `--every <duration>` turns `takt run` resident; a duration is whole seconds in `d`, `h`, `m` and `s`, from `1s` to `7d`. Without it nothing changes: one pass, as today.
 - **Slots.** Inside each window, the window's start and every `every` after it up to and including its end; a window with no end (`Wed 07:30`) is one slot. Days are `Mon` to `Sun`, a range `Mon-Tue` or a list `Mon,Wed`. With no window, a slot falls every `every` from the start.
 - **Time.** Times are wall-clock in `time_zone`, an IANA name resolved by the bundled tz database, so the container needs no tzdata. A slot in a DST gap moves forward to the first valid instant; one in a DST fold is taken once, the earlier.
 - **A tick** is one child `takt run` process: the same argument list with the schedule flags removed and `--once` added (`--once` also ignores the run file's `schedule`), and `--outcome-file <tick dir>/outcome.json`. One tick runs at a time. A tick still running at its next slot skips that slot, which is counted and never queued. After a suspend the missed slots run once, not one each. Crash isolation and the per-tick exit code come from the child process.
@@ -80,6 +80,7 @@ Under `<state dir>/schedule/<schedule id>/`, the schedule id being a digest of t
 | `ticks.jsonl` | one `takt.schedule-tick/1` line per tick: slot, started, ended, exit, outcome path, skipped slots before it |
 | `ticks/<slot>/stdout`, `stderr`, `outcome.json` | what the tick wrote |
 | `end.json` | when the schedule ends: reason, exit |
+| `lock` | the exclusive lock the running start holds |
 
 A later orchestrator reads files and the exit code only. The resident process exits:
 
@@ -90,7 +91,7 @@ A later orchestrator reads files and the exit code only. The resident process ex
 | 5 | its own error |
 | 3 | SIGTERM or SIGINT: no further tick starts, the running tick ends on its own, the schedule writes `end.json` with reason `signal` and exits 3 (stopped, as a budget stop). Nothing is forwarded to the tick, as `design:continuous-orchestration` § 5 reads a pause at a boundary; a second signal is forwarded |
 
-A second start of the same schedule while `schedule.json` names a live pid is refused, exit 1, naming the pid. After a dead pid or an `end.json`, it starts again, rebuilt from the files: it runs no slot that `ticks.jsonl` already holds.
+A second start of the same schedule while another start holds the schedule's `lock` (an exclusive lock on `<schedule id>/lock`, held for the life of the running start and released by the kernel when that process ends) is refused, exit 1, naming the pid `schedule.json` records. A recorded pid alone blocks nothing. A start that takes the lock begins again, rebuilt from the files, and removes an earlier `end.json`: it runs no slot that `ticks.jsonl` already holds.
 
 ### Fit with the orchestration design
 
