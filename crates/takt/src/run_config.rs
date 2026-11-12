@@ -332,6 +332,20 @@ pub struct RunConfig {
     /// the file.
     #[serde(skip)]
     pub command_actions: Option<crate::command_action::CommandActions>,
+    /// The `connectors` member as written, which [`RunConfig::read`] checks into
+    /// [`RunConfig::connector_actions`] or refuses at its line ([`MemberRefused`]).
+    #[serde(rename = "connectors", default, deserialize_with = "written")]
+    connectors_member: Option<serde_yaml_ng::Value>,
+    /// The `connector_actions` member as written, which [`RunConfig::read`] checks into
+    /// [`RunConfig::connector_actions`] or refuses at its line ([`MemberRefused`]).
+    #[serde(rename = "connector_actions", default, deserialize_with = "written")]
+    connector_actions_member: Option<serde_yaml_ng::Value>,
+    /// The served instance `connectors` names (`takt.work.ConnectorsEndpoint`) and the protocol
+    /// actions `connector_actions` binds to its operations (`takt.work.ConnectorAction`), each
+    /// binding with its line ([`crate::connector_action`]); `None` without `connectors`. Set by
+    /// [`RunConfig::read`], never read from the file.
+    #[serde(skip)]
+    pub connector_actions: Option<crate::connector_action::ConnectorActions>,
 }
 
 /// What a run file says about the forge beyond its name: the commands, the transport and the
@@ -1215,7 +1229,7 @@ fn session_request(path: &Path, mapping: &serde_yaml_ng::Mapping) -> Result<Sess
     Ok(request)
 }
 
-const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, `schedule`, a mapping of a schedule's every, time zone, windows and stop conditions, `command_actions`, a mapping of a protocol action to an argv, the one file it writes under artifacts, the evidence kind it produces and its unchanged and done exits, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
+const SHAPE: &str = "a run configuration file holds `iterations` and `hours`, numbers, `tokens`, a whole number above zero, `story`, `harness`, `model`, `endpoint_file`, `endpoint_token_env`, `forge`, `forge_instance`, `forge_endpoint`, `test_cmd`, `state_dir`, `records` and `protocol`, strings, `continue_past_red_base`, a boolean, `scan`, `none`, `llm`, an `llm.routes/1` document or `{path: <file>}`, `transport`, glab or api, `credential`, a mapping naming an env variable or a file, `forge_commands`, a mapping of argument lists, `local_checks`, an argument list, `setup`, a list of commands each with a name and an argv, `work`, a list of work source names, `work_commands`, a mapping of argument lists, `deployment_paths`, a list of the paths the deployment keeps in the tree, `schedule`, a mapping of a schedule's every, time zone, windows and stop conditions, `command_actions`, a mapping of a protocol action to an argv, the one file it writes under artifacts, the evidence kind it produces and its unchanged and done exits, `connectors`, a mapping of a served Connectors instance's endpoint and instance, `connector_actions`, a mapping of a protocol action to the operation it invokes, its input and the evidence kind it produces, and `protocols`, a mapping of a protocol to its declared inputs, each optional; `records` is `default` or `trial`";
 
 /// The largest file the `llm` member may name by path, in bytes; a larger one is refused before it is read.
 const LLM_DOCUMENT_BOUND: u64 = 2 * 1024 * 1024;
@@ -1904,6 +1918,49 @@ impl RunConfig {
                     }));
                 }
             }
+        }
+        let connectors_member = config.connectors_member.take();
+        let connector_actions_member = config.connector_actions_member.take();
+        if connectors_member.is_some() || connector_actions_member.is_some() {
+            let toml = extension == Some("toml");
+            let line_of = |keys: &[&str]| {
+                (1..=keys.len()).rev().find_map(|depth| {
+                    let under_takt: Vec<&str> = std::iter::once("takt")
+                        .chain(keys[..depth].iter().copied())
+                        .collect();
+                    locate(text, toml, &keys[..depth]).or_else(|| locate(text, toml, &under_takt))
+                })
+            };
+            let refused = |refusal: crate::connector_action::Refusal| {
+                let keys: Vec<&str> = refusal.keys.iter().map(String::as_str).collect();
+                anyhow::Error::new(MemberRefused {
+                    path: path.to_owned(),
+                    line: line_of(&keys).unwrap_or(1),
+                    member: refusal.member,
+                    rule: refusal.rule,
+                })
+            };
+            let connectors = connectors_member
+                .as_ref()
+                .map(crate::connector_action::read_connectors)
+                .transpose()
+                .map_err(refused)?;
+            let mut bindings = match &connector_actions_member {
+                Some(member) => {
+                    crate::connector_action::read(member, connectors.is_some()).map_err(refused)?
+                }
+                None => Vec::new(),
+            };
+            for binding in &mut bindings {
+                binding.line =
+                    line_of(&[crate::connector_action::MEMBER, &binding.action]).unwrap_or(1);
+            }
+            config.connector_actions =
+                connectors.map(|connectors| crate::connector_action::ConnectorActions {
+                    file: path.to_owned(),
+                    connectors,
+                    bindings,
+                });
         }
         if let Some(endpoint) = &config.forge_endpoint
             && let Err(rule) = crate::forge::connectors::check_endpoint(endpoint)

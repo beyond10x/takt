@@ -65,7 +65,9 @@ small = "lab/small"
 /// beside it (story:llm-section-is-an-llm-routes-document). `local_checks` takes an argument
 /// list (story:local-forge-merges-into-a-target-branch). `work` takes a list of work sources
 /// (story:work-flag-and-the-aep-source). `work_commands` takes a mapping holding `read`
-/// (story:the-command-work-source).
+/// (story:the-command-work-source). `connectors` takes a mapping of an endpoint and an instance,
+/// and `connector_actions` an empty mapping, which needs no `connectors`
+/// (story:a-connector-read-action).
 fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
     fs::write(dir.join("llm-probe.toml"), PROBE_LLM).expect("a probe document beside the probe");
     [
@@ -90,6 +92,8 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "{ read = [\"true\"] }",
         "{ every = \"30m\" }",
         "{ \"x.render\" = { argv = [\"true\"], writes = \"f\", evidence = \"k\" } }",
+        "{ endpoint = \"http://127.0.0.1:8402\", instance = \"chat/team\" }",
+        "{}",
     ]
     .into_iter()
     .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())

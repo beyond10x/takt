@@ -8293,7 +8293,8 @@ pub fn is_built_in_kind(kind: &str) -> bool {
 }
 
 /// Where the run file binds a validator to a protocol action by the action's id: the file, the
-/// member that holds the binding (`command_actions`) and the line the binding's key is written on.
+/// member that holds the binding (`command_actions`, `connector_actions`) and the line the
+/// binding's key is written on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunFileBinding {
     /// The run file.
