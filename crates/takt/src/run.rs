@@ -10277,6 +10277,12 @@ impl<'a> Run<'a> {
     ) -> Result<Self> {
         let set_aside = opening_set_aside_given(tree, set_aside)?;
         let case = CaseDir::resume(tree, id)?;
+        // A binding of this run's run file is checked against the protocol the case pinned as
+        // the open checks it ([`Validator::check_at_resume`]): one the open would refuse
+        // refuses the resume at its line, before any step.
+        for validator in validators {
+            validator.check_at_resume(tree, &case.dir)?;
+        }
         let intent = case.intent()?;
         let unit = match case.story()? {
             Some(story) => {

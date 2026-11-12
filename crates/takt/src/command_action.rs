@@ -245,6 +245,24 @@ impl CommandAction {
     ) -> Result<Observation> {
         self.disowned.set(false);
         let case = crate::case::current(tree)?;
+        // Whoever calls it, a command action records no kind its action may not produce in the
+        // protocol the case pinned: such a kind, or no protocol to read it from, runs nothing and
+        // records nothing.
+        let produced = crate::validator::produces_kind(&case, self.action(), self.kind());
+        if !matches!(produced, Ok(true)) {
+            let why = produced.map_or_else(
+                |error| format!("{error:#}"),
+                |_| {
+                    "the case's protocol does not list it among what the action may produce"
+                        .to_owned()
+                },
+            );
+            anyhow::bail!(
+                "{}: no `{}` record is made, nothing is run: {why}",
+                self.action(),
+                self.kind()
+            );
+        }
         let artifacts = case.join("artifacts");
         let file = artifacts.join(&self.binding.writes);
         if let Some(parent) = file.parent() {
@@ -418,6 +436,81 @@ mod tests {
             action.writes(),
             [PathBuf::from("artifacts/status/publish.json")]
         );
+    }
+
+    /// A scratch directory under the temporary directory, removed when dropped.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A committed tree on the branch of the case `c1`, its `case.yaml` there and `protocol` as
+    /// its pinned `protocol.yaml`, none when `None`: the tree and the case's directory.
+    fn case_tree(name: &str, protocol: Option<&str>) -> (Scratch, PathBuf) {
+        let tree =
+            std::env::temp_dir().join(format!("takt-command-action-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tree);
+        std::fs::create_dir_all(&tree).expect("a scratch tree");
+        let scratch = Scratch(tree.clone());
+        let git = |args: &[&str]| {
+            let config = [
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@localhost",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "core.hooksPath=/dev/null",
+            ];
+            let args: Vec<&str> = config.iter().chain(args).copied().collect();
+            crate::git::run(&tree, &args).expect("git runs");
+        };
+        git(&["init", "-q", "-b", "takt/c1"]);
+        std::fs::write(tree.join("act.sh"), "echo ran > ran.txt\n").expect("the script");
+        git(&["add", "-A"]);
+        git(&["commit", "-q", "-m", "start"]);
+        let case = crate::case::CaseDir::locate(&tree, "c1");
+        std::fs::create_dir_all(&case).expect("the case directory");
+        std::fs::write(case.join("case.yaml"), "id: c1\n").expect("case.yaml");
+        if let Some(protocol) = protocol {
+            std::fs::write(case.join("protocol.yaml"), protocol).expect("protocol.yaml");
+        }
+        (scratch, case)
+    }
+
+    /// Whoever calls it, an observation records no kind its action may not produce in the
+    /// protocol the case pinned, and none when the case pins no protocol: nothing is run and the
+    /// observation is an error, so no record is made.
+    #[test]
+    fn an_observation_records_no_kind_its_action_may_not_produce() {
+        let protocol = "actions:\n  status.render:\n    may_produce:\n      - evidence: status_rendered\n  tests.run:\n    may_produce:\n      - evidence: test_result\nevidence_kinds:\n  status_rendered: {}\n  test_result: {}\n";
+        for (name, pinned) in [("unproduced", Some(protocol)), ("unpinned", None)] {
+            let (scratch, case) = case_tree(name, pinned);
+            let action = CommandAction::new(Binding {
+                action: "status.render".to_owned(),
+                argv: vec!["sh".to_owned(), "act.sh".to_owned()],
+                writes: PathBuf::from("status/out.txt"),
+                evidence: "test_result".to_owned(),
+                unchanged_exit: None,
+                done_exit: None,
+                line: 2,
+            });
+            let observed = action.observe(&scratch.0, "HEAD", 1);
+            assert!(
+                observed.is_err(),
+                "{name}: an observation of a kind status.render may not produce: {:?}",
+                observed.map(|observation| observation.records)
+            );
+            assert!(!scratch.0.join("ran.txt").exists(), "{name}: the argv ran");
+            assert!(
+                !case.join("artifacts/status/out.txt").exists(),
+                "{name}: an output was written"
+            );
+        }
     }
 
     #[test]

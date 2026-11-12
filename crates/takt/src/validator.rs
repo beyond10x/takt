@@ -166,6 +166,14 @@ pub trait Validator {
         let _ = (tree, case_dir);
         Ok(())
     }
+    /// Checks, when the case at `case_dir` in `tree` is resumed, what of
+    /// [`Self::check_at_open`] the run file's configuration can change since the case opened:
+    /// a refusal is the error, and nothing is resumed. Nothing to check by default; a binding
+    /// of the run file ([`RunFileBound`]) checks what it checks at open.
+    fn check_at_resume(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        let _ = (tree, case_dir);
+        Ok(())
+    }
     /// Why the owner's record does not let the agent role `role` grant this validator's action
     /// for the case in `tree` at `revision`, read where the validator reads whose grant it
     /// takes; `None` when it does. The run asks before it writes a grant as that role itself
@@ -8301,8 +8309,9 @@ pub struct RunFileBinding {
 /// protocol does not declare ([`UNDECLARED_RULE`]), or whose validator's evidence kind the
 /// protocol does not list among what that action may produce ([`UNPRODUCED_RULE`]), refuses the
 /// run at the binding's line
-/// ([`crate::run_config::MemberRefused`], exit 2), the case discarded; otherwise it performs as
-/// the validator it wraps.
+/// ([`crate::run_config::MemberRefused`], exit 2), the case discarded; when a case is resumed it
+/// refuses the resume the same way, nothing resumed; otherwise it performs as the validator it
+/// wraps.
 pub struct RunFileBound {
     validator: Box<dyn Validator>,
     binding: RunFileBinding,
@@ -8414,6 +8423,11 @@ impl Validator for RunFileBound {
         }
         self.validator.check_at_open(tree, case_dir)
     }
+    /// The run file is read again on each run, so a resumed case meets a binding its open never
+    /// checked: it is checked as at open, refused at its line.
+    fn check_at_resume(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        self.check_at_open(tree, case_dir)
+    }
     fn delegation_refusal(
         &self,
         tree: &Path,
@@ -8475,8 +8489,9 @@ fn protocol_has_action(case_dir: &Path, action: &str) -> Result<bool> {
 }
 
 /// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
-/// evidence kind `kind` and lists it among what `action` may produce.
-fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
+/// evidence kind `kind` and lists it among what `action` may produce. A case with no
+/// `protocol.yaml` is an error.
+pub(crate) fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
     let path = case_dir.join("protocol.yaml");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;

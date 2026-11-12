@@ -253,6 +253,93 @@ fn a_binding_writes_no_record_of_a_kind_its_action_may_not_produce() {
     );
 }
 
+/// The built `takt run --case <id>` resuming the case `case`, no harness, no forge, the run file
+/// `config`: exit code, stdout, stderr.
+fn resume(scratch: &Scratch, config: &Path, test_cmd: &str, case: &str) -> (i32, String, String) {
+    let output = Command::new(env!("CARGO_BIN_EXE_takt"))
+        .args(["run", "--repo"])
+        .arg(scratch.tree())
+        .args([
+            "--harness",
+            "none",
+            "--forge",
+            "none",
+            "--iterations",
+            "3",
+            "--test-cmd",
+            test_cmd,
+            "--case",
+            case,
+        ])
+        .arg("--config")
+        .arg(config)
+        .arg("--state-dir")
+        .arg(scratch.state())
+        .output()
+        .expect("takt runs");
+    (
+        output.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&output.stdout).into_owned(),
+        String::from_utf8_lossy(&output.stderr).into_owned(),
+    )
+}
+
+/// A case opened with no binding is resumed with a binding whose `evidence` is a kind its action
+/// may not produce, the kind the built-in `tests.run` writes. The specification
+/// (`takt.work.CommandAction`): such a binding is refused at its line when the case opens and
+/// when it is resumed, exit 2, and each observation checks the kind again; with the test command
+/// `false` the case must not complete on `tests.pass`, and no command action records a
+/// `test_result`.
+#[test]
+fn a_resumed_case_records_no_kind_its_action_may_not_produce() {
+    let scratch = scratch("resume-forged-kind", TESTS_AFTER_RENDER, WRITE_AND_PASS);
+    let clean = scratch.0.join("clean.yaml");
+    fs::write(&clean, "iterations: 3\n").expect("the clean run file");
+    let (code, out, err) = run(&scratch, &clean, "false", &[]);
+    let opened = cases(&scratch.tree());
+    assert_eq!(
+        opened.len(),
+        1,
+        "one case is opened\nexit {code}\nstdout {out}\nstderr {err}"
+    );
+    let id = opened[0]
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("a case id")
+        .to_owned();
+    let forged = scratch.0.join("forged.yaml");
+    fs::write(
+        &forged,
+        "command_actions:\n  status.render:\n    argv: [sh, act.sh, \"{artifacts}\"]\n    writes: status/out.txt\n    evidence: test_result\n",
+    )
+    .expect("the forged run file");
+    let (code, out, err) = resume(&scratch, &forged, "false", &id);
+    let recorded: Vec<serde_json::Value> = records(&opened[0])
+        .into_iter()
+        .filter(|record| {
+            record["producer"]
+                .as_str()
+                .is_some_and(|producer| producer.contains("command-action"))
+        })
+        .collect();
+    assert!(
+        recorded.is_empty(),
+        "a resumed command action recorded what status.render's may_produce does not name: {recorded:?}\nexit {code}\nstdout {out}\nstderr {err}"
+    );
+    assert!(
+        !out.contains("Completed (tested)"),
+        "the resumed case completed on tests.pass with the test command `false`\nstdout {out}\nstderr {err}"
+    );
+    assert_eq!(code, 2, "stdout {out}\nstderr {err}");
+    assert!(
+        err.contains(&format!(
+            "the run configuration file {} is refused at line 2",
+            forged.display()
+        )) && err.contains("may produce"),
+        "{err}"
+    );
+}
+
 /// The child leaves its declared output as a link to a file outside the tree. The story: "its
 /// one output file is the declared `writes`, kept under `artifacts/`"; what it left is no file
 /// under `artifacts/`, and the next consumer of it (a write action's `input_from`) reads where it
