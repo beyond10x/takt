@@ -1,7 +1,7 @@
 # Wave 58: a command action
 
 Stage: **in review**. `wave/58` branches from `wave/57` at f4616dbd while pull request 65 waits for its grant, and
-merges `wave/57` at dabcd934 (its CI fix) as 1160b381. Approved: approval-record:wave-58-command-action.
+merges `wave/57` at dabcd934 (its CI fix) as 1160b381, and `main` at 2c1a3a31 (pull request 65) as 33066b1a. Approved: approval-record:wave-58-command-action.
 
 ## Selection
 
@@ -43,16 +43,23 @@ and one note. The specification of the fixes is 794de514, the fixes a81a3d3e:
 - The reference said "those eleven" of twelve fields.
 - Note: `takt scenario run` checks `command_actions` and applies none; the reference now says so.
 
-Tests after the fixes and the merge of `wave/57`, each command run package-scoped:
+The reviewer's confirm at d326c51d (review-result:w58-adv-2) found one more defect, introduced in this wave: the
+kind check ran only when a case opened, so `takt run --case` with a binding of another action's kind still recorded
+`test_result pass`. The specification is a2865232, the fix 7eaa28ca: a resumed case runs the bound validators' open
+checks and refuses exit 2, and the command action checks the kind against the case's pinned protocol at each
+observation, before it runs anything.
+
+Tests after the second fix round, each command run package-scoped:
 
 | command | result |
 |---|---|
 | `cargo test -p b10x-takt-cli --test command_action_cli` | 6 passed |
-| `cargo test -p b10x-takt-cli --test w58_adv_command_action_cli` | 3 passed |
+| `cargo test -p b10x-takt-cli --test w58_adv_command_action_cli` | 4 passed |
 | `cargo test -p b10x-takt --test w58_adv_command_action` | 1 passed |
-| `cargo test -p b10x-takt --lib` | 266 passed |
+| `cargo test -p b10x-takt --lib` | 267 passed |
+| `cargo test -p b10x-takt --test confinement --test effects --test tests_have_a_home_of_their_own` | 22, 7 and 4 passed |
 | `cargo clippy -p b10x-takt -p b10x-takt-cli --all-targets -- -D warnings` | exit 0 |
-| `scripts/check-citations --require-digests` | 1604 resolved, 0 unresolved |
+| `scripts/check-citations --require-digests` | 1607 resolved, 0 unresolved |
 
 ## Gate
 
@@ -66,4 +73,4 @@ path into a case. They write no record; both are now listed in its `EVIDENCE_LIN
 ## Close
 
 After the merge, a store-only close moves story:a-command-action to `implemented` with the CI run as its
-`test_result`. It rides with wave 59, together with wave 57's close.
+`test_result`. It rides with wave 59. Wave 57's close rides with this wave (3ccfd674).
