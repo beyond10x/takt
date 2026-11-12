@@ -150,9 +150,13 @@ by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
   command run on that tree; a figure nobody computed is left out.
 - This repository is public. Committed text names no private repository, session or decision id,
   host detail or person.
-- Spec first: a story that introduces a noun declares it in `ess/` before code builds on it,
-  checked with `ess specify validate --path ess`; every `read from:` citation there names the
-  line that says it.
+- Spec first, for every change (owner, 2026-11-12): any change to takt's behaviour, its run file,
+  its flags, its records or its nouns edits `ess/` first, and the code follows the specification.
+  This holds for a story, a fix round and a fix of under 20 lines alike. A story that introduces a
+  noun declares it in `ess/` before code builds on it. Each change is checked with
+  `ess specify validate --path ess`, and every `read from:` citation there names the line that
+  says it. An implementor's brief names `ess/domains/takt.yaml` in its Scope whenever the change
+  is to behaviour.
 
 ## Roles
 
