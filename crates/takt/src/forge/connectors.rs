@@ -15,8 +15,9 @@
 //! the revision `invoke … --describe` reported for the operation at the preflight. With
 //! `forge_endpoint`, the URL of a served Connectors instance ([`check_endpoint`]), each operation
 //! is one `POST /v1alpha2/invoke` there after one `GET /v1/describe`, and no `connectors` line
-//! runs. No `Authorization` header and no credential of any kind goes with a served call: takt
-//! holds none, the instance holds the provider's.
+//! runs. The served route is takt's one client of a served instance
+//! ([`crate::connectors_client`]). No `Authorization` header and no credential of any kind goes
+//! with a served call: takt holds none, the instance holds the provider's.
 //!
 //! The `gitlab` connector's operations take the project's path from `origin`:
 //!
@@ -85,11 +86,17 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
-use std::time::Duration;
 
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
 
+use crate::connectors_client::{
+    Client, Record, bounded, not_applied, record_refusals, refusals_in,
+};
+pub use crate::connectors_client::{
+    DESCRIBE_PATH, INVOKE_PATH, KEY_PREFIX, ServedRefused, check_endpoint, idempotency_key,
+    is_error_envelope,
+};
 use crate::git::{NO_REDIRECT, RemoteTransport};
 use crate::run_config::ForgeSettings;
 use crate::scan::Scan;
@@ -135,75 +142,14 @@ const PULL_MERGE: &str = GITHUB[3];
 const CHECK_RUNS: &str = GITHUB[4];
 const STATUS: &str = GITHUB[5];
 
-/// The path of the served wire's description.
-pub const DESCRIBE_PATH: &str = "/v1/describe";
-
-/// The path of the served wire's invocation.
-pub const INVOKE_PATH: &str = "/v1alpha2/invoke";
-
 /// The most pages of a listing read, so a listing that never ends is an error.
 const PAGES: usize = 50;
 
 /// The check runs one page of `check_runs.list` asks for.
 const PER_PAGE: usize = 100;
 
-/// The most bytes of a failed line's standard error, or of a served error's message, kept in
-/// the error.
-const STDERR_BYTES: usize = 600;
-
-/// The most bytes of one served answer that are read.
-const ANSWER_LIMIT: usize = 16 << 20;
-
-/// How long a served call may take, whole.
-const CALL_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// How long a connection to the served instance may take to be made.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// The longest word of a target, as Connectors admits one.
 const WORD_BYTES: usize = 128;
-
-/// What every `idempotency_key` the forge sends begins with.
-pub const KEY_PREFIX: &str = "takt-";
-
-/// What the digest of an `idempotency_key` is taken over first, so a change to what goes into it
-/// is a new name and never a key reused for another write.
-const KEY_DOMAIN: &str = "takt.connectors.write/2";
-
-/// The `idempotency_key` of the write `operation` on `input` at the descriptor revision
-/// `revision` for the case `case`, after the provider refused that same write at that revision
-/// `refused` times: [`KEY_PREFIX`] and the lowercase hex SHA-256 of a JSON array of
-/// [`KEY_DOMAIN`], the case, the operation, the revision, the input and `refused`. The host holds
-/// a key for the operation, revision and input it was first sent with, so a write sent at
-/// another revision goes under another key, never meeting `idempotency_conflict`. 69 ASCII
-/// bytes, inside the 1 to 256 bytes connectors admits; the same arguments always give the same
-/// key, and any other argument another.
-#[must_use]
-pub fn idempotency_key(
-    case: &str,
-    operation: &str,
-    revision: &str,
-    input: &Value,
-    refused: u32,
-) -> String {
-    use sha2::{Digest as _, Sha256};
-    let named = json!([KEY_DOMAIN, case, operation, revision, input, refused]);
-    let digest = Sha256::digest(named.to_string().as_bytes());
-    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
-    format!("{KEY_PREFIX}{hex}")
-}
-
-/// What the file of a case's refused writes ([`ConnectorsForge::REFUSALS`]) names itself by.
-const REFUSALS_FORMAT: &str = "takt.connectors.refusals/1";
-
-/// Whether a write's `mutation.classification` says it was not applied: the provider refused it
-/// (`refused`), or its attempt never crossed the dispatch gate (`not_attempted`, an aborted
-/// attempt's replay among them). Only then is the write sent again under a new key; `applied`,
-/// `unknown` and an answer with no classification keep the key, so a write that may have been
-/// made is replayed and never made twice.
-fn not_applied(classification: Option<&str>) -> bool {
-    matches!(classification, Some("refused" | "not_attempted"))
-}
 
 /// The outcome class of `error`, the failure of a write sent through the instance: on the
 /// served route what its answer says ([`ServedRefused`]): `outcome_unknown` is `unknown`, a
@@ -247,173 +193,6 @@ fn write_failure(error: anyhow::Error) -> WriteError {
         }
         _ => super::run_failure(error),
     }
-}
-
-/// The most bytes of a case's refusal record ([`ConnectorsForge::REFUSALS`]) that are read.
-const REFUSALS_LIMIT: u64 = 64 << 10;
-
-/// How many times the provider refused each write of the case whose artifacts directory is
-/// `dir`, by the write's first key: what [`ConnectorsForge::REFUSALS`] holds there, empty when
-/// nothing is there. A file that is not one is an error, never a count of zero: the record is
-/// opened without following a link at it (`O_NOFOLLOW`) or waiting on it (`O_NONBLOCK`), must be
-/// a regular file of at most [`REFUSALS_LIMIT`] bytes, its `refused` must be an object of
-/// non-negative integer counts, and its `unknown`, when there, an object of keys each naming a
-/// fresh key or null ([`Record::unknown`]).
-fn refusals_in(dir: &Path) -> Result<Record> {
-    use std::io::Read as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    let path = dir.join(ConnectorsForge::REFUSALS);
-    let file = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&path)
-    {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
-        Err(error) if error.raw_os_error() == Some(libc::ELOOP) => bail!(
-            "{} is a link, and a refusal record is never read through one; nothing was sent",
-            path.display()
-        ),
-        Err(error) => {
-            return Err(error)
-                .with_context(|| format!("read {}; nothing was sent", path.display()));
-        }
-    };
-    let meta = file
-        .metadata()
-        .with_context(|| format!("read {}; nothing was sent", path.display()))?;
-    if !meta.is_file() {
-        bail!("{} is not a regular file; nothing was sent", path.display());
-    }
-    let mut bytes = Vec::new();
-    file.take(REFUSALS_LIMIT + 1)
-        .read_to_end(&mut bytes)
-        .with_context(|| format!("read {}; nothing was sent", path.display()))?;
-    if bytes.len() as u64 > REFUSALS_LIMIT {
-        bail!(
-            "{} is longer than {REFUSALS_LIMIT} bytes; nothing was sent",
-            path.display()
-        );
-    }
-    let document: Value = serde_json::from_slice(&bytes)
-        .with_context(|| format!("{} is not JSON; nothing was sent", path.display()))?;
-    if document["format"] != REFUSALS_FORMAT {
-        bail!(
-            "{} is no {REFUSALS_FORMAT} document; nothing was sent",
-            path.display()
-        );
-    }
-    let Some(refused) = document["refused"].as_object() else {
-        bail!(
-            "{} holds no object of counts at `refused`; nothing was sent",
-            path.display()
-        );
-    };
-    let refused = refused
-        .iter()
-        .map(|(key, count)| {
-            let count = count
-                .as_u64()
-                .and_then(|count| u32::try_from(count).ok())
-                .ok_or_else(|| {
-                    anyhow!(
-                        "{} counts {key} as no number of refusals; nothing was sent",
-                        path.display()
-                    )
-                })?;
-            Ok((key.clone(), count))
-        })
-        .collect::<Result<_>>()?;
-    let unknown = match document.get("unknown") {
-        None => BTreeMap::new(),
-        Some(Value::Object(unknown)) => unknown
-            .iter()
-            .map(|(key, fresh)| match fresh {
-                _ if !is_key(key) => Err(anyhow!(
-                    "{} names {key:?} at `unknown`, which is no key takt takes; nothing was sent",
-                    path.display()
-                )),
-                Value::Null => Ok((key.clone(), None)),
-                Value::String(fresh) if is_key(fresh) => Ok((key.clone(), Some(fresh.clone()))),
-                _ => Err(anyhow!(
-                    "{} names no fresh key or null for {key} at `unknown`; nothing was sent",
-                    path.display()
-                )),
-            })
-            .collect::<Result<_>>()?,
-        Some(_) => bail!(
-            "{} holds no object of keys at `unknown`; nothing was sent",
-            path.display()
-        ),
-    };
-    Ok(Record { refused, unknown })
-}
-
-/// Whether `text` has the form of a key [`idempotency_key`] makes: `takt-` and 64 lowercase
-/// hexadecimal digits.
-fn is_key(text: &str) -> bool {
-    text.strip_prefix("takt-").is_some_and(|digest| {
-        digest.len() == 64
-            && digest
-                .bytes()
-                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-    })
-}
-
-/// What a case's refusal record ([`ConnectorsForge::REFUSALS`]) holds.
-#[derive(Debug, Default)]
-struct Record {
-    /// How many times each write at a revision was not applied, by its first key.
-    refused: BTreeMap<String, u32>,
-    /// Each key a merge was answered `outcome_unknown` under, with the fresh key taken after
-    /// the pull request read open and unmerged at the head that merge named, `None` until one is.
-    unknown: BTreeMap<String, Option<String>>,
-}
-
-/// Writes `record` into the case's artifacts directory `dir` ([`ConnectorsForge::REFUSALS`])
-/// through a file beside it renamed over it, so a later process reads the old count or the new
-/// one, never a part. That file is made new (`O_EXCL`) without following a link at its name
-/// (`O_NOFOLLOW`); whatever a stale one left there, a link among them, is removed first, never
-/// written through.
-fn record_refusals(dir: &Path, record: &Record) -> Result<()> {
-    use std::io::Write as _;
-    use std::os::unix::fs::OpenOptionsExt as _;
-    std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    let path = dir.join(ConnectorsForge::REFUSALS);
-    let partial = dir.join(format!(
-        ".{}.{}.partial",
-        ConnectorsForge::REFUSALS,
-        std::process::id()
-    ));
-    let mut document = json!({"format": REFUSALS_FORMAT, "refused": record.refused});
-    if !record.unknown.is_empty() {
-        document["unknown"] = json!(record.unknown);
-    }
-    let bytes = serde_json::to_vec_pretty(&document)?;
-    let create = || {
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o644)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&partial)
-    };
-    let mut file = match create() {
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            std::fs::remove_file(&partial)
-                .with_context(|| format!("remove the stale {}", partial.display()))?;
-            create()
-        }
-        opened => opened,
-    }
-    .with_context(|| format!("create {}", partial.display()))?;
-    let written = file.write_all(&bytes).and_then(|()| file.sync_all());
-    drop(file);
-    if let Err(error) = written {
-        let _ = std::fs::remove_file(&partial);
-        return Err(error).with_context(|| format!("write {}", partial.display()));
-    }
-    std::fs::rename(&partial, &path).with_context(|| format!("write {}", path.display()))
 }
 
 /// The case whose artifacts directory is `dir` (`<case directory>/artifacts`, as the validators
@@ -493,42 +272,6 @@ pub fn target_of(text: &str) -> Option<(Connector, Option<&str>)> {
         return None;
     }
     Some((Connector::named(connector)?, instance))
-}
-
-/// Whether `url` is an endpoint the forge calls, and if so whether its host is a loopback host:
-/// `https://<host>[:<port>][/<prefix>]`, or `http://` to a loopback host alone (`localhost`,
-/// `127.0.0.0/8`, `[::1]`), the host a name, an IPv4 address or a bracketed IPv6 address
-/// ([`crate::harness::host_of`], [`crate::harness::loopback`]), with no userinfo, query,
-/// fragment or white space. The refusal is the rule broken, worded after the key's name, never
-/// the URL.
-pub fn check_endpoint(url: &str) -> std::result::Result<bool, &'static str> {
-    let Some((scheme, rest)) = url
-        .split_once("://")
-        .filter(|(scheme, _)| matches!(*scheme, "https" | "http"))
-        .filter(|_| !url.chars().any(|c| c.is_whitespace() || c.is_control()))
-    else {
-        return Err(
-            "is the URL of a served Connectors instance: `https://<host>[:<port>][/<prefix>]`, or `http://` to a loopback host, with no white space",
-        );
-    };
-    let (authority, tail) = rest.split_at(rest.find(['/', '?', '#']).unwrap_or(rest.len()));
-    if authority.contains('@') || tail.contains(['?', '#']) {
-        return Err(
-            "holds a userinfo, a query or a fragment, each of which can carry a credential; it is `https://<host>[:<port>][/<prefix>]`, or `http://` to a loopback host",
-        );
-    }
-    let Some(host) = crate::harness::host_of(authority) else {
-        return Err(
-            "names no host takt reads: a name, an IPv4 address or a bracketed IPv6 address, with an optional `:<port>` of at most 65535",
-        );
-    };
-    let loopback = crate::harness::loopback(host);
-    if scheme == "http" && !loopback {
-        return Err(
-            "is `http://` only to a loopback host (`localhost`, `127.0.0.0/8`, `[::1]`); any other host takes `https://`",
-        );
-    }
-    Ok(loopback)
 }
 
 /// The URL of the loopback relay `url`, an `origin` [`crate::git::remote_transport`] admitted
@@ -654,92 +397,13 @@ pub fn github_checks(
 enum Route {
     /// `connectors invoke <target>` through the runner.
     Cli,
-    /// The served wire of the instance at `endpoint`.
+    /// The served wire of the instance `client` calls.
     Served {
-        /// The URL as given, without a trailing `/`.
-        endpoint: String,
-        /// Whether its host is a loopback host: then no proxy is asked.
-        loopback: bool,
+        /// The client of the instance.
+        client: Client,
         /// The descriptor revision `GET /v1/describe` reported, which every invocation names.
         revision: String,
     },
-}
-
-/// A served call that did not succeed: the HTTP status and, when the answer says, its code and
-/// message.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ServedRefused {
-    /// What was called: the path, the operation and the endpoint, never the input.
-    pub call: String,
-    /// The HTTP status.
-    pub status: u16,
-    /// The answer's error code.
-    pub code: Option<String>,
-    /// The answer's message, bounded.
-    pub message: String,
-    /// Whether the answer named a request: its `request_id` is not null.
-    pub echoed: bool,
-    /// The answer's `mutation.classification`, when it carries one: what the instance recorded
-    /// of a write's attempt.
-    pub classification: Option<String>,
-    /// Whether the answer is a v1alpha2 error envelope ([`is_error_envelope`]), and not only
-    /// something that names a code.
-    pub envelope: bool,
-}
-
-impl ServedRefused {
-    /// Whether the instance answered that what was asked conflicts with what holds now: HTTP
-    /// 409, or the code `conflict`; a key held for another request (`idempotency_conflict`) is
-    /// not.
-    #[must_use]
-    pub fn is_conflict(&self) -> bool {
-        (self.status == 409 && self.code.as_deref() != Some("idempotency_conflict"))
-            || self.code.as_deref() == Some("conflict")
-    }
-
-    /// Whether the instance does not know whether the write was applied: `outcome_unknown`.
-    #[must_use]
-    pub fn is_outcome_unknown(&self) -> bool {
-        self.code.as_deref() == Some("outcome_unknown")
-    }
-
-    /// Whether the instance refused the request for a member it does not take, before reading
-    /// the rest of it: a v1alpha2 error envelope ([`is_error_envelope`]) with the code
-    /// `unsupported`, HTTP 400, `request_id: null`, no attempt. A host without standing grants
-    /// answers so to `idempotency_key`, having run nothing. Any other answer, one that only names
-    /// the code among them, is no such refusal.
-    #[must_use]
-    pub fn refuses_a_member(&self) -> bool {
-        self.envelope
-            && self.status == 400
-            && self.code.as_deref() == Some("unsupported")
-            && !self.echoed
-            && self.classification.is_none()
-    }
-}
-
-impl fmt::Display for ServedRefused {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} answered HTTP {}", self.call, self.status)?;
-        if let Some(code) = &self.code {
-            write!(f, " ({code})")?;
-        }
-        if !self.message.is_empty() {
-            write!(f, ": {}", self.message)?;
-        }
-        Ok(())
-    }
-}
-
-impl std::error::Error for ServedRefused {}
-
-/// `text` without control characters, at most [`STDERR_BYTES`] characters of it.
-fn bounded(text: &str) -> String {
-    text.trim()
-        .chars()
-        .filter(|c| !c.is_control() || *c == ' ')
-        .take(STDERR_BYTES)
-        .collect()
 }
 
 /// The code of a `connectors` failure envelope, on standard error as `--output json` writes
@@ -772,8 +436,6 @@ pub struct ConnectorsForge {
     described: RefCell<BTreeMap<&'static str, (String, String)>>,
     bound: RefCell<BTreeMap<u64, (String, u64)>>,
     reread: RefCell<BTreeSet<u64>>,
-    calls: Cell<u64>,
-    started: u128,
     /// Whether the served instance refused `idempotency_key` as a member it does not take: then
     /// every write goes with no key.
     unkeyed: Cell<bool>,
@@ -890,15 +552,11 @@ impl ConnectorsForge {
         };
         let route = match endpoint {
             None => Route::Cli,
-            Some(url) => {
-                let loopback = check_endpoint(url)
-                    .map_err(|rule| anyhow!("`forge_endpoint` {rule}; nothing was opened"))?;
-                Route::Served {
-                    endpoint: url.trim_end_matches('/').to_owned(),
-                    loopback,
-                    revision: String::new(),
-                }
-            }
+            Some(url) => Route::Served {
+                client: Client::at(url)
+                    .map_err(|rule| anyhow!("`forge_endpoint` {rule}; nothing was opened"))?,
+                revision: String::new(),
+            },
         };
         let url = crate::git::remote_url(tree, "origin").ok();
         let relay = match url
@@ -935,9 +593,6 @@ impl ConnectorsForge {
                 origin.1
             );
         }
-        let started = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_nanos());
         let mut forge = Self {
             connector,
             target: target.to_owned(),
@@ -952,8 +607,6 @@ impl ConnectorsForge {
             described: RefCell::new(BTreeMap::new()),
             bound: RefCell::new(BTreeMap::new()),
             reread: RefCell::new(BTreeSet::new()),
-            calls: Cell::new(0),
-            started,
             unkeyed: Cell::new(false),
             retried: RefCell::default(),
             state_dir: None,
@@ -975,18 +628,47 @@ impl ConnectorsForge {
     pub fn route(&self) -> String {
         match &self.route {
             Route::Cli => format!("{PROGRAM} invoke {}", self.target),
-            Route::Served { endpoint, .. } => format!("POST {INVOKE_PATH} at {endpoint}"),
+            Route::Served { client, .. } => {
+                format!("POST {INVOKE_PATH} at {}", client.endpoint())
+            }
         }
     }
 
     /// Describes every operation the connector's map needs and refuses the ones the instance
-    /// does not describe.
+    /// does not describe. On the served route that is the one `GET /v1/describe`
+    /// ([`Client::describe`]), its instance the one `forge_instance` names when it names one, its
+    /// revision kept for every invocation.
     fn preflight(&mut self, tree: &Path) -> Result<()> {
         let required = self.connector.required();
-        let (missing, found) = match &self.route {
-            Route::Cli => self.preflight_cli(tree, required)?,
-            Route::Served { .. } => self.preflight_served(required)?,
+        let (missing, found, revision) = match &self.route {
+            Route::Cli => {
+                let (missing, found) = self.preflight_cli(tree, required)?;
+                (missing, found, None)
+            }
+            Route::Served { client, .. } => {
+                let description = client.describe(
+                    self.instance.as_deref(),
+                    "`forge_instance`",
+                    "nothing was opened",
+                )?;
+                let missing = required
+                    .iter()
+                    .copied()
+                    .filter(|name| !description.operations.iter().any(|listed| listed == name))
+                    .collect();
+                let found = format!(
+                    "connector {}, instance {}, descriptor {}, served at {}",
+                    self.connector.name(),
+                    description.instance,
+                    description.revision,
+                    client.endpoint()
+                );
+                (missing, found, Some(description.revision))
+            }
         };
+        if let (Some(described), Route::Served { revision, .. }) = (revision, &mut self.route) {
+            *revision = described;
+        }
         if !missing.is_empty() {
             bail!(
                 "{} does not describe {}, which `forge: connectors` needs on the {} connector, and a write is described only when the instance admits it; nothing was opened",
@@ -1003,7 +685,9 @@ impl ConnectorsForge {
     fn reached(&self) -> String {
         match &self.route {
             Route::Cli => format!("the connectors target {}", self.target),
-            Route::Served { endpoint, .. } => format!("the instance served at {endpoint}"),
+            Route::Served { client, .. } => {
+                format!("the instance served at {}", client.endpoint())
+            }
         }
     }
 
@@ -1055,69 +739,6 @@ impl ConnectorsForge {
             );
         }
         Ok((missing, found.unwrap_or_default()))
-    }
-
-    /// The preflight of the served route: one `GET /v1/describe`, its instance the one
-    /// `forge_instance` names when it names one, its revision kept for every invocation.
-    fn preflight_served(
-        &mut self,
-        required: &[&'static str],
-    ) -> Result<(Vec<&'static str>, String)> {
-        let Route::Served {
-            endpoint, loopback, ..
-        } = &self.route
-        else {
-            unreachable!("the served preflight runs on the served route");
-        };
-        let call = format!("GET {DESCRIBE_PATH} at {endpoint}");
-        let (status, bytes) = exchange(
-            endpoint,
-            *loopback,
-            reqwest::Method::GET,
-            DESCRIBE_PATH,
-            None,
-        )
-        .with_context(|| format!("{call} did not answer; nothing was opened"))?;
-        let answer: Option<Value> = serde_json::from_slice(&bytes).ok();
-        let Some(answer) = answer.filter(|_| status == 200) else {
-            return Err(anyhow::Error::new(refused(call, status, &bytes)))
-                .context("nothing was opened");
-        };
-        let text = |name: &str| {
-            answer[name]
-                .as_str()
-                .filter(|text| !text.is_empty())
-                .map(str::to_owned)
-                .ok_or_else(|| anyhow!("{call} reported no {name}; nothing was opened"))
-        };
-        let revision = text("revision")?;
-        let served = text("instance")?;
-        if let Some(instance) = &self.instance
-            && *instance != served
-        {
-            bail!(
-                "{call} describes the instance {served}, not {instance}, which `forge_instance` names; nothing was opened"
-            );
-        }
-        let listed: Vec<&str> = answer["operations"]
-            .as_array()
-            .ok_or_else(|| anyhow!("{call} reported no operations; nothing was opened"))?
-            .iter()
-            .filter_map(|operation| operation["id"].as_str())
-            .collect();
-        let missing = required
-            .iter()
-            .copied()
-            .filter(|name| !listed.contains(name))
-            .collect();
-        let found = format!(
-            "connector {}, instance {served}, descriptor {revision}, served at {endpoint}",
-            self.connector.name()
-        );
-        if let Route::Served { revision: held, .. } = &mut self.route {
-            *held = revision;
-        }
-        Ok((missing, found))
     }
 
     /// Runs `connectors --output json invoke <target> <operation> <extra>`: the line as an error
@@ -1197,9 +818,7 @@ impl ConnectorsForge {
     fn named(&self, operation: &str) -> String {
         match &self.route {
             Route::Cli => format!("`{PROGRAM} invoke {} {operation}`", self.target),
-            Route::Served { endpoint, .. } => {
-                format!("`POST {INVOKE_PATH}` {operation} at {endpoint}")
-            }
+            Route::Served { client, .. } => client.named(operation),
         }
     }
 
@@ -1256,19 +875,15 @@ impl ConnectorsForge {
         input: &Value,
         merging: Option<(u64, &str)>,
     ) -> Written<Value> {
-        let Route::Served {
-            endpoint,
-            loopback,
-            revision,
-        } = &self.route
-        else {
+        let Route::Served { client, revision } = &self.route else {
             let outcome = self.outcome(tree, operation, input)?;
             return self.written_body(operation, &outcome);
         };
         if !self.unkeyed.get() {
             let case = case_of(dir);
             let first = idempotency_key(&case, operation, revision, input, 0);
-            let mut refusals = refusals_in(dir).map_err(WriteError::not_attempted)?;
+            let mut refusals: Record =
+                refusals_in(dir, Self::REFUSALS).map_err(WriteError::not_attempted)?;
             let mut refused = refusals.refused.get(&first).copied().unwrap_or(0);
             let mut key = idempotency_key(&case, operation, revision, input, refused);
             if let Some((number, head)) = merging
@@ -1285,7 +900,7 @@ impl ConnectorsForge {
                 let fresh = idempotency_key(&case, operation, revision, input, refused);
                 refusals.refused.insert(first.clone(), refused);
                 refusals.unknown.insert(key, Some(fresh.clone()));
-                record_refusals(dir, &refusals)
+                record_refusals(dir, Self::REFUSALS, &refusals)
                     .with_context(|| {
                         format!(
                             "pull request {number} reads open at {head} after a merge answered outcome_unknown, and the fresh key could not be recorded; nothing was sent"
@@ -1294,8 +909,7 @@ impl ConnectorsForge {
                     .map_err(WriteError::not_attempted)?;
                 key = fresh;
             }
-            let outcome =
-                self.served_answer(endpoint, *loopback, revision, operation, input, Some(&key));
+            let outcome = client.answer(revision, operation, input, Some(&key));
             let refusal = outcome
                 .as_ref()
                 .err()
@@ -1309,7 +923,7 @@ impl ConnectorsForge {
                 };
                 if merging.is_some() && refusal.is_some_and(ServedRefused::is_outcome_unknown) {
                     refusals.unknown.entry(key).or_insert(None);
-                    record_refusals(dir, &refusals)
+                    record_refusals(dir, Self::REFUSALS, &refusals)
                         .with_context(|| {
                             format!(
                                 "{} answered outcome_unknown, and its key could not be recorded for the next attempt",
@@ -1324,7 +938,7 @@ impl ConnectorsForge {
                         WriteOutcome::NotAttempted
                     };
                     refusals.refused.insert(first, refused.saturating_add(1));
-                    record_refusals(dir, &refusals)
+                    record_refusals(dir, Self::REFUSALS, &refusals)
                         .with_context(|| {
                             format!(
                                 "{} was not applied, and its refusal could not be recorded for the next attempt",
@@ -1336,8 +950,8 @@ impl ConnectorsForge {
                 return self.written_body(operation, &outcome.map_err(write_failure)?["result"]);
             }
         }
-        let outcome = self
-            .served_invoke(endpoint, *loopback, revision, operation, input, None)
+        let outcome = client
+            .invoke(revision, operation, input, None)
             .map_err(write_failure)?;
         self.written_body(operation, &outcome)
     }
@@ -1368,76 +982,11 @@ impl ConnectorsForge {
                     .map_err(super::run_failure)?;
                 Self::cli_answer(line, &exit).map_err(write_failure)?["result"].clone()
             }
-            Route::Served {
-                endpoint,
-                loopback,
-                revision,
-            } => self
-                .served_invoke(endpoint, *loopback, revision, operation, input, None)
+            Route::Served { client, revision } => client
+                .invoke(revision, operation, input, None)
                 .map_err(write_failure)?,
         };
         Ok(outcome)
-    }
-
-    /// One `POST /v1alpha2/invoke` of `operation` on `input`, carrying `key` as its
-    /// `idempotency_key` when one is given: the operation's result. A replay of a key
-    /// (`mutation.replayed: true`) is read as the original outcome it is.
-    fn served_invoke(
-        &self,
-        endpoint: &str,
-        loopback: bool,
-        revision: &str,
-        operation: &'static str,
-        input: &Value,
-        key: Option<&str>,
-    ) -> Result<Value> {
-        self.served_answer(endpoint, loopback, revision, operation, input, key)
-            .map(|answer| answer["result"].clone())
-    }
-
-    /// [`Self::served_invoke`]'s call, its whole success answer: the `result` and, for a write,
-    /// the `mutation` the instance recorded.
-    fn served_answer(
-        &self,
-        endpoint: &str,
-        loopback: bool,
-        revision: &str,
-        operation: &'static str,
-        input: &Value,
-        key: Option<&str>,
-    ) -> Result<Value> {
-        let call = self.calls.get() + 1;
-        self.calls.set(call);
-        let request_id = format!("takt-{}-{}-{call}", std::process::id(), self.started);
-        let mut envelope = json!({
-            "version": "v1alpha2",
-            "request_id": request_id,
-            "operation": operation,
-            "revision": revision,
-            "input": input,
-        });
-        if let Some(key) = key {
-            envelope["idempotency_key"] = json!(key);
-        }
-        let named = self.named(operation);
-        let (status, bytes) = exchange(
-            endpoint,
-            loopback,
-            reqwest::Method::POST,
-            INVOKE_PATH,
-            Some(envelope.to_string().into_bytes()),
-        )
-        .with_context(|| format!("{named} did not answer"))?;
-        let answer: Option<Value> = serde_json::from_slice(&bytes).ok();
-        match answer {
-            Some(answer) if (200..300).contains(&status) && answer["status"] == "success" => {
-                if answer["request_id"] != request_id.as_str() {
-                    bail!("{named} answered another request than the one sent");
-                }
-                Ok(answer)
-            }
-            _ => Err(refused(named, status, &bytes).into()),
-        }
     }
 
     /// The pull request `number` as the connector reports it; it is read again, so a merge
@@ -2003,129 +1552,6 @@ impl ConnectorsForge {
         }
         Ok(body)
     }
-}
-
-/// Whether `answer` is an error envelope of the v1alpha2 binding, as compatibility §5 closes
-/// it: an object of `version: v1alpha2`, `request_id` (a string or null), `status: error`, an
-/// `error` of a string `code`, a string `message` and an optional positive integer
-/// `retry_after_seconds` and nothing else, no `result`, `audit_ref` and `audit_status`
-/// consistent (`complete` and `incomplete` with a reference, `unavailable` and `not_required`
-/// with null), and no member besides those and `source_audit` and `mutation`.
-#[must_use]
-pub fn is_error_envelope(answer: &Value) -> bool {
-    const MEMBERS: [&str; 8] = [
-        "version",
-        "request_id",
-        "status",
-        "error",
-        "audit_ref",
-        "audit_status",
-        "source_audit",
-        "mutation",
-    ];
-    let Some(members) = answer.as_object() else {
-        return false;
-    };
-    let Some(error) = answer["error"].as_object() else {
-        return false;
-    };
-    let audited = match answer["audit_status"].as_str() {
-        Some("complete" | "incomplete") => answer["audit_ref"].is_string(),
-        Some("unavailable" | "not_required") => {
-            members.contains_key("audit_ref") && answer["audit_ref"].is_null()
-        }
-        _ => false,
-    };
-    members.keys().all(|name| MEMBERS.contains(&name.as_str()))
-        && answer["version"] == "v1alpha2"
-        && members
-            .get("request_id")
-            .is_some_and(|id| id.is_null() || id.is_string())
-        && answer["status"] == "error"
-        && audited
-        && error
-            .keys()
-            .all(|name| matches!(name.as_str(), "code" | "message" | "retry_after_seconds"))
-        && error.get("code").is_some_and(Value::is_string)
-        && error.get("message").is_some_and(Value::is_string)
-        && error
-            .get("retry_after_seconds")
-            .is_none_or(|seconds| seconds.as_u64().is_some_and(|seconds| seconds > 0))
-}
-
-/// The error of a served call that did not succeed, from its HTTP status and its answer. The
-/// code and the message of an answer that is no envelope are read from its top level, for the
-/// message alone: such an answer is never taken for the refusal of a member
-/// ([`ServedRefused::refuses_a_member`]).
-fn refused(call: String, status: u16, bytes: &[u8]) -> ServedRefused {
-    let answer: Value = serde_json::from_slice(bytes).unwrap_or_default();
-    let error = if answer["error"].is_object() {
-        &answer["error"]
-    } else {
-        &answer
-    };
-    ServedRefused {
-        call,
-        status,
-        code: error["code"].as_str().map(bounded),
-        message: error["message"].as_str().map(bounded).unwrap_or_default(),
-        echoed: !answer["request_id"].is_null(),
-        classification: answer["mutation"]["classification"].as_str().map(bounded),
-        envelope: is_error_envelope(&answer),
-    }
-}
-
-/// One served call, `method` on `path` of `endpoint`, with `body`, a JSON document, when there
-/// is one; on a runtime of its own in a thread of its own, so a caller inside a runtime is no
-/// obstacle to it. No credential goes with it and a redirect is never followed. The status and
-/// at most [`ANSWER_LIMIT`] bytes of the answer.
-fn exchange(
-    endpoint: &str,
-    loopback: bool,
-    method: reqwest::Method,
-    path: &str,
-    body: Option<Vec<u8>>,
-) -> Result<(u16, Vec<u8>)> {
-    let url = format!("{endpoint}{path}");
-    std::thread::scope(|scope| {
-        scope
-            .spawn(|| {
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()?;
-                runtime.block_on(async {
-                    let mut client = reqwest::Client::builder()
-                        .redirect(reqwest::redirect::Policy::none())
-                        .connect_timeout(CONNECT_TIMEOUT)
-                        .timeout(CALL_TIMEOUT)
-                        .user_agent(concat!("takt/", env!("CARGO_PKG_VERSION")));
-                    if loopback {
-                        client = client.no_proxy();
-                    }
-                    let mut request = client
-                        .build()?
-                        .request(method.clone(), &url)
-                        .header(reqwest::header::ACCEPT, "application/json");
-                    if let Some(body) = body {
-                        request = request
-                            .header(reqwest::header::CONTENT_TYPE, "application/json")
-                            .body(body);
-                    }
-                    let mut response = request.send().await?;
-                    let status = response.status().as_u16();
-                    let mut answer = Vec::new();
-                    while let Some(chunk) = response.chunk().await? {
-                        if answer.len() + chunk.len() > ANSWER_LIMIT {
-                            bail!("the answer is longer than {ANSWER_LIMIT} bytes");
-                        }
-                        answer.extend_from_slice(&chunk);
-                    }
-                    Ok((status, answer))
-                })
-            })
-            .join()
-            .map_err(|_| anyhow!("the call to {url} panicked"))?
-    })
 }
 
 impl Forge for ConnectorsForge {
