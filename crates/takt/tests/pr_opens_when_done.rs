@@ -547,6 +547,10 @@ fn after_a_failed_ci_the_next_change_is_pushed_once_it_is_handed_over_again() {
     );
 }
 
+/// The validators the run file binds by action id (`crates/takt/src/validator.rs` `register_bound`),
+/// each with the action and kind its binding names: none is a built-in.
+const RUN_FILE_BOUND: &[&str] = &["CommandAction", "RunFileBound"];
+
 /// The list the choice rule and the offer read (`takt::validator::BUILT_IN`) is the validators'
 /// own: every `impl Validator for` in the library's sources has an entry, and each entry's
 /// action and kind are what an instance of that validator answers. A validator added without
@@ -566,6 +570,9 @@ fn the_built_in_list_is_every_built_in_validator_with_its_own_action_and_kind() 
             }
         }
     }
+    // A validator the run file binds to a protocol action (`command_actions` and the like) is not
+    // a built-in: the run file names its action and kind, and the generic registration checks them.
+    implemented.retain(|name| !RUN_FILE_BOUND.contains(&name.as_str()));
     implemented.sort();
     // A type that serves more than one action has one entry per action, each checked below
     // against an instance made for that action.
