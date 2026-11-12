@@ -104,8 +104,8 @@ Each implementor sub-agent gets these lines, verbatim, with the story's id and S
 - The tree is shared with up to two other implementors. A compile error in a file outside your
   Scope is not yours: name the file and the error in your return and go on. Do not edit outside
   your Scope to make the build pass.
-- Spec first where the story introduces a noun (`AGENTS.md` § Rules): `ess/` first, then
-  `ess specify validate --path ess`.
+- Spec first for every change to behaviour (`AGENTS.md` § Rules): `ess/` first, then the code,
+  then `ess specify validate --path ess` and `python3 -I scripts/check-citations --require-digests`.
 - Test first. Run `cargo check -p <crate>` and the story's tests. Do not run `task check`. Do not
   commit. Do not use `git stash`, `git checkout <file>` or `git restore`.
 - Return within 45 minutes, finished or not: the changed paths, the test command and its output,

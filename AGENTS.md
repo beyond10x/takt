@@ -93,11 +93,18 @@ by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
   when asked and allows a grant only at the case revision asked about and the revision of its
   subject it was given at. The one gate in Rust is the merge validator's, which merges only under
   a grant of `repository.merge` at the case's revision; add no other. takt writes such a grant
-  itself in one case only: as `agent:takt-delivery`, under a delegation of `repository.merge`
-  (and `repository.merge.judge_surface` for a judge-surface diff) in the target's
-  `.engineering/delegations.yaml` at the tip the forge reports, with `tests.pass`, `gate.green`
-  and `ci.green` at the revision (`Run::grant_delegated`, `crates/takt/src/run.rs`); the merge
-  reads the delegation again before it merges. Add no other path by which takt grants itself.
+  itself in two cases only. First, as `agent:takt-delivery`, under a delegation of
+  `repository.merge` (and `repository.merge.judge_surface` for a judge-surface diff) in the
+  target's `.engineering/delegations.yaml` at the tip the forge reports, with `tests.pass`,
+  `gate.green` and `ci.green` at the revision (`Run::grant_delegated`, `crates/takt/src/run.rs`);
+  the merge reads the delegation again before it merges. Second, `connector.write`, under a
+  declaration of the write in the target's `.engineering/delegations.yaml` at the revision the
+  case opened on: the connector and its instance, the operations, the target (for a chat, one
+  channel) and an optional rate; takt grants a write only when its operation and target fall
+  inside the declaration and records the grant in the case, and refuses any other write
+  (story:connector-writes-under-a-delegation; the owner, 2026-11-12: "in our specific case,
+  there should be no approval, ideally this behavior/permissions can be configured via config
+  file"). Add no other path by which takt grants itself.
 - A judgement step offers the model only the actions the frontier admits; a step that does more is
   refused and reverted, not accepted.
 - Credentials never enter a harness's environment, its prompt or a case record.
@@ -143,9 +150,13 @@ by the run's uid (`chmod -R go-w`): gate-exec trusts `/usr/local/bin`.
   command run on that tree; a figure nobody computed is left out.
 - This repository is public. Committed text names no private repository, session or decision id,
   host detail or person.
-- Spec first: a story that introduces a noun declares it in `ess/` before code builds on it,
-  checked with `ess specify validate --path ess`; every `read from:` citation there names the
-  line that says it.
+- Spec first, for every change (owner, 2026-11-12): any change to takt's behaviour, its run file,
+  its flags, its records or its nouns edits `ess/` first, and the code follows the specification.
+  This holds for a story, a fix round and a fix of under 20 lines alike. A story that introduces a
+  noun declares it in `ess/` before code builds on it. Each change is checked with
+  `ess specify validate --path ess`, and every `read from:` citation there names the line that
+  says it. An implementor's brief names `ess/domains/takt.yaml` in its Scope whenever the change
+  is to behaviour.
 
 ## Roles
 
