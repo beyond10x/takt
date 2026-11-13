@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-12T23:01:38Z",
+  "actor": "human:timo",
+  "artifact": "story:a-run-on-a-schedule",
+  "kind": "story",
+  "revision": 15,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/43318222734",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/43318222734"
+  }
+}

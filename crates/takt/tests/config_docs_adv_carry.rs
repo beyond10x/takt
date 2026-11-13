@@ -89,6 +89,7 @@ fn value_for(dir: &Path, key: &str) -> Option<&'static str> {
         "[\"aep\"]",
         "{ read = [\"true\"] }",
         "{ every = \"30m\" }",
+        "{ \"x.render\" = { argv = [\"true\"], writes = \"f\", evidence = \"k\" } }",
     ]
     .into_iter()
     .find(|value| read(dir, "probe.toml", &format!("{key} = {value}\n")).is_ok())

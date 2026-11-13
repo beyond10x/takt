@@ -23,7 +23,7 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 10
+revision: 11
 ---
 # Story: a-connector-write-under-a-grant
 
@@ -61,6 +61,10 @@ the render's comparison with the message read from the thread does. The grant is
 - `connector_write_not_the_gate`: with `--gate` naming another approval-required action, the write is not performed
   without its own grant: the log holds no write.
 - `connector_write_no_credential`: no `Authorization` header and no environment credential reach the instance.
+- `connector_write_outcome_unknown_not_resent`: the instance answers the write 502 with `code: outcome_unknown`
+  (as the served host does today when its own pre-send guard refuses and nothing was sent): the case records `fail`
+  with the code and sends no second invoke, neither under the same key nor under a fresh one; whether the post landed
+  is settled by the next tick's thread read and the render's comparison, never by a resend inside the case.
 - Spec first: `operations` and `input_from` on `takt.work.ConnectorAction`; `ess specify validate --path ess` exits 0.
 
 ## Scope

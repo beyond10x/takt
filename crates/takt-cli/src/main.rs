@@ -754,6 +754,10 @@ struct RunArgs {
     /// The run file's `work_commands`, which the source `command` runs.
     #[arg(skip)]
     work_commands: Option<takt::work::command::WorkCommands>,
+    /// The run file's `command_actions`: protocol actions bound to argument lists, each performed
+    /// by a command action's validator ([`takt::command_action`]).
+    #[arg(skip)]
+    command_actions: Option<takt::command_action::CommandActions>,
     /// The protocol: a built-in id (`takt protocols`) or a `protocol/1` file. Not given, a story
     /// the planning store gives opens on its tag `protocol:<name>/<major>`, else the run file's
     /// `protocol`, else `story.delivery/3`, an --intent on `software.change/1` (takt's defaults document),
@@ -935,6 +939,7 @@ impl RunArgs {
         let mut file = takt::run_config::RunConfig::read(path)?;
         self.work_sources = file.work_sources();
         self.work_commands = file.work_commands.clone();
+        self.command_actions = file.command_actions.clone();
         self.check_work_item()?;
         if let Some(story) = file.story.take()
             && ["story", "work", "intent", "case"]
@@ -1792,6 +1797,14 @@ fn exit_code() -> u8 {
         Ok(code) => code,
         Err(error) => {
             eprintln!("takt: {}", printable(&format!("{error:#}")));
+            // A run file member refused once the case's protocol is known (a command action
+            // bound to an action it does not declare) exits as one refused when the file is read.
+            if error
+                .downcast_ref::<takt::run_config::MemberRefused>()
+                .is_some()
+            {
+                return EXIT_USAGE;
+            }
             EXIT_REFUSED
         }
     }
@@ -2251,6 +2264,7 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 work_item,
                 work_sources,
                 work_commands,
+                command_actions,
                 protocol,
                 inputs,
                 case_id,
@@ -2631,6 +2645,11 @@ fn run(cli: Cli, out: &mut dyn Write) -> Result<u8> {
                 resuming.as_ref().map(|resuming| resuming.id.as_str()),
             )?;
             forge.register(&mut validators);
+            // The run file's command actions, each bound under its action id: a case whose
+            // protocol does not declare one is refused at its line when it opens.
+            if let Some(actions) = &command_actions {
+                takt::validator::register_bound(&mut validators, actions.validators());
+            }
             // An improvement turn's merge validators read the mainline, with a forge or without.
             validators.push(Box::new(takt::improvement::CandidateMerged::new(
                 mainline.clone(),

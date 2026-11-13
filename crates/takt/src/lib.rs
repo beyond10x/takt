@@ -7,6 +7,7 @@
 //! The design is `docs/design/takt.md`.
 
 pub mod case;
+pub mod command_action;
 pub mod commit_style;
 pub mod confinement;
 pub mod connectors_client;

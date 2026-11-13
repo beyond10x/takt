@@ -166,6 +166,14 @@ pub trait Validator {
         let _ = (tree, case_dir);
         Ok(())
     }
+    /// Checks, when the case at `case_dir` in `tree` is resumed, what of
+    /// [`Self::check_at_open`] the run file's configuration can change since the case opened:
+    /// a refusal is the error, and nothing is resumed. Nothing to check by default; a binding
+    /// of the run file ([`RunFileBound`]) checks what it checks at open.
+    fn check_at_resume(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        let _ = (tree, case_dir);
+        Ok(())
+    }
     /// Why the owner's record does not let the agent role `role` grant this validator's action
     /// for the case in `tree` at `revision`, read where the validator reads whose grant it
     /// takes; `None` when it does. The run asks before it writes a grant as that role itself
@@ -2308,7 +2316,7 @@ impl Validator for TestsRun {
 
 /// What an observation held to `deadline` answers: an error once it returned at or after it,
 /// whatever it observed, so the budget that ended it records nothing; else `observed`.
-fn ended_by(
+pub(crate) fn ended_by(
     deadline: Option<std::time::Instant>,
     action: &str,
     observed: Result<Observation>,
@@ -8284,6 +8292,152 @@ pub fn is_built_in_kind(kind: &str) -> bool {
     BUILT_IN.iter().any(|built_in| built_in.kind == kind)
 }
 
+/// Where the run file binds a validator to a protocol action by the action's id: the file, the
+/// member that holds the binding (`command_actions`) and the line the binding's key is written on.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunFileBinding {
+    /// The run file.
+    pub file: PathBuf,
+    /// The member holding the binding.
+    pub member: &'static str,
+    /// The line of the binding's key, from 1.
+    pub line: usize,
+}
+
+/// A validator the run file binds under an action id ([`RunFileBinding`]), registered beside the
+/// built-in ones ([`register_bound`]). When a case opens, a binding of an action the case's
+/// protocol does not declare ([`UNDECLARED_RULE`]), or whose validator's evidence kind the
+/// protocol does not list among what that action may produce ([`UNPRODUCED_RULE`]), refuses the
+/// run at the binding's line
+/// ([`crate::run_config::MemberRefused`], exit 2), the case discarded; when a case is resumed it
+/// refuses the resume the same way, nothing resumed; otherwise it performs as the validator it
+/// wraps.
+pub struct RunFileBound {
+    validator: Box<dyn Validator>,
+    binding: RunFileBinding,
+}
+
+impl RunFileBound {
+    /// `validator`, bound by `binding`.
+    #[must_use]
+    pub fn new(validator: Box<dyn Validator>, binding: RunFileBinding) -> Self {
+        Self { validator, binding }
+    }
+}
+
+/// The rule a binding of an action the case's protocol does not declare breaks.
+pub const UNDECLARED_RULE: &str = "binds an action the case's protocol does not declare";
+
+/// The rule a binding whose evidence kind the case's protocol does not let its action produce
+/// breaks.
+pub const UNPRODUCED_RULE: &str =
+    "binds an evidence kind the case's protocol does not list among what its action may produce";
+
+/// Registers each of `bound` in `validators`, after the validators already there.
+pub fn register_bound(validators: &mut Vec<Box<dyn Validator>>, bound: Vec<RunFileBound>) {
+    validators.extend(
+        bound
+            .into_iter()
+            .map(|bound| Box::new(bound) as Box<dyn Validator>),
+    );
+}
+
+impl Validator for RunFileBound {
+    fn name(&self) -> &str {
+        self.validator.name()
+    }
+    fn action(&self) -> &str {
+        self.validator.action()
+    }
+    fn kind(&self) -> &str {
+        self.validator.kind()
+    }
+    fn subject(&self) -> &str {
+        self.validator.subject()
+    }
+    fn observe(&self, tree: &Path, revision: &str, seq: usize) -> Result<Observation> {
+        self.validator.observe(tree, revision, seq)
+    }
+    fn observe_waiting(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+    ) -> Result<(Observation, bool)> {
+        self.validator.observe_waiting(tree, revision, seq)
+    }
+    fn waits_locally(&self) -> bool {
+        self.validator.waits_locally()
+    }
+    fn observe_within(
+        &self,
+        tree: &Path,
+        revision: &str,
+        seq: usize,
+        deadline: Option<std::time::Instant>,
+    ) -> Result<(Observation, bool)> {
+        self.validator.observe_within(tree, revision, seq, deadline)
+    }
+    fn writes(&self) -> Vec<PathBuf> {
+        self.validator.writes()
+    }
+    fn runs(&self) -> Vec<String> {
+        self.validator.runs()
+    }
+    fn take_failed(&self) -> Vec<FailedCheck> {
+        self.validator.take_failed()
+    }
+    fn take_obligations(&self) -> Option<Vec<crate::obligations::Obligation>> {
+        self.validator.take_obligations()
+    }
+    fn take_forge_write(&self) -> Option<crate::events::ForgeWrite> {
+        self.validator.take_forge_write()
+    }
+    fn record_sends(&self, sending: Option<Rc<crate::events::Sending>>) {
+        self.validator.record_sends(sending);
+    }
+    fn gates_document(&self) -> Option<&Path> {
+        self.validator.gates_document()
+    }
+    fn gates_project(&self) -> Option<&Path> {
+        self.validator.gates_project()
+    }
+    fn check_at_open(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        let refused = |rule| {
+            Err(anyhow::Error::new(crate::run_config::MemberRefused {
+                path: self.binding.file.clone(),
+                line: self.binding.line,
+                member: self.binding.member,
+                rule,
+            }))
+        };
+        if !protocol_has_action(case_dir, self.action())? {
+            return refused(UNDECLARED_RULE);
+        }
+        // A bound validator writes no kind its action does not declare: a claim another
+        // action's kind makes true is that action's to observe.
+        if case_dir.join("protocol.yaml").exists()
+            && !produces_kind(case_dir, self.action(), self.kind())?
+        {
+            return refused(UNPRODUCED_RULE);
+        }
+        self.validator.check_at_open(tree, case_dir)
+    }
+    /// The run file is read again on each run, so a resumed case meets a binding its open never
+    /// checked: it is checked as at open, refused at its line.
+    fn check_at_resume(&self, tree: &Path, case_dir: &Path) -> Result<()> {
+        self.check_at_open(tree, case_dir)
+    }
+    fn delegation_refusal(
+        &self,
+        tree: &Path,
+        revision: &str,
+        role: &str,
+    ) -> Result<Option<String>> {
+        self.validator.delegation_refusal(tree, revision, role)
+    }
+}
+
 /// `change.read`: observes whether the implementation revision's tree differs from the case's
 /// base outside `.engineering/` (the planning store and the cases, which takt's own take,
 /// approval and records change), by content, not by its commits or their messages, and writes
@@ -8318,8 +8472,6 @@ impl ChangeRead {
     pub const PATHS_KIND: &str = "paths_changed";
 }
 
-/// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
-/// evidence kind `kind` and lists it among what `action` may produce.
 /// Whether the protocol the case at `case_dir` pinned names `action`. A case with no pinned
 /// protocol file is taken to name it, so the check it guards still runs.
 fn protocol_has_action(case_dir: &Path, action: &str) -> Result<bool> {
@@ -8336,7 +8488,10 @@ fn protocol_has_action(case_dir: &Path, action: &str) -> Result<bool> {
         .is_some_and(|actions| actions.contains_key(action)))
 }
 
-fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
+/// Whether the protocol of the case at `case_dir`, as its `protocol.yaml` holds it, declares the
+/// evidence kind `kind` and lists it among what `action` may produce. A case with no
+/// `protocol.yaml` is an error.
+pub(crate) fn produces_kind(case_dir: &Path, action: &str, kind: &str) -> Result<bool> {
     let path = case_dir.join("protocol.yaml");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;

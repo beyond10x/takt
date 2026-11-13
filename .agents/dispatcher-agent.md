@@ -55,7 +55,13 @@ Read, in this order, before acting:
 5. **Build.** When every story has returned, or four hours after the open:
    `cargo build --workspace && cargo test --workspace`, after `df -h /` (§ Limits). Red: a fix
    sub-agent with the error text, or the dispatcher fixes it itself when the fix is under 20 lines
-   (the exception above).
+   (the exception above). When the disk or the host keeps this step to package-scoped runs, those
+   runs still include the tests that scan every source file of the workspace, at least
+   `cargo test -p b10x-takt --no-fail-fast --test confinement --test tests_have_a_home_of_their_own
+   --test effects --test pr_opens_when_done`: a story's own tests do not see a process started
+   outside the seam, a test file without its own home, a line naming a case's `evidence` past its
+   port or a validator missing from the built-in list. Wave 57's first CI run failed on the first
+   two, wave 58's lanes on the third and wave 58's first CI run on the fourth.
 6. **Adversarial review.** One reviewer sub-agent, an adversarial pass on
    `git diff main...wave/<NN>` at the tip's sha. It returns a verdict, the sha and its findings.
    A finding fixable now gets one fix round (a sub-agent, or the dispatcher), then one more at

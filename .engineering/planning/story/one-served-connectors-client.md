@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:one-served-connectors-client
 kind: story
-status: active
+status: implemented
 title: One served Connectors client for the forge, connector actions and work sources
 summary: describe, invoke with any operation, the idempotency key and a per-caller refusal record
 relations:
@@ -15,10 +15,11 @@ scope:
   path: crates/takt/src/forge/connectors.rs
 - confidence: cited
   path: crates/takt/src/lib.rs
-revision: 8
+revision: 9
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-12T18:32:48Z", actor: "human:timo", revision: 7}
 - {from: "proposed", to: "active", at: "2026-11-12T18:32:48Z", actor: "human:timo", revision: 8}
+- {from: "active", to: "implemented", at: "2026-11-12T23:01:39Z", actor: "human:timo", revision: 9, decided_on: {"recorded":{"test_result":1,"review_outcome":1}}, executor: "agent:b10x-takt", correlation: "wave/57"}
 ---
 # Story: one-served-connectors-client
 
