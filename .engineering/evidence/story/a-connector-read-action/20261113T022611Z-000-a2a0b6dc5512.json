@@ -1,0 +1,13 @@
+{
+  "at": "2026-11-13T02:26:11Z",
+  "actor": "human:timo",
+  "artifact": "story:a-connector-read-action",
+  "kind": "story",
+  "revision": 12,
+  "change": {
+    "change": "evidence",
+    "kind": "test_result",
+    "source": "https://github.com/beyond10x/takt/actions/runs/43346440639",
+    "reference": "https://github.com/beyond10x/takt/actions/runs/43346440639"
+  }
+}

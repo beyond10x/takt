@@ -7,7 +7,7 @@ title: 'Wave 59: a connector read action'
 summary: 'one unit toward connector actions: run-file-bound Connectors reads'
 relations:
 - decides: story:a-connector-read-action
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "approved", at: "2026-11-12T23:18:12Z", actor: "human:timo", revision: 2, executor: "agent:b10x-takt", correlation: "wave/59"}
 ---
@@ -33,3 +33,10 @@ code.
 
 The merge into `main` waits for the grant of the agent the owner authorized on 2026-11-12 to decide on the owner's
 behalf; the delegation of `repository.merge.judge_surface` to the planner stays revoked (`.engineering/delegations.yaml`).
+
+Its transition records `actor: "human:timo"` and `executor: "agent:b10x-takt"`. The store has no field for a session
+that acts on an instruction attributed to the owner, so `actor` names on whose behalf the instruction was given, not
+a line the owner typed; this text is the record of who gave it.
+
+The merge itself was granted by the owner's own answer of 2026-11-13, 03:16 CET, at head b47913d3
+(approval-record:pr-67-merge).

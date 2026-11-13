@@ -7,7 +7,7 @@ title: 'Wave 58: a command action'
 summary: 'one unit toward connector actions: run-file-bound command actions'
 relations:
 - decides: story:a-command-action
-revision: 3
+revision: 4
 transitions:
 - {from: "draft", to: "approved", at: "2026-11-12T20:59:46Z", actor: "human:timo", revision: 2, executor: "agent:b10x-takt", correlation: "wave/58"}
 ---
@@ -30,3 +30,7 @@ Spec first (`AGENTS.md` § Rules): `takt.work.CommandAction` and the field `comm
 
 The merge into `main` waits for the grant of the agent the owner authorized on 2026-11-12 to decide on the owner's
 behalf; the delegation of `repository.merge.judge_surface` to the planner stays revoked (`.engineering/delegations.yaml`).
+
+Its transition records `actor: "human:timo"` and `executor: "agent:b10x-takt"`. The store has no field for a session
+that acts on an instruction attributed to the owner, so `actor` names on whose behalf the instruction was given, not
+a line the owner typed; this text is the record of who gave it.
