@@ -187,7 +187,7 @@ in [How a run ends](../concepts/how-a-run-ends.md#the-two-test-stops).
 
 The run file's `connectors` names a served Connectors instance, and its `connector_actions` bind a
 protocol action to one of its operations: [Every field](../reference/configuration.md#every-field).
-takt refuses only an action the case's protocol declares `effect: write`. It cannot tell an
+Of reads and writes, takt refuses only an action the case's protocol declares `effect: write`. It cannot tell an
 operation that reads from one that writes: whoever writes the run file and the protocol decides
 that, together with the host's standing grants.
 
