@@ -23,7 +23,7 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 11
+revision: 13
 ---
 # Story: a-connector-write-under-a-grant
 
@@ -66,9 +66,27 @@ the render's comparison with the message read from the thread does. The grant is
   with the code and sends no second invoke, neither under the same key nor under a fresh one; whether the post landed
   is settled by the next tick's thread read and the render's comparison, never by a resend inside the case.
 - Spec first: `operations` and `input_from` on `takt.work.ConnectorAction`; `ess specify validate --path ess` exits 0.
+- `connector_describe_held_to_the_hours` (from the review of pull request 67, finding F4): with the run's `hours` ending
+  before the describe answers, the describe before a case opens and the one inside an observation are cut at that
+  end, as the invoke is (`answer_within`), not held to the fixed 120 s of `CALL_TIMEOUT`.
+- `connector_answer_kept_as_read` (finding F5): an answer of numbers such as `1e15` is kept as the bytes read, so the
+  kept file is never longer than `ANSWER_LIMIT`; today `serde_json::to_vec` re-prints them longer
+  (`crates/takt/src/connector_action.rs:488`).
+- `connector_answer_not_written_through_a_link` (finding F6): a link put at `artifacts/connector/<action>.json` while the
+  call is in flight is not followed; the answer is written to a new file renamed over it, as `record_refusals` does
+  (`crates/takt/src/connectors_client.rs:224-260`).
 
 ## Scope
 
 - `crates/takt/src/connector_action.rs`; `crates/takt/src/run_config.rs`; `crates/takt/src/run.rs` (inferred: the gate
   for a run-file-bound write); `ess/domains/takt.yaml`; new `crates/takt-cli/tests/connector_write_cli.rs`;
   `website/docs/reference/configuration.md`.
+
+## Admission by the served host
+
+From the review of pull request 67 (finding F3): takt sends no credential to the instance, and the served Connectors
+host admits a request only with `Authorization: Bearer` (a static bearer or a service-account token; beyond10x/connectors
+`crates/connectors-host/src/server.rs`, read at 56969ef0). A read or write action therefore reaches a served host only
+through something on loopback between takt and the host that adds the bearer. Which route takt supports (such a
+sidecar, or the host admitting a workload by token review) is the owner's decision and comes before this story; the
+0.36.0 reference and release notes state the limit.

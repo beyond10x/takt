@@ -1,6 +1,6 @@
 # Wave 59: a connector read action
 
-Stage: **in review**. `wave/59` branches from `wave/58` at 67eea205 and merges `wave/58` at 933de0d4 (its CI fix) as
+Stage: **merged**. Pull request 67 merged at b47913d3 as 32d02632 (approval-record:pr-67-merge); released in 0.36.0. `wave/59` branches from `wave/58` at 67eea205 and merges `wave/58` at 933de0d4 (its CI fix) as
 d0e4f4ec. Approved: approval-record:wave-59-connector-read-action. The last wave of the epic for now: waves 60 to 62
 are not started (`docs/handoff/2026-11-13.md`).
 
@@ -57,5 +57,7 @@ No whole-crate or workspace test ran locally: the host's disk. The full gate is 
 
 ## Close
 
-After the merge, a store-only close moves story:a-connector-read-action to `implemented` with the CI run as its
-`test_result`.
+Pull request 67 merged at its granted head b47913d3 as 32d02632, its seven checks green (`check` run
+https://github.com/beyond10x/takt/actions/runs/43346440639). story:a-connector-read-action moved to `implemented` with
+that run as its `test_result`. An independent review of b47913d3 found no blocker; its findings F1 to F8 are filed
+as approval-record:pr-67-merge lists, and the documentation of F1, F3, F4 and F7 went into the 0.36.0 release prepare.
