@@ -4,9 +4,11 @@
 //! [`ConnectorAction`], through the one client ([`crate::connectors_client::Client`]). Before any
 //! case opens, one describe must describe the instance and list every bound operation
 //! ([`ConnectorActions::preflight`]); each observation is one invoke at the described revision.
-//! The answer is kept as the observation's artifact `artifacts/connector/<action>.json`, never
-//! in the record, which is `canon-evidence/1` of the bound kind: `pass` when the instance
-//! answered success, `fail` when it refused. No credential goes with a call.
+//! The answer is kept compact as the observation's artifact `artifacts/connector/<action>.json`,
+//! never in the record, which is `canon-evidence/1` of the bound kind: `pass` when the instance
+//! answered success, `fail` only when the instance refused the read ([`refuses_the_read`]);
+//! any other answer is an error of the observation, no record. The call is held to what is left
+//! of the run's hours. No credential goes with a call.
 
 use std::path::{Path, PathBuf};
 
@@ -150,6 +152,25 @@ const CONNECTORS_RULE: &str = "is a mapping of `endpoint`, the URL of a served C
 
 /// The rule of `connector_actions`' shape.
 const SHAPE_RULE: &str = "is a mapping of a protocol action's id, a plain file name, to `operation`, the operation it invokes, `input`, a mapping, and `evidence`, an evidence kind";
+
+/// The code of the served host's answer to an invocation at a revision it no longer describes:
+/// no refusal of the read, the descriptor moved.
+const STALE_DESCRIPTION: &str = "stale_description";
+
+/// Whether `refusal` is the instance's own refusal of the read: a v1alpha2 error envelope
+/// ([`crate::connectors_client::is_error_envelope`]) whose code is not [`STALE_DESCRIPTION`].
+/// A gateway's page, a redirect, or any other answer that is no envelope is not.
+fn refuses_the_read(refusal: &ServedRefused) -> bool {
+    refusal.envelope && refusal.code.as_deref() != Some(STALE_DESCRIPTION)
+}
+
+/// The rule an action `command_actions` binds too breaks, at the `connector_actions` binding.
+pub const BOUND_BY_COMMAND_RULE: &str =
+    "binds an action `command_actions` binds too; an action is bound in one member only";
+
+/// The rule an action `connector_actions` binds too breaks, at the `command_actions` binding.
+pub const BOUND_BY_CONNECTOR_RULE: &str =
+    "binds an action `connector_actions` binds too; an action is bound in one member only";
 
 /// The rule a binding of a built-in validator's action breaks.
 const BUILT_IN_RULE: &str = "binds an action takt's own validators perform";
@@ -327,7 +348,8 @@ impl ConnectorAction {
         format!("{ANSWERS}/{}.json", self.binding.action)
     }
 
-    /// Performs the binding, refusing to call when `deadline` has passed.
+    /// Performs the binding, refusing to call when `deadline` has passed and holding the call to
+    /// what is left before it.
     fn observe_by(
         &self,
         tree: &Path,
@@ -416,15 +438,19 @@ impl ConnectorAction {
                 self.action()
             );
         }
-        let (result, kept, said) = match client.answer(
+        let within = deadline.map_or(std::time::Duration::MAX, |deadline| {
+            deadline.saturating_duration_since(std::time::Instant::now())
+        });
+        let (result, kept, said) = match client.answer_within(
             &described,
             &self.binding.operation,
             &self.binding.input,
             None,
+            within,
         ) {
             Ok(answer) => ("pass", answer, "answered".to_owned()),
             Err(error) => match error.downcast_ref::<ServedRefused>() {
-                Some(refusal) => (
+                Some(refusal) if refuses_the_read(refusal) => (
                     "fail",
                     serde_json::json!({
                         "status": "error",
@@ -434,7 +460,12 @@ impl ConnectorAction {
                     }),
                     format!("refused: {refusal}"),
                 ),
-                None => return Err(error),
+                _ => {
+                    return Err(error.context(format!(
+                        "{}: no refusal of the read by the instance; no record is made, and the next run describes again",
+                        self.action()
+                    )));
+                }
             },
         };
         let record = Record::new(
@@ -454,7 +485,7 @@ impl ConnectorAction {
             records: vec![record],
             artifact: Some(Artifact {
                 name: self.answer_name(),
-                bytes: serde_json::to_vec_pretty(&kept)?,
+                bytes: serde_json::to_vec(&kept)?,
             }),
         })
     }

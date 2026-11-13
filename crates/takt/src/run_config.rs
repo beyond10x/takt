@@ -1955,6 +1955,39 @@ impl RunConfig {
                 binding.line =
                     line_of(&[crate::connector_action::MEMBER, &binding.action]).unwrap_or(1);
             }
+            // An action is bound in one member only: one `command_actions` binds too is refused
+            // at the later of its two bindings, naming the action and both members.
+            if let Some(commands) = &config.command_actions {
+                for binding in &bindings {
+                    let Some(command) = commands
+                        .bindings
+                        .iter()
+                        .find(|command| command.action == binding.action)
+                    else {
+                        continue;
+                    };
+                    let (line, member, rule) = if binding.line >= command.line {
+                        (
+                            binding.line,
+                            crate::connector_action::MEMBER,
+                            crate::connector_action::BOUND_BY_COMMAND_RULE,
+                        )
+                    } else {
+                        (
+                            command.line,
+                            crate::command_action::MEMBER,
+                            crate::connector_action::BOUND_BY_CONNECTOR_RULE,
+                        )
+                    };
+                    return Err(anyhow::Error::new(MemberRefused {
+                        path: path.to_owned(),
+                        line,
+                        member,
+                        rule,
+                    })
+                    .context(format!("the action {}", binding.action)));
+                }
+            }
             config.connector_actions =
                 connectors.map(|connectors| crate::connector_action::ConnectorActions {
                     file: path.to_owned(),

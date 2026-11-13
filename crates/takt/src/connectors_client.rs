@@ -519,6 +519,7 @@ impl Client {
             reqwest::Method::GET,
             DESCRIBE_PATH,
             None,
+            CALL_TIMEOUT,
         )
         .with_context(|| format!("{call} did not answer; {consequence}"))?;
         let answer: Option<Value> = serde_json::from_slice(&bytes).ok();
@@ -579,6 +580,19 @@ impl Client {
         input: &Value,
         key: Option<&str>,
     ) -> Result<Value> {
+        self.answer_within(revision, operation, input, key, CALL_TIMEOUT)
+    }
+
+    /// [`Self::answer`], the call held to `within` whole, and never to more than
+    /// [`CALL_TIMEOUT`].
+    pub fn answer_within(
+        &self,
+        revision: &str,
+        operation: &str,
+        input: &Value,
+        key: Option<&str>,
+        within: Duration,
+    ) -> Result<Value> {
         let call = self.calls.get() + 1;
         self.calls.set(call);
         let request_id = format!("takt-{}-{}-{call}", std::process::id(), self.started);
@@ -599,6 +613,7 @@ impl Client {
             reqwest::Method::POST,
             INVOKE_PATH,
             Some(envelope.to_string().into_bytes()),
+            within.min(CALL_TIMEOUT),
         )
         .with_context(|| format!("{named} did not answer"))?;
         let answer: Option<Value> = serde_json::from_slice(&bytes).ok();
@@ -616,14 +631,15 @@ impl Client {
 
 /// One served call, `method` on `path` of `endpoint`, with `body`, a JSON document, when there
 /// is one; on a runtime of its own in a thread of its own, so a caller inside a runtime is no
-/// obstacle to it. No credential goes with it and a redirect is never followed. The status and
-/// at most [`ANSWER_LIMIT`] bytes of the answer.
+/// obstacle to it. No credential goes with it and a redirect is never followed. It is held to
+/// `timeout` whole. The status and at most [`ANSWER_LIMIT`] bytes of the answer.
 fn exchange(
     endpoint: &str,
     loopback: bool,
     method: reqwest::Method,
     path: &str,
     body: Option<Vec<u8>>,
+    timeout: Duration,
 ) -> Result<(u16, Vec<u8>)> {
     let url = format!("{endpoint}{path}");
     std::thread::scope(|scope| {
@@ -636,7 +652,7 @@ fn exchange(
                     let mut client = reqwest::Client::builder()
                         .redirect(reqwest::redirect::Policy::none())
                         .connect_timeout(CONNECT_TIMEOUT)
-                        .timeout(CALL_TIMEOUT)
+                        .timeout(timeout)
                         .user_agent(concat!("takt/", env!("CARGO_PKG_VERSION")));
                     if loopback {
                         client = client.no_proxy();

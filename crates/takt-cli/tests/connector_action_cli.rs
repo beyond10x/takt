@@ -455,6 +455,34 @@ fn connector_read_write_binding_refused() {
     }
 }
 
+/// An action `connector_actions` binds and `command_actions` binds after it is refused at the
+/// later binding, the `command_actions` one, naming the action and both members; nothing is
+/// called.
+#[test]
+fn connector_read_action_bound_twice_refused_at_the_later_binding() {
+    let (url, seen) = serve(&[OPERATION], false);
+    let config = format!(
+        "{}command_actions:\n  thread.read:\n    argv: [touch, \"{{artifacts}}/x.txt\"]\n    writes: x.txt\n    evidence: thread_read\n",
+        binding(&url, "thread.read", OPERATION, "thread_read")
+    );
+    let scratch = scratch("twice", &config);
+    let (code, out, err) = run(&scratch, &[]);
+    assert_eq!(code, 2, "stdout {out}\nstderr {err}");
+    assert!(
+        err.contains(&format!(
+            "the action thread.read: the run configuration file {} is refused at line 10: `command_actions` binds an action `connector_actions` binds too",
+            scratch.config().display()
+        )),
+        "{err}"
+    );
+    assert!(
+        lines(&seen).is_empty(),
+        "nothing called: {:?}",
+        lines(&seen)
+    );
+    assert!(cases(&scratch.tree()).is_empty(), "no case opened: {out}");
+}
+
 #[test]
 fn connector_read_endpoint_rule() {
     let (_url, seen) = serve(&[OPERATION], false);
