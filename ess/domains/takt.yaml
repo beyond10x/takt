@@ -351,7 +351,7 @@ types:
   # runs: a kind its action may not produce, or no protocol to read it from, runs nothing and
   # records nothing.
   # read from: docs/design/scheduled-runs-and-connector-actions.md (§ Command action)
-  # read from: .engineering/planning/story/a-command-action.md:37-41
+  # read from: .engineering/planning/story/a-command-action.md:38-42
   # read from: crates/takt/src/command_action.rs:272-279
   # read from: crates/takt/src/command_action.rs:280-281
   # read from: crates/takt/src/validator.rs:8415-8423
