@@ -389,7 +389,7 @@ types:
   # instance. takt sends no credential to it: no `Authorization` header and nothing from its
   # environment; the instance holds the provider's.
   # read from: docs/design/scheduled-runs-and-connector-actions.md (§ No credential in takt)
-  # read from: .engineering/planning/story/a-connector-read-action.md:39-44
+  # read from: .engineering/planning/story/a-connector-read-action.md:40-45
   # read from: crates/takt/src/connector_action.rs:222-223
   - name: takt.work.ConnectorsEndpoint
     kind: struct
@@ -425,7 +425,7 @@ types:
   # nothing resumed, exit 2. Each observation checks the kind and the effect again against the
   # case's pinned `protocol.yaml` and calls nothing when either does not hold.
   # read from: docs/design/scheduled-runs-and-connector-actions.md (§ Read action)
-  # read from: .engineering/planning/story/a-connector-read-action.md:56-63
+  # read from: .engineering/planning/story/a-connector-read-action.md:57-64
   # read from: crates/takt/src/connector_action.rs:91
   # read from: crates/takt-cli/src/main.rs:2667
   # read from: crates/takt/src/connector_action.rs:348
@@ -1234,6 +1234,7 @@ types:
       # action id; its shape is checked when the file is read and each refusal names its line,
       # exit 2, an action `command_actions` binds too among them.
       # read from: docs/design/scheduled-runs-and-connector-actions.md (§ 4. F2: connector actions)
+      # read from: crates/takt/src/run_config.rs:1948-1953
       - name: connector_actions
         type: Optional<Map<takt.work.ActionId, takt.work.ConnectorAction>>
 
