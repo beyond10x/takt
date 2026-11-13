@@ -76,7 +76,7 @@ A YAML file with no `format` is read whole, as the fields themselves. A file wit
 ### Every field
 
 Every field is optional. Every field but `scan`, `forge_commands`, `forge_instance`, `forge_endpoint`, `local_checks`, `setup`, `transport`, `credential`, `work`, `work_commands`, `schedule`, `command_actions`, `connectors` and `connector_actions` is the `takt run` flag of the same name, with `-`
-for `_`; those twelve have no flag of that name (`--work` names one item by its key, not a list of sources; the keys of `schedule` are the flags `--every`, `--time-zone`, `--window` and `--until`).
+for `_`; those fourteen have no flag of that name (`--work` names one item by its key, not a list of sources; the keys of `schedule` are the flags `--every`, `--time-zone`, `--window` and `--until`).
 
 | field | meaning |
 |---|---|
