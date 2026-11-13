@@ -1,6 +1,6 @@
 # Wave 58: a command action
 
-Stage: **in review**. `wave/58` branches from `wave/57` at f4616dbd while pull request 65 waits for its grant, and
+Stage: **in review**, released as 0.35.0 with wave 57 once merged. `wave/58` branches from `wave/57` at f4616dbd while pull request 65 waits for its grant, and
 merges `wave/57` at dabcd934 (its CI fix) as 1160b381, and `main` at 2c1a3a31 (pull request 65) as 33066b1a. Approved: approval-record:wave-58-command-action.
 
 ## Selection
