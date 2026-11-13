@@ -8,7 +8,7 @@ import counts from '@site/data/story-counts.json';
 
 # Status
 
-- **Latest release:** 0.35.0, 2026-11-13 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
+- **Latest release:** 0.36.0, 2026-11-13 ([changelog](https://github.com/beyond10x/takt/blob/main/CHANGELOG.md), [install](./guides/install.md)).
 - **Shipped** means a story is implemented and merged into `main`, which can be ahead of the latest release.
 - **Open:** the stories of the open wave (Decided, [below](#every-story)), and the gaps on [Known limitations](./known-limitations.md).
 
@@ -91,6 +91,7 @@ Each release in one line, from the changelog:
 | 0.33.0 | the gate compares at the case's base what a branch edit could otherwise use to decide it: a file named glued to a short option or inside a shell's `-c` line, a Taskfile pulled in through `includes:`, a lint group allow added in source, a citation digest and the specification inputs |
 | 0.34.0 | `takt run --work <key>` names the work item, and the run file's `work` list orders the sources the next one comes from: `aep`, the planning store, and `command`, a team's own command line; a case records the item's key and revision and its commits carry `Refs: <key>`; the run file's `deployment_paths` keep a deployment's own untracked files out of step changes and commits, and a step that puts a link there is refused |
 | 0.35.0 | `takt run --every` stays resident and starts one pass per slot, inside `--window`s in a `--time-zone`, until an `--until` condition holds, one start per schedule; `--outcome-file` writes `takt.run-outcome/1` for every run; the run file's `command_actions` bind an argument list to a protocol action, run with no shell and no credential, its exit status the evidence of one declared output file |
+| 0.36.0 | the run file's `connectors` names a served Connectors instance and its `connector_actions` bind a protocol action to one of its operations, one describe before a case opens and one invoke per observation with no credential, so a served Connectors host, which wants a bearer token, is reached only through a proxy that adds it; the answer is kept as an artifact, the record `pass` on success and `fail` only when the instance refused the read; an action bound by `command_actions` too is refused |
 
 ## Every story
 

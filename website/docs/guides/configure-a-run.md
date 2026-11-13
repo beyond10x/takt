@@ -183,6 +183,24 @@ For a base whose tests fail on purpose, such as a story that fixes them, set
 `continue_past_red_base = true` or pass `--continue-past-red-base`. Both stop rules are described
 in [How a run ends](../concepts/how-a-run-ends.md#the-two-test-stops).
 
+## 7. Bind a connector action
+
+The run file's `connectors` names a served Connectors instance, and its `connector_actions` bind a
+protocol action to one of its operations: [Every field](../reference/configuration.md#every-field).
+takt refuses only an action the case's protocol declares `effect: write`. It cannot tell an
+operation that reads from one that writes: whoever writes the run file and the protocol decides
+that, together with the host's standing grants.
+
+:::caution[Not run against a served Connectors host]
+
+takt sends the instance no credential, by design. A served Connectors host admits a request only
+with an `Authorization: Bearer` header, so it answers takt's one `GET /v1/describe` HTTP 401 and
+the run is refused before a case opens or resumes, exit 1. A connector action reaches a served host only
+through something between takt and the host that adds the bearer, such as a proxy or sidecar on
+loopback that injects it. takt's own tests call a fake instance on 127.0.0.1 alone.
+
+:::
+
 ## What a wrong file gets
 
 `--config` is read strictly. A file that is not entirely understood is refused before the case
