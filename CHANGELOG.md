@@ -6,6 +6,39 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-13
+
+The run file's `connectors` names a served Connectors instance and its `connector_actions` bind a protocol action to one of its operations, called with no credential.
+A served Connectors host refuses a call with no bearer token, so takt reaches one only through a proxy or sidecar that adds the bearer; no connector action has been run against a served host.
+
+### Added
+
+- The run file's `connectors` names a served Connectors instance: `endpoint`, its URL, and `instance`, `<connector>[/<instance>]`.
+- `connectors.endpoint` is `https://`, or `http://` to a loopback host, as `forge_endpoint` is; any other is refused at its line, exit 2, repeating nothing written there.
+- The run file's `connector_actions` bind a `protocol/1` action, by its id, a plain file name, to a Connectors `operation` with its `input`, a mapping.
+- A binding's `evidence` is the kind of its one `canon-evidence/1` record, about the implementation at the case revision.
+- Before a case opens or resumes, one `GET /v1/describe` must list every bound operation; one it does not list is named, exit 1, nothing invoked.
+- When `connectors.instance` names an instance after `/`, the describe must describe that instance.
+- A served Connectors host answers that describe HTTP 401, as takt sends no `Authorization` header; the run is refused, exit 1, no case opened.
+- A connector action reaches a served host only through something between takt and the host that adds the bearer, such as a proxy or sidecar on loopback; takt's tests call a fake instance alone.
+- Each observation is one `POST /v1alpha2/invoke` at the described revision, held to two minutes and to what is left of the run's `hours`; what it came to once they end is not recorded.
+- Only the invoke is held to `hours`: every `GET /v1/describe` is held to two minutes whatever is left of them.
+- No `Authorization` header and no credential from takt's environment reaches the instance.
+- To a host not on loopback a call goes through an HTTP or HTTPS proxy named by `HTTPS_PROXY` or `ALL_PROXY`, unless `NO_PROXY` covers the host.
+- A user and password in that proxy's URL reach the proxy alone, never the instance.
+- A `socks` proxy is not supported: a call through one fails.
+- The answer is kept compact as `artifacts/connector/<action>.json`, never in the record.
+- The record is `pass` when the instance answered success, `fail` only when it refused the read: a v1alpha2 error envelope whose code is not `stale_description`.
+- `stale_description` or an answer that is no envelope, such as a gateway's page, a redirect or no answer, records nothing: the step fails as an error and the next run describes again.
+- Only an action the case's protocol declares `effect: write` is refused; one with `effect: read` or with no `effect` is bound.
+- takt reads only each operation's id from the describe, and nothing there says whether it writes: one that writes can be bound and is sent once per observation, with no idempotency key.
+- Whoever writes the run file and the protocol decides what counts as a read, together with the host's standing grants.
+- A binding without `connectors`, of an action takt's own validators perform, with another key or a value of another shape is refused at its line, exit 2.
+- So is an action the case's protocol does not declare, declares `effect: write`, or whose `may_produce` does not list the `evidence`, when the case opens and when it resumes.
+- At each step an action declared `effect: write`, or a kind it may not produce, invokes nothing and records nothing.
+- An action `command_actions` binds too is refused at the later of its two bindings' lines, naming the action and both members, exit 2.
+- `takt scenario run` checks `connectors` and `connector_actions` and applies neither.
+
 ## [0.35.0] - 2026-11-13
 
 `takt run --every` runs on a schedule of windows and `--outcome-file` writes what a run ended with; the run file's `command_actions` bind an argument list to a protocol action.
@@ -1170,7 +1203,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.35.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.36.0...HEAD
+[0.36.0]: https://github.com/beyond10x/takt/compare/0.35.0...0.36.0
 [0.35.0]: https://github.com/beyond10x/takt/compare/0.34.0...0.35.0
 [0.34.0]: https://github.com/beyond10x/takt/compare/0.33.0...0.34.0
 [0.33.0]: https://github.com/beyond10x/takt/compare/0.32.0...0.33.0
