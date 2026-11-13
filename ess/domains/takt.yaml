@@ -390,7 +390,7 @@ types:
   # environment; the instance holds the provider's.
   # read from: docs/design/scheduled-runs-and-connector-actions.md (§ No credential in takt)
   # read from: .engineering/planning/story/a-connector-read-action.md:39-44
-  # read from: crates/takt/src/connector_action.rs:201-202
+  # read from: crates/takt/src/connector_action.rs:222-223
   - name: takt.work.ConnectorsEndpoint
     kind: struct
     fields:
@@ -405,12 +405,20 @@ types:
   # any case opens, one `GET /v1/describe` must describe `connectors.instance` and list
   # `operation`, else the run is refused naming the operation, exit 1, no case opened. Each
   # observation is one `POST /v1alpha2/invoke` of `operation` on `input` at the described
-  # revision; the answer is kept as the observation's artifact `artifacts/connector/<action>.json`,
+  # revision, held to the client's 120 s and to what is left of the run's hour budget
+  # (`takt run --hours`): what it came to once the budget ended is not recorded. The answer is
+  # kept compact, as the observation's artifact `artifacts/connector/<action>.json`,
   # never in the record, and the record is one `canon-evidence/1` of the kind `evidence` names,
-  # about the implementation at the case revision, `pass` when the instance answered success and
-  # `fail` when it refused. A binding of an action takt's own validators perform, an action id
-  # that is no plain file name, another key or a value of another shape is refused at its line
-  # when the file is read, exit 2, and so is a binding without `connectors`. A binding of an
+  # about the implementation at the case revision: `pass` when the instance answered success, and
+  # `fail` only when the instance refused the read, an error envelope of v1alpha2 whose code is
+  # not `stale_description`. Anything else (`stale_description`, an answer that is no envelope, a
+  # redirect, no answer) is an error of the observation, never retried within it: no record, the
+  # step fails as an error, and the next run or tick describes again. An action is bound in one
+  # member only: one `command_actions` binds too is refused at the later binding's line when the
+  # file is read, naming the action and both members, exit 2. A binding of an action takt's own
+  # validators perform, an action id that is no plain file name, another key or a value of
+  # another shape is refused at its line when the file is read, exit 2, and so is a binding
+  # without `connectors`. A binding of an
   # action the case's protocol does not declare, whose `evidence` the protocol does not list
   # among what that action may produce, or whose action the protocol declares `effect: write`, is
   # refused at its line when the case opens, the case discarded, exit 2, and when it is resumed,
@@ -418,14 +426,18 @@ types:
   # case's pinned `protocol.yaml` and calls nothing when either does not hold.
   # read from: docs/design/scheduled-runs-and-connector-actions.md (§ Read action)
   # read from: .engineering/planning/story/a-connector-read-action.md:56-63
-  # read from: crates/takt/src/connector_action.rs:89
+  # read from: crates/takt/src/connector_action.rs:91
   # read from: crates/takt-cli/src/main.rs:2667
-  # read from: crates/takt/src/connector_action.rs:327
-  # read from: crates/takt/src/connector_action.rs:425-428
-  # read from: crates/takt/src/connector_action.rs:260-261
-  # read from: crates/takt/src/connector_action.rs:501-506
-  # read from: crates/takt/src/connector_action.rs:341
-  # read from: crates/takt/src/connector_action.rs:356
+  # read from: crates/takt/src/connector_action.rs:348
+  # read from: crates/takt/src/connector_action.rs:451-454
+  # read from: crates/takt/src/connector_action.rs:281-282
+  # read from: crates/takt/src/connector_action.rs:532-537
+  # read from: crates/takt/src/connector_action.rs:363
+  # read from: crates/takt/src/connector_action.rs:378
+  # read from: crates/takt/src/connector_action.rs:163-164
+  # read from: crates/takt/src/connector_action.rs:442-444
+  # read from: crates/takt/src/connector_action.rs:488
+  # read from: crates/takt/src/run_config.rs:1960-1965
   - name: takt.work.ConnectorAction
     kind: struct
     fields:
@@ -1002,7 +1014,7 @@ types:
   # A container started from takt's image reads it at `/config/agent.yaml`.
   # read from: crates/takt/src/run_config.rs:197-236
   # read from: crates/takt/src/run_config.rs:1283-1286
-  # read from: crates/takt/src/run_config.rs:2023-2028
+  # read from: crates/takt/src/run_config.rs:2056-2061
   # read from: crates/takt/src/run_config.rs:1791-1806
   # read from: crates/takt/src/run_config.rs:1839-1840
   # read from: crates/takt/src/run_config.rs:146-152
@@ -1064,7 +1076,7 @@ types:
       - name: llm
         type: Optional<takt.work.LlmRoutes>
       # read from: crates/takt/src/run_config.rs:238
-      # read from: crates/takt/src/run_config.rs:1992-1997
+      # read from: crates/takt/src/run_config.rs:2025-2030
       - name: records
         type: Optional<String>
       - name: commit
@@ -1088,7 +1100,7 @@ types:
       # out the connector's only one. Anything else is refused at its line before a case opens.
       # It belongs to `forge: connectors`, which needs it.
       # read from: crates/takt/src/run_config.rs:268-272
-      # read from: crates/takt/src/run_config.rs:2039-2049
+      # read from: crates/takt/src/run_config.rs:2072-2082
       # read from: crates/takt/src/forge/connectors.rs:262-275
       - name: forge_instance
         type: Optional<String>
@@ -1099,7 +1111,7 @@ types:
       # to `forge: connectors`, and under any other forge it is refused, exit 1.
       # read from: crates/takt/src/run_config.rs:273-276
       # read from: crates/takt/src/run_config.rs:381-383
-      # read from: crates/takt/src/run_config.rs:1965-1976
+      # read from: crates/takt/src/run_config.rs:1998-2009
       # read from: crates/takt/src/connectors_client.rs:262-295
       - name: forge_endpoint
         type: Optional<String>
@@ -1127,7 +1139,7 @@ types:
       # read from: .engineering/planning/story/work-flag-and-the-aep-source.md:60-61
       # read from: crates/takt/src/run_config.rs:268-272
       # read from: .engineering/planning/approval-record/wave-56-work-model-points.md:31-32
-      # read from: crates/takt/src/run_config.rs:2312-2357
+      # read from: crates/takt/src/run_config.rs:2345-2390
       # read from: crates/takt/src/case.rs:4910-4917
       - name: work
         type: Optional<List<String>>
@@ -1162,8 +1174,8 @@ types:
       # read from: .engineering/planning/story/git-excluded-files-are-not-step-changes.md:43-48
       # read from: .engineering/planning/decision-blocker/excluded-files-and-user-excludes.md:48-52
       # read from: crates/takt/src/run_config.rs:305-316
-      # read from: crates/takt/src/run_config.rs:2086-2098
-      # read from: crates/takt/src/run_config.rs:2102-2124
+      # read from: crates/takt/src/run_config.rs:2119-2131
+      # read from: crates/takt/src/run_config.rs:2135-2157
       # read from: crates/takt/src/git.rs:1099-1108
       # read from: crates/takt/src/git.rs:1111-1143
       # read from: crates/takt/src/git.rs:1241-1269
@@ -1220,7 +1232,7 @@ types:
         type: Optional<takt.work.ConnectorsEndpoint>
       # The protocol actions bound to operations of that instance (takt.work.ConnectorAction), by
       # action id; its shape is checked when the file is read and each refusal names its line,
-      # exit 2.
+      # exit 2, an action `command_actions` binds too among them.
       # read from: docs/design/scheduled-runs-and-connector-actions.md (§ 4. F2: connector actions)
       - name: connector_actions
         type: Optional<Map<takt.work.ActionId, takt.work.ConnectorAction>>
@@ -3089,10 +3101,10 @@ types:
   # read from: crates/takt/src/forge/connectors.rs:122-131
   # read from: crates/takt/src/forge/connectors.rs:359-393
   # read from: crates/takt/src/forge/connectors.rs:641-682
-  # read from: crates/takt/src/connectors_client.rs:537-542
+  # read from: crates/takt/src/connectors_client.rs:538-543
   # read from: crates/takt/src/forge/connectors.rs:1003-1133
   # read from: crates/takt/src/forge/connectors.rs:1347-1361
-  # read from: crates/takt/src/connectors_client.rs:617-620
+  # read from: crates/takt/src/connectors_client.rs:632-635
   # read from: crates/takt/src/forge/connectors.rs:1742-1759
   # read from: crates/takt/src/connectors_client.rs:50-71
   # read from: crates/takt/src/connectors_client.rs:336-347
@@ -4709,7 +4721,7 @@ types:
   # against what the protocol declares under `case.inputs` when the case's protocol is known, and
   # refuses what does not match at its line. An opaque reference here; the declared values are the
   # protocol's.
-  # read from: crates/takt/src/run_config.rs:2176-2209
+  # read from: crates/takt/src/run_config.rs:2209-2242
   - name: takt.work.ProtocolsSection
     kind: newtype
     of: Json
