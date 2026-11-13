@@ -24,8 +24,27 @@ fn the_reference_counts_the_fields_without_a_flag_as_it_lists_them() {
         .next()
         .expect("a number word");
     let words = [
-        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-        "eleven", "twelve", "thirteen",
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+        "twenty",
     ];
     let counted = words
         .iter()

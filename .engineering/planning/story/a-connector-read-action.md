@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-connector-read-action
 kind: story
-status: draft
+status: active
 title: A protocol read action bound to a Connectors operation produces evidence and keeps the answer
 summary: 'connector_actions read: one invoke on a served instance, the answer as the artifact, the record at the case revision'
 relations:
@@ -27,7 +27,10 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 10
+revision: 12
+transitions:
+- {from: "draft", to: "proposed", at: "2026-11-12T23:18:13Z", actor: "human:timo", revision: 11, executor: "agent:b10x-takt", correlation: "wave/59"}
+- {from: "proposed", to: "active", at: "2026-11-12T23:18:13Z", actor: "human:timo", revision: 12, executor: "agent:b10x-takt", correlation: "wave/59"}
 ---
 # Story: a-connector-read-action
 

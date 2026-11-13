@@ -1,6 +1,6 @@
 # Wave 58: a command action
 
-Stage: **in review**, released as 0.35.0 with wave 57 once merged. `wave/58` branches from `wave/57` at f4616dbd while pull request 65 waits for its grant, and
+Stage: **merged and released**. Pull request 66 merged at fdd4dc63 as 3c2d0071, tagged 0.35.0 (approval-record:pr-66-merge). `wave/58` branches from `wave/57` at f4616dbd while pull request 65 waits for its grant, and
 merges `wave/57` at dabcd934 (its CI fix) as 1160b381, and `main` at 2c1a3a31 (pull request 65) as 33066b1a. Approved: approval-record:wave-58-command-action.
 
 ## Selection
@@ -76,5 +76,6 @@ not built in. The test now keeps a list of the run-file-bound validators apart f
 
 ## Close
 
-After the merge, a store-only close moves story:a-command-action to `implemented` with the CI run as its
-`test_result`. It rides with wave 59. Wave 57's close rides with this wave (3ccfd674).
+Pull request 66 merged at its granted head fdd4dc63 as 3c2d0071, its seven checks green (`check` run
+https://github.com/beyond10x/takt/actions/runs/43334373184), and `0.35.0` was tagged at the merge. story:a-command-action
+moved to `implemented` with that run as its `test_result`, in a store-only commit on `wave/59`.

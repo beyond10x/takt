@@ -724,7 +724,7 @@ fn the_port_guard_finds_a_record_written_past_it_in_any_crate() {
 /// otherwise a read, a name, the empty directory a case opens with, replay's copy into a
 /// scratch tree, or a unit test's write into its own scratch case. A line found and not here,
 /// or here and not found, fails the guard.
-const EVIDENCE_LINES: [(&str, &str, &str); 22] = [
+const EVIDENCE_LINES: [(&str, &str, &str); 23] = [
     (
         "takt/src/evidence.rs",
         "match self.case.borrow_mut().add_evidence(&record) {",
@@ -834,6 +834,11 @@ const EVIDENCE_LINES: [(&str, &str, &str); 22] = [
         "takt/src/command_action.rs",
         ".ok_or_else(|| at(\"evidence\"))?",
         "refuses a command action binding with no `evidence` key, naming the key, never a case's directory",
+    ),
+    (
+        "takt/src/connector_action.rs",
+        "let evidence = text(\"evidence\")?;",
+        "reads a connector action binding's `evidence` key in the run file, the kind it records, never a case's directory",
     ),
 ];
 

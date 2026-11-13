@@ -10,6 +10,7 @@ pub mod case;
 pub mod command_action;
 pub mod commit_style;
 pub mod confinement;
+pub mod connector_action;
 pub mod connectors_client;
 pub mod console;
 pub mod events;

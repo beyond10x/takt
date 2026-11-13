@@ -2,7 +2,7 @@
 format: aep.planning-md/3
 id: story:a-command-action
 kind: story
-status: active
+status: implemented
 title: A protocol action bound to an argument list produces evidence by its exit status
 summary: 'command_actions: no shell, no credential, one declared output file, pass, unchanged, done or fail'
 relations:
@@ -25,10 +25,11 @@ scope:
   path: ess/domains/takt.yaml
 - confidence: cited
   path: website/docs/reference/configuration.md
-revision: 12
+revision: 13
 transitions:
 - {from: "draft", to: "proposed", at: "2026-11-12T20:59:46Z", actor: "human:timo", revision: 11, executor: "agent:b10x-takt", correlation: "wave/58"}
 - {from: "proposed", to: "active", at: "2026-11-12T20:59:46Z", actor: "human:timo", revision: 12, executor: "agent:b10x-takt", correlation: "wave/58"}
+- {from: "active", to: "implemented", at: "2026-11-13T00:56:27Z", actor: "human:timo", revision: 13, decided_on: {"recorded":{"test_result":1,"review_outcome":2}}, executor: "agent:b10x-takt", correlation: "wave/58"}
 ---
 # Story: a-command-action
 
