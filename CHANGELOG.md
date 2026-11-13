@@ -6,6 +6,38 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-13
+
+`takt run --every` runs on a schedule of windows and `--outcome-file` writes what a run ended with; the run file's `command_actions` bind an argument list to a protocol action.
+
+### Added
+
+- `takt run --every <duration>` stays resident and starts one pass, a tick, per slot; `duration` is whole seconds in `d`, `h`, `m` and `s`, from `1s` to `7d`, a longer one refused.
+- `--window '<days> <HH:MM>[-<HH:MM>]'`, repeatable, limits the slots to weekly windows: the window's start and every `--every` after it up to its end; with no window a slot falls every `--every`.
+- `--time-zone <zone>` is the IANA zone the window times are wall-clock in, `UTC` by default; the tz database is bundled in takt, so a container needs no tzdata.
+- A slot already past is skipped, never queued; the next tick runs at the first slot not past, and its `skipped` counts those before it.
+- `--until <condition>`, repeatable, ends the schedule on `nothing-ready`, `exit:<n>`, `outcome:<name>` or `deadline:<RFC 3339 instant>`, exit 0; so does a schedule with no slot left.
+- `--once` runs one pass as without `--every` and reads no `schedule`; each tick is started with it.
+- The run file's `schedule` mapping (`every`, `time_zone`, `windows`, `until`) is the same schedule; a flag wins over it, and a member that does not read is refused at its line, exit 2.
+- A schedule's files are under `<state dir>/schedule/<schedule id>/`: `schedule.json`, `ticks.jsonl` (`takt.schedule-tick/1`), `ticks/<slot>/` and `end.json` with its reason.
+- A tick's directory holds its `stdout`, `stderr` and `outcome.json`.
+- One start runs a schedule: a second start of the same schedule is refused, exit 1, while another holds its `lock`, and a recorded pid alone blocks nothing.
+- A tick that exits 1 or 2 ends the schedule with that exit unless an `exit:<n>` condition holds first; no other tick exit ends it.
+- The first SIGTERM or SIGINT starts no further tick, lets the running tick end and exits 3; each signal after it is forwarded to the tick.
+- `--outcome-file <file>` writes `takt.run-outcome/1` (`exit`, `stop`, `case`, `outcome`, `frontier`, `started`, `ended`) at the end of every `takt run`.
+- A refusal of the run file and of the command line (exit 2) writes it too; `--help` and `--version` write none.
+- The file is written to a new file renamed over `<file>`, and a symbolic link at `<file>` is replaced, not followed.
+- The run file's `command_actions` bind a `protocol/1` action's id to an `argv`, run without a shell in the tree with no credential; `{artifacts}` in it is the case's `artifacts/` directory.
+- A command action's `writes` is its one output file under `artifacts/`; any other write under the case or in the tree is put back, refusing the step.
+- The output is kept only as a regular file of its own: a link, a file under a link and a hard link are refused.
+- Exit 0 records `pass`, `unchanged_exit` records `unchanged`, `done_exit` records `done`, any other exit `fail`.
+- The result is one `canon-evidence/1` record of the binding's `evidence` kind at the case revision.
+- The command is held to five minutes and to the run's `hours`; killed when they end, it records nothing.
+- An action takt's own validators perform, an empty `argv` and an action the case's protocol does not declare are refused at the binding's line, exit 2.
+- So is an `evidence` kind the action's `may_produce` does not list.
+- The kind is checked when a case opens, when it resumes (`takt run --case`, nothing resumed) and at each step, where a refused kind runs no command and records nothing.
+- `takt scenario run` checks `schedule` and `command_actions` and applies neither.
+
 ## [0.34.0] - 2026-11-06
 
 `takt run --work <key>` names the work item, from the planning store or a team's own command line; the run file's `deployment_paths` keep a deployment's files out of step changes.
@@ -1138,7 +1170,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.34.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.35.0...HEAD
+[0.35.0]: https://github.com/beyond10x/takt/compare/0.34.0...0.35.0
 [0.34.0]: https://github.com/beyond10x/takt/compare/0.33.0...0.34.0
 [0.33.0]: https://github.com/beyond10x/takt/compare/0.32.0...0.33.0
 [0.32.0]: https://github.com/beyond10x/takt/compare/0.31.0...0.32.0
