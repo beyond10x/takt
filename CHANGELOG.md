@@ -6,6 +6,15 @@ takt's releases.
 
 ## [Unreleased]
 
+## [0.36.1] - 2026-11-22
+
+No change to what the `takt` binary does: the specification in `ess/` now cites the code that reads `connector_actions`.
+
+### Changed
+
+- The specification cites the lines of `crates/takt/src/run_config.rs` that read the run file's `connector_actions`.
+- Two citations in the specification follow the lines of the story they name, which moved.
+
 ## [0.36.0] - 2026-11-13
 
 The run file's `connectors` names a served Connectors instance and its `connector_actions` bind a protocol action to one of its operations, called with no credential.
@@ -1203,7 +1212,8 @@ The first published release of the 0.2 line; its changes are those listed under 
 - Known limit: `scripts/check-finding` builds the revision under check with the operator's HOME and environment (story:check-finding-builds-confined).
 - Known limit: `scripts/check-finding` can print `not_reproduced` when the predicate's command crashed or never reached the scenario (story:check-finding-positive-control).
 
-[Unreleased]: https://github.com/beyond10x/takt/compare/0.36.0...HEAD
+[Unreleased]: https://github.com/beyond10x/takt/compare/0.36.1...HEAD
+[0.36.1]: https://github.com/beyond10x/takt/compare/0.36.0...0.36.1
 [0.36.0]: https://github.com/beyond10x/takt/compare/0.35.0...0.36.0
 [0.35.0]: https://github.com/beyond10x/takt/compare/0.34.0...0.35.0
 [0.34.0]: https://github.com/beyond10x/takt/compare/0.33.0...0.34.0
